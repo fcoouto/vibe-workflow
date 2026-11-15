@@ -461,6 +461,52 @@ class BridgeTest(native_tests.NativeBase, Reader):
         self.assertEqual(record['reserved'], {})
         self.assertEqual(self.prepare('claude-code')['reason'], 'already_prepared')  # one permit only
 
+    def test_native_metadata_without_quota_reaches_fallback(self):
+        """Task 3: an exchange's account and catalog survive its unknown usage and reach provider-managed fallback
+        with one permit and no included claim; unreported served values stay unknown. No catalog sends nothing."""
+        self.answer(dict(initialize(), models=[]), usage(self.now))
+        self.assertEqual(self.prepare('claude-code', 'm0'),
+                         dict(v=1, state='blocked', reason='native_binding_unverified'))
+        self.assertEqual(self.holds(), {})
+        self.offset += claude_usage.FAILURE_BACKOFF
+        self.answer(initialize(), usage(self.now, limits=None))
+        tool = native_tests.NativeTool()
+        permit, done = self.run_native('claude-code', tool, attempt='m1')
+        self.assertEqual((permit['state'], tool.calls), ('dispatched', [dict(model='invented-small', effort='high')]))
+        self.assertEqual(self.disposition('m1'), ({}, ['quota_unknown', 'provider_managed_fallback']))
+        self.assertEqual(done['served'], dict(model='unknown', effort='unknown'))
+        self.assertEqual(self.prepare('claude-code', 'm1')['reason'], 'already_prepared')
+        self.assertEqual(len(self.spawns()), 2)
+
+    def test_failed_quota_does_not_repeat_fresh_metadata_exchange(self):
+        """Task 3: required metadata is reused while current, after the optional quota read failed and its backoff
+        ended; only demanded quota may start another exchange."""
+        routing_paths.qualify(self.settings, claude_usage.PATH, demand=None, evidence='synthetic-1',
+                              now=int(time.time()))
+        self.answer(initialize(), usage(self.now, limits=None))
+        self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
+        self.offset += claude_usage.FAILURE_BACKOFF + 1  # the quota backoff is over; account and catalog are current
+        route = dict(route=claude_usage.PATH + ':activation', account='claude-plan', pool=claude_usage.POOL,
+                     billing_class='included_subscription')
+        collector.LocalSource(self.settings).acquire_billing([route], int(time.time()))
+        self.assertEqual(claude_usage.refresh(self.settings, need=()), dict(state='fresh'))
+        self.assertEqual(self.prepare('claude-code', 'q2')['state'], 'dispatched')
+        self.assertEqual(self.disposition('q2')[0], {})
+        self.assertEqual(len(self.spawns()), 1)
+
+    def test_a_missing_catalog_is_restored_once_with_current_account_and_windows(self):
+        """A current account with fresh windows but no bound catalog is read once at once, not after expiry; the
+        exchange's incidental quota is kept and later preparation reuses the metadata."""
+        self.assertEqual(claude_usage.refresh(self.settings)['state'], 'stored')
+        native_catalog._path(self.settings).unlink()  # only the catalog snapshot is lost
+        self.assertTrue(claude_usage.usable(self.settings, int(time.time())))
+        permit = self.prepare('claude-code', 'c1')
+        self.assertEqual(permit['state'], 'dispatched', permit)
+        self.assertEqual(len(self.spawns()), 2)
+        self.assertTrue(self.disposition('c1')[0])  # an included reservation on the incidental reading
+        self.assertEqual(self.prepare('claude-code', 'c2')['state'], 'dispatched')
+        self.assertEqual(len(self.spawns()), 2)
+
     def test_provider_refusal_is_uncertain_and_never_retried(self):
         self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
         refused = self.complete('n1', dict(kind='not_started'))
@@ -491,8 +537,11 @@ class ProvenanceTest(BridgeTest):
         self.complete('n1', dict(kind='complete'))
         self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
         self.answer(initialize(email='other@example.invalid'), usage(self.now, limits=None))
-        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')  # the current account, fallback only
-        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == 'n2')
+        refused = self.prepare('claude-code', 'n2')  # its admission's own read found another account: never sent
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'native_binding_changed'))
+        self.assertNotEqual(self.holds().get('n2', {}).get('state'), 'dispatched')
+        self.assertEqual(self.prepare('claude-code', 'n3')['state'], 'dispatched')  # the current account, fallback only
+        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == 'n3')
         self.assertEqual((record['reserved'], record['reason_codes'][-2:]), ({}, ['quota_unknown',
                                                                                   'provider_managed_fallback']))
 

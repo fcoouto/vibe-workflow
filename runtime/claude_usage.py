@@ -420,8 +420,16 @@ def _save(settings_path, **change):
 
 
 def _fresh(settings_path, need, now):
-    if account(settings_path, now) is None:
+    """Whether the required metadata is current (the account and the catalog snapshot bound to the client's current
+    binding, whatever the quota state) and then each demanded window (none with `need=()`) has a fresh reading."""
+    from runtime.adapters import native_catalog
+    snapshot = native_catalog.stored(settings_path, CLIENT)
+    current = native_catalog._binding(settings_path, CLIENT)
+    if account(settings_path, now) is None or snapshot is None or type(current) is not dict \
+            or any(snapshot['binding'][key] != current.get(key) for key in ('connection', 'controls')):
         return False
+    if not need:
+        return True
     stored = {item['id']: item for item in usable_windows(settings_path, now)}
     boundary = observations.consumed_at(settings_path, POOL)
     return all(key in stored and 0 <= now - stored[key]['observed_at'] <= observations.FRESH_SECONDS
@@ -458,9 +466,12 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
     """Make the account read (and the demanded windows) current: `{state, reason?, windows?}`, never raises.
 
     `fresh`: nothing to do, no process. `busy`: another reader still holds the lock. `backoff`: the last read
-    failed less than FAILURE_BACKOFF s ago. `stored`: one exchange stored. `failed`: a fixed reason, backing off."""
+    failed less than FAILURE_BACKOFF s ago. `stored`: one exchange stored. `failed`: a fixed reason, backing off.
+    An explicit empty `need` asks for the required metadata only: current metadata is reused whatever the optional
+    quota state, and an exchange that stored metadata but no usable usage answers `stored` with the usage reason
+    (the usage failure still backs off)."""
     environ = os.environ if environ is None else environ
-    need = tuple(need) if need else tuple(sorted(METERS.values()))  # the path's 5h and 7d by default
+    need = tuple(need) if need is not None else tuple(sorted(METERS.values()))  # the path's 5h and 7d by default
     try:
         if not force and _fresh(settings_path, need, int(time.time())):
             return dict(state='fresh')
@@ -492,6 +503,8 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                 # binding); stored window rows stay as observed history, unusable without a confirmation.
                 ended = dict(account=None) if str(error) in ACCOUNT_REFUSALS else {}
                 _save(settings_path, failure=dict(at=int(time.time()), reason=str(error)), **ended)
+                if not need and _fresh(settings_path, need, int(time.time())):
+                    return dict(state='stored', windows=[], reason=str(error))  # metadata current, usage unknown
                 return dict(state='failed', reason=str(error))
             except (OSError, ValueError):
                 _save(settings_path, failure=dict(at=int(time.time()), reason='observation_store_invalid'))

@@ -179,18 +179,22 @@ class LocalSource:
         return None
 
     def billing(self, route, now):
-        """The native Claude path's account-bound fact from its private account store (`claude_usage`); no other
-        path has a producer, so it answers None and reads nothing for them."""
-        from runtime import claude_usage
-        return claude_usage.billing_fact(self.settings_path, route, now) if claude_usage.applies(route) else None
+        """A native path's account-bound fact from its own producer's private store, chosen by the route's exact
+        path (`claude_usage`, `codex_account`); no other path has a producer, so it answers None and reads nothing."""
+        from runtime import claude_usage, codex_account
+        producer = next((item for item in (claude_usage, codex_account) if item.applies(route)), None)
+        return producer.billing_fact(self.settings_path, route, now) if producer is not None else None
 
     def acquire_billing(self, routes, now):
-        """One bounded native Claude account/usage read when an applicable route's account is not current; only
-        `acquire_billing`/preactivation call it, never a pure read, preview or served preparation."""
-        from runtime import claude_usage
+        """One bounded native account read per applicable producer when its account is not current: Claude's also
+        reads the demanded windows (none demanded: metadata only), Codex's never reads quota. Only `acquire_billing`/
+        preactivation call it, never a pure read, preview or served preparation."""
+        from runtime import claude_usage, codex_account
         need = {window for route in routes if claude_usage.applies(route) for window in route.get('demand') or ()}
         if any(map(claude_usage.applies, routes)) and self.settings_path is not None:
             claude_usage.refresh(self.settings_path, need=tuple(sorted(need)))
+        if any(map(codex_account.applies, routes)) and self.settings_path is not None:
+            codex_account.refresh(self.settings_path)
 
     def model_demand(self, route):
         """No per-model demand mapping is qualified (OpenCode Go's allowance is model-dependent): none."""
@@ -654,8 +658,9 @@ def acquire_billing(project, assignment, *, settings_path, table=None, strategy_
                     source=None):
     """Acquire only the request's statically relevant billing facts, outside served preparation and pure reads.
 
-    LocalSource acquires only the native Claude account read (`claude_usage`), which owns its account key, bounded
-    transport and freshness; other paths start nothing. Neither requests nor settings can supply a source.
+    LocalSource acquires only the native account reads (`claude_usage`, `codex_account`, by exact path), which own
+    their account keys, bounded transport and freshness; other paths start nothing. Neither requests nor settings
+    can supply a source.
     """
     source = source if source is not None else default_source(settings_path)
     if not callable(getattr(source, 'acquire_billing', None)):

@@ -1,6 +1,7 @@
 """Native Codex account/catalog metadata from the 0.167.2 stable app-server protocol.
 
-This provider is not wired into routing consumers. One bounded, read-only exchange
+LocalSource, the native catalog and the native bridge select it by its exact path
+or client only. One bounded, read-only exchange
 checks practical identity around a complete catalog and incidental quota read.
 Only derived identity and exact launch aliases/efforts persist. No usage cache-age
 bound or complete constraint mapping is qualified, so usable_windows always refuses
@@ -164,10 +165,16 @@ def binding(settings_path):
                                              connection='account:' + current['key'], controls=CONTROLS)
 
 
+def applies(route):
+    """Whether this producer supplies a route's account: a subscription route on its exact native path (a dispatch
+    recheck's route names no billing class; its path is subscription-only)."""
+    return type(route) is dict and route.get('billing_class', 'included_subscription') == 'included_subscription' \
+        and routing_paths.path_of(route.get('route')) == PATH
+
+
 def billing_fact(settings_path, route, now):
     """Only this native path's account confirmation; unknown overflow is not a quota claim."""
-    if type(route) is not dict or routing_paths.path_of(route.get('route')) != PATH \
-            or route.get('pool') != POOL or route.get('billing_class') != 'included_subscription':
+    if not applies(route) or route.get('pool') != POOL:
         return None
     current = _account(settings_path, now)
     if current is None:

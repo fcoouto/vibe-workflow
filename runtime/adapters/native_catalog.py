@@ -8,8 +8,10 @@ Sources:
 - `current_binding(client)`: a code-supplied `{client_version, connection, controls}` of the client now running; none
   in production. For Claude Code the binding is instead the current native account read (`runtime/claude_usage.py`):
   its client version, its derived account key as the connection and the alias/effort controls the bridge sends. No
-  UUID or attestation of another coordinator's complete settings is required (15 November account amendment). Codex
-  has no such source, so its bridge still refuses (`native_binding_unverified`).
+  UUID or attestation of another coordinator's complete settings is required (15 November account amendment). For
+  Codex it is the native account read (`runtime/codex_account.py`), whose missing client version stays `unknown`.
+  That read is a point-in-time check of the native login: a later login or backend switch is visible only at the
+  next read, never fenced atomically across processes.
 - The stored snapshot `{binding, models: [{alias, resolved, efforts}]}` beside the routing settings, written only by a
   bounded acquisition outside served preparation (`store_snapshot`; the Claude account read writes it from the same
   exchange). With no snapshot the bridge refuses (`native_catalog_unavailable`). A snapshot is reused only while its
@@ -34,10 +36,11 @@ def current_binding(client):
 
 
 def _binding(settings_path, client):
-    """`current_binding`, else for Claude Code the current native account read's binding."""
-    from runtime import claude_usage
+    """`current_binding`, else the current native account read's binding of the client's own producer."""
+    from runtime import claude_usage, codex_account
     found = current_binding(client)
-    return found if found is not None or client != claude_usage.CLIENT else claude_usage.binding(settings_path)
+    producer = {claude_usage.CLIENT: claude_usage, codex_account.CLIENT: codex_account}.get(client)
+    return found if found is not None or producer is None else producer.binding(settings_path)
 
 
 def _path(settings_path):
