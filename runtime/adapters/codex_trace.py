@@ -7,6 +7,7 @@ writer. No public task/proposal/CLI input selects this source.
 """
 
 import hashlib
+import math
 import os
 from pathlib import Path
 import re
@@ -36,7 +37,7 @@ def _require(condition, code='native_trace_relation_unavailable'):
 
 def _check(source):
     deadline = source['deadline']
-    _require(type(deadline) in (float, int) and time.monotonic() < deadline, 'timeout')
+    _require(type(deadline) in (float, int) and math.isfinite(deadline) and time.monotonic() < deadline, 'timeout')
     budget = source.setdefault('_budget', dict(files=0, bytes=0, entries=0))
     _require(budget['files'] <= MAX_FILES and budget['bytes'] <= MAX_BYTES
         and budget['entries'] <= MAX_ENTRIES, 'native_trace_budget_exceeded')
