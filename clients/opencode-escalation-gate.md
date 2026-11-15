@@ -7,10 +7,11 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 **Unreleased behavior change:** the final stop now denies edits rather than
 offering approval. Late completed edits cannot clear it. Separate explicit user
 direction through the existing root-message control is required before another
-edit; no pending edit resumes automatically. A private account-free native drill
-verified re-evaluation and one child release, then stopped on a provider transport
-failure before the final-stop cases. Full qualification remains pending; see the
-[14 November report](../docs/qualification/2026-11-14-unconditional-stop.md).
+edit; no pending edit resumes automatically. A separately authorized private
+account-free follow-up on 15 November passed the selected native maximum-effort
+flow, including repeated root/child stop denials and named continuation without
+automatic edits. The earlier transport failure remains recorded; see the
+[qualification report](../docs/qualification/2026-11-14-unconditional-stop.md#fresh-authorized-follow-up--15-november).
 The custom approval-panel work in PR #294 remains deferred,
 draft/BLOCKED, unmerged and unreleased.
 

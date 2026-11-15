@@ -48,13 +48,18 @@
 - [x] Record the original shared-activation blocker and completed independent work; no native behavior case ran in that preflight.
 - [x] Verify a private account-free native read/edit path, independently reviewed by Opus.
 - [x] Obtain Astra's full-drill design assessment and execute one bounded campaign.
-- [ ] Complete final-stop, repeated-denial, unrelated-work and explicit-continuation native cases.
-- [ ] Resolve the failed campaign's shared-settings preservation uncertainty before accepting aggregate qualification.
+- [x] Complete final-stop, repeated-denial, unrelated-work and explicit-continuation native cases in one separately authorized fresh attempt.
+- [x] Verify preservation with per-path fingerprints in the fresh attempt; retain the original discrepancy as unresolved historical evidence.
+- [x] Accept Astra's fresh evidence assessment.
+- [x] Record the independently accepted qualification outcome; retain ordinary delivery evidence in PR #302 and the task ledger.
 
 ## Progress
 
-Status: source verified and published as draft/BLOCKED PR #302. Native qualification
-is partial after a provider transport failure; see the [current report](../../qualification/2026-11-14-unconditional-stop.md).
+Status: source and the separately authorized 15 November native full-stop flow
+are verified. Controller and independent coordinator assertions passed; Astra
+independently accepted the scoped evidence. Ordinary delivery evidence and live
+status belong to PR #302 and the task ledger;
+see the [current report](../../qualification/2026-11-14-unconditional-stop.md).
 Native title synchronization remains paused under the existing user direction.
 
 At the source-implementation checkpoint, the task checkout was clean on
@@ -147,4 +152,49 @@ and separate passing repair remain unobserved natively. Existing 79-case source
 proof remains applicable because runtime/tests are byte-identical. No deployment,
 merge or release occurred. A separately authorized fresh attempt is needed:
 the failed campaign is closed, and its in-memory state ended with its process.
-Keep PR #302 draft/BLOCKED and PR #294 deferred, draft/BLOCKED and unmerged.
+At the close of that failed attempt, PR #302 remained draft/BLOCKED.
+PR #294 remains deferred, draft/BLOCKED and unmerged.
+
+## Fresh authorized follow-up — 15 November
+
+The user's “Authorized” response permitted one fresh bounded campaign with the
+proposed evidence improvements. It did not renew or rewrite the failed attempt.
+New fixture, private runtime/database, exclusive start/log/result records and
+timestamped per-path before/after fingerprints were used. Source, immutable
+checker, permissions, route and thresholds stayed unchanged.
+
+Actual OpenCode 2.2.6 used public zero-cost
+`opencode/deepseek-v4.1-flash-free#max` for 57 requests, all primary, across four
+actors. The campaign used 39 controller operations and 122,759 ms, within its
+120-request/200-operation/45-minute limits. No retry, fault injection, synthetic
+state, account connection, shared-service restart or installed update occurred.
+
+Both canaries reached re-evaluation after three genuine edit/check failures.
+A fresh original foreground read-only child released both once. Two more rounds
+reached final stop at value 5. Two root edits and two fresh-child edits were
+denied with correlated native permission/tool IDs; bytes and full held snapshots
+stayed unchanged. No permission approval event occurred. Child completion did
+not release the stop.
+
+Unrelated-file work through the held root and another independent root succeeded.
+A separate fixture-user root message cleared only canary.py, performed no tool
+call and resumed no edit. A distinct subsequent edit set canary.py to 99; the
+same immutable unittest passed. Sibling stayed stopped at 5.
+
+All selected shared-file hashes and metadata matched before/after. Shared service
+and selected Claude directory metadata matched. Source/protected inputs and all
+retained prior receipt/script/log hashes matched. All fixture actors were inactive
+before shutdown; owned process exited zero, was reaped and its group was absent.
+This proves preservation for the fresh observation window, not attribution or
+retroactive preservation of the original failed attempt.
+
+Coordinator raw-evidence checks passed. Astra independently accepted the fresh
+scoped mechanical drill and substantiated no product defect. Current main at
+`2e21c20b0c964aafd6498485b1ebcf5b26f796bc` does not change this adapter, its
+three Node suites, Python wrapper or validation/sharding scripts; the narrow
+source review and unchanged 79-case proof remain applicable.
+Native late-completion races, alternate escalation branches, same-held-path
+independent-root edits, native write/patch/mixed-file denial variants, Claude
+bridging, Desktop/TUI presentation and semantic
+diagnosis quality are not established by this sequential flow. Existing source
+tests continue covering the unexercised state-machine branches and late races.
