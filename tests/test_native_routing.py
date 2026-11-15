@@ -136,6 +136,14 @@ class NativeBase(Stores):
             return permit, None
         return permit, self.complete(attempt, tool(permit))
 
+    def fallback(self, client, attempt):
+        """The account amendment: exhausted fresh included quota dispatches on the enabled account's own
+        provider-managed overflow, recorded distinctly and holding no included claim."""
+        self.assertEqual(self.prepare(client, attempt)['state'], 'dispatched')
+        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
+                      if item['attempt_id'] == attempt)
+        self.assertEqual((record['reserved'], record['reason_codes'][-1]), ({}, routing.FALLBACK))
+
     def holds(self):
         ledger = self.service._ledger(False)
         return {} if ledger is None else ledger.snapshot()['holds']
@@ -239,7 +247,7 @@ class NativeLaunchTests(NativeBase):
         self.billing()
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
         self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
-        self.assertEqual(self.prepare('claude-code', 'q2')['state'], 'pending')  # held
+        self.fallback('claude-code', 'q2')  # included room held: provider-managed overflow, no included claim
         store = collector.window_path(self.settings)
         before = store.read_bytes()
         self.assertEqual(self.complete('q1', dict(kind='complete'))['state'], 'recorded')
@@ -356,7 +364,7 @@ class NativeLaunchTests(NativeBase):
         self.window('claude-subscription', '5h', 18000, used=986, later=1)
         self.assertEqual(self.prepare('claude-code', 'a')['state'], 'dispatched')
         self.assertEqual(self.prepare('claude-code', 'b')['state'], 'dispatched')  # both reservations fit
-        self.assertEqual(self.prepare('claude-code', 'c')['state'], 'pending')  # a third does not
+        self.fallback('claude-code', 'c')  # a third does not fit the included room: account overflow only
         self.assertEqual(self.complete('a', dict(kind='complete'))['state'], 'recorded')
         self.assertEqual(self.prepare('claude-code', 'd')['state'], 'pending')  # the consumed reading is stale now
 
@@ -372,7 +380,7 @@ class NativeLaunchTests(NativeBase):
                          ('recorded', 'uncertain', 'reconcile_subscription'), answer)
         self.assertEqual(self.holds()['n1']['state'], 'uncertain')
         self.assertNotEqual(self.prepare('claude-code')['state'], 'dispatched')  # the same attempt: no new permit
-        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'pending')  # its capacity is still held
+        self.fallback('claude-code', 'n2')  # its included capacity is still held; only overflow remains
 
     def test_native_unknown_send_is_not_retried(self):
         self.billing()
@@ -438,9 +446,7 @@ class NativeLaunchTests(NativeBase):
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
         self.assertEqual(held['state'], 'admitted', held)  # the OpenCode alias holds the shared Claude allowance
-        tool = NativeTool()
-        permit, _ = self.run_native('claude-code', tool)
-        self.assertEqual((permit['state'], tool.calls), ('pending', []), permit)
+        self.fallback('claude-code', 'n1')  # the OpenCode alias's included claim is never duplicated
         self.window('claude-subscription', '5h', 18000, used=1000, later=2)
         self.assertEqual(self.prepare('codex', 'c1')['state'], 'dispatched')  # another pool is unaffected
 
