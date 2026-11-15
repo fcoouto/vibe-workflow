@@ -190,7 +190,14 @@ class _Session:
 
 def _exited(pid, seconds):
     """Whether the leader exited within `seconds`, polled without reaping it: while it is unreaped its pid and
-    process group id cannot be reused, so a group signal reaches only its own group."""
+    process group id cannot be reused, so a group signal reaches only its own group.
+
+    Without a non-reaping `os.waitid` (macOS Python 3.11) exit cannot be observed without reaping, so this waits the
+    whole grace and answers False: the caller then signals the still-unreaped group (harmless if it already exited)
+    before it reaps. Conservative: a normal exit is also signalled, and each stop takes its full graces."""
+    if not hasattr(os, 'waitid'):
+        time.sleep(seconds)
+        return False
     end = time.monotonic() + seconds
     while True:
         try:

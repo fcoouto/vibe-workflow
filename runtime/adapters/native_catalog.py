@@ -4,18 +4,20 @@ A native catalog lists, for one client, the model aliases its own launch accepts
 express, bound to the client's connection and effective invocation controls, with version provenance. It never comes from a request
 or another client's catalog, and no model name is parsed.
 
-Sources, all unqualified today:
-- `current_binding(client)`: the verified `{client_version, connection, controls}` of the client now running. No
-  zero-inference source of it is qualified (a standalone initialization does not prove another coordinator's effective
-  settings), so it answers None and the bridge refuses (`native_binding_unverified`).
+Sources:
+- `current_binding(client)`: a code-supplied `{client_version, connection, controls}` of the client now running; none
+  in production. For Claude Code the binding is instead the current native account read (`runtime/claude_usage.py`):
+  its client version, its derived account key as the connection and the alias/effort controls the bridge sends. No
+  UUID or attestation of another coordinator's complete settings is required (15 November account amendment). Codex
+  has no such source, so its bridge still refuses (`native_binding_unverified`).
 - The stored snapshot `{binding, models: [{alias, resolved, efforts}]}` beside the routing settings, written only by a
-  qualified bounded acquisition outside served preparation (`store_snapshot`). None is qualified or run here: with no
-  snapshot the bridge refuses (`native_catalog_unavailable`). A snapshot is reused only while its binding equals the
-  current connection and controls (`native_binding_changed` otherwise); version-only changes do not invalidate it.
-  No process starts on a `prepare`.
+  bounded acquisition outside served preparation (`store_snapshot`; the Claude account read writes it from the same
+  exchange). With no snapshot the bridge refuses (`native_catalog_unavailable`). A snapshot is reused only while its
+  binding equals the current connection and controls (`native_binding_changed` otherwise, for example after an
+  account change); version-only changes do not invalidate it. No process starts in this module.
 - `from_claude_initialize` and `from_codex_models` map the documented payloads (Claude initialization `models[]`:
   `value`, `resolvedModel`, `supportsEffort`, `supportedEffortLevels`; the Codex catalog `{model, supported_efforts}`)
-  into snapshot models, for that acquisition. Parsing a payload is not qualifying its source.
+  into snapshot models.
 """
 from runtime import routing, routing_launch, routing_observations as collector
 from runtime.software_versions import MINIMUM_VERSIONS, at_least
@@ -27,8 +29,15 @@ MAX_MODELS = 32
 
 
 def current_binding(client):
-    """The verified binding of the running `client`, or None: no source of it is qualified."""
+    """A code-supplied binding of the running `client`, or None (the production default)."""
     return None
+
+
+def _binding(settings_path, client):
+    """`current_binding`, else for Claude Code the current native account read's binding."""
+    from runtime import claude_usage
+    found = current_binding(client)
+    return found if found is not None or client != claude_usage.CLIENT else claude_usage.binding(settings_path)
 
 
 def _path(settings_path):
@@ -80,7 +89,7 @@ def identities(client, models):
 
 def catalog(settings_path, client):
     """(route identities, None) from the stored snapshot bound to the current client, or (None, reason)."""
-    binding = current_binding(client)
+    binding = _binding(settings_path, client)
     if not _binding_ok(binding):
         return None, 'native_binding_unverified'
     if at_least(binding['client_version'], MINIMUM_VERSIONS[client]) is False:

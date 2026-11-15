@@ -10,6 +10,76 @@
 
 **Spec:** [Smart Routing redesign](../specs/2026-11-10-smart-routing-redesign-design.md), approved by the user on 10 November 2026. It amends the [8 November design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) and the [C.3 wiring design](../specs/2026-11-10-smart-routing-c3-wiring-design.md). The [8 November plan](2026-11-08-smart-routing.md) stays the record of the merged slices, the pre-canary requirements and the cutover tasks; this plan owns slices F1 to F8 and L1 to L4.
 
+### Account-based simplification, approved 15 November 2026
+
+The user approved the [account-based design amendment](../specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026)
+and requested immediate implementation. It supersedes conflicting current
+billing/UUID/coordinator-attestation requirements below and in inherited contracts.
+Preserve dated decisions and failed/incomplete evidence as history, not passes.
+Do not restart delivered F1–F7 or PR #308's acquisition-ordering work.
+
+**Outcome:** route to the enabled account without changing its settings. Its
+existing paid overflow is allowed. Email + organization when present + sign-in
+type from native account metadata is the practical identity key; a change
+invalidates cached account data. Use supported model/effort parameters and normal
+result checks, not an exhaustive fingerprint of another running coordinator.
+Freshness, unknown readings, applicable constraints, no duplicate uncertain sends
+and genuine shared allowance accounting remain real correctness requirements.
+No direct API Usage/OpenRouter activation, purchases, settings changes or new
+live-purpose budget is authorized.
+
+**Implementation sequence (continue without another approval pause):**
+
+1. **Remove obsolete requirements at their owners.** Update current billing
+   eligibility/dispatch/activation consumers and their tests so an enabled account
+   is not excluded by enabled/unknown Extra Usage or absent provider-disabled
+   proof. Keep direct API/gateway funding gates and historical records unchanged.
+   Update current client guidance and qualification criteria alongside behavior.
+2. **Implement Claude's account/usage producer.** Add
+   `runtime/claude_usage.py` with a fixed bounded zero-inference native exchange
+   (`initialize`, `get_usage` with `skip_behaviors: true`), a nonsecret account
+   key, conservative time projection and validated complete applicable windows.
+   Reuse existing observation/private-store/locking and process-lifecycle patterns;
+   never import qualification tooling into shipped runtime or send a user prompt.
+   Keep diagnostic tooling and its historical escalation evidence untouched.
+3. **Connect acquisition to real consumers.** Reuse PR #308's before-eligibility,
+   preactivation and external-preview boundaries. `LocalSource` reads the native
+   producer's account-bound observations; refresh only demanded stale Claude pools
+   and reuse windows acquired with account metadata. Invalidate on account change
+   or consumed-boundary conflict; an old reading cannot become new capacity.
+4. **Simplify native catalog/launch binding.** Reuse
+   `runtime/adapters/native_catalog.py` and `runtime/native_routing.py` with the
+   supported native metadata snapshot and ordinary model/effort controls. Remove
+   the requirement for a stable UUID or complete current-coordinator settings
+   attestation. Preserve host filtering, explicit choice, substitution reporting,
+   idempotent settlement and unknown-send recovery.
+5. **Honor account-managed overflow.** An exhausted included window must not be
+   treated as a prohibition on the enabled account's normal provider-managed
+   fallback. Reading Extra Usage is not another dispatch prerequisite: prefer
+   usable included allowance, otherwise let the provider enforce the account's
+   configured limits. Represent fallback honestly and separately from included
+   reservations, not as invented free headroom or a newly enabled direct API route.
+   Do not change settings or retry a provider refusal blindly. Preserve genuine
+   included-quota sharing and existing direct-API money controls.
+6. **Verify and deliver.** Write focused tests first and observe the intended RED
+   before implementation. Exercise real `LocalSource`, private stores, the actual
+   native bridge/launcher and synthetic native transport: account-key changes,
+   enabled/disabled/unknown overflow, stale/fallback/future/malformed/partial/scoped
+   readings, concurrent acquisition/backoff, incidental-window reuse, no reader in
+   pure/served paths, exact launch controls, exhaustion with permitted overflow,
+   duplicate permits and uncertain/completed accounting. Validate, commit before
+   selected checks, run the final full-suite gate, obtain independent code/security
+   review, and follow the standing draft-PR/readiness/merge lifecycle. Report
+   package proof and observed native execution separately. Retain existing live
+   caps and requests for any genuinely new qualification authority.
+
+**Owned production interfaces:** `claude_usage` supplies bounded native account
+and usage acquisition into existing local-source/cache boundaries; requests never
+supply producer implementations, credentials or positive observations. The native
+catalog remains a small alias/effort snapshot, not a policy/settings registry.
+Choose exact internal signatures with their callers/tests together before edits;
+retain existing public routing request shapes and ledger history.
+
 ### Advisory replay retirement, approved 13 November 2026
 
 [Validation Edit 14](../../smart-routing-validation.md#edit-14-13-november-2026-advisory-replay-retired)
@@ -60,7 +130,7 @@ The coordinator supplies a Task Profile as part of its existing reasoning; code 
 - **Exact replay.** The strict replay reproduces every admission record, calls no model and reads no live data.
 - **File size.** Each Python file is at or under 1,000 lines. The files with a fixed ceiling in `scripts/validate.py:21-33` must not grow: `runtime/routing.py` 1506, `runtime/delegation.py` 3369, `runtime/evidence.py` 8505, `runtime/changes.py` 6074, `runtime/state.py` 2613, `runtime/usage_budget.py` 1553, `runtime/adapters/codex.py` 1579, `runtime/setup_observation.py` 1526. All but `runtime/state.py` and `runtime/setup_observation.py` (1515 lines) are exactly at their ceiling, so a change in them replaces lines and adds none. A PR that shrinks one lowers its ceiling in the same PR. `scripts/routing.py` has 940 lines; new operations go into runtime modules and the script only dispatches.
 - **No model name** in `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/`, `templates/`, `AGENTS.md` or shipped JSON. Tests use invented names. Dated evidence records under `docs/` keep theirs.
-- **No API Usage or paid fallback this release.** No new API-spending key or organization is authorized. An already connected OpenCode subscription may use a provider-managed key; key-based authentication alone does not make included usage API Usage. F4.5 uses the client's connection without exporting its secret. No account purchase, connection change, Extra Usage enablement or live call is authorized by this plan. API Usage is required next release.
+- **No direct API Usage this release.** No new API-spending key or organization is authorized. Existing account-managed paid fallback is allowed under the 15 November amendment; the workflow never enables it or changes account settings. An already connected OpenCode subscription may use a provider-managed key; key-based authentication alone does not make included usage direct API Usage. F4.5 uses the client's connection without exporting its secret. No account purchase, connection change, Extra Usage setting change or live qualification call is authorized by this plan. Direct API Usage is required next release.
 - **Stored history.** Records written before a change keep their old values. They are read as written, never rewritten and never used for learning.
 - **No stored task text, finding text or file paths** in learning or replay records.
 - **Tests run under a private home:** `T=$(mktemp -d); HOME="${T:?}" python3 -B scripts/test_sharded.py <modules>; rm -rf "${T:?}"`. The full suite is the same command with no module. `python3 -B scripts/validate.py` runs before every push.
@@ -140,7 +210,7 @@ Two reviews blocked this plan for one reason: a rule read a value that only a te
 | Claude pool windows | Existing `opencode_launcher._finish` for reported settled windows; F4.6's qualified `claude_usage` reader and native completion for independently timestamped windows; recovery `seed_window` | The collector, through `LocalSource.windows`, on both OpenCode and native Claude paths | F4.6 must qualify the reader before release. Until then the existing first/idle-gap seed dependency remains an open blocker, not the intended routine flow. |
 | ChatGPT pool windows | The Codex reader `codex_rate_limits.refresh`, outside `--serve`; `seed_window`; `_finish` when the harness reports a reading (not verified for this provider) | The collector | The reader runs only for a kept route on this pool |
 | OpenCode subscription windows and connection identity | F4.5's bounded client usage adapter, using OpenCode's existing connection | The collector and existing window store | Includes short, weekly and monthly limits; no Console cash balance is subscription headroom |
-| Subscription-only billing state per connection | No qualified writer yet for the expanded bindings. Candidates: observable provider-side Go Extra Usage state; Claude `extra_usage.is_enabled` from the qualified reader; Codex ordinary-usage/credit metadata from its reader | F4.5/F4.6 eligibility and dispatch checks, on native and OpenCode aliases | Require account-scoped, current evidence excluding paid crossover. Unknown or enabled paid overflow leaves the path ineligible; ordinary usage permission alone does not prove a no-crossover boundary. A quota seed never supplies billing proof. |
+| Native account identity and optional provider-managed overflow metadata | The account's native metadata reader; Claude uses the practical email/organization/sign-in key under the 15 November amendment | Local-source cache binding, native catalog reuse and account-aware allocation | No disabled-overflow billing proof is required. Enabled or unknown Extra Usage does not exclude an enabled account. Preserve real usage and provider limits; distinguish allowed account-managed overflow from free included quota. Direct API/gateway funding controls are separate. |
 | Native launch settings and outcome | F4.6's native host binding and native dispatch result | Shared admission/settlement and client-facing result | Native model/effort only; observed settings stay unknown where the host does not expose them |
 | Harness-specific model IDs, alias resolution and expressible efforts | F4.2's publication inputs from each client's own catalog; F4.6's native snapshot and invocation controls | `routing_evidence.compile_table`, generated routes and dispatch identity checks | Exact `(model, harness)` lookup; another harness's metadata or benchmark is not a substitute |
 | A window's `protected` share | None | `routing._candidate` | Always 0 |

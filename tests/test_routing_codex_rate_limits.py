@@ -333,10 +333,13 @@ class ExchangeTests(Sandbox):
         calls, real = [], os.killpg
 
         def killpg(pgid, sig):
-            try:
-                os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            try:  # without a non-reaping waitid (macOS Python 3.11) an unreaped leader still answers signal 0
+                if hasattr(os, 'waitid'):
+                    os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                else:
+                    os.kill(pgid, 0)
                 unreaped = True
-            except ChildProcessError:
+            except (ChildProcessError, ProcessLookupError):
                 unreaped = False
             calls.append((sig, unreaped))
             return real(pgid, sig)
@@ -346,7 +349,11 @@ class ExchangeTests(Sandbox):
         calls, patch = self.group_signals()
         with patch:
             self.assertEqual(len(self.read()), 1)
-        self.assertEqual(calls, [])
+        if hasattr(os, 'waitid'):
+            self.assertEqual(calls, [])
+        else:  # the documented fallback: the exit is unobservable, so the still-unreaped group is signalled
+            self.assertEqual([sig for sig, _ in calls], [signal.SIGTERM, signal.SIGKILL])
+            self.assertTrue(all(unreaped for _, unreaped in calls), calls)
 
     def test_the_timeout_signals_the_group_only_while_the_leader_is_unreaped(self):
         calls, patch = self.group_signals()

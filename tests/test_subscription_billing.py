@@ -56,10 +56,14 @@ class FactTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertEqual(billing.problem(fact(**change), ROUTE, NOW), 'billing_scope_mismatch')
 
-    def test_enabled_or_unknown_paid_crossover_fails_closed(self):
-        for state in ('enabled', 'unknown', 'disabled_by_user', 'budget_zero'):
+    def test_reported_overflow_never_disqualifies_and_unknown_values_are_malformed(self):
+        # The 15 November account amendment: the enabled account's provider applies its own overflow settings.
+        for state in billing.CROSSOVER:
             with self.subTest(paid_crossover=state):
-                self.assertEqual(billing.problem(fact(paid_crossover=state), ROUTE, NOW), 'billing_crossover_possible')
+                self.assertIsNone(billing.problem(fact(paid_crossover=state), ROUTE, NOW))
+        for state in ('enabled', 'disabled_by_user', 'budget_zero'):
+            with self.subTest(paid_crossover=state):
+                self.assertEqual(billing.problem(fact(paid_crossover=state), ROUTE, NOW), 'billing_malformed')
 
     def test_a_failing_or_absent_source_is_unverified(self):
         class Broken:

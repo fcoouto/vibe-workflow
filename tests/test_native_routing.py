@@ -15,12 +15,12 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import native_routing, routing, routing_launch, routing_observations as collector, routing_paths, \
+from runtime import claude_usage, native_routing, routing, routing_launch, routing_observations as collector, routing_paths, \
     routing_settings, subscription_billing, task_profile
 from runtime.adapters import native_catalog
 from scripts import routing as command
 from tests import test_routing_command as command_tests
-from tests.test_routing_observations import SCOPE, Stores
+from tests.test_routing_observations import SCOPE, Stores, native_reading
 
 CLAUDE_PATH, CODEX_PATH = 'claude-native-subscription', 'codex-chatgpt-subscription'
 BINDINGS = {'claude-code': dict(client_version='invented-2', connection='native-login', controls='agent-alias-effort'),
@@ -76,9 +76,21 @@ class NativeBase(Stores):
     def window(self, pool, window, length, used=100, later=0):
         """Store a reading (setUp's are 10 s old); `later` moves it forward, since an older or equal reading never
         replaces one and a future-dated one is stale."""
-        collector.store_window(self.settings, pool, dict(id=window, limit=1000, used=used, length=length,
-                                                         reset_at=self.now + 3600, rolling=False,
-                                                         observed_at=self.now - 10 + later, unit=collector.WINDOW_UNIT))
+        reading = dict(id=window, limit=1000, used=used, length=length, reset_at=self.now + 3600, rolling=False,
+                       observed_at=self.now - 10 + later, unit=collector.WINDOW_UNIT)
+        if pool == 'claude-subscription':  # the native consumer uses only readings bound to its account read
+            native_reading(self.settings, [reading], int(time.time()))
+        else:
+            collector.store_window(self.settings, pool, reading)
+
+    def opencode_reading(self, used=100):
+        """OpenCode's own unbound reading of the shared Claude pool: it never counts for the native route, and the
+        native route's account-bound readings never count for it."""
+        at = int(time.time()) - 1
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            collector.store_window(self.settings, 'claude-subscription', dict(
+                id=window, limit=1000, used=used, length=length, reset_at=at + 3600, rolling=False, observed_at=at,
+                unit=collector.WINDOW_UNIT))
 
     def newer_readings(self, used=100):
         """Independent telemetry observed after the last completion: the clock moves on and both pools get a reading
@@ -88,9 +100,12 @@ class NativeBase(Stores):
         for pool, windows in (('claude-subscription', (('5h', 18000), ('7d', 604800))),
                               ('chatgpt-subscription', (('7d', 604800),))):
             for window, length in windows:
-                collector.store_window(self.settings, pool, dict(id=window, limit=1000, used=used, length=length,
-                                                                 reset_at=at + 3600, rolling=False, observed_at=at,
-                                                                 unit=collector.WINDOW_UNIT))
+                reading = dict(id=window, limit=1000, used=used, length=length, reset_at=at + 3600, rolling=False,
+                               observed_at=at, unit=collector.WINDOW_UNIT)
+                if pool == 'claude-subscription':
+                    native_reading(self.settings, [reading], int(time.time()))
+                else:
+                    collector.store_window(self.settings, pool, reading)
 
     def billing(self, **change):
         double = subscription_billing.double('native')
@@ -135,6 +150,14 @@ class NativeBase(Stores):
         if permit.get('state') != 'dispatched':
             return permit, None
         return permit, self.complete(attempt, tool(permit))
+
+    def fallback(self, client, attempt):
+        """The account amendment: exhausted fresh included quota dispatches on the enabled account's own
+        provider-managed overflow, recorded distinctly and holding no included claim."""
+        self.assertEqual(self.prepare(client, attempt)['state'], 'dispatched')
+        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
+                      if item['attempt_id'] == attempt)
+        self.assertEqual((record['reserved'], record['reason_codes'][-1]), ({}, routing.FALLBACK))
 
     def holds(self):
         ledger = self.service._ledger(False)
@@ -228,8 +251,9 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual((chosen['state'], chosen['model'], chosen['effort']), ('dispatched', 'invented-small', 'low'))
 
     def test_native_unavailable_route_sends_nothing(self):
+        claude_usage._store(self.settings).unlink()  # the real producer, but no current account read
         tool = NativeTool()
-        permit, completed = self.run_native('claude-code', tool)  # the real billing producer: none
+        permit, completed = self.run_native('claude-code', tool)
         self.assertEqual(permit['state'], 'pending', permit)
         self.assertEqual((tool.calls, completed, self.holds()), ([], None, {}))
 
@@ -239,7 +263,7 @@ class NativeLaunchTests(NativeBase):
         self.billing()
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
         self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
-        self.assertEqual(self.prepare('claude-code', 'q2')['state'], 'pending')  # held
+        self.fallback('claude-code', 'q2')  # included room held: provider-managed overflow, no included claim
         store = collector.window_path(self.settings)
         before = store.read_bytes()
         self.assertEqual(self.complete('q1', dict(kind='complete'))['state'], 'recorded')
@@ -300,6 +324,7 @@ class NativeLaunchTests(NativeBase):
         self.addCleanup(pinned.close)
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=int(time.time()))
+        self.opencode_reading()
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
             dict(attempt_id='oc-x', task='task-oc-x', scope=routing_launch.assignment_scope(self.checkout),
                  choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
@@ -356,7 +381,7 @@ class NativeLaunchTests(NativeBase):
         self.window('claude-subscription', '5h', 18000, used=986, later=1)
         self.assertEqual(self.prepare('claude-code', 'a')['state'], 'dispatched')
         self.assertEqual(self.prepare('claude-code', 'b')['state'], 'dispatched')  # both reservations fit
-        self.assertEqual(self.prepare('claude-code', 'c')['state'], 'pending')  # a third does not
+        self.fallback('claude-code', 'c')  # a third does not fit the included room: account overflow only
         self.assertEqual(self.complete('a', dict(kind='complete'))['state'], 'recorded')
         self.assertEqual(self.prepare('claude-code', 'd')['state'], 'pending')  # the consumed reading is stale now
 
@@ -372,7 +397,7 @@ class NativeLaunchTests(NativeBase):
                          ('recorded', 'uncertain', 'reconcile_subscription'), answer)
         self.assertEqual(self.holds()['n1']['state'], 'uncertain')
         self.assertNotEqual(self.prepare('claude-code')['state'], 'dispatched')  # the same attempt: no new permit
-        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'pending')  # its capacity is still held
+        self.fallback('claude-code', 'n2')  # its included capacity is still held; only overflow remains
 
     def test_native_unknown_send_is_not_retried(self):
         self.billing()
@@ -430,6 +455,7 @@ class NativeLaunchTests(NativeBase):
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=self.now)
+        self.opencode_reading(used=993)
         pinned = command.Service(self.settings, self.ledger_path, project=self.checkout)
         self.addCleanup(pinned.close)
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
@@ -438,9 +464,7 @@ class NativeLaunchTests(NativeBase):
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
         self.assertEqual(held['state'], 'admitted', held)  # the OpenCode alias holds the shared Claude allowance
-        tool = NativeTool()
-        permit, _ = self.run_native('claude-code', tool)
-        self.assertEqual((permit['state'], tool.calls), ('pending', []), permit)
+        self.fallback('claude-code', 'n1')  # the OpenCode alias's included claim is never duplicated
         self.window('claude-subscription', '5h', 18000, used=1000, later=2)
         self.assertEqual(self.prepare('codex', 'c1')['state'], 'dispatched')  # another pool is unaffected
 
@@ -496,6 +520,9 @@ class NativeBoundaryTests(NativeBase):
         with mock.patch.object(native_catalog, 'current_binding', lambda client: changed):
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_changed')
         with mock.patch.object(native_catalog, 'current_binding', lambda client: None):  # the production default
+            # the current account read's binding: another connection than the stored snapshot's
+            self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_changed')
+            claude_usage._store(self.settings).unlink()  # no current account read (the reader is unavailable here)
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_unverified')
         self.assertEqual(self.holds(), {})
 

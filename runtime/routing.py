@@ -442,7 +442,7 @@ def _candidate(data, route, observations, assignment, settings, held, now):
         except BudgetError:
             return None, ['funding_unverified']
     windows = {window['id']: window for window in pool['windows']}
-    vector, constraints, money = {}, [], usage_budget.usage_budget_money.API_MONEY_BUFFER_BP  # F5.A2: dollars
+    vector, constraints, money, short = {}, [], usage_budget.usage_budget_money.API_MONEY_BUFFER_BP, False
     bounds = route.get('next_request_bound') or {}
     for window_id, estimate in route['demand'].items():
         window = windows.get(window_id)
@@ -465,14 +465,14 @@ def _candidate(data, route, observations, assignment, settings, held, now):
             vector[key] = max(vector.get(key, 0), reserve)
         else:
             vector[key] = reserve
-        if reserve > room:
-            return None, ['insufficient_headroom']
+        if reserve > room and (funding or not (short := route.get('provider_fallback') is True)):
+            return None, ['insufficient_headroom']  # included room short of the reservation (holds too): overflow
         constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
                                 resets_at=window.get('reset_at')))
     if funding and any(vector[ORG + funding] > item['headroom'] for item in constraints):
         return None, ['insufficient_headroom']  # the one dollar charge must fit every window it is counted in
-    return dict(route=route['route'], pool=route['pool'], constraints=constraints, vector=vector, cls=cls,
-                spec=route, windows=pool['windows'], revision=revision), []
+    return dict(route=route['route'], pool=route['pool'], constraints=[] if short else constraints, fallback=short,
+                vector={} if short else vector, cls=cls, spec=route, windows=pool['windows'], revision=revision), []
 
 
 def _choice_matches(entry, item):
@@ -492,7 +492,7 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
         if item is not None:
             candidates.append(item)
         excluded += why
-    bucket = [assignment['work_kind'], assignment['complexity_band']]
+    bucket, candidates = [assignment['work_kind'], assignment['complexity_band']], routing_funding.prefer_included(candidates)
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
     u = e = None
     if ranked:
@@ -727,7 +727,7 @@ REQUEST_KINDS = ('primary', 'subagent', 'title', 'compaction', 'generate')
 REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_pool')
 # Lifecycle events: each S3.1 kind is a ledger hold transition; S3.6a adds usage, settlement and `observed` (usage
 # with no transition, e.g. the coordinator's own requests, reported under a known attempt's root and never charged).
-RECORD_KINDS = ('dispatched', 'uncertain', 'not_dispatched', 'complete')
+RECORD_KINDS, FALLBACK = ('dispatched', 'uncertain', 'not_dispatched', 'complete'), 'provider_managed_fallback'
 EVENT_KINDS = RECORD_KINDS + ('observed',)
 EVENT_REQUIRED = ('event_id', 'attempt_id', 'kind')
 EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_attempt_id', 'funding', 'authority')
@@ -857,8 +857,8 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
     if bound:
         if any(key not in remaining or amount > remaining[key] for key, amount in bound.items()):
             return _blocked('envelope_exhausted')
-    elif not any(amount > 0 for amount in remaining.values()):
-        return _blocked('envelope_exhausted')
+    elif not any(amount > 0 for amount in remaining.values()) and FALLBACK not in record.get('reason_codes', ()):
+        return _blocked('envelope_exhausted')  # a provider-managed fallback admission holds no included claim
     result = dict(state='allow', attempt_id=attempt_id, route=record['route'], pool=record['pool'],
                   settings_revision=record['settings_revision'], remaining=remaining)
     if issued is not None:

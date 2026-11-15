@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 import time
 
-from runtime import routing, routing_launch, routing_observations as collector, routing_paths
+from runtime import claude_usage, routing, routing_launch, routing_observations as collector, routing_paths
 from runtime.adapters import native_catalog
 
 CLIENTS = native_catalog.HOSTS
@@ -197,6 +197,10 @@ def command_prepare(service, body):
     reason = _runtime_delegation(service.project, client)
     if reason is not None:
         return _blocked(reason)
+    if client == claude_usage.CLIENT and native_catalog.catalog(service.settings_path, client)[1] is not None:
+        # Cold or changed account: one bounded read bootstraps account, catalog and usage before the catalog gate;
+        # the collector then reuses its windows instead of reading again.
+        claude_usage.refresh(service.settings_path)
     entries, reason = native_catalog.catalog(service.settings_path, client)
     if reason is not None:
         return _blocked(reason)

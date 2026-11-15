@@ -8,7 +8,7 @@ from runtime import (delegation_routing, native_routing, routing, routing_launch
 from runtime.adapters import native_catalog
 from scripts import routing as command
 from tests.test_routing_command import job
-from tests.test_routing_observations import Stores, sub_window
+from tests.test_routing_observations import Stores, native_reading, sub_window
 from tests.test_qualification_canary_ranked import RankedStores
 
 PATH = 'claude-native-subscription'
@@ -41,9 +41,13 @@ class AcquisitionTests(Stores):
         self.reads.append(copy.deepcopy(routes))
         for route in routes:
             self.facts[self.key(route)] = subscription_billing.double('acquisition-test')(route, at)
-            for window, length in (('5h', 18000), ('7d', 604800)):
-                collector.store_window(self.settings, route['pool'], dict(
-                    sub_window(at), id=window, length=length))
+            readings = [dict(sub_window(at), id=window, length=length) for window, length in (('5h', 18000),
+                                                                                              ('7d', 604800))]
+            if route['pool'] == POOL and routing_paths.path_of(route['route']) == PATH:
+                native_reading(self.settings, readings, at)  # the native reader binds its rows to the account
+            else:
+                for item in readings:
+                    collector.store_window(self.settings, route['pool'], item)
 
     def collect(self, refresh=True, **changes):
         options = dict(choices=[dict(IDENTITY, funding='subscription')], harnesses=['claude-native'])
