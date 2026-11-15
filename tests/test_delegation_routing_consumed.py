@@ -12,7 +12,7 @@ commands: a replay of `reconcile_assignment` does not reach the hook, so the pub
 uncertain` followed by the one-shot operator `reconcile_subscription` abandon. The direct hook calls below prove
 crash ordering and mark-once semantics only.
 """
-from contextlib import closing
+from contextlib import closing, contextmanager
 import io
 import json
 import time
@@ -49,7 +49,16 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
                 raise codex_rate_limits.ReadError('codex_unavailable')
             newer['now'] += 2
             return [flows.week_window(newer['now'])]
-        return mock.patch.object(codex_rate_limits, 'read_windows', side_effect=read)
+        return self.acquiring(mock.patch.object(codex_rate_limits, 'read_windows', side_effect=read))
+
+    @staticmethod
+    @contextmanager
+    def acquiring(reader):
+        """`reader` patched in, with the labelled double that acquires like a future qualified native Codex source
+        (the collector itself starts no Codex reader)."""
+        with reader, mock.patch.object(collector, 'refresh_needed',
+                                       flows.synthetic_codex_acquisition(collector.refresh_needed)):
+            yield
 
     def clock(self):
         """A test clock every module reads through `time.time` (moved by the newer-reading double)."""

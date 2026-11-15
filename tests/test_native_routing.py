@@ -15,8 +15,8 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import claude_usage, native_routing, routing, routing_launch, routing_observations as collector, routing_paths, \
-    routing_settings, subscription_billing, task_profile
+from runtime import claude_usage, codex_account, native_routing, routing, routing_launch, \
+    routing_observations as collector, routing_paths, routing_settings, subscription_billing, task_profile
 from runtime.adapters import native_catalog
 from scripts import routing as command
 from tests import test_routing_command as command_tests
@@ -31,6 +31,15 @@ SNAPSHOTS = {'claude-code': [dict(alias='invented-small', resolved='invented-sma
                        dict(alias='invented-codex-large', resolved=None, efforts=['high'])]}
 HARNESS = {'claude-code': 'claude-native', 'codex': 'codex-native'}
 PROVIDER = {'claude-code': 'anthropic', 'codex': 'openai'}
+
+
+REAL_CODEX_WINDOWS = codex_account.usable_windows  # `[]` today: no complete quota source is qualified
+
+
+def synthetic_codex_windows(settings_path, now, stored=None):
+    """TEST-ONLY code-level double for a future qualified native Codex window source: it hands the dispatch, one-use
+    and settlement flows below the readings those tests store for the shared pool. Production returns none."""
+    return collector.LocalSource(settings_path).windows('chatgpt-subscription', now, stored=stored)
 
 
 class NativeTool:
@@ -62,6 +71,7 @@ class NativeBase(Stores):
         real, self.offset = time.time, 0  # a test clock that moves forward only when a test says so
         self.enterContext(mock.patch('time.time', lambda: real() + self.offset))
         self.enterContext(mock.patch.object(native_catalog, 'current_binding', lambda client: BINDINGS.get(client)))
+        self.enterContext(mock.patch.object(codex_account, 'usable_windows', synthetic_codex_windows))
         for client, models in SNAPSHOTS.items():
             native_catalog.store_snapshot(self.settings, client, dict(binding=BINDINGS[client], models=models))
         routing_paths.qualify(self.settings, CLAUDE_PATH, demand={'5h': 5, '7d': 5}, evidence='synthetic-1',
@@ -233,6 +243,16 @@ class NativeLaunchTests(NativeBase):
                                harness='opencode provider openai', provider='openai', evidence_refs=['g'])])
         permit = self.prepare('codex')
         self.assertTrue(permit['route'].startswith(CODEX_PATH + ':'), permit)
+
+    def test_native_codex_without_a_qualified_window_source_sends_nothing(self):
+        """The shared ChatGPT pool holds fresh unbound readings and billing is verified, but the real native Codex
+        source returns no windows: nothing may be admitted, spawned, held or read from the pool or a process."""
+        self.billing()
+        tool = NativeTool()
+        with mock.patch.object(codex_account, 'usable_windows', REAL_CODEX_WINDOWS):
+            permit, completed = self.run_native('codex', tool)
+        self.assertEqual(permit['state'], 'pending', permit)
+        self.assertEqual((tool.calls, completed, self.holds()), ([], None, {}))
 
     def test_native_spawn_receives_the_admitted_settings(self):
         self.billing()

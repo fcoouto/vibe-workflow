@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import (codex_rate_limits, delegation_routing, opencode_launcher, opencode_subscription,
+from runtime import (codex_account, codex_rate_limits, delegation_routing, opencode_launcher, opencode_subscription,
                      openrouter_settings, routing, routing_launch, routing_observations as collector, routing_paths,
                      routing_settings, subscription_billing, usage_settings)
 from scripts import routing as command
@@ -43,11 +43,33 @@ def week_window(at, used=100):
                 unit=collector.WINDOW_UNIT)
 
 
+def synthetic_codex_windows(settings_path, now, stored=None):
+    """TEST-ONLY code-level double for a future qualified native Codex window source (the real
+    `codex_account.usable_windows` returns none today): the Codex path's flows below keep the readings these tests
+    store for the shared pool. Production never uses it."""
+    return collector.LocalSource(settings_path).windows(CODEX_POOL, now, stored=stored)
+
+
+def synthetic_codex_acquisition(real):
+    """TEST-ONLY wrapper of `collector.refresh_needed`: stands in for a future qualified native Codex source that
+    acquires on demand, once per pool before eligibility, through the existing reader lifecycle (a test's reader
+    double) and leaves its readings in the pool store. The collector itself starts no Codex reader today."""
+    def refresh_needed(specs, settings_path, marks=()):
+        failed = real(specs, settings_path, marks)
+        for spec in {item['pool']: item for item in specs if item['route'].startswith(CODEX_PATH + ':')}.values():
+            codex_rate_limits.refresh(settings_path, need=tuple(sorted(spec['demand'])))
+        return failed
+    return refresh_needed
+
+
 class Flow(Stores):
     """A managed checkout pinned to the test's own settings and ledger; every state file lives under its root."""
 
     def setUp(self):
         super().setUp()
+        patcher = mock.patch.object(codex_account, 'usable_windows', synthetic_codex_windows)  # see the double
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # No production billing producer exists: a labelled code-level double stands in for this module's flows.
         billing = mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now:
                                      subscription_billing.double('production-flows')(route, now))
@@ -121,7 +143,8 @@ class SubscriptionFlowTests(Flow):
         # The kept ChatGPT route asks the Codex reader outside `--serve`; its reading is fresh, so the reader answers
         # `fresh` without a process (the class guard refuses any process) and stores nothing.
         refresh = mock.Mock(wraps=codex_rate_limits.refresh)
-        with mock.patch.object(codex_rate_limits, 'refresh', refresh):
+        with mock.patch.object(codex_rate_limits, 'refresh', refresh), \
+                mock.patch.object(collector, 'refresh_needed', synthetic_codex_acquisition(collector.refresh_needed)):
             one_shot = self.prepare('r1', service=self.pinned(one_shot=True))
             serving = self.prepare('r2', service=self.pinned(serving=True))
         self.assertEqual(refresh.call_count, 1)  # the one-shot service only; served preparation never reads
@@ -391,6 +414,9 @@ class CodexDelegationFlowTests(AdmissionFixture, unittest.TestCase):
                                      subscription_billing.double('codex-delegation-flows')(route, now))
         billing.start()
         self.addCleanup(billing.stop)
+        windows_double = mock.patch.object(codex_account, 'usable_windows', synthetic_codex_windows)  # see the double
+        windows_double.start()
+        self.addCleanup(windows_double.stop)
         self.plan()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
