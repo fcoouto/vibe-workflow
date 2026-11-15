@@ -237,6 +237,12 @@ This and Task 3B complete Task 3 under the approved account-continuity revision.
 Keep one integration owner through both outcomes. Serialize source edits and
 review each outcome before releasing the next; do not recreate provider streams.
 
+**Accepted synthetic implementation:** `98faa260..1e5d2c6`. The committed
+32-module gate passed 1,039 tests with zero skips. Independent state/publication
+review and scoped corrupt-state/partial-response re-review passed. Generation-row
+growth retains the existing 1 MiB fail-closed limit; cross-file durability,
+physical power loss and live clients remain unproved. Task 3B is still required.
+
 **Files:** modify `runtime/claude_usage.py`, `runtime/codex_account.py`;
 `runtime/adapters/native_catalog.py` only if its existing exact-schema consumer
 needs adjustment. Tests: `tests/test_claude_usage.py`, `test_codex_account.py`,
@@ -275,25 +281,25 @@ generation. `usable_windows` checks the full token, not a timestamp/key prefix.
 This avoids a new row field/store and closes same-second ABA snapshot reuse.
 Codex `usable_windows` remains `[]`.
 
-- [ ] **1. Add focused failing tests** for same-second A/B/ABA, same-account
+- [x] **1. Add focused failing tests** for same-second A/B/ABA, same-account
   refresh/restart, explicit refusal, transient pending state, legacy None and
   old-writer B-success/clear/new-A, lost/corrupt/re-created store, and failure
   after each publication step. Assert generation equality only for proven
   continuity; ABA/new provenance differs; incomplete states yield no fact/binding.
   Include ABA with old Claude rows at the same timestamp: no included reuse.
-- [ ] **2. Run only the new tests first**, observing intended failures.
+- [x] **2. Run only the new tests first**, observing intended failures.
   Use real disposable producer stores and existing synthetic native transports;
   no actual native executable/account is reachable.
-- [ ] **3. Implement the existing producer transitions/readers** under their
+- [x] **3. Implement the existing producer transitions/readers** under their
   current locks, retained parser/backoff/currentness rules and catalog schema.
   Align directly affected old synthetic fixtures; do not change parser outputs
   or grant identity to missing sources merely to make fixtures green.
-- [ ] **4. Verify** with
+- [x] **4. Verify** with
   `python3 -B -m unittest tests.test_native_account_continuity tests.test_claude_usage tests.test_codex_account tests.test_native_routing`.
   Parent validates, commits and runs the corresponding canonical sharded modules
   plus `test_subscription_acquisition`, `test_subscription_billing` and
   `test_routing_observations` on committed source.
-- [ ] **5. Obtain scoped independent state/publication review**, accepting only
+- [x] **5. Obtain scoped independent state/publication review**, accepting only
   actual ABA/provenance/crash-boundary evidence. Keep live/physical-power-loss
   limits explicit. No Task 3 acceptance or activation yet.
 
