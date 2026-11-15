@@ -66,7 +66,9 @@ def active_pools(data):
 
 def fence(found, data):
     """`routing._candidate`'s `(item, reasons)` under the fence: an included candidate on an active pool becomes the
-    route's provider-managed fallback (`QUOTA_FENCED`) when the route has one, and is excluded otherwise."""
+    route's provider-managed fallback (`QUOTA_FENCED`) when the route has one, and is excluded otherwise. A candidate
+    already classified fallback (`QUOTA_UNKNOWN` or `QUOTA_INSUFFICIENT`) passes unchanged and keeps that disposition:
+    unknown quota takes precedence in the audit record; neither makes an included claim."""
     item, reasons = found
     if item is None or item.get('fallback') or item['cls'] != 'subscription' or item['pool'] not in active_pools(data):
         return found

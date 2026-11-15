@@ -220,9 +220,15 @@ class QuotaOptionalAdmissionTests(Stores):
                     self.assert_fallback(answer)
 
     def test_empty_demand_never_becomes_an_included_claim(self):
-        _, answer = self.admit([sub_route(demand={})], dict(sub=[sub_window(self.now)]))
-        if answer['status'] == 'admitted':
-            self.assert_fallback(answer)
+        refused, answer = self.admit([sub_route(demand={})], dict(sub=[sub_window(self.now)]), attempt='z1')
+        self.assertEqual((excluded(refused), answer['status']), (dict(sub='route_invalid'), 'pending'))  # collector
+        observations = self.collect([sub_route()], dict(sub=[sub_window(self.now)]))['observations']
+        observations['routes'][0]['demand'] = {}  # a caller snapshot: an eligible account with an empty demand
+        assignment = dict(attempt_id='z2', task='t-z2', role='software-engineer', work_kind='implementation',
+                          complexity_band='medium', scope=SCOPE, choice=choice_of(sub_route()))
+        answer = routing.admit(assignment, dict(strategy_ids=[], reason_codes=[]), dict(
+            routing.routing_settings.resolve({}), revision=0), observations, ledger=self.service._ledger(True, True))
+        self.assert_fallback(answer)  # admitted as provider-managed fallback with reserved={}, never a zero-cost claim
 
     def test_known_included_wins_unless_explicit_choice_excludes_it(self):
         known = sub_route('known', model='m-known', pool='known')

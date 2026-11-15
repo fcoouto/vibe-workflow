@@ -147,8 +147,10 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
         with self.reader():
             for name, answer in (('codex', self.codex_alias('alias-codex')),
                                  ('opencode', self.opencode_alias('alias-opencode'))):
-                with self.subTest(alias=name):
-                    self.assertNotEqual(answer['state'], 'admitted', answer)  # never the pre-turn headroom
+                with self.subTest(alias=name):  # never the pre-turn headroom: provider-managed fallback only
+                    record = self.find('alias-' + name)
+                    self.assertEqual((answer['state'], record['reserved'], record['reason_codes'][-2:]),
+                                     ('admitted', {}, ['quota_unknown', 'provider_managed_fallback']), answer)
         claude = self.direct('other-pool', 'opencode', routing_launch.shim_harness('claude-agent'),
                              provider='claude-agent', model='invented-claude-model', effort='high')
         self.assertEqual(claude['state'], 'admitted', claude)  # an unrelated pool stays usable
@@ -165,8 +167,10 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
         self.assertEqual(calls, [(CODEX_POOL, attempt, 'dispatched')])
         self.assertEqual(self.hold(attempt), 'released')
         self.assertGreater(collector.consumed_at(self.settings, CODEX_POOL), 0)
-        self.assertNotEqual(intent['routing']['state'], 'admitted', intent)  # the same pre-turn reading is stale
-        self.assertIsNone(self.find(attempt + '.c1'))
+        self.assertEqual(intent['routing'], dict(state='admitted', attempt_id=attempt + '.c1'), intent)
+        record = self.find(attempt + '.c1')  # the same pre-turn reading is stale: fallback only, no included claim
+        self.assertEqual((record['reserved'], record['reason_codes'][-2:]),
+                         ({}, ['quota_unknown', 'provider_managed_fallback']))
 
     def test_an_independently_newer_reading_restores_the_continuation_on_the_same_route(self):
         self.ready()

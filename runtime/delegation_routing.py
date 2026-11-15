@@ -469,13 +469,16 @@ def _continuation_attempt(record, value):
 def _close_turns(service, record):
     """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
     ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`. The
-    reason a turn's hold had to stay held (`_close`), or None."""
+    reason a turn's hold had to stay held (`_close`, else `turn_close_refused` for any close not recorded), or None.
+    A recorded reply, a duplicate included, closed it."""
     data, kept = _holds(service), None
     for attempt, hold in sorted(data.get('holds', {}).items()):
         if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
             kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
             if kind is not None:
-                kept = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt)).get('reason') or kept
+                closed = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt))
+                if closed.get('state') != 'recorded':  # the hold still counts: no fresh permit on top of it
+                    kept = closed.get('reason') or kept or 'turn_close_refused'
     return kept
 
 
