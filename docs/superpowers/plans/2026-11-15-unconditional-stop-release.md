@@ -92,5 +92,15 @@ The failure record is published as draft
 No Claude probe, full-suite run or release has occurred. Further native attempts
 need a separately authorized allocation after diagnosis; the existing failed
 attempt cannot be replayed.
+
+Separately approved model-free diagnosis subsequently reproduced
+`rpc.invalid_input` for the timing schema's `sessionID.pattern`. The first
+model-free attempt stopped on a premature inventory read; a newly authorized
+corrected attempt used a bounded activation wait and captured the untruncated
+error. It made three HTTP calls, no model requests, and stopped cleanly.
+This identifies a copied-schema failure mechanism, not native race/UI proof or
+the missing historical response body. No schema fix or further native attempt
+is authorized by that closed diagnostic allocation. Claude and release remain
+held; all earlier failed receipts remain preserved.
 Earlier source and 57-request public-route proof remain unchanged and scoped;
 they do not satisfy the newly requested Claude/UI/race observations.

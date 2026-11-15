@@ -19,6 +19,10 @@ either case executed. It also observed a changed shared-settings hash with
 unknown attribution. Neither native race nor new TUI coverage is qualified;
 see the [attempt report](../docs/qualification/2026-11-14-unconditional-stop.md#ui-and-native-race-attempt--15-november).
 The user's Preserve-login decision holds Claude testing and release.
+A separately approved model-free probe later reproduced rejection of the timing
+RPC's JSON Schema `pattern` keyword. That is a diagnostic-harness failure, not a
+stop-gate denial; native UI/race qualification is still pending. See
+[the diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#model-free-timing-rpc-diagnosis--15-november).
 
 ## What it does
 

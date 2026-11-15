@@ -294,3 +294,63 @@ The full Python suite has not run for this task. No version bump, tag, package
 publication, marketplace update or personal installation occurred.
 Claude execution and final release qualification remain blocked separately;
 PR #294 stays deferred, draft/BLOCKED, unmerged and unreleased.
+
+## Model-free timing RPC diagnosis — 15 November
+
+The user separately approved bounded model-free diagnosis without replaying the
+failed campaign. Offline error-capture checks first failed against status-only
+capture, then passed with bounded reading, cancellation and redaction.
+
+The first isolated attempt stopped after a single inventory GET returned an empty
+plugin list. It sent no arm request. Static inspection of the pinned OpenCode
+2.2.6 binary established that `plugin.list` returns current inventory immediately;
+it does not wait for activation. `agent.list` provides a bounded activation wait.
+The empty response did not prove configuration failure or eventual activation
+success. This failed prerequisite and its consumed allocation remain preserved.
+
+After a separate user approval, a fresh corrected attempt waited through
+`agent.list`, verified active timing/guard plugins with `plugin.list`, then called
+`arm` exactly once. Three offline sequence regressions first failed against the
+inventory-only baseline, then passed after adding the activation wait. All seven
+capture/sequence checks passed before native execution.
+
+The corrected native observation used three HTTP calls, zero model requests and
+754 ms, within its three-call/five-minute/no-retry allocation. The original copied
+timing plugin and barrier were unchanged and hash-bound before startup. The
+untruncated HTTP 400 response identified:
+
+```text
+rpc.invalid_input
+Patterns may block validation and are disabled. Use patterns: "apply" for trusted schemas or "ignore" to discard them.
+  at ["schema"]["properties"]["sessionID"]["pattern"]
+```
+
+This reproduces rejection of the JSON Schema `pattern` keyword during input-schema
+decoding. It is not a malformed session-ID value or a production stop-gate denial.
+No successful arm, session creation, prompt, edit, race callback or frontend ran.
+The opaque former race-session ID was not queried or resumed.
+
+Both attempts used fresh private HOME/XDG/configuration/database/temp paths,
+outside-write containment and loopback-only outbound networking. The corrected
+inventory confirmed active diagnostic guard/timing plugins and no Claude provider.
+The public OpenCode provider is protected from removal in this binary; the
+corrected attempt did not claim a disabling directive removed it. Its private
+account, credential and session tables were empty. No Claude or Keychain operation
+ran.
+
+The corrected server exited zero, was reaped, and its owned process group was
+independently confirmed absent. All pinned sources and earlier failed receipts
+matched. The six selected shared-file existence/content records matched during
+each model-free window; neither result resolves earlier preservation failures.
+
+Private corrected-probe SHA-256 bindings:
+
+- Captured response: `9e14e4c4092808b48746ac5baba276b67c697a0b232432ee01f0cf474ffc55d0`.
+- Result: `4123a2c13436e748f2834c9ea51c2241a5840f18470ec20c1e01a16f043d4f6b`.
+- Native binary: `90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15`.
+
+The copied-schema rejection supplies a supported mechanism for the historical
+HTTP 400. It does not recover that missing original response or retroactively
+establish complete original diagnostic-source provenance. No schema fix,
+replacement inference campaign, full Python suite or release followed.
+Native UI/race execution and Claude qualification remain pending.
