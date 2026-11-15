@@ -14,7 +14,8 @@ while a header-seeded fallback strips both. The only raw limit kind with known m
 fallback, partial or malformed answer leaves usage unknown, never zero or spare. Session telemetry must show zero
 inference (cost, API duration, model usage) and no transcript behaviors, or nothing at all is stored.
 
-Windows are stored bound to the account key and the exchange (`account`, observed time): the native consumer uses
+Windows are stored bound to the account key and the exchange (under `<window>@<key prefix>` with `account`, so they
+never replace another client's row of the shared pool, nor it theirs; and the observed time): the native consumer uses
 only rows of the current account's latest confirmed exchange (`usable_windows`), so another client's or account's
 reading of the shared pool, or an earlier exchange's window beside a partial newer one, is never its headroom.
 Extra Usage is recorded as `enabled`, `disabled` or `unknown` and is never a dispatch prerequisite: an enabled
@@ -331,15 +332,22 @@ def account(settings_path, now):
     return found
 
 
+def bound_id(window, key):
+    """The store key of this account's reading of `window` (a key-digest prefix, never an identifier)."""
+    return '%s@%s' % (window, key[:12])
+
+
 def usable_windows(settings_path, now, stored=None):
-    """The pool rows the native consumer may use: bound to the current account and to its latest confirmed
-    exchange. `stored` is one read of the window store when the caller has it."""
+    """The pool rows the native consumer may use: bound to the current account and observed no earlier than its
+    latest confirmed exchange (`usage_at`; none after a failed, partial or fallback read). `stored` is one read of
+    the window store when the caller has it."""
     current = account(settings_path, now)
     if current is None or not routing._amount(current.get('usage_at')):
         return []
     rows = observations.LocalSource(settings_path).windows(POOL, now, stored=stored)
-    return [row for row in rows if row.get('account') == current['key'] and row.get('observed_at') == current[
-        'usage_at']]
+    by_id = {bound_id(window, current['key']): window for window in METERS.values()}
+    return [dict(row, id=by_id[row['id']]) for row in rows if row['id'] in by_id
+            and row.get('account') == current['key'] and row['observed_at'] >= current['usage_at']]
 
 
 def usable(settings_path, now):
@@ -424,7 +432,7 @@ def _record(settings_path, init, use, started):
     if problem is not None:
         raise problem
     for item in windows:
-        observations.store_window(settings_path, POOL, dict(item, account=key))
+        observations.store_window(settings_path, POOL, dict(item, id=bound_id(item['id'], key), account=key))
     _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow,
                                       usage_at=usage_at))  # confirmed only after every row is stored
     return windows

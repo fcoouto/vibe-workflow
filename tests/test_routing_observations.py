@@ -108,6 +108,22 @@ def refuse(name):
     return call
 
 
+NATIVE_KEY = 'a' * 32  # an invented derived native Claude account key
+
+
+def native_reading(settings, windows, at):
+    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record and
+    `claude-subscription` rows bound to it. A code-level fixture, never a qualified observation."""
+    from runtime import claude_usage
+    current = claude_usage._state(settings).get('account') or {}
+    first = min([item['observed_at'] for item in windows] + ([current['usage_at']] if current.get('usage_at') else []))
+    claude_usage._save(settings, account=dict(key=NATIVE_KEY, observed_at=at, client_version='invented-2',
+                                              overflow='unknown', usage_at=first))
+    for item in windows:
+        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], NATIVE_KEY),
+                                                                 account=NATIVE_KEY))
+
+
 class Stores(unittest.TestCase):
     """Temporary routing settings and ledger, both away from every default path."""
 

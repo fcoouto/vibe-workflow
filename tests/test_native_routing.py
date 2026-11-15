@@ -15,12 +15,12 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import native_routing, routing, routing_launch, routing_observations as collector, routing_paths, \
+from runtime import claude_usage, native_routing, routing, routing_launch, routing_observations as collector, routing_paths, \
     routing_settings, subscription_billing, task_profile
 from runtime.adapters import native_catalog
 from scripts import routing as command
 from tests import test_routing_command as command_tests
-from tests.test_routing_observations import SCOPE, Stores
+from tests.test_routing_observations import SCOPE, Stores, native_reading
 
 CLAUDE_PATH, CODEX_PATH = 'claude-native-subscription', 'codex-chatgpt-subscription'
 BINDINGS = {'claude-code': dict(client_version='invented-2', connection='native-login', controls='agent-alias-effort'),
@@ -76,9 +76,21 @@ class NativeBase(Stores):
     def window(self, pool, window, length, used=100, later=0):
         """Store a reading (setUp's are 10 s old); `later` moves it forward, since an older or equal reading never
         replaces one and a future-dated one is stale."""
-        collector.store_window(self.settings, pool, dict(id=window, limit=1000, used=used, length=length,
-                                                         reset_at=self.now + 3600, rolling=False,
-                                                         observed_at=self.now - 10 + later, unit=collector.WINDOW_UNIT))
+        reading = dict(id=window, limit=1000, used=used, length=length, reset_at=self.now + 3600, rolling=False,
+                       observed_at=self.now - 10 + later, unit=collector.WINDOW_UNIT)
+        if pool == 'claude-subscription':  # the native consumer uses only readings bound to its account read
+            native_reading(self.settings, [reading], int(time.time()))
+        else:
+            collector.store_window(self.settings, pool, reading)
+
+    def opencode_reading(self, used=100):
+        """OpenCode's own unbound reading of the shared Claude pool: it never counts for the native route, and the
+        native route's account-bound readings never count for it."""
+        at = int(time.time()) - 1
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            collector.store_window(self.settings, 'claude-subscription', dict(
+                id=window, limit=1000, used=used, length=length, reset_at=at + 3600, rolling=False, observed_at=at,
+                unit=collector.WINDOW_UNIT))
 
     def newer_readings(self, used=100):
         """Independent telemetry observed after the last completion: the clock moves on and both pools get a reading
@@ -88,9 +100,12 @@ class NativeBase(Stores):
         for pool, windows in (('claude-subscription', (('5h', 18000), ('7d', 604800))),
                               ('chatgpt-subscription', (('7d', 604800),))):
             for window, length in windows:
-                collector.store_window(self.settings, pool, dict(id=window, limit=1000, used=used, length=length,
-                                                                 reset_at=at + 3600, rolling=False, observed_at=at,
-                                                                 unit=collector.WINDOW_UNIT))
+                reading = dict(id=window, limit=1000, used=used, length=length, reset_at=at + 3600, rolling=False,
+                               observed_at=at, unit=collector.WINDOW_UNIT)
+                if pool == 'claude-subscription':
+                    native_reading(self.settings, [reading], int(time.time()))
+                else:
+                    collector.store_window(self.settings, pool, reading)
 
     def billing(self, **change):
         double = subscription_billing.double('native')
@@ -236,8 +251,9 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual((chosen['state'], chosen['model'], chosen['effort']), ('dispatched', 'invented-small', 'low'))
 
     def test_native_unavailable_route_sends_nothing(self):
+        claude_usage._store(self.settings).unlink()  # the real producer, but no current account read
         tool = NativeTool()
-        permit, completed = self.run_native('claude-code', tool)  # the real billing producer: none
+        permit, completed = self.run_native('claude-code', tool)
         self.assertEqual(permit['state'], 'pending', permit)
         self.assertEqual((tool.calls, completed, self.holds()), ([], None, {}))
 
@@ -308,6 +324,7 @@ class NativeLaunchTests(NativeBase):
         self.addCleanup(pinned.close)
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=int(time.time()))
+        self.opencode_reading()
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
             dict(attempt_id='oc-x', task='task-oc-x', scope=routing_launch.assignment_scope(self.checkout),
                  choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
@@ -438,6 +455,7 @@ class NativeLaunchTests(NativeBase):
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=self.now)
+        self.opencode_reading(used=993)
         pinned = command.Service(self.settings, self.ledger_path, project=self.checkout)
         self.addCleanup(pinned.close)
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
@@ -502,6 +520,9 @@ class NativeBoundaryTests(NativeBase):
         with mock.patch.object(native_catalog, 'current_binding', lambda client: changed):
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_changed')
         with mock.patch.object(native_catalog, 'current_binding', lambda client: None):  # the production default
+            # the current account read's binding: another connection than the stored snapshot's
+            self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_changed')
+            claude_usage._store(self.settings).unlink()  # no current account read (the reader is unavailable here)
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_unverified')
         self.assertEqual(self.holds(), {})
 

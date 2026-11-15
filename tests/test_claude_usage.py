@@ -115,7 +115,7 @@ class ExchangeTest(Reader):
     def test_success_stores_conservative_windows_account_and_catalog(self):
         before = int(time.time())
         self.assertEqual(self.refresh()['state'], 'stored')
-        windows = {item['id']: item for item in collector.LocalSource(self.settings).windows(claude_usage.POOL, 0)}
+        windows = {item['id']: item for item in claude_usage.usable_windows(self.settings, int(time.time()))}
         self.assertEqual(set(windows), {'5h', '7d'})
         self.assertEqual(windows['5h']['used'], 400)
         self.assertEqual(windows['7d']['length'], 7 * 86400)
