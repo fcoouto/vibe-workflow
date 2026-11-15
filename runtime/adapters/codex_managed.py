@@ -25,7 +25,8 @@ def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, 
             'custom_tool_call', 'custom_tool_call_output', 'function_call', 'function_call_output', 'local_shell_call'}]
         calls = [row for row in rows if row['payload'].get('call_id') == call_id]
         native_call_id = call_id
-        if case_id == 'post-tool-handling' and raw is not None:
+        if (case_id == 'post-tool-handling' and raw is not None
+                and (child_patch or not calls or calls[0]['payload'].get('name') == 'exec')):
             pairs = codex._exec_wrapped_pairs(raw, data, turn_id, tools=('apply_patch',))
             matches = [(outer, pair) for outer, pair in pairs.items()
                 if call_id in (outer, pair[0]['payload']['call_id'])]
