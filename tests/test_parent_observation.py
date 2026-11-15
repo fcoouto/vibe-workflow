@@ -44,19 +44,21 @@ class ParentObservationTests(unittest.TestCase):
         with state._database(self.scope) as db:
             return evidence._read(self.scope, task['qualification_before'], db=db)
 
-    def deny(self, *, wrapped=False):
+    def deny(self, *, wrapped=False, same_id=False):
+        native_call_id = 'call-parent-outer' if wrapped else 'parent-only-call'
         payload = dict(hook_event_name='PreToolUse', session_id=self.identity['session_id'],
             cwd=str(self.owner.fixture.repo), turn_id='parent-only-turn', tool_name='apply_patch',
-            tool_use_id='parent-only-call', tool_input=dict(command=PATCH))
+            tool_use_id=native_call_id if same_id or not wrapped else 'exec-parent-inner',
+            tool_input=dict(command=PATCH))
         data = json.loads(self.original['settings'].read_bytes())
         data.update(tool_hook_command=[sys.executable, '-I', '-B', str(state.PACKAGE/'scripts/workflow.py'),
-            'codex', 'PreToolUse'], tool_hook_payload=payload, wrapped_pre=wrapped)
+            'codex', 'PreToolUse'], tool_hook_payload=payload, wrapped_pre=wrapped, native_call_id=native_call_id)
         self.original['settings'].write_text(json.dumps(data))
         subprocess.run([str(self.original['executable']), 'exec', '--json', 'software-parent-only'],
             cwd=self.owner.fixture.repo, check=True, capture_output=True, timeout=10)
         task = state.task_status(self.scope, 'codex', self.identity['session_id'])['task']
         return self.identity | dict(expected_revision=task['revision'], stream='parent',
-            turn_id=payload['turn_id'], call_id=payload['tool_use_id'])
+            turn_id=payload['turn_id'], call_id=native_call_id)
 
     def test_task_start_captures_immutable_before_state_without_delegation(self):
         with state._database(self.scope) as db:
@@ -97,17 +99,35 @@ class ParentObservationTests(unittest.TestCase):
         with state._database(self.scope) as db:
             self.assertEqual(db.execute('select count(*) from assignments').fetchone()[0], 0)
 
-    def test_wrapped_parent_denial_uses_outer_call_id(self):
-        self.begin()
+    def test_wrapped_denial_without_native_relation_keeps_the_real_receipt_unjoined(self):
+        before = self.before(self.begin()['task'])
         selected = self.deny(wrapped=True)
-        self.assertEqual(selected['call_id'], 'parent-only-call')
-        witness = codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
-        self.assertTrue(doctor._native_witness_content(witness)['observations']['pre-tool-enforcement'])
+        self.assertEqual(selected['call_id'], 'call-parent-outer')
+        with state._database(self.scope) as db:
+            receipts = db.execute('select rowid,tool_call_id,fingerprint,conflicted from receipts where rowid>?',
+                (before['receipt_watermark'],)).fetchall()
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0][1:], ('exec-parent-inner', codex.patch_input_fingerprint(PATCH), 0))
+        raw = self.original['rollout'].read_bytes()
+        self.assertNotIn(b'exec-parent-inner', raw)
+        self.assertNotIn(b'item_completed', raw)
+        with self.assertRaisesRegex(codex.ObservationError, '^native_hook_correlation_unavailable$'):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+        self.assertEqual(self.original['canary'].read_text(), 'before\n')
+        with self.assertRaises(codex.ObservationError):
+            codex.observe_managed_case(self.scope, selected | dict(call_id='exec-parent-inner'),
+                self.allocation['reference'], 'pre-tool-enforcement')
+
+    def test_wrapped_denial_cannot_borrow_a_same_id_core_receipt(self):
+        self.begin()
+        selected = self.deny(wrapped=True, same_id=True)
+        with self.assertRaisesRegex(codex.ObservationError, '^native_hook_correlation_unavailable$'):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
 
     def test_parent_observation_rejects_wrong_selectors_and_post_tool_claim(self):
         self.begin()
         selected = self.deny()
-        for changes in (dict(session_id='foreign'), dict(turn_id='foreign'), dict(call_id='foreign'),
+        for changes in (dict(session_id='foreign'), dict(turn_id='foreign'), dict(call_id='foreign'), dict(scope_ref='foreign'),
                 dict(expected_revision=selected['expected_revision'] + 1)):
             with self.subTest(changes=changes), self.assertRaises((startup.StartupError, codex.ObservationError)):
                 codex.observe_managed_case(self.scope, selected | changes, self.allocation['reference'], 'pre-tool-enforcement')
