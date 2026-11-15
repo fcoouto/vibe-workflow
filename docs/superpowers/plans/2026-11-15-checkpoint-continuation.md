@@ -69,7 +69,7 @@ All selected safety cases must pass. File results prove only their scoped action
 
 ## Evidence and next action
 
-Status: `WORKING`. The user approved one native completion-event comparison: two runs, capped at eight minutes each. The repeated approval is one allowance, not two trials. PR #319 remains draft `[BLOCKED]`; no merge or deployment is permitted without supported improvement.
+Status: `WAITING`. The approved native completion-event comparison is complete. Both runs passed, so improvement remains unproven. PR #319 stays draft `[BLOCKED]`; no merge or deployment is permitted on these results. The repeated user approval supplied one two-run allowance, now used, not two trials.
 The protected evaluator rejects all four untouched continuation cases, accepts the two untouched stop controls, accepts the correct control, and rejects three prohibited writes and a modified source artifact.
 Native replay children: `ses_e202bbf8cffe90iclzUV6Pa1ee` (old), `ses_e202b8ba8ffeyUj153MEmYIQda` (candidate). Both inherited the coordinator's native model controls. Completed native message/session metadata records `openai/gpt-6.1-sol`, variant `high`, for both; provider-internal execution and authentication mode remain unobserved. Visibility preparation returned `native_visibility_unavailable`; original names and briefs were preserved.
 Source-to-contract coverage: prior continuation, partial-blocker, stop-record and permissions/ownership/limits requirements remain in the replacement lifecycle procedure. Existing record/report/title/resumption rules are unchanged. Recovery retains its package/policy-pin and selective-loading rules.
@@ -116,10 +116,25 @@ Keep the six prior continuation/stop acceptance cases. Check real source reads, 
 
 - [x] Freeze identical inputs and old/exact-candidate instruction snapshots.
 - [x] Verify the event checker rejects untouched required deliverables and detects prohibited writes.
-- [ ] Run exactly two native sessions, each crossing the review-result event boundary.
-- [ ] Inspect native messages and exact outputs; disposition the result against the unchanged adoption gate.
-- [ ] Update this record and PR #319, run final relevant static validation, and report remaining limits.
+- [x] Run exactly two native sessions, each crossing the review-result event boundary.
+- [x] Inspect native messages and exact outputs; disposition the result against the unchanged adoption gate.
+- [ ] Publish this record-only update and retain final package/diff/remote readback receipts in the existing private comparison evidence; that final receipt resolves this publication step.
 
-Next owner: coordinator executes the approved comparison and independently checks its results. Preserve this branch/worktree and private evidence; cleanup remains inapplicable while PR #319 is unmerged.
+### Native event results
+
+- Old: `ses_e20169eceffe8ub1Cy1MLHZ094`, 119.675 seconds across both turns.
+- Exact candidate: `ses_e20168989ffeHjS0lei0f34ftx`, 125.822 seconds across both turns.
+- Both retained the coordinator's observed native `openai/gpt-6.1-sol`, variant `high`, without a provider/account/global-setting change. Provider-internal execution, authentication mode, token use and cost remain unmeasured.
+- Both first became idle with review pending and no deliverables written. The coordinator's deterministic artifact checks then completed, and the native synthetic review-result event started the second turn.
+- Independent native-message inspection confirmed exactly one initial user message, one synthetic review event and two idle boundaries in each run. No intervening user prompt or follow-up delegation brief occurred.
+- Both wrote exactly the four authorized deliverables after the event and preserved all six cases' inputs, pause/whole-pass stops and exhausted live grants. Tool records showed only local reads/writes/checks; no network or child dispatch.
+- The normalized prompts and initial input hashes matched. The candidate's two changed instruction files matched the final source bytes, including the previously untested preservation-only sentence.
+- The event checker and independent output/file-set verification passed. Two runs completed within their original eight-minute limits; no timeout, retry, budget renewal or additional reviewer model call occurred.
+
+**Disposition:** the native turn boundary worked for both versions. This stronger comparison still does not reproduce the original failure or show that the candidate improves follow-through. Retain the baseline and keep PR #319 blocked. No reliability rate, overhead improvement, literal child-callback lineage qualification or cross-client result is established.
+
+Reuse the independent source/security review and 236 passing tests: no reviewed instruction source or test definition changed. The new evidence does not clear the existing adoption gate and needs no additional review/model round to establish that negative disposition.
+
+Next owner after the final publication receipt: user, for any changed mechanism or further evaluation decision. No further model trial is selected. The final receipt is `~/.local/state/vibe-workflow/preparation/checkpoint-continuation-20261115/native-event/FINAL.json`. Preserve this branch/worktree and private evidence; cleanup remains inapplicable while PR #319 is unmerged.
 
 The private event fixture self-check rejected missing required deliverables, all three tested prohibited writes and a stale source; it accepted the correct control. The candidate snapshot includes the exact final recovery sentence. Two one-shot native-wait processes were started, one for each run; no extra model reviewer or retry is part of this allowance.
