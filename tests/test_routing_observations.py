@@ -619,7 +619,7 @@ class LocalSourceTests(Stores):
         reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
         with mock.patch.object(codex_rate_limits, 'refresh', reader):
             early = self.collect(table=table, strategy_ids=claude[:2] + ['o1'] + claude[2:], refresh_windows=True)
-        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(reader.call_count, 0)  # Task 3B: the pool reader proves no OpenCode account
         self.assertEqual(early['observations']['shortlist'], claude[:2] + ['o1'] + claude[2:9])
 
     def test_subscription_candidate_beyond_position_64_is_not_lost(self):
@@ -662,8 +662,8 @@ class LocalSourceTests(Stores):
         self.assertEqual(result['observations']['shortlist'], order[:10])
         self.assertEqual(excluded(result), {})  # the failed ChatGPT read leaves their quota unknown: fallback only
         self.assertEqual([(route['strategy_id'], route['demand'] is None) for route in result['observations']['routes']],
-                         [(sid, n < 5) for n, sid in enumerate(order[:10])])  # still exactly the cut, never refilled
-        self.assertEqual((reader.call_count, sorted(read)), (1, ['chatgpt-subscription', 'claude-subscription']))
+                         [(sid, True) for sid in order[:10]])  # Task 3B: no unbound row is a claim; the cut stays
+        self.assertEqual((reader.call_count, sorted(read)), (0, ['chatgpt-subscription', 'claude-subscription']))
 
     def test_preview_collect_and_decision_keep_the_same_shortlist(self):
         """The actual producers: `Service.preview` (no binding, ledger, window, reader or write), the managed
@@ -705,9 +705,9 @@ class LocalSourceTests(Stores):
         with mock.patch.object(codex_rate_limits, 'refresh', reader), mock.patch.object(collector, 'collect', collect):
             decided = managed.handle(json.dumps(dict(body, v=1, op='prepare')).encode())
         self.assertEqual(collected[0]['observations']['shortlist'], preview['shortlist'])
-        self.assertEqual(reader.call_count, 1)  # the late refusal: the ChatGPT routes, no refill
+        self.assertEqual(reader.call_count, 0)  # Task 3B: no pool reader for an OpenCode alias, no refill
         self.assertEqual(decided['state'], 'admitted', decided)
-        self.assertIn(decided['admission']['route'].rsplit(':', 1)[1], preview['shortlist'][5:])
+        self.assertEqual(decided['admission']['route'].rsplit(':', 1)[1], preview['shortlist'][0])  # 3B: all fallback
         # A caller's own snapshot (no `shortlist`) with twelve eligible routes is cut the same way in admission.
         snapshot = collected[0]['observations']
         template = next(route for route in snapshot['routes'] if route['strategy_id'] == 'c0')
@@ -752,8 +752,8 @@ class LocalSourceTests(Stores):
         reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
         with mock.patch.object(codex_rate_limits, 'refresh', reader):
             both = self.collect(table=table, strategy_ids=['o1', 'c1'], refresh_windows=True)
-        self.assertEqual(reader.call_count, 1)  # once, for the kept ChatGPT route's pool only
-        self.assertEqual(reader.call_args.kwargs['need'], ('7d',))
+        self.assertEqual(reader.call_count, 0)  # Task 3B: never started for the kept OpenCode ChatGPT route
+        self.assertIsNone(reader.call_args)
         self.assertEqual((excluded(both), kept(both)['opencode-chatgpt-subscription:o1']['demand']), ({}, None))
 
     def test_choice_filter_keeps_static_source_ids(self):
@@ -877,10 +877,10 @@ class LocalSourceTests(Stores):
             with self.subTest(order=order):
                 result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS])
                 self.assertEqual({key: route['demand'] is None for key, route in kept(result).items()},
-                                 {OPENCODE_CHATGPT: False, NATIVE_CODEX: True})  # Codex: fallback only, never a row
+                                 {OPENCODE_CHATGPT: True, NATIVE_CODEX: True})  # Task 3B: no unbound row for either
                 self.assertEqual(excluded(result), {})
                 windows = result['observations']['pools']['chatgpt-subscription']['windows']
-                self.assertEqual([window['id'] for window in windows], ['7d'])  # the bound producer's view only
+                self.assertEqual([window['id'] for window in windows], [])  # Task 3B: no producer proves the row
 
     def test_the_legacy_reader_runs_once_for_opencode_only_in_either_shortlist_order(self):
         from runtime import codex_rate_limits
@@ -892,7 +892,7 @@ class LocalSourceTests(Stores):
                 with mock.patch.object(codex_rate_limits, 'refresh', reader):
                     result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS],
                                           refresh_windows=True)
-                self.assertEqual(reader.call_count, 1)  # OpenCode's pool read; the native route starts none
+                self.assertEqual(reader.call_count, 0)  # Task 3B: neither route starts the pool-wide reader
                 self.assertEqual((excluded(result), {key: route['demand'] for key, route in kept(result).items()}),
                                  ({}, {OPENCODE_CHATGPT: None, NATIVE_CODEX: None}))  # both fallback only
 

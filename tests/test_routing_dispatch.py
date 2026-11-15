@@ -17,6 +17,22 @@ from scripts import routing as command
 from tests.test_routing_command import (API, Base, SCRIPT, api_observations, check, facts, now, observations,
                                         prepare, prepare_legacy_paid)
 
+
+PATCHES = []
+
+
+def setUpModule():
+    """Task 3B: a test-only seam after the request boundary stands in for trusted collection (`trusted_snapshots`)."""
+    from tests.test_routing_account_continuity import trusted_snapshots
+    PATCHES[:] = trusted_snapshots()
+    for patch in PATCHES:
+        patch.start()
+
+
+def tearDownModule():
+    for patch in reversed(PATCHES):
+        patch.stop()
+
 ROOT = Path(__file__).resolve().parents[1]
 CONSERVATIVE_SESSION = re.compile(r'ses_[0-9a-f]{32}')
 CONSERVATIVE_MESSAGE = re.compile(r'msg_[0-9a-f]{32}')
@@ -40,12 +56,20 @@ def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# Test-only child bootstrap (Task 3B): a dispatching child process gets the same labelled synthetic account fact that
+# `trusted_snapshots` installs in this process (no production seam, flag or input), then runs the unchanged command.
+CHILD = ('import runpy, sys; sys.path.insert(0, %r); '
+         'from runtime import routing_observations as o, subscription_billing as b; d = b.double("caller-snapshot"); '
+         'o.LocalSource.billing = lambda s, r, n: d(r, n); sys.argv = sys.argv[1:]; '
+         'runpy.run_path(sys.argv[0], run_name="__main__")' % str(ROOT))
+
+
 class DispatchBase(Base):
     def ids(self, attempt):
         return routing.admission_ids(self.snapshot(), attempt)
 
     def spawn(self, op, request):
-        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), op, '--settings', str(self.settings),
+        child = subprocess.Popen([sys.executable, '-B', '-c', CHILD, str(SCRIPT), op, '--settings', str(self.settings),
                                   '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
         child.stdin.write(json.dumps(request).encode())
@@ -584,6 +608,8 @@ class LostAcknowledgmentTests(DispatchBase):
     def test_a_process_killed_after_commit_leaves_one_dispatch_and_no_token(self):
         self.service.close()
         code = ('import os, sys; sys.path.insert(0, %r); from scripts import routing as c; '
+                'from runtime import routing_observations as o, subscription_billing as b; '  # test-only fact
+                'd = b.double("caller-snapshot"); o.LocalSource.billing = lambda s, r, n: d(r, n); '
                 'c._write = lambda stdout, response: os._exit(9); '
                 'sys.exit(c.main(["dispatch", "--settings", %r, "--ledger", %r]))'
                 % (str(ROOT), str(self.settings), str(self.ledger)))
@@ -743,7 +769,8 @@ class ServeDispatchTests(DispatchBase):
         self.call(prepare('s1'))
         session = self.ids('s1')['session_id']
         self.service.close()
-        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
+        child = subprocess.Popen([sys.executable, '-B', '-c', CHILD, str(SCRIPT), '--serve', '--settings',
+                                  str(self.settings),
                                   '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
         try:

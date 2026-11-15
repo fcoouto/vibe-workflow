@@ -1004,7 +1004,7 @@ def _fresh_gate(data, attempt_id, fresh, workflow):
             return 'binding_missing'
         if not routing_gates.valid_binding(stored):
             return 'gate_error'
-        if credential_marker(data, record) != stored['credential']:
+        if record.get('billing_class') != 'included_subscription' and credential_marker(data, record) != stored['credential']:
             return 'credential_changed'
         job = stored['job']
         if job is None:
@@ -1059,7 +1059,7 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=Non
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
         admitted.update(route=record['route'], pool=record['pool'])
-        reason = _fresh_gate(data, attempt_id, fresh, workflow) or fallback.dispatch_problem(data, record, settings_path)
+        reason = _fresh_gate(data, attempt_id, fresh, workflow) or fallback.dispatch_problem(data, record, settings_path, moment)
         if reason is not None:
             return reason
         if gates:

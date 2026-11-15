@@ -539,8 +539,8 @@ class ProvenanceTest(BridgeTest):
         self.complete('n1', dict(kind='complete'))
         self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
         self.answer(initialize(email='other@example.invalid'), usage(self.now, limits=None))
-        refused = self.prepare('claude-code', 'n2')  # its admission's own read found another account: never sent
-        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'native_binding_changed'))
+        refused = self.prepare('claude-code', 'n2')  # its collection's own read found another account: never sent
+        self.assertEqual((refused['state'], refused['reason']), ('pending', 'no_feasible_route'))  # account_changed
         self.assertNotEqual(self.holds().get('n2', {}).get('state'), 'dispatched')
         self.assertEqual(self.prepare('claude-code', 'n3')['state'], 'dispatched')  # the current account, fallback only
         record = next(item for item in self.data()['admissions'] if item['attempt_id'] == 'n3')

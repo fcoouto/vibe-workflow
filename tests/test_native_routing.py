@@ -518,8 +518,11 @@ class NativeLaunchTests(NativeBase):
                  choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
-        self.assertEqual(held['state'], 'admitted', held)  # the OpenCode alias holds the shared Claude allowance
-        self.fallback('claude-code', 'n1')  # the OpenCode alias's included claim is never duplicated
+        self.assertEqual(held['state'], 'admitted', held)  # Task 3B: an unbound reading is never its included claim
+        self.assert_no_claim('oc')  # the OpenCode alias is admitted on its account's fallback only
+        self.assertEqual(self.prepare('claude-code', 'n1')['state'], 'dispatched')  # the native read's room is its own
+        self.assertTrue(next(item for item in self.service._ledger(False).snapshot()['admissions']
+                             if item['attempt_id'] == 'n1')['reserved'])
         self.window('claude-subscription', '5h', 18000, used=1000, later=2)
         self.assertEqual(self.prepare('codex', 'c1')['state'], 'dispatched')  # another pool is unaffected
 

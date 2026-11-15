@@ -362,6 +362,7 @@ class Service:
     def _observations(self, value, caller=False):
         """The command's clock decides: a snapshot off it by more than MAX_CLOCK_DRIFT is stale, and the admission
         is stamped with the command's time. Malformed snapshots pass through to admit's own shape check."""
+        value = importlib.import_module(COLLECTOR).caller_snapshot(value) if caller else value  # never its identity
         if self.test_inputs or type(value) is not dict or type(value.get('now')) is not int:
             return value
         now = self.clock()

@@ -77,10 +77,15 @@ def fence(found, data):
     return dict(item, constraints=[], fallback=True, vector={}, quota=QUOTA_FENCED), reasons
 
 
-def dispatch_problem(data, record, settings_path):
-    """Why an included admission may not dispatch now, or None: its pool has open fallback exposure, or a terminal
-    consumption boundary at or after its snapshot time (every reading it used predates or equals that time)."""
-    from runtime import routing_observations
+def dispatch_problem(data, record, settings_path, now):
+    """Why a subscription admission may not dispatch at `now` (the transaction's time), or None. First, for included
+    and provider-managed fallback admissions alike, its admitted account identity (`subscription_billing.
+    dispatch_problem`); then, for an included one only, open fallback exposure on its pool, or a terminal consumption
+    boundary at or after its snapshot time (every reading it used predates or equals that time)."""
+    from runtime import routing_observations, subscription_billing
+    problem = subscription_billing.dispatch_problem(record, settings_path, now)
+    if problem is not None:
+        return problem
     if is_fallback(record) or record.get('billing_class') != 'included_subscription':
         return None
     if record.get('pool') in active_pools(data):

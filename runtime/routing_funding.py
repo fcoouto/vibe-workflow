@@ -177,5 +177,9 @@ def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, rea
                                routes_version=observations.get('routes_version')),
                   risk_band=assignment.get('risk_band'), floor_filled=assignment.get('floor_filled'),
                   strategy={field: spec.get(field) for field in routing.ROUTE_IDENTITY})
-    record['binding'] = routing_gates.binding(copy.deepcopy(workflow), routing.credential_marker(data, record))
+    # A subscription admission (included or fallback) keeps the account marker trusted collection verified for it
+    # (`subscription_billing.marker`, checked again in the dispatch transaction); a funded one its credential marker.
+    marker = spec.get('account_marker') if record['billing_class'] == 'included_subscription' \
+        else routing.credential_marker(data, record)
+    record['binding'] = routing_gates.binding(copy.deepcopy(workflow), marker)
     return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])

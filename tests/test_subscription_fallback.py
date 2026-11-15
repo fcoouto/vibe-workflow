@@ -15,6 +15,22 @@ from tests.test_routing_command import facts, now, observations, prepare
 from tests.test_routing_dispatch import dispatch, record
 from tests.test_routing_subscription_reconcile import ABANDON, Subscription, reconcile
 
+
+PATCHES = []
+
+
+def setUpModule():
+    """Task 3B: a test-only seam after the request boundary stands in for trusted collection (`trusted_snapshots`)."""
+    from tests.test_routing_account_continuity import trusted_snapshots
+    PATCHES[:] = trusted_snapshots()
+    for patch in PATCHES:
+        patch.start()
+
+
+def tearDownModule():
+    for patch in reversed(PATCHES):
+        patch.stop()
+
 DAY = 86400
 
 
@@ -61,7 +77,7 @@ class ExposureTests(FallbackBase):
         data = self.snapshot()
         self.assertIn('sub', active_pools(data))
         included_record = budget.Ledger.admission(data, 'i1')
-        self.assertIsNotNone(dispatch_problem(data, included_record, self.settings))
+        self.assertIsNotNone(dispatch_problem(data, included_record, self.settings, now()))
         refused = self.try_dispatch('i1')
         self.assertEqual(refused['state'], 'blocked', refused)
         self.assertEqual(self.hold('i1')['state'], 'admitted')  # nothing written; the reservation stays held
@@ -73,7 +89,7 @@ class ExposureTests(FallbackBase):
         self.uncertain('f1')
         data = self.snapshot()
         self.assertIn('sub', active_pools(data))  # an uncertain send keeps its unknown exposure
-        self.assertIsNotNone(dispatch_problem(data, budget.Ledger.admission(data, 'i1'), self.settings))
+        self.assertIsNotNone(dispatch_problem(data, budget.Ledger.admission(data, 'i1'), self.settings, now()))
 
     def test_concurrent_fallbacks_need_terminal_coverage_for_every_attempt(self):
         fallback_admission = self.fallback('f1')
@@ -131,8 +147,8 @@ class ExposureTests(FallbackBase):
         data = self.snapshot()
         with mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('no process')):
             self.assertEqual(active_pools(data), {'sub'})
-            self.assertIsNotNone(dispatch_problem(data, budget.Ledger.admission(data, 'i1'), self.settings))
-            self.assertIsNone(dispatch_problem(data, budget.Ledger.admission(data, 'f1'), self.settings))
+            self.assertIsNotNone(dispatch_problem(data, budget.Ledger.admission(data, 'i1'), self.settings, now()))
+            self.assertIsNone(dispatch_problem(data, budget.Ledger.admission(data, 'f1'), self.settings, now()))
 
 
 class TerminalBoundaryTests(FallbackBase):

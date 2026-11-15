@@ -41,7 +41,7 @@ RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
-                'next_request_bound')
+                'next_request_bound', 'account_marker')  # the marker: in memory, from `shortlist`'s verified fact
 WINDOW_FIELDS = ('id', 'limit', 'used', 'length', 'reset_at', 'rolling', 'protected', 'organization',
                  'organization_revision', 'unit')
 # User decision 6 (C.3 design 7.1): the one-shot operator op `seed_window` stores a subscription window no host has
@@ -199,6 +199,16 @@ class LocalSource:
     def model_demand(self, route):
         """No per-model demand mapping is qualified (OpenCode Go's allowance is model-dependent): none."""
         return None
+
+
+def caller_snapshot(value):
+    """A caller-supplied snapshot as admission may use it: a copy whose routes carry no `account_marker`, since only
+    trusted collection supplies admission identity (Task 3B), even when it equals the current fact's marker. Other
+    values pass unchanged to admit's own shape check; the supplied object is never changed."""
+    if type(value) is not dict or type(value.get('routes')) is not list:
+        return value
+    return dict(value, routes=[{key: item for key, item in route.items() if key != 'account_marker'}
+                               if type(route) is dict else route for route in value['routes']])
 
 
 def default_source(settings_path=None):
@@ -583,14 +593,14 @@ def refresh_needed(specs, settings_path, marks=()):
     one reader per pool, a fixed reason and no retry on failure). A Claude reading the account read before
     eligibility already stored is reused, not read again. Returns `{pool: reason}` for each pool left without a
     fresh reading (`reader_busy` or a `codex_*`/`claude_*` reason)."""
-    from runtime import claude_usage, codex_rate_limits
+    from runtime import claude_usage
     need = {}
     for spec in specs:
         if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks and spec['demand'] \
                 and _native(spec) != 'codex':  # no quota reader is qualified for it, and the legacy one is not its own;
-            # unknown demand (None) starts no quota reader merely to reach provider-managed fallback
-            reader = codex_rate_limits if codex_rate_limits.applies(spec) else claude_usage \
-                if claude_usage.applies(spec) else None
+            # unknown demand (None) starts no quota reader merely to reach provider-managed fallback. The legacy
+            # pool-wide Codex reader proves no account for any alias (an OpenCode one included): never started here.
+            reader = claude_usage if claude_usage.applies(spec) else None
             if reader is not None:
                 need.setdefault((reader, spec['pool']), set()).update(spec['demand'])
     failed = {}
@@ -693,14 +703,17 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
                              else None, reason=reason))
 
     for spec in candidates:
-        reason = None
-        if spec['billing_class'] == 'included_subscription' \
-                and not subscription_billing.verified(source, spec, now):
-            reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
+        reason = marker = None
+        if spec['billing_class'] == 'included_subscription':
+            marker = subscription_billing.marker(subscription_billing.fact(source, spec, now), spec, now)
+            if marker is None:
+                reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
         if reason is not None:
             leave(spec, reason)
             continue
         kept = copy.deepcopy(spec)
+        if marker is not None:
+            kept['account_marker'] = marker  # the identity this route was verified with, kept for its admission
         if spec.get('demand_scope') == routing_paths.MODEL_DEMAND and not _model_demand(source, spec):
             kept['demand'] = None  # the path's measured demand is not known to hold for this model: demand unknown
         if spec['billing_class'] == 'gateway':
@@ -805,6 +818,8 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             elif native == 'codex':
                 from runtime import codex_account
                 found = codex_account.usable_windows(settings_path, now, stored) if own else []
+            elif billing == 'included_subscription' and type(source) is LocalSource:
+                found = []  # no producer proves which account or generation a stored unbound row measured: no claim
             else:
                 found = [window for window in found if 'account' not in window]
             for window in found:
@@ -822,6 +837,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             if native != 'codex' or windows:  # a Codex build with no window never claims the shared pool
                 binding.setdefault(spec['pool'], native)
         pool = pools[key]
+        if billing == 'included_subscription' and subscription_billing.marker(subscription_billing.fact(
+                source, spec, now), spec, now) != spec.get('account_marker'):
+            leave(spec, 'account_changed')  # the identity changed while this snapshot was read: never substituted
+            continue
         if binding.get(spec['pool'], native) != native and billing != 'included_subscription':
             leave(spec, 'window_unobserved')  # another consumer's readings of the pool are not this route's
             continue

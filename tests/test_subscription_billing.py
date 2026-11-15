@@ -122,7 +122,7 @@ class CollectorBoundaryTests(Stores):
             return double(route, now)
         host = [routes[2]['harness']]  # the native Codex host only
         result, read = self.collect_static(routes, produce, harnesses=host)
-        self.assertEqual(asked, [routes[2]['route']])  # no foreign connection is queried
+        self.assertEqual(asked, [routes[2]['route']] * 2)  # no foreign connection; verified, rechecked after the read
         self.assertEqual(set(kept(result)), {routes[2]['route']})
         self.assertEqual(read, [routes[2]['pool']])
         result, _ = self.collect_static(routes, double)
