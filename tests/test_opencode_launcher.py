@@ -908,8 +908,8 @@ class WindowUnitTests(LauncherBase):
                                            [route(window_unit='percent')], local.windows, ready,
                                            billing=subscription_billing.double('local-windows')),
                                        **request_of([route()]))
-        self.assertEqual(mismatched['observations']['excluded'],
-                         [dict(route='claude-haiku-low', reason='window_unit_mismatch')])
+        self.assertEqual(mismatched['observations']['excluded'], [])  # Task 2: unusable quota, not an account failure
+        self.assertEqual([item['demand'] for item in mismatched['observations']['routes']], [None])  # fallback only
 
 
 class SignalTests(LauncherBase):

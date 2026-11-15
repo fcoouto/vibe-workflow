@@ -25,11 +25,14 @@ def subscription_shortlist(strategy_ids, routes):
     return found
 
 
-def prefer_included(candidates):
-    """Included allowance first: provider-managed fallback candidates (`fallback`: on fresh readings the included room
-    left after reported use, held reservations and debits cannot cover the reservation, so no included claim is made
-    and the enabled account's provider applies its own overflow configuration) are considered only when no candidate
-    has included room."""
+def prefer_included(candidates, entries=None):
+    """Included allowance first: provider-managed fallback candidates (`fallback`: the included room left after
+    reported use, held reservations and debits cannot cover the reservation, the quota or demand is unknown, or the pool
+    is fenced, so no included claim is made and the enabled account's provider applies its own overflow configuration)
+    are considered only when no candidate has included room. A non-ranked decision's explicit or settings choices
+    (`entries`) filter first: another route's included room never overrides them."""
+    if entries is not None:
+        candidates = [item for item in candidates if any(routing._choice_matches(entry, item) for entry in entries)]
     return [item for item in candidates if not item.get('fallback')] or candidates
 
 
@@ -48,8 +51,11 @@ def in_ranking_order(observations, ranking):
 
 def _eligible(route):
     """A caller route's non-window checks (`routing._candidate` before its pool): a subscription route with its
-    identity, demand, pool and account, reported capable, permitted and binding-enforceable."""
-    return route.get('billing_class') == SUBSCRIPTION and isinstance(route.get('demand'), dict) and all(
+    identity, demand (or unknown demand with provider-managed fallback), pool and account, reported capable, permitted
+    and binding-enforceable."""
+    demand = route.get('demand')
+    known = isinstance(demand, dict) or (demand is None and 'demand' in route and route.get('provider_fallback') is True)
+    return route.get('billing_class') == SUBSCRIPTION and known and all(
         route.get(key) is True for key in ('capable', 'permitted', 'binding_enforceable')) and all(
         routing._text(route.get(key)) for key in ('route', 'pool', 'account', 'strategy_id'))
 
@@ -142,7 +148,7 @@ def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, rea
     item = next(c for c in candidates if c['route'] == chosen)
     spec = item['spec']
     if item.get('fallback'):  # recorded distinctly: provider-managed overflow, never included headroom
-        reasons = [*reasons, routing.FALLBACK]
+        reasons = [*reasons, item.get('quota', 'quota_insufficient'), routing.FALLBACK]  # with its quota disposition
     credential = spec.get('credential') or {}
     ranked = mode == 'ranked'
     harnesses = assignment.get('allowed_harnesses') or []

@@ -488,13 +488,13 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     ranked = routing_funding.is_ranked(assignment, ranking, settings)
     candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
     for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
-        item, why = fallback.fence(_candidate(data, route, observations, assignment, settings, held, now), data)
+        item, why = fallback.fence(fallback.candidate(data, route, observations, assignment, settings, held, now), data)
         if item is not None:
             candidates.append(item)
         excluded += why
-    bucket, candidates = [assignment['work_kind'], assignment['complexity_band']], routing_funding.prefer_included(candidates)
-    reasons = list(ranking.get('reason_codes', [])) if ranked else []
-    u = e = None
+    entries = None if ranked else [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
+    bucket, candidates = [assignment['work_kind'], assignment['complexity_band']], routing_funding.prefer_included(candidates, entries)
+    reasons, u, e = list(ranking.get('reason_codes', [])) if ranked else [], None, None
     if ranked:
         pending, chosen, shares = routing_funding.ranked(data, candidates, excluded, ranking, settings, observations,
                                                          bucket)
@@ -502,7 +502,6 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
             return pending
         mode = 'ranked'
     else:
-        entries = [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
         chosen, shares, mode = None, None, 'worker_choice'
         for entry in entries:
             matching = [c for c in candidates if _choice_matches(entry, c)]
@@ -576,7 +575,7 @@ def _valid_route(route):
     for key in ('route', 'pool', 'account', 'strategy_id', 'billing_class', *ROUTE_IDENTITY):
         if key in route and not _text(route[key]):
             return False
-    if 'demand' in route and not _amounts(route['demand']):
+    if 'demand' in route and not (_amounts(route['demand']) or fallback.unmeasured(route)):
         return False
     if route.get('next_request_bound') is not None and not _amounts(route['next_request_bound'], allow_none=True):
         return False
@@ -596,7 +595,8 @@ def _valid_pool(pool):
     if type(pool) is not dict or not _optional(pool.get('billing_class'), _text):
         return False
     windows = pool.get('windows')
-    if type(windows) is not list or not 0 < len(windows) <= MAX_WINDOWS or not all(_valid_window(w) for w in windows):
+    if type(windows) is not list or not (windows or 'billing_class' not in pool) or len(windows) > MAX_WINDOWS \
+            or not all(_valid_window(w) for w in windows):  # a subscription pool with no reading: quota unknown
         return False
     grant = pool.get('grant')
     return grant is None or (type(grant) is dict and _finite(grant.get('remaining'))

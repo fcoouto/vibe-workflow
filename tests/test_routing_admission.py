@@ -346,8 +346,10 @@ class AllocationTests(Base):
         self.assertEqual(result['class'], 'subscription')
 
     def test_zero_demand_candidates_are_finite(self):
-        routes = [sub_route('sub', demand={})]
-        self.assertEqual(self.admit('a', ['s-sub'], routes, dict(sub=sub_pool()))['status'], 'admitted')
+        routes = [sub_route('sub', demand={})]  # Task 2: an empty demand is never an included (zero-cost) claim
+        self.assertEqual(self.admit('a', ['s-sub'], routes, dict(sub=sub_pool()))['status'], 'pending')
+        fallback = self.admit('b', ['s-sub'], [sub_route('sub', demand={}, provider_fallback=True)], dict(sub=sub_pool()))
+        self.assertEqual((fallback['status'], fallback['reserved']), ('admitted', {}))
 
     def test_pools_spread_by_pressure_within_a_class(self):
         def pool(limit, used):

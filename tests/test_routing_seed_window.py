@@ -285,7 +285,8 @@ class StoreTests(SeedBase):
     def test_a_stored_window_with_another_source_is_never_a_window(self):
         self.write_store(dict({key: value for key, value in sub_window(self.now).items() if key != 'id'},
                               source='other'))
-        self.assertIn(dict(route='sub', reason='window_unobserved'), self.collect()['observations']['excluded'])
+        observations = self.collect()['observations']  # Task 2: never a window, so quota unknown: fallback only
+        self.assertEqual((observations['excluded'], [route['demand'] for route in observations['routes']]), ([], [None]))
 
     def race(self, first, second):
         """Run `first` in this thread; once it has read the store under its lock, start `second` in another thread.

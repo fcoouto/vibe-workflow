@@ -650,6 +650,7 @@ class OpenCodeLaunchFlowTests(Stores):
     def launch(self, attempt='a1'):
         assignment = dict(attempt_id=attempt, task='task-' + attempt,
                           scope=routing_launch.assignment_scope(self.checkout))
+        self.since = len(self.order)  # this launch's own trace starts here
         return opencode_launcher.launch(self.checkout, host=self.host, assignment=assignment, job=self.job,
                                         prompt='Do the fixture task', service=self.service)
 
@@ -657,12 +658,20 @@ class OpenCodeLaunchFlowTests(Stores):
         ledger = self.service._ledger(False)
         return {} if ledger is None else ledger.snapshot()['holds']
 
-    def assert_sent_nothing(self, result, attempt):
-        """No session, no prompt and no open hold for `attempt`."""
+    def assert_sent_nothing(self, result, attempt, since=0):
+        """No session, no prompt (in this launch's trace, from `since`) and no open hold for `attempt`."""
         self.assertNotEqual(result.get('state'), 'recorded', result)
-        self.assertNotIn('create', self.order)
-        self.assertNotIn('prompt', self.order)
+        self.assertNotIn('create', self.order[since:])
+        self.assertNotIn('prompt', self.order[since:])
         self.assertNotIn(self.holds().get(attempt, {}).get('state'), ('admitted', 'dispatched'))
+
+    def assert_fallback(self, result, disposition, since=None):
+        """Task 2: one provider-managed send (in the last launch's trace) with no included claim, recorded with its
+        quota disposition."""
+        trace = self.order[self.since if since is None else since:]
+        self.assertEqual((result['state'], result['admission']['reserved']), ('recorded', {}), result)
+        self.assertEqual(result['admission']['reason_codes'][-2:], [disposition, routing.FALLBACK])
+        self.assertEqual((trace.count('create'), trace.count('prompt')), (1, 1))
 
     # -- P8 ------------------------------------------------------------------------------------------------------
     def test_opencode_subscription_ranked_launch_on_the_local_source(self):
@@ -696,7 +705,7 @@ class OpenCodeLaunchFlowTests(Stores):
                 self.host.usage = go_usage(now(), percent=percent)
                 collector_path = collector.window_path(self.settings)
                 collector_path.unlink(missing_ok=True)
-                self.assert_sent_nothing(self.launch('full-' + name), 'full-' + name)
+                self.assert_fallback(self.launch('full-' + name), 'quota_insufficient')  # never an included claim
         collector.window_path(self.settings).unlink(missing_ok=True)
         self.host.usage = go_usage(now(), percent=(99.2, 1, 1))  # room for one reservation, not two
         opencode_subscription.refresh(self.service, lambda: (200, self.host.usage), routing_launch.prepare_request(
@@ -706,19 +715,20 @@ class OpenCodeLaunchFlowTests(Stores):
             dict(attempt_id='held', task='task-held', scope=routing_launch.assignment_scope(self.checkout)), self.job,
             harnesses=[routing_launch.shim_harness('opencode-go')]))
         self.assertEqual((held['state'], held['admission']['route']), ('admitted', GO_PATH + ':s-go1'), held)
-        self.assert_sent_nothing(self.launch('alias'), 'alias')  # the second alias draws on the same held allowance
+        self.assert_fallback(self.launch('alias'), 'quota_insufficient')  # no second claim on the held allowance
 
     def test_a_go_connection_without_its_producers_sends_nothing(self):
-        """Real absent producers, unknown or paid-crossover billing, no demand mapping, an exhausted meter and a host
-        without the Go connection: nothing is sent. Without a kept route or a qualified binding nothing is read."""
+        """Real absent producers, unknown or malformed paid-crossover billing and a host without the Go connection:
+        nothing is sent. No demand mapping or an exhausted meter: provider-managed fallback, never an included claim;
+        unknown demand starts no Go usage read. Without a kept route or a qualified binding nothing is read."""
         self.qualify_go()
         self.table(*self.go_strategies())
         cases = (('real producers', None, False), ('unknown billing', dict(billing=None), False),
                  ('paid crossover', dict(billing='enabled'), False),
-                 ('unknown demand mapping', dict(demand=False), False),
-                 ('exhausted', {}, True), ('disconnected', {}, False))
+                 ('unknown demand mapping', dict(demand=False), False, 'quota_unknown'),
+                 ('exhausted', {}, True, 'quota_insufficient'), ('disconnected', {}, False))
         models = self.host.models
-        for name, doubles, reads in cases:
+        for name, doubles, reads, *fallback in cases:
             attempt = 'none-' + name.replace(' ', '-')
             with self.subTest(case=name), ExitStack() as stack:
                 if doubles is not None:
@@ -727,8 +737,12 @@ class OpenCodeLaunchFlowTests(Stores):
                 if name == 'disconnected':
                     self.host.models = [item for item in models if item['providerID'] != 'opencode-go']
                 collector.window_path(self.settings).unlink(missing_ok=True)
-                before = self.host.usage_reads
-                self.assert_sent_nothing(self.launch(attempt), attempt)
+                before, since = self.host.usage_reads, len(self.order)
+                result = self.launch(attempt)
+                if fallback:
+                    self.assert_fallback(result, fallback[0], since)
+                else:
+                    self.assert_sent_nothing(result, attempt, since)
                 self.assertEqual(self.host.usage_reads - before, 1 if reads else 0)
                 self.host.models = models
 
@@ -751,9 +765,7 @@ class OpenCodeLaunchFlowTests(Stores):
         self.assertEqual(self.launch('miss-1')['state'], 'recorded')
         self.assertEqual(json.loads(store.read_bytes())['pools'], before)  # nothing invented
         self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
-        second = self.launch('miss-2')
-        self.assertEqual(second['state'], 'pending', second)  # not the same pre-launch headroom
-        self.assertEqual(self.order.count('create'), 1)
+        self.assert_fallback(self.launch('miss-2'), 'quota_unknown')  # never the same pre-launch headroom
         self.assertEqual(collector.consumed_at(self.settings, 'chatgpt-subscription'), 0)  # other pools untouched
 
     def test_a_partial_reading_marks_the_pool_too(self):
@@ -763,7 +775,7 @@ class OpenCodeLaunchFlowTests(Stores):
             five_hour=dict(utilization=0.25, resetsAt=resets, status='allowed')))  # 5h only: 7d is not covered
         self.assertEqual(self.launch('part-1')['state'], 'recorded')
         self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
-        self.assertEqual(self.launch('part-2')['state'], 'pending')
+        self.assert_fallback(self.launch('part-2'), 'quota_unknown')
 
     def test_a_covering_settled_reading_keeps_the_pool_usable(self):
         self.claude_only()
@@ -784,7 +796,7 @@ class OpenCodeLaunchFlowTests(Stores):
     def test_a_whole_covering_completion_between_collection_and_admission_is_seen(self):
         """F4R-09 (covering readings): `late` collects the pool at 100/1000, then `early` runs a whole launch whose own
         settled readings (999/1000, covering both claims) are stored and whose hold is released, then `late` admits.
-        No consumed boundary moved; the admission still sees that the pool's stored readings changed: pending."""
+        No consumed boundary moved; the admission still sees that the pool's stored readings changed: fallback only."""
         self.claude_only()
         self.covering(0.999, 0.999)
         real, order = routing.admit, []
@@ -798,8 +810,9 @@ class OpenCodeLaunchFlowTests(Stores):
         with mock.patch.object(routing, 'admit', interleave):
             late = self.launch('late')
         self.assertEqual(order, ['early'])
-        self.assertEqual(late['state'], 'pending', late)  # never the 100/1000 headroom collected before
-        self.assertEqual(self.order.count('create'), 1)
+        self.assertEqual((late['state'], late['admission']['reserved'], late['admission']['reason_codes'][-2:]),
+                         ('recorded', {}, ['quota_unknown', routing.FALLBACK]), late)  # never the 100/1000 headroom
+        self.assertEqual(self.order.count('create'), 2)  # `early`'s send and `late`'s provider-managed one
 
     def test_another_pools_reading_between_collection_and_admission_changes_nothing(self):
         """The recheck is per pool: a reading stored for another pool in between leaves this snapshot usable."""
@@ -831,7 +844,7 @@ class OpenCodeLaunchFlowTests(Stores):
             self.assertEqual(self.launch('cached-1')['state'], 'recorded')
         self.assertEqual(json.loads(store.read_bytes())['pools'], before)  # nothing replaced, nothing redated
         self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
-        self.assertEqual(self.launch('cached-2')['state'], 'pending')
+        self.assert_fallback(self.launch('cached-2'), 'quota_unknown')
 
     def test_a_reading_observed_before_the_admission_covers_nothing(self):
         """A stored reading older than the admission cannot show that launch's use, even when it replaced an older
@@ -883,13 +896,13 @@ class OpenCodeLaunchFlowTests(Stores):
         self.host.usage = go_usage(now())
         self.assertEqual(self.launch('go-1')['state'], 'recorded')
         self.assertGreater(collector.consumed_at(self.settings, GO_PATH), 0)  # a Go launch reports no reading
-        self.assertEqual(self.launch('go-2')['state'], 'pending')  # the bound read finds the pool fresh-but-used
+        self.assert_fallback(self.launch('go-2'), 'quota_unknown')  # the bound read finds the pool fresh-but-used
 
     # -- F5.3: ranked funding never selects a paid route ---------------------------------------------------------
     def test_opencode_ranked_admission_never_selects_a_gateway_route(self):
         """Both path types are qualified and ranked (the gateway first), the host lists both providers and the
-        Claude subscription is full: the launch waits, with no dollar hold and no dispatch. With a ChatGPT
-        subscription that fits, the actual launcher sends exactly its admitted identity and settles once."""
+        Claude subscription is full: its own provider-managed fallback, never the gateway, with no dollar hold. With a
+        ChatGPT subscription that fits, the actual launcher sends exactly its admitted identity and settles once."""
         self.doubles(demand=False, semantics=False)
         routing_paths.qualify(self.settings, 'openrouter-workers', demand={'credit': 5}, evidence='synthetic-1',
                               now=now())
@@ -903,8 +916,8 @@ class OpenCodeLaunchFlowTests(Stores):
         claude = self.strategy('s-claude', CLAUDE_MODEL, 'claude-agent', CLAUDE_HARNESS, effort='low')
         self.table(gateway, claude)
         waiting = self.launch('only-paid-fits')
-        self.assertEqual(waiting['state'], 'pending', waiting)
-        self.assert_sent_nothing(waiting, 'only-paid-fits')
+        self.assert_fallback(waiting, 'quota_insufficient')
+        self.assertEqual(waiting['admission']['route'], CLAUDE_PATH + ':s-claude')  # never the ranked-first gateway
         self.assertEqual([hold for hold in self.holds().values() if hold.get('amount') or hold.get('organization')],
                          [])  # no dollar hold anywhere
         self.assertNotIn('dispatched', {hold['state'] for hold in self.holds().values()})
@@ -922,14 +935,14 @@ class OpenCodeLaunchFlowTests(Stores):
                          ('opencode-chatgpt-subscription:s-chatgpt', 'subscription', 'included_subscription', 'ranked'))
         self.assertEqual(self.host.created['model'], dict(id='invented-chatgpt-model', providerID='openai',
                                                           variant='high'))
-        self.assertEqual((self.order.count('create'), self.order.count('prompt')), (1, 1))
+        self.assertEqual((self.order.count('create'), self.order.count('prompt')), (2, 2))  # one send per launch
         self.assertEqual(self.holds()['subscription-fits']['state'], 'released')  # settled once
 
     # -- P1 ------------------------------------------------------------------------------------------------------
     def test_opencode_ranked_launch_on_the_local_source(self):
-        """P1 with synthetic billing: no window → pending; recovery seed → launch and settled reading; fresh
-        follow-up without a seed; after a gap over 900 s with no qualified Claude reader → pending, stale. The
-        automatic qualified-reader branch stays open (F4.6 source gate)."""
+        """P1 with synthetic billing: no window → provider-managed fallback; recovery seed → launch and settled
+        reading; fresh follow-up without a seed; after a gap over 900 s with no qualified Claude reader → stale,
+        fallback again. The automatic qualified-reader branch stays open (F4.6 source gate)."""
         self.doubles(demand=False, semantics=False)
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=now())
@@ -947,10 +960,10 @@ class OpenCodeLaunchFlowTests(Stores):
             return admitted[-1]
         self.enterContext(mock.patch.object(collector, 'collect', collect))
         self.enterContext(mock.patch.object(routing, 'admit', admit))
-        first = self.launch('p1-a')
-        self.assertEqual((first['state'], first['reason']), ('pending', 'no_feasible_route'), first)
-        self.assertEqual(excluded[-1], {'opencode-claude-subscription:s-claude': 'window_unobserved'})
-        self.assert_sent_nothing(first, 'p1-a')
+        with mock.patch('time.time', lambda real=time.time: real() - 5):  # its terminal boundary precedes the seeds
+            first = self.launch('p1-a')
+        self.assert_fallback(first, 'quota_unknown')
+        self.assertEqual(excluded[-1], {})  # kept with unknown quota, never refused for missing telemetry
         for window, length in (('5h', 18000), ('7d', 604800)):
             seeded = self.one_shot(dict(v=1, op='seed_window', pool='claude-subscription', window=window, used=100,
                                         limit=1000, reset_at=now() + 3600, length=length, event_id='seed-' + window))
@@ -970,13 +983,9 @@ class OpenCodeLaunchFlowTests(Stores):
         self.host.rate_limit = None
         third = self.launch('p1-c')
         self.assertEqual(third['state'], 'recorded', third)  # fresh: no seed needed
-        created = self.order.count('create')
-        later = time.time() + 1000
-        with mock.patch('time.time', lambda: later):
+        with mock.patch('time.time', lambda real=time.time: real() + 1000):
             fourth = self.launch('p1-d')
-        self.assertEqual(fourth['state'], 'pending', fourth)
-        self.assertIn('stale_observation', admitted[-1]['reason_codes'])  # the route is kept but its reading is stale
-        self.assertEqual(self.order.count('create'), created)
+        self.assert_fallback(fourth, 'quota_unknown')  # the route is kept but its reading is stale: no claim
         self.assertEqual(self.host.usage_reads, 0)  # no Go read for a Claude-only request
 
     def one_shot(self, request):

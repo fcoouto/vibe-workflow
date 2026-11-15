@@ -154,7 +154,9 @@ def refresh(service, read, request, *, now):
              if item['provider'] == GO_PROVIDER}
     body = {key: value for key, value in request.items() if key not in ('v', 'op')}
     preview = service.preview(body) if paths else {}
-    kept = sorted({routing_paths.path_of(route) for route in preview.get('routes', [])} & set(paths))
+    unmeasured = set(preview.get('unmeasured', ()))  # unknown demand: provider-managed fallback needs no usage read
+    kept = sorted({routing_paths.path_of(route) for route in preview.get('routes', []) if route not in unmeasured}
+                  & set(paths))
     if not kept:
         return dict(state='skipped', reason='no_kept_go_route')
     source = collector.LocalSource(settings_path)

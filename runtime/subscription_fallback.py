@@ -11,6 +11,45 @@ from runtime.usage_budget import Ledger
 
 EXPOSED_STATES = ('dispatched', 'uncertain')
 FENCED = 'fallback_exposure_open'
+# The quota disposition of a fallback admission, stored in its `reason_codes` beside `routing.FALLBACK`.
+QUOTA_UNKNOWN, QUOTA_INSUFFICIENT, QUOTA_FENCED = 'quota_unknown', 'quota_insufficient', 'quota_fenced'
+SUBSCRIPTION = 'included_subscription'
+
+
+def unmeasured(route):
+    """A subscription route whose demand is explicitly unknown (None): only ever provider-managed fallback."""
+    return isinstance(route, dict) and route.get('demand') is None and route.get('billing_class') == SUBSCRIPTION
+
+
+def _unknown(route, pool, now):
+    """Whether an eligible subscription route's included quota or demand is unknown: no or empty demand, or a demanded
+    window missing, unread, not fresh or past its reset. Malformed numbers are left to `routing._candidate`."""
+    if not (isinstance(route, dict) and route.get('billing_class') == SUBSCRIPTION
+            and route.get('provider_fallback') is True and isinstance(pool, dict) and 'demand' in route):
+        return False  # a missing health key stays `observation_incomplete`
+    if not route.get('demand'):
+        return True
+    windows = {window.get('id'): window for window in pool.get('windows', []) if isinstance(window, dict)}
+    return any(window is None or window.get('used') is None or window.get('fresh') is not True
+               or (window.get('reset_at') is not None and window['reset_at'] <= now)
+               for window in map(windows.get, route['demand']))
+
+
+def candidate(data, route, observations, assignment, settings, held, now):
+    """`routing._candidate` with unknown quota classified after every non-quota check: an eligible subscription route
+    (`provider_fallback`) whose quota/demand is unknown becomes its provider-managed fallback (no included claim,
+    `QUOTA_UNKNOWN`); identity, binding, capability, permission and observation-integrity refusals stand. An empty
+    demand never becomes an included claim."""
+    from runtime import routing  # routing imports this module
+    pool = observations.get('pools', {}).get(route.get('pool')) if isinstance(route, dict) else None
+    if not _unknown(route, pool, now):
+        if isinstance(route, dict) and route.get('billing_class') == SUBSCRIPTION and route.get('demand') == {}:
+            return None, ['observation_incomplete']
+        return routing._candidate(data, route, observations, assignment, settings, held, now)
+    item, reasons = routing._candidate(data, dict(route, demand={}), observations, assignment, settings, held, now)
+    if item is None:
+        return item, reasons
+    return dict(item, spec=route, constraints=[], fallback=True, vector={}, quota=QUOTA_UNKNOWN), reasons
 
 
 def is_fallback(record):
@@ -27,13 +66,13 @@ def active_pools(data):
 
 def fence(found, data):
     """`routing._candidate`'s `(item, reasons)` under the fence: an included candidate on an active pool becomes the
-    route's provider-managed fallback when the route has one, and is excluded otherwise."""
+    route's provider-managed fallback (`QUOTA_FENCED`) when the route has one, and is excluded otherwise."""
     item, reasons = found
     if item is None or item.get('fallback') or item['cls'] != 'subscription' or item['pool'] not in active_pools(data):
         return found
     if item['spec'].get('provider_fallback') is not True:
         return None, [FENCED]
-    return dict(item, constraints=[], fallback=True, vector={}), reasons
+    return dict(item, constraints=[], fallback=True, vector={}, quota=QUOTA_FENCED), reasons
 
 
 def dispatch_problem(data, record, settings_path):

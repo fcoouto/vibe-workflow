@@ -436,14 +436,21 @@ class BridgeTest(native_tests.NativeBase, Reader):
         self.assertEqual(len(self.spawns()), 1)
         done = self.complete('n1', dict(kind='complete', model='invented-small-1'))
         self.assertEqual(done['served']['substituted'], False)
-        self.assertEqual(self.prepare('claude-code', attempt='n2')['reason'], 'no_feasible_route')
-        self.assertEqual(len(self.spawns()), 2)  # a cached reply may predate the completion: not usable, backs off
-        self.assertEqual(self.prepare('claude-code', attempt='n3')['reason'], 'no_feasible_route')
-        self.assertEqual(len(self.spawns()), 2)
+        for attempt in ('n2', 'n3'):  # a cached reply may predate the completion: not usable, backs off
+            self.assertEqual(self.prepare('claude-code', attempt=attempt)['state'], 'dispatched')  # Task 2: fallback
+            self.assertEqual(self.disposition(attempt), ({}, ['quota_unknown', 'provider_managed_fallback']))
+            self.assertEqual(len(self.spawns()), 2)
         self.offset += claude_usage.CACHE_CEILING * 2
         again = self.prepare('claude-code', attempt='n4')
         self.assertEqual(again['state'], 'dispatched', again)
         self.assertEqual(len(self.spawns()), 3)
+        # A fresh covering reading arrived, but n2 and n3 are still open provider-managed attempts on this pool: the
+        # included optimization stays fenced (a real exposure, not a mocked one), and no included claim is made.
+        self.assertEqual(self.disposition('n4'), ({}, ['quota_fenced', 'provider_managed_fallback']))
+
+    def disposition(self, attempt):
+        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == attempt)
+        return record['reserved'], record['reason_codes'][-2:]
 
     def test_exhausted_included_quota_dispatches_on_provider_managed_fallback(self):
         self.answer(initialize(), usage(self.now, five=100, seven=100, extra=dict(is_enabled=False)))
@@ -475,15 +482,19 @@ class ProvenanceTest(BridgeTest):
     def test_an_unbound_reading_never_restores_native_headroom(self):
         self.answer(initialize(), usage(self.now, limits=None))  # this account's usage stays unknown
         self.opencode_reading(used=0)  # another client's newer reading with ample room, unbound
-        self.assertEqual(self.prepare('claude-code')['state'], 'pending')
-        self.assertEqual(self.data()['admissions'], [])
+        self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')  # Task 2: fallback, never that room
+        self.assertEqual([(item['reserved'], item['reason_codes'][-2:]) for item in self.data()['admissions']],
+                         [({}, ['quota_unknown', 'provider_managed_fallback'])])
 
     def test_another_accounts_reading_is_unknown(self):
         self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
         self.complete('n1', dict(kind='complete'))
         self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
         self.answer(initialize(email='other@example.invalid'), usage(self.now, limits=None))
-        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'pending')
+        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')  # the current account, fallback only
+        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == 'n2')
+        self.assertEqual((record['reserved'], record['reason_codes'][-2:]), ({}, ['quota_unknown',
+                                                                                  'provider_managed_fallback']))
 
     def test_the_opencode_consumer_never_uses_native_bound_readings(self):
         self.assertEqual(claude_usage.refresh(self.settings)['state'], 'stored')
@@ -495,8 +506,9 @@ class ProvenanceTest(BridgeTest):
         local = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
                                   ledger_path=self.ledger_path, choices=[choice],
                                   harnesses=['claude-agent-sdk via opencode'])
-        self.assertEqual({item['reason'] for item in local['observations']['excluded']}, {'window_unobserved'})
-        self.assertEqual(local['observations']['routes'], [])
+        self.assertEqual(local['observations']['excluded'], [])  # Task 2: its own (synthetic) account stays eligible
+        self.assertEqual([route['demand'] for route in local['observations']['routes']], [None])  # fallback only
+        self.assertEqual(local['observations']['pools']['claude-subscription']['windows'], [])  # no native row borrowed
 
     def test_same_account_aliases_share_one_included_allowance(self):
         self.answer(initialize(), usage(self.now, five=99.3))  # room for one reservation only

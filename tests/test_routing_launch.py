@@ -353,8 +353,8 @@ class LaunchTests(Stores):
         self.assertEqual(self.launch(service=service)['state'], 'recorded')  # a subscription admission proceeds
 
     def test_a_pending_assignment_holds_nothing_and_never_falls_back(self):
-        self.source = collector.StaticSource([sub_route()], {}, ready,  # no telemetry yet
-                                             billing=subscription_billing.double('launch-tests'))
+        # No account fact: an account failure, never unknown quota alone (Task 2), so nothing is admitted or sent.
+        self.source = collector.StaticSource([sub_route()], {}, ready)
         result = self.launch()
         self.assertEqual(result['state'], 'pending', result)
         self.assertEqual(self.transport.calls, [])

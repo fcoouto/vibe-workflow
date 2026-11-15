@@ -189,6 +189,24 @@ class QualificationTests(Folder):
         self.qualify('gw-path', self.rules, demand={'credit': 1_000_000})
         self.assertEqual(paths.qualifications(self.settings)['gw-path']['demand'], {'credit': 1_000_000})
 
+    def test_subscription_launch_qualification_does_not_require_quota_seed(self):
+        """Task 2: explicit null demand qualifies only a subscription path's account/launch, never a gateway's."""
+        with self.assertRaisesRegex(ValueError, 'demand_invalid'):
+            self.qualify('gw-path', self.rules, demand=None)
+        for demand in ({}, {'5h': None, '7d': 1}):
+            with self.subTest(demand=demand), self.assertRaisesRegex(ValueError, 'demand_invalid'):
+                self.qualify('sub-path', self.rules, demand=demand)
+        self.assertEqual(paths.operation('qualify_path', self.settings, dict(
+            path='claude-native-subscription', evidence='e'), 1)['reason'], 'demand_invalid')  # absent is not null
+        self.qualify('sub-path', self.rules, demand=None)
+        self.assertIs(paths.qualifications(self.settings)['sub-path']['demand'], None)
+        found = paths.resolved(self.rules, paths.qualifications(self.settings))
+        self.assertEqual([(item['path'], item['demand']) for item in found], [('sub-path', None)])
+        route = paths.strategy_route(found[0], dict(strategy_id='s1', model='m', effort='high'))
+        self.assertIs(route['demand'], None)
+        self.qualify('sub-path', self.rules)  # an old measured record stays readable and replaces it
+        self.assertEqual(paths.qualifications(self.settings)['sub-path']['demand'], {'5h': 10, '7d': 2})
+
     def test_a_qualifications_account_replaces_the_rules(self):
         self.qualify('sub-path', self.rules)
         self.qualify('gw-path', self.rules, demand={'credit': 5}, account='actual-org')

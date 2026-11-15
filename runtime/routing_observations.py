@@ -20,7 +20,7 @@ import sqlite3
 import time
 import uuid
 
-from runtime import routing, routing_funding, routing_paths, subscription_billing, usage_budget
+from runtime import routing, routing_funding, routing_paths, subscription_billing, subscription_fallback, usage_budget
 
 WINDOWS_FILE = 'window-observations.json'
 ENTITLEMENTS_FILE = 'entitlements.json'
@@ -506,7 +506,8 @@ def _manifest_reason(route):
         return 'billing_class_excluded' if routing._text(route.get('billing_class')) else 'route_invalid'
     shaped = {key: route[key] for key in ROUTE_FIELDS if key in route}
     complete = all(routing._text(route.get(key)) for key in (*routing.ROUTE_IDENTITY, 'account')) \
-        and routing._part(route.get('pool')) and route.get('demand') and routing._valid_route(shaped)
+        and routing._part(route.get('pool')) and (route.get('demand') or subscription_fallback.unmeasured(route)) \
+        and routing._valid_route(shaped)
     if not complete or (route['billing_class'] == 'gateway' and route.get('integration_route') not in INTEGRATION_ROUTES):
         return 'route_invalid'
     return None
@@ -581,8 +582,9 @@ def refresh_needed(specs, settings_path, marks=()):
     from runtime import claude_usage, codex_rate_limits
     need = {}
     for spec in specs:
-        if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks \
-                and _native(spec) != 'codex':  # no quota reader is qualified for it, and the legacy one is not its own
+        if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks and spec['demand'] \
+                and _native(spec) != 'codex':  # no quota reader is qualified for it, and the legacy one is not its own;
+            # unknown demand (None) starts no quota reader merely to reach provider-managed fallback
             reader = codex_rate_limits if codex_rate_limits.applies(spec) else claude_usage \
                 if claude_usage.applies(spec) else None
             if reader is not None:
@@ -659,9 +661,7 @@ def acquire_billing(project, assignment, *, settings_path, table=None, strategy_
     if not callable(getattr(source, 'acquire_billing', None)):
         return
     routes, _ = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
-    routes = [spec for spec in routes if spec.get('demand_scope') != routing_paths.MODEL_DEMAND
-              or _model_demand(source, spec)]
-    subscription_billing.acquire(source, routes, int(time.time()))
+    subscription_billing.acquire(source, routes, int(time.time()))  # unknown demand never hides the account
 
 
 def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
@@ -692,13 +692,12 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
         if spec['billing_class'] == 'included_subscription' \
                 and not subscription_billing.verified(source, spec, now):
             reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
-        if reason is None and spec.get('demand_scope') == routing_paths.MODEL_DEMAND \
-                and not _model_demand(source, spec):
-            reason = 'demand_unverified'  # the path's measured demand is not known to hold for this model
         if reason is not None:
             leave(spec, reason)
             continue
         kept = copy.deepcopy(spec)
+        if spec.get('demand_scope') == routing_paths.MODEL_DEMAND and not _model_demand(source, spec):
+            kept['demand'] = None  # the path's measured demand is not known to hold for this model: demand unknown
         if spec['billing_class'] == 'gateway':
             if 'openrouter' not in cache:
                 cache['openrouter'] = _openrouter(project)
@@ -770,8 +769,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         if billing == 'included_subscription':
             route['binding_enforceable'] = spec.get('binding_enforceable', True) is True
             # The account's provider manages its own overflow once included room cannot cover the reservation,
-            # after reported use, holds and debits (account amendment).
-            route['provider_fallback'] = claude_usage.applies(spec)
+            # after reported use, holds and debits, or when that room is unknown (account amendment). Every kept
+            # subscription route already passed its account/billing fact (`shortlist`).
+            route['provider_fallback'] = True
         if billing == 'gateway':
             route['integration_enabled'] = True
         native = _native(spec)
@@ -817,21 +817,27 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             if native != 'codex' or windows:  # a Codex build with no window never claims the shared pool
                 binding.setdefault(spec['pool'], native)
         pool = pools[key]
-        if binding.get(spec['pool'], native) != native:
+        if binding.get(spec['pool'], native) != native and billing != 'included_subscription':
             leave(spec, 'window_unobserved')  # another consumer's readings of the pool are not this route's
             continue
-        demanded = [window for window in pool['windows'] if window['id'] in spec['demand']]
+        if binding.get(spec['pool'], native) != native:
+            route['demand'] = None  # its own account, but no readings of its own: fallback only, never the owner's rows
+        demand = route['demand'] or {}  # None: an eligible subscription account with unknown demand (fallback only)
+        demanded = [window for window in pool['windows'] if window['id'] in demand]
+        reason = None
         if spec['pool'] in unread and native != 'codex' \
-                and (len(demanded) < len(spec['demand']) or not all(w['fresh'] for w in demanded)):
-            leave(spec, unread[spec['pool']])  # the Codex reader's fixed reason (R7), instead of stale or unobserved
+                and (len(demanded) < len(demand) or not all(w['fresh'] for w in demanded)):
+            reason = unread[spec['pool']]  # the Codex reader's fixed reason (R7), instead of stale or unobserved
+        elif not pool['windows'] or not set(demand) <= {window['id'] for window in pool['windows']}:
+            reason = 'window_unobserved'  # enabled, but no telemetry yet (C.3 design 7.1 decision 6)
+        if reason is not None and billing == 'included_subscription':
+            route['demand'] = None  # unknown included quota: the account's provider-managed fallback, never a claim
+        elif reason is not None:
+            leave(spec, reason)
             continue
-        if not pool['windows'] or not set(spec['demand']) <= {window['id'] for window in pool['windows']}:
-            leave(spec, 'window_unobserved')  # enabled, but no telemetry yet (C.3 design 7.1 decision 6)
-            continue
-        if billing == 'included_subscription' and any(window['id'] in spec['demand'] and window.get('unit')
-                                                       != spec['window_unit'] for window in pool['windows']):
-            leave(spec, 'window_unit_mismatch')  # a stored window in another unit, or in none
-            continue
+        if billing == 'included_subscription' and route['demand'] is not None and any(
+                window['id'] in demand and window.get('unit') != spec['window_unit'] for window in pool['windows']):
+            route['demand'] = None  # a stored window in another unit, or in none: unusable quota, fallback only
         if dollar:
             organizations = {window.get('organization') for window in pool['windows']}
             if len(organizations) != 1 or not _funding_verified(data, organizations.pop(), now):
@@ -840,11 +846,12 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             route['funding_verified'] = True
             route['credential'] = spec.get('credential')
         routes.append(route)
-        used.add(key)  # one producer per pool: `binding` refuses every other consumer of a kept route's pool
-    observations = dict(now=now, routes=routes, pools={pool: pools[(pool, kind)] for pool, kind in used},
+        used.add(key)  # one producer per pool: only `binding`'s routes keep a demand against the pool's rows
+    # Each pool publishes exactly its bound producer's view and boundary (never a union or the last key iterated).
+    owner = {pool: (pool, binding.get(pool, kind)) for pool, kind in used}
+    observations = dict(now=now, routes=routes, pools={pool: pools[key] for pool, key in owner.items()},
                         shortlist=cut['shortlist'], excluded=excluded, routes_version=cut['routes_version'])
-    return dict(observations=observations, seen=seen, boundaries={pool: boundaries[(pool, kind)]
-                                                                  for pool, kind in used})
+    return dict(observations=observations, seen=seen, boundaries={pool: boundaries[key] for pool, key in owner.items()})
 
 
 class _Rechecked:

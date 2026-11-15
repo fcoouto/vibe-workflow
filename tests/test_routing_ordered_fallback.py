@@ -7,11 +7,15 @@ budget for an alternative exists. Disposable stores and caller snapshots only; n
 """
 import json
 import unittest
+from unittest import mock
 
-from runtime import routing, usage_budget as budget
+from runtime import routing, routing_observations as collector, subscription_billing, subscription_fallback, \
+    usage_budget as budget
 from tests.test_routing_command import (API, API_CHOICE, Base, M, POLICY, api_observations, check, facts, now, prepare,
                                         prepare_legacy_paid)
 from tests.test_routing_dispatch import dispatch, record
+from tests.test_routing_observations import (SCOPE, Stores, choice_of, excluded, ranked_of, ready, request_of,
+                                             sub_route, sub_window)
 
 
 def ordered_table(*strategies):
@@ -156,6 +160,124 @@ class NoDuplicateTests(Ordered):
             self.assertEqual(ledger.credit_headroom('personal'), before)  # uncertain is never unsent proof
             self.assertEqual(ledger.snapshot()['holds']['p1']['state'], 'uncertain')
         self.assertEqual(self.explicit('p2', snapshot())['state'], 'admitted')  # a sufficient-budget alternative
+
+
+class QuotaOptionalAdmissionTests(Stores):
+    """Task 2: an eligible subscription account is admitted as provider-managed fallback when its included quota or
+    demand is unknown, through the real collector (synthetic source doubles) and `routing.admit`."""
+
+    def admit(self, routes, windows, attempt='q1', choice=None, source=None, **request):
+        if source is None:
+            result = self.collect(routes, windows, **request)
+        else:
+            result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                       ledger_path=self.ledger_path, source=source, **request)
+        ranked = 'strategy_ids' in request and choice is None
+        choice = choice if ranked or choice else choice_of(routes[0])
+        settings = dict(routing.routing_settings.resolve(dict(smart_routing=ranked)), revision=0)
+        ranking = dict(strategy_ids=request.get('strategy_ids', []), reason_codes=[])
+        assignment = dict(attempt_id=attempt, task='t-' + attempt, role='software-engineer',
+                          work_kind='implementation', complexity_band='medium', scope=SCOPE,
+                          **({'choice': choice} if choice else {}))
+        return result, routing.admit(assignment, ranking, settings, result['observations'],
+                                     ledger=self.service._ledger(True, True))
+
+    def assert_fallback(self, answer, disposition='quota_unknown'):
+        self.assertEqual(answer['status'], 'admitted', answer)
+        self.assertEqual(answer['reserved'], {})
+        self.assertIn(routing.FALLBACK, answer['reason_codes'])
+        self.assertIn(disposition, answer['reason_codes'])
+        stored = next(item for item in self.data()['admissions'] if item['attempt_id'] == answer['attempt_id'])
+        self.assertIn(disposition, stored['reason_codes'])
+        self.assertEqual(stored['reserved'], {})
+
+    def test_unknown_quota_is_fallback_not_headroom(self):
+        unitless = {key: value for key, value in sub_window(self.now).items() if key != 'unit'}
+        cases = dict(
+            absent=(sub_route(), {}),
+            stale=(sub_route(), dict(sub=[sub_window(self.now - collector.FRESH_SECONDS - 1)])),
+            partial=(sub_route(demand={'5h': 10, '7d': 5}), dict(sub=[sub_window(self.now)])),
+            malformed=(sub_route(), dict(sub=[dict(sub_window(self.now), limit='lots')])),
+            unread_used=(sub_route(), dict(sub=[dict(sub_window(self.now), used=None)])),
+            null_demand=(sub_route(demand=None), dict(sub=[sub_window(self.now)])))
+        for name, (route, windows) in cases.items():
+            with self.subTest(name):
+                result, answer = self.admit([route], windows, attempt='q-' + name)
+                self.assertNotIn('sub', excluded(result))
+                self.assert_fallback(answer)
+
+    def test_unverified_model_demand_is_fallback_not_an_included_claim(self):
+        route = sub_route(demand_scope='per_model')
+        for verified, expect in ((None, 'quota_unknown'), (True, None)):
+            with self.subTest(verified=verified):
+                source = collector.StaticSource([route], dict(sub=[sub_window(self.now)]), ready,
+                                                billing=subscription_billing.double('q'),
+                                                model_demand=None if verified is None else lambda spec: verified)
+                _, answer = self.admit([route], None, attempt='m-%s' % verified, source=source, **request_of([route]))
+                if expect is None:
+                    self.assertEqual((answer['status'], bool(answer['reserved'])), ('admitted', True))
+                else:
+                    self.assert_fallback(answer)
+
+    def test_empty_demand_never_becomes_an_included_claim(self):
+        _, answer = self.admit([sub_route(demand={})], dict(sub=[sub_window(self.now)]))
+        if answer['status'] == 'admitted':
+            self.assert_fallback(answer)
+
+    def test_known_included_wins_unless_explicit_choice_excludes_it(self):
+        known = sub_route('known', model='m-known', pool='known')
+        unknown = sub_route('unknown', model='m-unknown', pool='unknown')
+        windows = dict(known=[sub_window(self.now)], unknown=[])
+        routes, request = ranked_of([unknown, known])  # the unknown one ranks first
+        _, ranked = self.admit(routes, windows, attempt='r1', **request)
+        self.assertEqual((ranked['status'], ranked['route']), ('admitted', 'known'), ranked)
+        self.assertNotIn(routing.FALLBACK, ranked['reason_codes'])
+        _, ranked_unknown = self.admit(routes, dict(known=[], unknown=[]), attempt='r2', **request)
+        self.assertEqual(ranked_unknown['route'], 'unknown')  # value order when none is included
+        self.assert_fallback(ranked_unknown)
+        _, explicit = self.admit([unknown, known], windows, attempt='e1', choice=choice_of(unknown))
+        self.assertEqual(explicit['route'], 'unknown', explicit)  # known headroom never overrides it
+        self.assert_fallback(explicit)
+
+    def test_insufficient_and_fenced_known_quota_record_their_disposition(self):
+        _, short = self.admit([sub_route()], dict(sub=[sub_window(self.now, used=999)]), attempt='s1')
+        self.assert_fallback(short, 'quota_insufficient')
+        with mock.patch.object(subscription_fallback, 'active_pools', return_value={'sub'}):
+            _, fenced = self.admit([sub_route()], dict(sub=[sub_window(self.now)]), attempt='f1')
+        self.assert_fallback(fenced, 'quota_fenced')
+
+    def test_unknown_overflow_is_eligible_but_provider_refusal_and_identity_failures_launch_nothing(self):
+        unknown = lambda route, at: dict(subscription_billing.double('q')(route, at), paid_crossover='unknown')
+        source = collector.StaticSource([sub_route()], {}, ready, billing=unknown)
+        _, answer = self.admit([sub_route()], None, attempt='o1', source=source, **request_of([sub_route()]))
+        self.assert_fallback(answer)
+        collector.mark_not_entitled(self.settings, 'sub', 'sub-account', self.now)
+        refused, answer = self.admit([sub_route()], {}, attempt='o2')
+        self.assertEqual(excluded(refused), dict(sub='not_entitled'))
+        self.assertEqual(answer['status'], 'pending')
+        collector.clear_not_entitled(self.settings, 'sub', 'sub-account')
+        unbilled = collector.StaticSource([sub_route()], {}, ready)  # no account fact: identity unverified
+        missing, answer = self.admit([sub_route()], None, attempt='o3', source=unbilled, **request_of([sub_route()]))
+        self.assertEqual(excluded(missing), dict(sub=subscription_billing.UNVERIFIED))
+        self.assertEqual(answer['status'], 'pending')
+        unbound, answer = self.admit([sub_route(binding_enforceable=False)], {}, attempt='o4')
+        self.assertEqual(answer['status'], 'pending')
+        self.assertEqual(self.data()['holds'].keys(), {'o1'})
+
+    def test_null_demand_is_never_valid_for_a_gateway_or_paid_route(self):
+        routes = [dict(sub_route(), billing_class='gateway', demand=None)]
+        self.assertFalse(routing._valid_route(routes[0]))
+        self.assertTrue(routing._valid_route(sub_route(demand=None)))
+        self.assertFalse(routing._valid_route(dict(sub_route(demand=None), billing_class='api_prepaid')))
+
+    def test_new_fallback_records_replay_strictly(self):
+        from tests.qualification import replay_strict
+        routes, request = ranked_of([sub_route('unknown', pool='unknown'), sub_route('short', model='m2', pool='short')])
+        _, answer = self.admit(routes, dict(unknown=[], short=[sub_window(self.now, used=999)]), attempt='p1',
+                               **request)
+        self.assert_fallback(answer)
+        report = replay_strict.replay_records(self.data()['admissions'])
+        self.assertTrue(report['passed'], report)
 
 
 if __name__ == '__main__':

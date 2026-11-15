@@ -611,11 +611,11 @@ class CollectorTests(Sandbox):
         observations = self.collect(refresh_windows=True)['observations']
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0]['need'], ('7d',))
-        self.assertEqual(sorted(route['route'] for route in observations['routes']),
-                         [FIRST, SECOND])
+        self.assertEqual({route['route']: route['demand'] is None for route in observations['routes']},
+                         {FIRST: False, SECOND: False, CLAUDE: True})  # Claude has no reading: fallback only
         self.assertEqual([(item['id'], item['used'], item['fresh']) for item in observations['pools'][POOL]['windows']],
                          [('7d', 420, True)])
-        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
+        self.assertEqual(observations['excluded'], [])
 
     def test_a_fresh_reading_spawns_nothing(self):
         self.collect(refresh_windows=True)
@@ -635,7 +635,7 @@ class CollectorTests(Sandbox):
     def test_without_refresh_windows_nothing_is_read(self):
         observations = self.collect()['observations']
         self.assertEqual((self.calls, self.spawns()), ([], 0))
-        self.assertIn(dict(route=FIRST, reason='window_unobserved'), observations['excluded'])
+        self.assertIs(next(r for r in observations['routes'] if r['route'] == FIRST)['demand'], None)  # unread: unknown
 
     def test_a_static_source_never_reads(self):
         source = collector.StaticSource(collector.LocalSource(self.settings).manifest(TABLE))
@@ -646,29 +646,29 @@ class CollectorTests(Sandbox):
     def test_a_failed_read_leaves_the_route_out_with_the_readers_reason(self):
         with mock.patch.object(self, 'command', return_value=self.command('exit_at_once')):
             observations = self.collect(refresh_windows=True)['observations']
-        for route in (FIRST, SECOND):
-            self.assertIn(dict(route=route, reason='codex_exited'), observations['excluded'])
-        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
-        self.assertEqual(observations['routes'], [])
-        again = self.collect(refresh_windows=True)['observations']  # the backoff: no process, same reason
-        self.assertIn(dict(route=FIRST, reason='codex_exited'), again['excluded'])
+        self.assertEqual(observations['excluded'], [])  # a failed optional read leaves quota unknown: fallback only
+        self.assertEqual({route['route']: route['demand'] for route in observations['routes']},
+                         {FIRST: None, SECOND: None, CLAUDE: None})
+        again = self.collect(refresh_windows=True)['observations']  # the backoff: no process, still unknown
+        self.assertIs(next(r for r in again['routes'] if r['route'] == FIRST)['demand'], None)
         self.assertEqual(self.spawns(), 1)
 
-    def test_a_stale_reading_with_a_failed_read_is_left_out_with_the_reason(self):
+    def test_a_stale_reading_with_a_failed_read_leaves_quota_unknown(self):
         old = int(time.time()) - collector.FRESH_SECONDS - 5
         collector.store_window(self.settings, POOL, dict(id='7d', limit=1000, used=5, length=604800,
                                                          reset_at=old + 60, unit=collector.WINDOW_UNIT,
                                                          observed_at=old))
         with mock.patch.object(self, 'command', return_value=self.command('read_error')):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route=FIRST, reason='codex_protocol_error'), observations['excluded'])
-        self.assertEqual(observations['routes'], [])
+        self.assertEqual(observations['excluded'], [])  # Task 2: a failed optional read is not an account failure
+        self.assertEqual({route['route']: route['demand'] for route in observations['routes']},
+                         {FIRST: None, SECOND: None, CLAUDE: None})  # provider-managed fallback only, never a claim
 
-    def test_a_busy_reader_is_the_excluded_reason(self):
+    def test_a_busy_reader_leaves_quota_unknown(self):
         self.extra['timeout'] = 0.1  # the lock wait is the timeout plus 1 s
         with reader._pool_lock(self.settings, POOL):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route=FIRST, reason='reader_busy'), observations['excluded'])
+        self.assertIs(next(r for r in observations['routes'] if r['route'] == FIRST)['demand'], None)  # fallback only
 
     def test_the_service_reads_only_outside_serve(self):
         from scripts import routing as command

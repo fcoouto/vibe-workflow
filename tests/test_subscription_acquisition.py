@@ -184,14 +184,18 @@ class AcquisitionTests(Stores):
         self.assertEqual(answer['codes']['subscription_sources'], ['claude_code_native_bridge_unavailable'])
         self.assertEqual(self.reads, [])
 
-    def test_unverified_model_demand_never_triggers_acquisition(self):
+    def test_unverified_model_demand_acquires_only_the_account_and_stays_fallback(self):
+        """Task 2: unknown model demand no longer hides the account; its synthetic account acquisition runs once and
+        the route is kept with unknown demand (provider-managed fallback only, never an included claim)."""
         path = next(path for path in routing_paths.load_rules()['paths'] if path.get('demand_scope') == 'per_model')
         routing_paths.qualify(self.settings, path['path'], demand={window: 5 for window in path['windows']},
                               evidence='synthetic', now=self.now)
         answer = self.collect(choices=[dict(provider=path['provider'], model='invented-go', effort='high',
             harness=path['harness'], funding='subscription')], harnesses=[path['harness']])
-        self.assertEqual(answer['observations']['routes'], [])
-        self.assertEqual(self.reads, [])
+        self.assertEqual([(route['demand'], route['provider_fallback']) for route in answer['observations']['routes']],
+                         [(None, True)])
+        self.assertEqual([[routing_paths.path_of(route['route']) for route in read] for read in self.reads],
+                         [[path['path']]])  # the account read only: no quota reader is involved here
 
     def test_manifest_failure_is_sanitized_before_acquisition(self):
         routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
