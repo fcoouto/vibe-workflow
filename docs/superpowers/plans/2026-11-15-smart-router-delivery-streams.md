@@ -25,7 +25,8 @@ OC/CC/GO source investigations identified concrete contracts and remaining
 blockers. Native Codex account/catalog work can proceed independently; OpenCode
 identity/sharing and Go age/semantics/demand remain unproved. A separately approved
 second read after the classification repair confirmed native account/catalog,
-but usage still refused raw/model-scoped constraints; M1 is not complete. See the
+but usage still refused unrecognized fields; raw/model-scoped semantics also
+remain unresolved. M1 is not complete. See the
 [native reader result](../../smart-routing-qualification.md#native-claude-reader-attempt-15-november-2026).
 
 ## Global Constraints

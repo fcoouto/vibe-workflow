@@ -45,7 +45,8 @@ machine subscription type. The real native source confirmed a current account
 fact and a bound catalog with 14 entries / 64 alias-effort identities.
 
 **Usage still failed:** `claude_limits_unsupported`, with no usable windows.
-The projected shape contained three raw limit rows, one model-scoped row,
+The parser refused 24 unrecognized rate-limit keys before reaching its
+raw/scoped-limit checks. The projected shape also contained three raw limit rows, one model-scoped row,
 `weekly_scoped_shares`, breakdown/spend metadata and nullable rollout fields.
 Only redacted names/types and private derived state were retained, not account,
 model, limit-kind or scalar usage values. Field presence alone does not establish
@@ -75,7 +76,22 @@ The commands for the live session that the [pre-canary requirements](superpowers
 
 **What this session qualifies (F4).** There is no route manifest any more. The package ships model-free path rules (`runtime/routing_routes.json`); each `prepare` generates routes in memory from the qualified paths and the strategy table, and no file holds a route. This scheduled session qualifies only the OpenCode subscription paths it measures. The operator works in stages, each with its own prerequisite: `measure-demand` ([step 6](#6-measure-demand-no-calls)), then `qualify_path` for each proposed request, then `seed_window` for each demanded window ([step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)), then activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)). The gateway check (step 5) and the Codex path qualify nothing in this canary (decisions A and C of the [redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#coordinator-calls-for-the-users-review)). A new model on a qualified path needs no new session unless its allowance or demand semantics differ ([F4.5](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f45-opencode-subscription-connection-and-allowance-binding)). The separate evidence the release matrix still needs (OpenCode Go connections, native Codex and Claude Code launches, a qualified Claude usage reader and an account-scoped subscription-only billing boundary) is named in F4.5 and [F4.6](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f46-native-only-selection-and-launch-for-codex-and-claude-code); this session does not supply it.
 
-**Account facts and what still blocks activation and the canary.** Under the [15 November account amendment](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026), a subscription route needs a current account fact for its path (the enabled account was read), not proof that paid overflow is disabled; the account's own Extra Usage setting is reported, never required. The package's only producer is the native Claude account read (`runtime/claude_usage.py`) for `claude-native-subscription`. Every other subscription path still has none and is left out at selection and refused at dispatch (`billing_unverified`); activation's `subscription_sources` check refuses those hosts (for example `opencode_billing_unverified`). The native Claude producer is package support proven with a synthetic client only: no installed-client or account observation exists, and no live check is authorized by this amendment. Until a path's producer is observed on the real host, activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)) and the canary (step 8) are not to be attempted for it. Scope any authorized session to the prerequisites it can complete (steps 1 to 7). Open no budget for the canary and spend nothing on it.
+**Account facts and what still blocks activation and the canary.** Under the
+[15 November account amendment](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026),
+a subscription route needs a current account fact for its path, not proof that
+paid overflow is disabled. The account's own Extra Usage setting is reported,
+never required. The wired producer is the native Claude account read
+(`runtime/claude_usage.py`) for `claude-native-subscription`. Other subscription
+paths have no wired producer and remain excluded/refused as `billing_unverified`;
+activation's `subscription_sources` check refuses those hosts.
+The approved second native Claude read observed its account fact and bound
+catalog, but usage refused unrecognized fields and left no usable windows.
+Account observation alone does not qualify a routing path.
+Until a path's account source, complete applicable usage and measured demand have
+supported-host evidence, activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only))
+and the canary (step 8) are not to be attempted for it. The amendment itself grants
+no live check. Scope authorized sessions to prerequisites they can complete
+(steps 1 to 7). Open no budget for the canary and spend nothing on it.
 
 ### Before the session
 
@@ -223,7 +239,11 @@ python3 -B -m tests.qualification.replay_strict --dir <export dir>
 
 ### 8. Canary on the production routing ledger (user approval, canary only)
 
-**Blocked today:** no path's account producer has been observed on the real host (the native Claude reader is synthetic-proven package support only), so activation (8.1) and the canary are not scheduled; paths without a producer admit nothing (`billing_unverified`). See the [runbook entry](#live-session-runbook).
+**Blocked today:** native Claude account/catalog observation exists, but complete
+usage and path-specific demand remain unqualified; other paths lack wired account
+sources. Activation (8.1) and the canary remain unscheduled. Paths without an account
+fact admit nothing (`billing_unverified`); account observation alone does not
+replace the usage/demand gates. See the [runbook entry](#live-session-runbook).
 
 The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
 

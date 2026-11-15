@@ -205,8 +205,9 @@ native launch is claimed.
 **Approved second read, after the classification repair:** On reviewed `b85b4cfc`,
 one separately authorized zero-inference exchange confirmed the native account
 fact and account-bound catalog (14 entries, 64 alias-effort identities).
-Usage still returned `claude_limits_unsupported`: three raw limit rows and one
-model-scoped row were present, with extra metadata/nullable rollout fields.
+Usage still returned `claude_limits_unsupported`: the parser rejected 24
+unrecognized keys before its raw/scoped checks. Three raw limit rows and one
+model-scoped row were also present, with extra metadata/nullable rollout fields.
 No usable windows were produced. Only redacted field names/types and private
 derived state were retained. One child completed in 1.203 seconds, was reaped and
 left no owned-group process. Account/catalog observation now exists; complete
