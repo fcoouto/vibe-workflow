@@ -10,6 +10,15 @@
 
 **Spec:** [Smart Routing redesign](../specs/2026-11-10-smart-routing-redesign-design.md), approved by the user on 10 November 2026. It amends the [8 November design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) and the [C.3 wiring design](../specs/2026-11-10-smart-routing-c3-wiring-design.md). The [8 November plan](2026-11-08-smart-routing.md) stays the record of the merged slices, the pre-canary requirements and the cutover tasks; this plan owns slices F1 to F8 and L1 to L4.
 
+**Delivery checkpoint, 15 November 2026:** F1–F7 and PR #309's native Claude
+account flow are merged source delivery, not installed-client qualification.
+The [accelerated delivery map](2026-11-15-smart-router-delivery-streams.md)
+assigns remaining provider sources, shared integration, qualification, platform
+proof, cutover and post-canary learning. Its
+[recovered-gates section](2026-11-15-smart-router-delivery-streams.md#recovered-pre-canary-cutover-and-default-on-obligations)
+links the removed 8 November plan's last Git version and retains applicable gates.
+Historical task checkboxes below are not a current completion ledger.
+
 ### Account-based simplification, approved 15 November 2026
 
 The user approved the [account-based design amendment](../specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026)
