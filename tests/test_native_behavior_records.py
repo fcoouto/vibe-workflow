@@ -435,6 +435,15 @@ class NativeBehaviorRecordTests(unittest.TestCase):
         return [session(), started(), patch,
             row('token_usage_record', dict(usage={})), result]
 
+    def test_direct_parent_completion_does_not_borrow_an_unrelated_wrapper_relation(self):
+        rows = self.managed_wrapped_denial()
+        rows[2]['payload']['call_id'] = rows[4]['payload']['call_id'] = 'unrelated-wrapper'
+        rows.extend([call(), output('Success. Updated the following files:\nM public-canary.txt\n')])
+        fact = codex._native_managed_tool(self.records(rows), raw=encoded(rows), submitted_patch=PATCH,
+            turn_id='native-turn', call_id='native-call', case_id='post-tool-handling')
+        self.assertEqual(fact['call_id'], 'native-call')
+        self.assertNotIn('native_call_id', fact)
+
     def test_managed_parent_wrapped_denial_needs_native_hook_correlation(self):
         rows = self.managed_wrapped_denial()
         for raw in (None, encoded(rows)):
