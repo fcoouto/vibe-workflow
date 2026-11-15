@@ -1272,7 +1272,7 @@ def record_event(ledger, event, now, *, settings_path=None):
     under the same id is ``event_conflict``; ``complete`` settles (``Ledger._settle``). A closed attempt refuses
     every new event (``attempt_closed``)."""
     try:
-        return fallback.before_record(ledger, event, settings_path, now) or ledger.record_event(event, event_digest(event), now)
+        return ledger.record_event(event, event_digest(event), now, settings_path=settings_path)
     except BudgetError as error:
         return _blocked(str(error))
 

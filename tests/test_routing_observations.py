@@ -900,6 +900,15 @@ class LocalSourceTests(Stores):
         windows = result['observations']['pools']['chatgpt-subscription']['windows']
         self.assertEqual([window['used'] for window in windows], [40])
 
+    def test_a_consumed_mark_is_once_per_attempt_unless_a_terminal_retry_moves_it_forward(self):
+        self.assertTrue(collector.mark_consumed(self.settings, 'sub', 100, 'a1'))
+        self.assertFalse(collector.mark_consumed(self.settings, 'sub', 200, 'a1'))  # the default stays once only
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 100)
+        self.assertTrue(collector.mark_consumed(self.settings, 'sub', 300, 'a1', once=False))
+        collector.mark_consumed(self.settings, 'sub', 250, 'a1', once=False)  # never backwards
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 300)
+        self.assertEqual(collector._read(collector.window_path(self.settings))['consumed_by']['sub'], ['a1'])
+
 
 class ManagedFixtureTests(unittest.TestCase):
     """The managed-project fixture past its slice check (C.3 design 6.4 A4 rule 3), with C3-0b stood in while it is

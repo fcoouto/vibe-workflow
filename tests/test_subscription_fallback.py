@@ -25,8 +25,8 @@ class FallbackBase(Subscription):
         obs['pools']['sub']['windows'][0]['used'] = used
         return self.call(prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-sub'])))
 
-    def fallback(self, attempt):
-        response = self.admit_on(attempt, used=995)
+    def fallback(self, attempt, at=None):
+        response = self.admit_on(attempt, used=995, at=at)
         self.assertEqual(response['state'], 'admitted', response)
         self.assertEqual(response['admission']['reserved'], {})
         self.assertIn(routing.FALLBACK, response['admission']['reason_codes'])
@@ -192,12 +192,12 @@ class TerminalBoundaryTests(FallbackBase):
         seen = []
         real = collector.mark_consumed
 
-        def spy(settings_path, *args):
-            seen.append(settings_path)
-            return real(settings_path, *args)
+        def spy(settings_path, *args, **options):
+            seen.append((settings_path, options))
+            return real(settings_path, *args, **options)
         with mock.patch.object(collector, 'mark_consumed', spy):
             self.assertEqual(self.call(reconcile('f1', ABANDON, 'r1'))['state'], 'recorded')
-        self.assertEqual(seen, [self.service.settings_path])
+        self.assertEqual(seen, [(self.service.settings_path, dict(once=False))])  # a terminal retry moves forward
 
 
 class RawRecordClosureTests(FallbackBase):
@@ -255,6 +255,110 @@ class RawRecordClosureTests(FallbackBase):
             self.assertEqual(routing.record_event(ledger, dict(event_id='n1', attempt_id='f1',
                                                                kind='not_dispatched'), now())['state'], 'recorded')
         self.assertEqual(self.boundary(), 0)
+
+
+class TransactionBoundaryTests(FallbackBase):
+    """Review fix round 1 (T1-F1, T1-F2): a fallback's terminal boundary is written inside the write transaction that
+    commits its closure, after every validation, and a terminal retry moves it forward. Deterministic: the service
+    clock is fixed and the interleaving or failure is injected at a ledger seam; no sleep, thread or process."""
+
+    def at(self, moment):
+        self.service.clock = lambda: moment  # the command clock of every following request
+
+    def mid_flight_unusable(self, attempt, observed):
+        """An included admission from a reading observed while the fallback could consume never dispatches."""
+        self.included(attempt, at=observed)
+        refused = self.try_dispatch(attempt)
+        self.assertEqual((refused['state'], refused.get('reason')), ('blocked', 'stale_observation'), refused)
+
+    def failing_commit(self, attempt):
+        """The transaction that closes `attempt` fails once after its body is built (after the mark, before COMMIT)."""
+        real, failed = budget.usage_budget_storage.body_for_write, []
+
+        def body(data, **options):
+            if not failed and data['holds'].get(attempt, {}).get('closed'):
+                failed.append(attempt)
+                raise budget.BudgetError('ledger_busy')
+            return real(data, **options)
+        return mock.patch.object(budget.usage_budget_storage, 'body_for_write', body)
+
+    def stored(self, event_id):
+        return any(stored == event_id for stored, _ in self.events())
+
+    def test_a_dispatch_committed_inside_the_completion_never_releases_unmarked(self):
+        t0 = now()
+        self.at(t0)
+        self.fallback('f1', at=t0)
+        real, raced = budget.Ledger.record_event, []
+
+        def interleaved(ledger, event, *args, **options):
+            if event['attempt_id'] == 'f1' and event['kind'] == 'complete' and not raced:
+                raced.append(True)  # the client's own dispatch commits after the completion began
+                self.send('f1', sub=True)
+            return real(ledger, event, *args, **options)
+        self.at(t0 + 10)
+        with mock.patch.object(budget.Ledger, 'record_event', interleaved):
+            answer = self.call(record('f1', 'complete'))
+        self.assertEqual(raced, [True])
+        data = self.snapshot()
+        if not data['holds']['f1']['closed']:
+            self.assertIn('sub', active_pools(data))  # refused: the exposure stays fenced
+            return
+        self.assertEqual(answer['state'], 'recorded', answer)
+        self.assertGreaterEqual(self.boundary(), t0 + 10)  # closed only with its terminal boundary
+        self.mid_flight_unusable('i1', t0 - 5)  # pre-fallback quota never dispatches as included
+
+    def test_a_conflicting_completion_marks_nothing_and_the_genuine_closure_moves_the_boundary(self):
+        t0 = now()
+        self.at(t0)
+        self.fallback('f0', at=t0)
+        self.assertEqual(self.call(record('f0', 'not_dispatched', 'e1'))['state'], 'recorded')
+        self.fallback('f1', at=t0)
+        self.send('f1', sub=True)
+        self.at(t0 + 10)
+        conflict = self.call(record('f1', 'complete', 'e1'))  # another event's id with another digest
+        self.assertEqual((conflict['state'], conflict.get('reason')), ('blocked', 'event_conflict'), conflict)
+        self.assertEqual(self.boundary(), 0)  # a refused event writes no mark
+        self.assertIn('sub', active_pools(self.snapshot()))
+        self.at(t0 + 30)
+        self.assertEqual(self.call(record('f1', 'complete', 'e2'))['state'], 'recorded')
+        self.assertGreaterEqual(self.boundary(), t0 + 30)
+        self.mid_flight_unusable('i1', t0 + 20)
+
+    def closes_after_a_failed_commit(self, path):
+        t0 = now()
+        self.at(t0)
+        self.fallback('f1', at=t0)
+        self.send('f1', sub=True)
+        if path != 'complete':
+            self.uncertain('f1')
+        state = self.hold('f1')['state']
+        request = record('f1', 'complete', 'c1') if path == 'complete' else reconcile(
+            'f1', self.usage_of('f1') if path == 'host_usage' else ABANDON, 'c1')
+        self.at(t0 + 10)
+        with self.failing_commit('f1'):
+            failed = self.call(request)
+        self.assertEqual((failed['state'], failed.get('reason')), ('blocked', 'ledger_busy'), failed)
+        self.assertEqual((self.hold('f1')['closed'], self.hold('f1')['state']), (False, state))
+        self.assertFalse(self.stored('c1'))  # no committed closure event
+        self.assertIn('sub', active_pools(self.snapshot()))
+        self.at(t0 + 30)
+        self.assertEqual(self.call(request)['state'], 'recorded')  # the same event retries
+        boundary = self.boundary()
+        self.assertGreaterEqual(boundary, t0 + 30)
+        self.at(t0 + 40)
+        self.assertIs(self.call(request).get('duplicate'), True)
+        self.assertEqual(self.boundary(), boundary)  # an accepted replay leaves it unchanged
+        self.mid_flight_unusable('i1', t0 + 20)
+
+    def test_a_raw_completion_that_fails_after_its_mark_retries_forward(self):
+        self.closes_after_a_failed_commit('complete')
+
+    def test_a_host_usage_reconciliation_that_fails_after_its_mark_retries_forward(self):
+        self.closes_after_a_failed_commit('host_usage')
+
+    def test_an_abandon_that_fails_after_its_mark_retries_forward(self):
+        self.closes_after_a_failed_commit('abandon')
 
 
 if __name__ == '__main__':

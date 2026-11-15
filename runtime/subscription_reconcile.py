@@ -64,8 +64,9 @@ def reconcile_event(value):
 def reconcile(ledger, event, now, *, settings_path=None):
     """Apply one `reconcile_event` in one write transaction; refusals are fixed reasons and store nothing.
 
-    A provider-managed fallback attempt closes only after its pool's consumed boundary is written to the service's
-    own window store at `settings_path` (`subscription_fallback.mark_terminal`); without it nothing is recorded."""
+    A provider-managed fallback attempt's closure commits only after its pool's consumed boundary is written to the
+    service's own window store at `settings_path` (`subscription_fallback.mark_terminal`), after the closure and its
+    event row are applied and before COMMIT; without it nothing is recorded."""
     from runtime import routing
     try:
         return _reconcile(ledger, event, routing.event_digest(event), now, settings_path)
@@ -89,20 +90,17 @@ def _reconcile(ledger, event, digest, now, settings_path=None):
                 'hold_state_forbidden')
         require(evidence.get('kind') in EVIDENCE_KINDS, 'evidence_unsupported')
         if evidence['kind'] == 'host_usage':
-            require(hold.get('dispatch') is not None, 'dispatch_required')
-            require(evidence['session_id'] == hold['dispatch']['session_id'], 'evidence_mismatch')
-        record = Ledger.admission(data, attempt)
-        if subscription_fallback.is_fallback(record):
-            try:  # an uncertain fallback may have consumed an unknown amount: the boundary moves before it closes
-                subscription_fallback.mark_terminal(settings_path, record, now, attempt)
-            except (OSError, ValueError):
-                raise BudgetError('observation_store_unavailable') from None
-        if evidence['kind'] == 'host_usage':
             outcome, body = _host_usage(ledger, data, attempt, hold, event, now)
         else:
             outcome, body = _abandon(data, attempt, hold, now)
         body.update(kind=KIND, recorded_at=now, outcome=dict(outcome))
         ledger._store_event(data, event['event_id'], digest, body, now, effect=True)
+        record = Ledger.admission(data, attempt)
+        if subscription_fallback.is_fallback(record):
+            try:  # an uncertain fallback may have consumed an unknown amount: the boundary moves before COMMIT
+                subscription_fallback.mark_terminal(settings_path, record, now, attempt)
+            except (OSError, ValueError):
+                raise BudgetError('observation_store_unavailable') from None
         return outcome
 
 

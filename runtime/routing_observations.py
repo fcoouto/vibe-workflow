@@ -324,19 +324,21 @@ def consumed_at(settings_path, pool):
 MAX_CONSUMED_BY = 256  # recent attempts per pool whose completion already wrote the boundary
 
 
-def mark_consumed(settings_path, pool, at, attempt):
+def mark_consumed(settings_path, pool, at, attempt, once=True):
     """Record that `attempt`'s launch settled on `pool` at `at` without a reading (native completion, F4.6), once per
     attempt: under the store's lock a repeated or concurrent call for the same attempt changes nothing. The time only
     moves forward; the pool's readings stay as they are, and a reading observed after it restores the pool. True when
-    this call wrote it."""
+    this call wrote it. With `once` False (a provider-managed fallback's terminal mark, which a rolled-back closure may
+    have written earlier) a repeated call still moves the time forward; the attempt is listed once."""
     if not routing._part(pool) or not routing._amount(at) or not routing._text(attempt):
         raise ValueError('invalid_window_observation')
     with _locked(window_path(settings_path)) as path:
         value = _read(path) or dict(version=1, pools={})
         done = value.setdefault('consumed_by', {}).setdefault(pool, [])
-        if attempt in done:
+        if attempt in done and once:
             return False
-        done.append(attempt)
+        if attempt not in done:
+            done.append(attempt)
         del done[:-MAX_CONSUMED_BY]
         consumed = value.setdefault('consumed', {})
         consumed[pool] = max(at, consumed.get(pool, 0))

@@ -3,7 +3,7 @@
 A fallback admission (`routing.FALLBACK`, no included claim) that may have been sent can still consume an unknown
 amount of its pool. While any such attempt is dispatched or uncertain, its pool takes no included reservation and no
 included admission of it dispatches. Each supported terminal disposition writes the pool's consumed boundary
-(`routing_observations.mark_consumed`) before the hold closes, and an included admission whose snapshot is no newer
+(`routing_observations.mark_consumed`) before its closure commits, and an included admission whose snapshot is no newer
 than that boundary never dispatches. Exposure comes from the ledger's own open holds and admission records (records
 of open holds are never pruned): no second registry, send-time mark or timestamp field. Reads only; no process.
 """
@@ -49,18 +49,20 @@ def dispatch_problem(data, record, settings_path):
     return None
 
 
-def before_record(ledger, event, settings_path, now):
-    """`routing.record_event`'s guard: a `complete` that would release a dispatched fallback writes its terminal
-    boundary first; a missing store or failed write refuses (`observation_store_unavailable`) and records nothing.
-    Replays, conflicts and other transitions reach this with a closed or non-dispatched hold and mark nothing;
-    the ledger's own validation still decides the event. Returns None."""
-    from runtime.usage_budget import BudgetError
+def after_record(data, event, settings_path, now):
+    """`Ledger.record_event`'s fixed finalization, in its write transaction after the event applied and was stored and
+    before COMMIT: a `complete` that has just closed a provider-managed fallback hold writes the pool's terminal
+    boundary. The ledger refuses an already-closed hold (`attempt_closed`) and answers a replay or conflict before this
+    runs, so a closed hold here was closed by this event. A missing store or failed write raises
+    `observation_store_unavailable`, rolling back the closure and the event row so the same event can be retried.
+    Returns None."""
     if event.get('kind') != 'complete':
         return None
-    data = ledger.snapshot()
-    hold, record = data['holds'].get(event.get('attempt_id')), Ledger.admission(data, event.get('attempt_id'))
-    if hold is None or hold['closed'] or hold['state'] != 'dispatched' or not is_fallback(record):
+    hold = data['holds'].get(event['attempt_id'])
+    record = Ledger.admission(data, event['attempt_id']) if hold is not None and hold['closed'] else None
+    if record is None or not is_fallback(record):
         return None
+    from runtime.usage_budget import BudgetError
     try:
         mark_terminal(settings_path, record, now, event['attempt_id'])
     except (OSError, ValueError):
@@ -69,8 +71,9 @@ def before_record(ledger, event, settings_path, now):
 
 
 def mark_terminal(settings_path, record, at, attempt):
-    """Write a fallback's terminal consumption boundary before its hold closes; refuses without the actual store."""
+    """Write a fallback's terminal consumption boundary inside the transaction that commits its closure, moving it
+    forward even when a rolled-back attempt at that closure already wrote one; refuses without the actual store."""
     from runtime import routing_observations
     if settings_path is None:
         raise ValueError('observation_store_required')
-    routing_observations.mark_consumed(settings_path, record['pool'], at, attempt)
+    routing_observations.mark_consumed(settings_path, record['pool'], at, attempt, once=False)
