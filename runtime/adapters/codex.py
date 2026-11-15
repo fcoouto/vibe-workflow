@@ -1169,11 +1169,11 @@ def _native_policy_rejection(records, *, submitted_patch, turn_id, startup_read_
         raise ObservationError('native_policy_rejection_unobserved') from None
 
 
-def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, child_patch=False, raw=None):
+def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, child_patch=False, raw=None, trace_source=None):
     """Correlate native tool records; post success additionally requires Core-owned effects."""
     from runtime.adapters.codex_managed import native_managed_tool
     return native_managed_tool(records, submitted_patch=submitted_patch, turn_id=turn_id,
-        call_id=call_id, case_id=case_id, child_patch=child_patch, raw=raw)
+        call_id=call_id, case_id=case_id, child_patch=child_patch, raw=raw, trace_source=trace_source)
 
 
 def _setup_executable(process):
@@ -1406,7 +1406,7 @@ def observe_setup_metadata(process, attempt):
         raise ObservationError('setup_metadata_unavailable') from None
 
 
-def observe_managed_case(scope, task_ref, attempt_ref, case_id):
+def observe_managed_case(scope, task_ref, attempt_ref, case_id, *, trace_bundle=None):
     """Observe a parent task hook or the admitted child canary completion."""
     from runtime.adapters.codex_managed import observe_managed_case as observe
-    return observe(scope, task_ref, attempt_ref, case_id)
+    return observe(scope, task_ref, attempt_ref, case_id, trace_bundle=trace_bundle)

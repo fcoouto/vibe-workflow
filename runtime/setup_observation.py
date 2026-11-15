@@ -760,7 +760,7 @@ def _merge_managed_witness(content,reference,identity,witness):
     d3._require(scope is not None and scope.accepted_scope_digest==d3._digest(identity)
         and startup._canonical_plain(scope.qualification['reference'])==reference,'Original managed setup scope changed')
     for case,proofs in value['observations'].items():
-        d3._require(case in ('pre-tool-enforcement','post-tool-handling') and len(proofs)==4,
+        d3._require(case in ('pre-tool-enforcement','post-tool-handling') and len(proofs) in (4,11),
             'Unsupported managed behavior source')
         before_ref,after_ref=proofs[-2:]
         path,separator,selector=after_ref['reference'].partition('#managed-parent-observation:')

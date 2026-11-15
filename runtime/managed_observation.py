@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from runtime import onboarding as d3, startup, task_profile
 
@@ -253,7 +254,7 @@ def retained_parent_task(scope, selector, before_ref):
 
 def retained_readback(scope, task_ref, attempt_ref, *, case_id, projection, proofs):
     """Recheck the issued native source relation before consuming its Core receipt."""
-    from runtime import doctor
+    from runtime import doctor, setup_observation as setup
     from runtime.adapters import codex
     try:
         binding = projection['binding']
@@ -266,16 +267,32 @@ def retained_readback(scope, task_ref, attempt_ref, *, case_id, projection, proo
         d3._no_links(path)
         info = path.stat()
         physical = dict(device=info.st_dev, inode=info.st_ino)
+        remaining = projection['attempt']['limits']['deadline'] - time.time()
+        deadline = time.monotonic() + min(codex.REVIEW_TIMEOUT, max(0, remaining))
+        trace_source = None
+        native_call_id = task_ref['call_id']
+        if len(proofs) != 4:
+            from runtime.adapters import codex_trace
+            d3._require(len(proofs) == 11 and not child and binding.get('kind') == 'parent'
+                and case_id == 'pre-tool-enforcement', 'Unsupported retained trace source')
+            bundle, native_call_id = codex_trace.retained_selector(proofs[2:-2])
+            original, _ = setup._retained_reference(projection['setup_reference'], setup._budget(deadline))
+            trace_source = dict(bundle=bundle, native_home=original['configuration']['codex_home'],
+                repository_root=str(scope.repository_root), rollout_path=str(path), deadline=deadline)
+        d3._require(time.monotonic() < deadline, 'Retained native observation expired')
         raw = d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical)
         records = doctor.native_behavior_records(raw, thread_id=thread, source_reference=str(path))
         fact = startup._canonical_plain(codex._native_managed_tool(records,
             submitted_patch=projection['probe']['patch'], turn_id=task_ref['turn_id'],
-            call_id=task_ref['call_id'], case_id=case_id, child_patch=child, raw=raw))
-        d3._require(fact['call_id'] == task_ref['call_id'] and fact['sources'] == proofs[:2],
+            call_id=native_call_id, case_id=case_id, child_patch=child, raw=raw, trace_source=trace_source))
+        d3._require(fact['call_id'] == task_ref['call_id'] and fact['sources'] == proofs[:-2],
             'Managed native identity relation changed')
         actual = readback(scope, task_ref, attempt_ref, case_id=case_id)
+        if trace_source is not None:
+            codex_trace.recheck(dict(sources=fact['sources'][2:], native_call_id=native_call_id), trace_source)
         d3._require(d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical) == raw,
             'Managed native source changed during retained readback')
+        d3._require(time.monotonic() < deadline, 'Retained native observation expired')
         return fact, actual
     except (doctor.ObservationError, OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
         raise startup.StartupError('Retained native hook correlation is unavailable') from None

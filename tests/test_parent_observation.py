@@ -13,6 +13,7 @@ from runtime import doctor, evidence, setup_observation as source, startup, stat
 from runtime.adapters import codex
 from tests import test_native_behavior_owner as fixtures
 from tests.fixture_native_behavior import PATCH
+from tests.fixture_codex_trace import write_bundle, write_events
 
 
 class ParentObservationTests(unittest.TestCase):
@@ -117,6 +118,84 @@ class ParentObservationTests(unittest.TestCase):
         with self.assertRaises(codex.ObservationError):
             codex.observe_managed_case(self.scope, selected | dict(call_id='exec-parent-inner'),
                 self.allocation['reference'], 'pre-tool-enforcement')
+
+    def trace_denial(self):
+        started = self.begin()['task']
+        selected = self.deny(wrapped=True)
+        bundle, rows, _ = write_bundle(self.original['home'], self.owner.fixture.repo,
+            self.original['rollout'], thread=self.identity['session_id'], turn=selected['turn_id'],
+            outer=selected['call_id'], inner='exec-parent-inner')
+        witness = codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+            'pre-tool-enforcement', trace_bundle=str(bundle))
+        return started, selected, bundle, rows, witness
+
+    def consume_trace(self, witness):
+        content = doctor._native_witness_content(witness)
+        assessment = startup._canonical_plain(self.prepared['published']['source'].content['assessment'])
+        case = next(row for row in assessment['cases'] if row['id'] == 'pre-tool-enforcement')
+        case.update(status='verified', evidence=content['observations']['pre-tool-enforcement'])
+        return source.collect_retained_setup(self.prepared['published']['binding']['receipt'],
+            self.owner.identity, 'fixture:trace-parent-observed', assessment, witness=witness)
+
+    def test_trace_parent_denial_retains_exact_core_and_both_source_identities(self):
+        started, selected, bundle, _, witness = self.trace_denial()
+        proofs = doctor._native_witness_content(witness)['observations']['pre-tool-enforcement']
+        self.assertEqual(len(proofs), 11)
+        self.assertIn('call-parent-outer'.encode().hex(), proofs[2]['reference'])
+        self.assertTrue(proofs[-1]['reference'].endswith(':exec-parent-inner'))
+        with patch.dict(os.environ, CODEX_ROLLOUT_TRACE_ROOT='/unrelated/changed-location'):
+            observed = startup._canonical_plain(self.consume_trace(witness).content)
+        retained = observed['source']['managed']['pre-tool-enforcement']
+        native = retained['native']
+        self.assertEqual(native['call_id'], 'exec-parent-inner')
+        self.assertEqual(native['native_call_id'], 'call-parent-outer')
+        self.assertEqual(native['trace_relation']['runtime_cell_id'], 'cell-1')
+        self.assertEqual(native['sources'], startup._canonical_plain(proofs[:-2]))
+        before = self.before(started)
+        self.assertGreater(retained['after']['receipt']['rowid'], before['receipt_watermark'])
+        self.assertEqual(retained['after']['receipt']['fingerprint'], codex.patch_input_fingerprint(PATCH))
+        self.assertEqual(self.original['canary'].read_text(), 'before\n')
+        task = state.task_status(self.scope, 'codex', self.identity['session_id'])['task']
+        self.assertEqual(task['pins'], started['pins'])
+        self.assertEqual(task['qualification_attempt'], started['qualification_attempt'])
+        self.assertEqual(task['revision'], selected['expected_revision'])
+        with state._database(self.scope) as db:
+            self.assertEqual(db.execute('select count(*) from assignments').fetchone()[0], 0)
+
+    def test_retained_trace_rechecks_every_hash_and_physical_source(self):
+        _, _, bundle, _, witness = self.trace_denial()
+        self.consume_trace(witness)
+        for relative in ('manifest.json', 'trace.jsonl', 'payloads/1.json', 'payloads/2.json',
+                         'payloads/3.json', 'payloads/4.json', 'payloads/5.json'):
+            path = bundle/relative; raw = path.read_bytes()
+            try:
+                path.write_bytes(raw+b' ')
+                with self.subTest(relative=relative), self.assertRaises(startup.StartupError):
+                    self.consume_trace(witness)
+            finally:
+                path.write_bytes(raw)
+        path = bundle/'payloads/2.json'
+        replacement = bundle/'payloads/replacement.json'
+        replacement.write_bytes(path.read_bytes()); replacement.chmod(0o600)
+        os.replace(replacement, path)
+        with self.assertRaises(startup.StartupError):
+            self.consume_trace(witness)
+
+    def test_trace_cannot_select_missing_wrong_or_old_core_receipt(self):
+        started, selected, bundle, rows, _ = self.trace_denial()
+        rows[4]['payload']['tool_call_id'] = 'nonexistent-hook'
+        rows[5]['payload']['tool_call_id'] = 'nonexistent-hook'
+        write_events(bundle, rows)
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                'pre-tool-enforcement', trace_bundle=str(bundle))
+        rows[4]['payload']['tool_call_id'] = rows[5]['payload']['tool_call_id'] = 'exec-parent-inner'
+        write_events(bundle, rows)
+        with state._database(self.scope, write=True) as db:
+            db.execute("update receipts set conflicted=1 where tool_call_id='exec-parent-inner'")
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                'pre-tool-enforcement', trace_bundle=str(bundle))
 
     def test_wrapped_denial_cannot_borrow_a_same_id_core_receipt(self):
         self.begin()

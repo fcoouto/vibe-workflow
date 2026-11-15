@@ -8,7 +8,7 @@ from runtime import delegation, onboarding as d3, setup_observation, startup, ta
 from runtime.adapters import codex
 
 
-def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, child_patch=False, raw=None):
+def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, child_patch=False, raw=None, trace_source=None):
     """Resolve hook identity only from direct calls or the supported native completion interval."""
     try:
         data = startup._canonical_plain(records)
@@ -52,6 +52,7 @@ def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, 
                 or wrapped and result.get('namespace') not in (None, 'functions')):
             raise ValueError
         text = result.get('output')
+        trace = None
         if case_id == 'pre-tool-enforcement':
             reason = 'Patching requires a WORKING editable bound task without applicable blockers'
             if not codex._native_patch_denied(item, text, submitted_patch,
@@ -59,7 +60,13 @@ def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, 
                 raise ValueError
             if wrapped:
                 # A rejection envelope names only exec, not the nested hook invocation.
-                raise codex.ObservationError('native_hook_correlation_unavailable')
+                if trace_source is None:
+                    raise codex.ObservationError('native_hook_correlation_unavailable')
+                from runtime.adapters.codex_trace import read_rejection
+                trace = read_rejection(trace_source, thread_id=data['thread_id'], turn_id=turn_id,
+                    native_call_id=native_call_id, source_js=item['input'], submitted_patch=submitted_patch,
+                    rejection=f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}')
+                call_id = trace['call_id']
         elif not (isinstance(text, str) or isinstance(text, list) and all(isinstance(part, dict)
                 and part.get('type') == 'input_text' and isinstance(part.get('text'), str) for part in text)):
             raise ValueError
@@ -67,6 +74,9 @@ def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, 
             submitted_patch_sha256=hashlib.sha256(submitted_patch.encode()).hexdigest(), sources=[call['source'], output['source']])
         if native_call_id != call_id:
             fact['native_call_id'] = native_call_id
+        if trace is not None:
+            fact['sources'].extend(trace['sources'])
+            fact['trace_relation'] = trace['trace_relation']
         if child_patch:
             if isinstance(text, list) and len(text) == 1:
                 text = text[0]['text']
@@ -79,7 +89,7 @@ def native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, 
         raise codex.ObservationError('native_managed_tool_unobserved') from None
 
 
-def observe_managed_case(scope, task_ref, attempt_ref, case_id):
+def observe_managed_case(scope, task_ref, attempt_ref, case_id, *, trace_bundle=None):
     projection = startup._canonical_plain(setup_observation.managed_observation_projection(
         scope, task_ref, attempt_ref, case_id=case_id))
     try:
@@ -93,7 +103,14 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
         now = time.monotonic()
         remaining = projection['attempt']['limits']['deadline']-time.time()
         deadline = now+min(codex.REVIEW_TIMEOUT, max(0, remaining))
-        with codex._native_reader(codex.REVIEW_METHODS, deadline=deadline) as (observed_version, request):
+        trace_source = None
+        native_home = None
+        if trace_bundle is not None:
+            if not parent_only or case_id != 'pre-tool-enforcement':
+                raise codex.ObservationError('native_trace_custody_unavailable')
+            retained, _ = setup_observation._retained_reference(projection['setup_reference'], setup_observation._budget(deadline))
+            native_home = retained['configuration']['codex_home']
+        with codex._native_reader(codex.REVIEW_METHODS, deadline=deadline, native_home=native_home) as (observed_version, request):
             if parent_only:
                 parent = codex._native_metadata(scope, request, binding['parent_session_id'], observed_version)
                 codex._native_surface(parent, binding['client_surface'])
@@ -116,11 +133,14 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
             if time.monotonic() >= deadline:
                 raise codex.ObservationError('timeout')
             raw = d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical)
+            if trace_bundle is not None:
+                trace_source = dict(bundle=trace_bundle, native_home=native_home,
+                    repository_root=str(scope.repository_root), rollout_path=str(path), deadline=deadline)
             from runtime.doctor import native_behavior_records
             records = native_behavior_records(raw, thread_id=stream['id'], source_reference=str(path))
             fact = startup._canonical_plain(codex._native_managed_tool(records, submitted_patch=probe['patch'],
                 turn_id=selectors['turn_id'], call_id=selectors['call_id'], case_id=case_id,
-                child_patch=selectors['stream'] == 'child', raw=raw))
+                child_patch=selectors['stream'] == 'child', raw=raw, trace_source=trace_source))
             hook_ref = task_ref | dict(call_id=fact['call_id'])
             after = startup._canonical_plain(setup_observation.managed_observation_readback(
                 scope, hook_ref, attempt_ref, case_id=case_id))
@@ -150,6 +170,9 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
                     raise codex.ObservationError('managed_generation_unattributed')
             if d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical) != raw:
                 raise codex.ObservationError('managed_native_source_changed')
+            if 'trace_relation' in fact:
+                from runtime.adapters.codex_trace import recheck
+                recheck(dict(sources=fact['sources'][2:], native_call_id=fact['native_call_id']), trace_source)
             if (time.monotonic() >= deadline or projection != startup._canonical_plain(
                     setup_observation.managed_observation_projection(scope, task_ref, attempt_ref, case_id=case_id))
                     or after != startup._canonical_plain(setup_observation.managed_observation_readback(
