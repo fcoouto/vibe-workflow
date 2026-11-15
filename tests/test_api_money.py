@@ -630,7 +630,8 @@ class SharedCheckoutTests(unittest.TestCase):
         from unittest.mock import patch
         from runtime import usage_settings
         with tempfile.TemporaryDirectory() as folder:
-            home, roots = Path(folder) / 'home', [Path(folder) / 'checkout-a', Path(folder) / 'checkout-b']
+            folder = Path(folder).resolve()
+            home, roots = folder / 'home', [folder / 'checkout-a', folder / 'checkout-b']
             for root in roots:
                 root.mkdir()
             keys = {str(root): ('key-' + root.name, root) for root in roots}

@@ -12,7 +12,8 @@ def validate_task(task, original=None):
     if original is not None:
         for key in ('qualification_attempt', 'qualification_before'):
             if original.get(key) != task.get(key) or (key in original) != (key in task):
-                raise state.StateError('Original qualification purpose and before state are immutable')
+                label = 'purpose' if key == 'qualification_attempt' else 'before state'
+                raise state.StateError(f'Original qualification {label} is immutable')
     if 'qualification_before' in task:
         state._artifact_reference(task['qualification_before'])
         d3._require('qualification_attempt' in task, 'Parent before state needs its original qualification attempt')
