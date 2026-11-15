@@ -63,7 +63,7 @@ Separating execution admission from historical verification is independent work.
 - Cross-turn/scope, replayed, conflicted or pre-watermark receipts remain refused.
 - Existing authenticated nested completions and direct calls remain compatible.
 
-### Task 1: Reproduce the native identity boundary
+### Task 1: Reproduce and repair the native identity boundary
 
 **Files:** `tests/test_parent_observation.py`, existing fake-native fixtures and
 the nearest parser tests; add one small fixture/module only if necessary.
@@ -77,7 +77,7 @@ the nearest parser tests; add one small fixture/module only if necessary.
 - [ ] Commit tests, run the focused offline reproduction, and retain its intended
   RED result. Do not treat an unrelated error as reproduction.
 
-### Task 2: Repair authenticated correlation at its native owner
+#### Repair authenticated correlation at its native owner
 
 **Files:** Existing native parser/managed adapter, managed readback and retained
 setup consumer only where the actual data flow requires a change.
@@ -97,7 +97,7 @@ or a precise fail-closed unavailable-correlation result.
 - [ ] Validate package, commit implementation, then run focused and transitive
   offline checks on the committed candidate.
 
-### Task 3: Verify and deliver
+### Task 2: Verify and deliver
 
 - [ ] Self-review exact diff and report any remaining missing native capability.
 - [ ] Obtain independent general/security identity-boundary review.
