@@ -370,6 +370,27 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
                                                              state='recorded')])
         self.assertEqual(collector.consumed_at(self.settings, CODEX_POOL), 0)
 
+    def test_a_provider_managed_fallback_marks_its_pool_before_release(self):
+        """Design 4.1: a fallback admission claims no included window but may have consumed an unknown amount, so
+        `_close` writes the pool's boundary while the hold still counts, exactly as for an included claim."""
+        from runtime import routing
+        self.ready()
+        prepared = self.prepare(dispatch_id='fallback')
+        attempt = prepared['attempt_id']
+        real = delegation_routing._holds
+
+        def holds(service):
+            data = real(service)
+            return dict(data, admissions=[dict(r, reserved={}, reason_codes=[*r['reason_codes'], routing.FALLBACK])
+                                          for r in data.get('admissions', [])])
+        calls, spy = self.spy()
+        with spy, mock.patch.object(delegation_routing, '_holds', holds):
+            settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
+                prepared, outcome='cancelled'))
+        self.assertEqual(settled['routing']['closed'], [dict(attempt_id=attempt, kind='complete', state='recorded')])
+        self.assertEqual(calls, [(CODEX_POOL, attempt, 'dispatched')])  # marked while the hold still counted
+        self.assertGreater(collector.consumed_at(self.settings, CODEX_POOL), 0)
+
     def test_unknown_funding_keeps_the_hold(self):
         self.ready()
         previous = {}

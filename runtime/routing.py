@@ -17,7 +17,7 @@ import re
 import secrets
 
 from runtime import routing_allocator as allocator, routing_gates, routing_settings, task_profile
-from runtime import subscription_reconcile as sub_reconcile
+from runtime import subscription_fallback as fallback, subscription_reconcile as sub_reconcile
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
@@ -488,7 +488,7 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     ranked = routing_funding.is_ranked(assignment, ranking, settings)
     candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
     for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
-        item, why = _candidate(data, route, observations, assignment, settings, held, now)
+        item, why = fallback.fence(_candidate(data, route, observations, assignment, settings, held, now), data)
         if item is not None:
             candidates.append(item)
         excluded += why
@@ -1019,7 +1019,7 @@ def _fresh_gate(data, attempt_id, fresh, workflow):
         return 'gate_error'
 
 
-def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=None):
+def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=None, settings_path=None):
     """Issue the single-use authority for an admitted attempt, or return the existing decision.
 
     ``settings`` (resolved settings with ``revision``) and ``now`` may be callables; they are read INSIDE the
@@ -1059,7 +1059,7 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=Non
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
         admitted.update(route=record['route'], pool=record['pool'])
-        reason = _fresh_gate(data, attempt_id, fresh, workflow)
+        reason = _fresh_gate(data, attempt_id, fresh, workflow) or fallback.dispatch_problem(data, record, settings_path)
         if reason is not None:
             return reason
         if gates:
@@ -1261,7 +1261,7 @@ def event_digest(event):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
-def record_event(ledger, event, now):
+def record_event(ledger, event, now, *, settings_path=None):
     """Apply one lifecycle event (already checked by ``event_error``) in one ledger transaction.
 
     S3.1/S3.4 transitions are unchanged: only established outcomes release a claim (``not_dispatched`` before
@@ -1272,7 +1272,7 @@ def record_event(ledger, event, now):
     under the same id is ``event_conflict``; ``complete`` settles (``Ledger._settle``). A closed attempt refuses
     every new event (``attempt_closed``)."""
     try:
-        return ledger.record_event(event, event_digest(event), now)
+        return fallback.before_record(ledger, event, settings_path, now) or ledger.record_event(event, event_digest(event), now)
     except BudgetError as error:
         return _blocked(str(error))
 

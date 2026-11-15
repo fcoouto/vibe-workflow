@@ -360,6 +360,20 @@ class LaunchTests(Stores):
         self.assertEqual(self.transport.calls, [])
         self.assertEqual(self.holds(), {})
 
+    def test_a_fallback_completion_marks_its_pool_even_with_nothing_claimed(self):
+        """Design 4.1: a provider-managed fallback claims no window, so an empty claim is trivially covered; it may
+        still have consumed an unknown amount, so its pool's boundary is written before the hold is released. A
+        covered included claim stays unmarked, and a boundary that cannot be written keeps the hold (False)."""
+        fallback = dict(attempt_id='f1', pool='sub', reserved={}, reason_codes=[routing.FALLBACK])
+        included = dict(attempt_id='i1', pool='sub', reserved={'win:sub/5h': 6}, reason_codes=[])
+        self.assertTrue(launcher._covered_or_marked(self.service, included, lambda admission: ['5h'], self.settings))
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 0)
+        with mock.patch.object(collector, 'mark_consumed', side_effect=OSError('store unwritable')):
+            self.assertFalse(launcher._covered_or_marked(self.service, fallback, lambda admission: [], self.settings))
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 0)
+        self.assertTrue(launcher._covered_or_marked(self.service, fallback, lambda admission: [], self.settings))
+        self.assertGreater(collector.consumed_at(self.settings, 'sub'), 0)
+
     def test_a_lost_acknowledgment_records_uncertain_and_names_the_operator_op(self):
         result = self.launch(transport=Transport(error=TimeoutError('no acknowledgment')))
         self.assertEqual(result, dict(state='uncertain', attempt_id='a1', recovery='reconcile_subscription'))

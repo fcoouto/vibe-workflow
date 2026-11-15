@@ -14,7 +14,7 @@ import json
 import re
 import secrets
 
-from runtime import usage_budget
+from runtime import subscription_fallback, usage_budget
 from runtime.usage_budget import MAX_INTEGER, WIN, BudgetError, Ledger, integer, require
 
 KIND = 'reconcile_subscription'
@@ -61,16 +61,19 @@ def reconcile_event(value):
     return dict(value, kind=KIND), None
 
 
-def reconcile(ledger, event, now):
-    """Apply one `reconcile_event` in one write transaction; refusals are fixed reasons and store nothing."""
+def reconcile(ledger, event, now, *, settings_path=None):
+    """Apply one `reconcile_event` in one write transaction; refusals are fixed reasons and store nothing.
+
+    A provider-managed fallback attempt closes only after its pool's consumed boundary is written to the service's
+    own window store at `settings_path` (`subscription_fallback.mark_terminal`); without it nothing is recorded."""
     from runtime import routing
     try:
-        return _reconcile(ledger, event, routing.event_digest(event), now)
+        return _reconcile(ledger, event, routing.event_digest(event), now, settings_path)
     except BudgetError as error:
         return dict(state='blocked', reason=str(error))
 
 
-def _reconcile(ledger, event, digest, now):
+def _reconcile(ledger, event, digest, now, settings_path=None):
     usage_budget.integer(now)
     with ledger.transaction() as data:
         usage_budget._create_tables(ledger.db)
@@ -85,6 +88,15 @@ def _reconcile(ledger, event, digest, now):
         require(hold['state'] == 'uncertain' and not hold['amount'] and hold.get('organization') is None,
                 'hold_state_forbidden')
         require(evidence.get('kind') in EVIDENCE_KINDS, 'evidence_unsupported')
+        if evidence['kind'] == 'host_usage':
+            require(hold.get('dispatch') is not None, 'dispatch_required')
+            require(evidence['session_id'] == hold['dispatch']['session_id'], 'evidence_mismatch')
+        record = Ledger.admission(data, attempt)
+        if subscription_fallback.is_fallback(record):
+            try:  # an uncertain fallback may have consumed an unknown amount: the boundary moves before it closes
+                subscription_fallback.mark_terminal(settings_path, record, now, attempt)
+            except (OSError, ValueError):
+                raise BudgetError('observation_store_unavailable') from None
         if evidence['kind'] == 'host_usage':
             outcome, body = _host_usage(ledger, data, attempt, hold, event, now)
         else:

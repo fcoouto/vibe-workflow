@@ -356,6 +356,17 @@ class GateSeamTests(DispatchBase):
                                       gates=(lambda data, record: None,))
         self.assertEqual(passed['state'], 'dispatched')
 
+    def test_an_open_fallback_on_the_pool_refuses_an_included_dispatch_inside_the_transaction(self):
+        """Design 4.1: the exposure fence reads the same ledger transaction, with or without a window store."""
+        obs = observations(provider_fallback=True, account='acct-f1')
+        obs['pools']['sub']['windows'][0]['used'] = 995
+        self.assertEqual(self.call(prepare('f1', observations=obs))['admission']['reserved'], {})
+        with self.open_ledger() as ledger:
+            self.assertEqual(routing.dispatch(ledger, 'f1', facts(), self.settings_value, now())['state'], 'dispatched')
+            refused = routing.dispatch(ledger, 'a1', facts(), self.settings_value, now())
+            self.assertEqual(refused, dict(state='blocked', reason='fallback_exposure_open'))
+            self.assertEqual(ledger.snapshot()['holds']['a1']['state'], 'admitted')
+
     def test_a_gate_cannot_change_the_ledger(self):
         def meddle(data, record):
             data['caps'] = dict(total=99, per_account=99)

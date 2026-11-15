@@ -383,8 +383,8 @@ def _covered_or_marked(service, admission, settled, settings_path):
         covered = set(settled(admission)) if settled is not None else set()
     except Exception:  # noqa: BLE001 - a reading that could not be stored covers nothing
         covered = set()
-    if claimed <= covered:
-        return True
+    if claimed <= covered and routing.FALLBACK not in (admission.get('reason_codes') or ()):
+        return True  # a fallback claims nothing, yet may have consumed an unknown amount: always marked
     try:
         routing_observations.mark_consumed(settings_path or service.settings_path, admission['pool'], int(time.time()),
                                            admission['attempt_id'])

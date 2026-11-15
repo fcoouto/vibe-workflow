@@ -558,7 +558,8 @@ class Service:
         require(ledger is not None, 'ledger_absent')
         self._expire(ledger)
         # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
-        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body), workflow=self.workflow)
+        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body), workflow=self.workflow,
+                                settings_path=self.settings_path)
 
     def _record(self, body):
         event = body['event']
@@ -567,7 +568,7 @@ class Service:
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
         self._expire(ledger)
-        result = routing.record_event(ledger, event, self.clock())
+        result = routing.record_event(ledger, event, self.clock(), settings_path=self.settings_path)
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _resolve_cost_unknown(self, body):
@@ -588,7 +589,8 @@ class Service:
 
     def _reconcile_subscription(self, body):
         """Operator reconciliation of an uncertain subscription hold (S3.6c): a host re-read or abandon."""
-        return self._operator(*subscription_reconcile.reconcile_event(body), apply=subscription_reconcile.reconcile)
+        return self._operator(*subscription_reconcile.reconcile_event(body), apply=lambda ledger, event, now:
+                              subscription_reconcile.reconcile(ledger, event, now, settings_path=self.settings_path))
 
     def _drop_debit(self, body):
         """Operator removal of one S3.6c window debit against its `status` marker (C3-0a), e.g. a rolling window's."""

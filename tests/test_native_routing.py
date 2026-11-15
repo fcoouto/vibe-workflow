@@ -470,6 +470,27 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual(permit['reason'], 'catalog_mismatch')
         self.assertEqual(self.holds()['n1']['state'], 'released')  # closed `not_dispatched`
 
+    def test_an_open_fallback_fences_included_quota_until_its_completion_marks_the_pool(self):
+        """Design 4.1: while a dispatched fallback can still consume an unknown amount, a newer roomy reading takes
+        no included reservation on its pool; its native completion writes the boundary before the hold releases, and
+        only a reading observed after that restores included quota."""
+        self.billing()
+        self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
+        self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
+        self.fallback('claude-code', 'f1')
+        self.assertEqual(self.complete('q1', dict(kind='complete'))['state'], 'recorded')
+        self.newer_readings()  # roomy and observed after q1's boundary, but f1 is still running
+        self.fallback('claude-code', 'q2')
+        first = self.boundary()
+        self.assertEqual(self.complete('f1', dict(kind='complete'))['state'], 'recorded')
+        self.assertGreater(self.boundary(), first)  # f1's terminal boundary, written before its release
+        self.assertEqual(self.complete('q2', dict(kind='complete'))['state'], 'recorded')
+        self.newer_readings()
+        self.assertEqual(self.prepare('claude-code', 'q3')['state'], 'dispatched')
+        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
+                      if item['attempt_id'] == 'q3')
+        self.assertNotEqual(record['reserved'], {})  # included quota restored after every fallback settled
+
     def test_exhaustion_and_shared_pool_reservations(self):
         self.billing()
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
