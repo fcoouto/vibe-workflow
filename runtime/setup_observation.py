@@ -802,7 +802,7 @@ def _merge_managed_witness(content,reference,identity,witness):
         retained=content['source']['observations'].setdefault(case,[])
         retained.extend(proof for proof in proofs if proof not in retained)
         content['source'].setdefault('managed',{})[case]=dict(before=startup._canonical_plain(before),after=after,
-            assignment=assignment_id,before_reference=before_ref,after_reference=after_ref)
+            assignment=assignment_id if 'attempt_id' in task_ref else None,before_reference=before_ref,after_reference=after_ref)
 
 
 def _monotonic_coverage(previous, successor):

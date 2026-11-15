@@ -172,6 +172,39 @@ class ParentObservationTests(unittest.TestCase):
         with patch.object(source.d3, '_read_file', side_effect=changing), self.assertRaises(codex.ObservationError):
             codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
 
+    def test_parent_observation_needs_original_before_pins_attempt_and_deadline(self):
+        self.begin()
+        selected = self.deny()
+        codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+        with state._database(self.scope) as db:
+            original = db.execute('select data from tasks').fetchone()[0]
+        for field in ('qualification_before', 'pins', 'qualification_attempt'):
+            changed = json.loads(original)
+            if field == 'qualification_before':
+                changed.pop(field)
+            elif field == 'pins':
+                changed[field]['runtime_digest'] = 'a' * 64
+            else:
+                changed[field]['sha256'] = 'a' * 64
+            with self.subTest(field=field):
+                try:
+                    with state._database(self.scope, write=True) as db:
+                        db.execute('update tasks set data=?', (json.dumps(changed),))
+                    with self.assertRaises((startup.StartupError, codex.ObservationError)):
+                        codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+                finally:
+                    with state._database(self.scope, write=True) as db:
+                        db.execute('update tasks set data=?', (original,))
+        with patch.object(source.time, 'time', return_value=self.allocation['limits']['deadline'] + 1):
+            with self.assertRaises((startup.StartupError, codex.ObservationError)):
+                codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+
+    def test_failed_before_capture_rolls_back_task_birth(self):
+        self.original['canary'].write_text('unapproved\n')
+        with self.assertRaises((startup.StartupError, state.StateError)):
+            self.begin()
+        self.assertIsNone(state.task_status(self.scope, 'codex', self.identity['session_id'])['task'])
+
 
 if __name__ == '__main__':
     unittest.main()

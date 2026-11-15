@@ -61,6 +61,8 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
                     or type(receipt['rowid']) is not int or receipt['rowid'] <= before['receipt_watermark']):
                 raise codex.ObservationError('managed_effects_unobserved')
             startup._canonical_hash(receipt['fingerprint'])
+            if parent_only and receipt['fingerprint'] != codex.patch_input_fingerprint(probe['patch']):
+                raise codex.ObservationError('managed_parent_receipt_mismatch')
             if selectors['stream'] == 'child':
                 pre = delegation._child_patch_pre_fingerprint(binding['assignment_digest'], codex.patch_input_fingerprint(probe['patch']))
                 if receipt['fingerprint'] != delegation._child_patch_fingerprint(pre, fact['post_hook_fingerprint']):

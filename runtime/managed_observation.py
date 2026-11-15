@@ -52,7 +52,7 @@ def _parent_before(value):
     state._fields(value, ('version', 'kind', 'identity', 'pins', 'attempt_ref',
         'revision', 'generation', 'receipt_watermark', 'probe'))
     d3._require(type(value['version']) is int and value['version'] == 1
-        and value['kind'] == 'qualification-parent-before', 'Invalid parent qualification before state')
+        and value['kind'] == 'qualification-parent-before' and value['probe'] is not None, 'Invalid parent qualification before state')
     state._fields(value['identity'], ('client', 'session_id', 'task_id', 'scope_ref'))
     state._identity(value['identity'])
     state._canonical_ref(value['attempt_ref'])
