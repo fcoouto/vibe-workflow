@@ -211,7 +211,7 @@ export function createWorkflowPlugin(config: Config = {}) {
           event.message = display(decision.message)
           if (decision.effect === "deny") return
         }
-        // Remember allowed and asked edits; the completed call confirms them (an approved stop-stage edit clears).
+        // Remember allowed and configured asked edits; the completed call confirms them, without clearing a final stop.
         const call = event.source?.id
         if (typeof call !== "string") return
         if (remembered.size >= MAX_REMEMBERED) remembered.delete(remembered.keys().next().value!)

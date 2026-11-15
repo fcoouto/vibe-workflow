@@ -637,25 +637,64 @@ test("nothing is written to prompts or messages while nothing is held", async ()
   t.cleanup()
 })
 
-test("final review: an approved stop-stage edit clears the hold; a rejected one does not", async () => {
+test("final stop denies edit, write and patch without approval or automatic continuation", async () => {
   const t = await start()
-  const MAX = { providerID: "p", id: "m", variant: "max" }
-  await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MAX })
-  for (let i = 0; i < 3; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
-  await diagnose(t, MAX, "succeeded", "ses_reeval")  // re-evaluation accepted
-  for (let i = 0; i < 2; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
-  const rejected = permissionEvent(ROOT, ["a.ts"], "call_rejected")
-  await t.hooks["permission.evaluate"](rejected)
-  assert.equal(rejected.effect, "ask")
-  await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_rejected", tool: "edit", input: {}, status: "error",
-    error: { message: "rejected" } })
-  const approved = permissionEvent(ROOT, ["a.ts"], "call_approved")
-  await t.hooks["permission.evaluate"](approved)
-  assert.equal(approved.effect, "ask")
-  await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_approved", tool: "edit", input: {}, status: "completed",
-    result: { content: "ok" } })
-  assert.equal((await edit(t, ["a.ts"])).effect, "allow")
-  t.cleanup()
+  try {
+    const MAX = { providerID: "p", id: "m", variant: "max" }
+    await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MAX })
+    for (let i = 0; i < 3; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+    await diagnose(t, MAX, "succeeded", "ses_reeval")
+    for (let i = 0; i < 2; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+    const before = await status(t)
+    assert.equal(before.held[0].stage, "stop")
+    for (const action of ["edit", "write", "patch"]) {
+      for (const configured of ["allow", "ask"]) {
+        for (const resources of [["a.ts"], ["a.ts", "b.ts"]]) {
+          const event = permissionEvent(ROOT, resources, `stop_${++calls}`, configured, action)
+          await t.hooks["permission.evaluate"](event)
+          assert.equal(event.effect, "deny")
+          assert.match(event.message, /stage: stop/)
+          assert.deepEqual(await status(t), before)
+        }
+      }
+    }
+    await diagnose(t, MAX, "succeeded", "ses_afterstop")
+    assert.equal((await edit(t, ["a.ts"], "ses_afterstop")).effect, "deny")
+    for (const text of ["yes, continue", "don't reset the counter for a.ts"]) {
+      await t.hooks["session.prompt"]({ sessionID: ROOT, prompt: { text } })
+      assert.deepEqual(await status(t), before)
+    }
+    await t.hooks["session.prompt"]({ sessionID: "ses_afterstop", prompt: { text: "reset the counter for a.ts" } })
+    assert.deepEqual(await status(t), before)
+    const unrelated = permissionEvent(ROOT, ["b.ts"], "configured_ask", "ask")
+    await t.hooks["permission.evaluate"](unrelated)
+    assert.equal(unrelated.effect, "ask")
+    await t.emit({ type: "session.created", data: { sessionID: "ses_other" } })
+    assert.equal((await edit(t, ["a.ts"], "ses_other")).effect, "allow")
+    await t.hooks["session.prompt"]({ sessionID: ROOT, prompt: { text: "reset the counter for a.ts" } })
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+  } finally { t.cleanup() }
+})
+
+test("a completion admitted before the final stop cannot clear it", async () => {
+  const t = await start()
+  try {
+    const MAX = { providerID: "p", id: "m", variant: "max" }
+    await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MAX })
+    for (let i = 0; i < 3; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+    await diagnose(t, MAX, "succeeded", "ses_reeval")
+    const late = permissionEvent(ROOT, ["a.ts", "b.ts"], "call_late")
+    await t.hooks["permission.evaluate"](late)
+    assert.equal(late.effect, "allow")
+    for (let i = 0; i < 2; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+    const before = await status(t)
+    assert.equal(before.held[0].stage, "stop")
+    await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_late", tool: "edit", input: {}, status: "completed",
+      result: { content: "ok" } })
+    assert.deepEqual(await status(t), before)
+    assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+    assert.equal((await edit(t, ["b.ts"])).effect, "allow")
+  } finally { t.cleanup() }
 })
 
 test("final review: a follow-up to a child first seen through a lookup does not release", async () => {
