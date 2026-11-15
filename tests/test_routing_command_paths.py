@@ -31,6 +31,15 @@ class PathRequestTests(command_tests.Base):
                                      subscription_billing.double('command-paths')(route, now))
         billing.start()
         self.addCleanup(billing.stop)
+        # TEST-ONLY code-level double for a future qualified native Codex window source (the real
+        # `codex_account.usable_windows` returns none today): this module's Codex path keeps the shared-pool reading
+        # it stores below. Production never uses it.
+        from runtime import codex_account
+        windows = mock.patch.object(codex_account, 'usable_windows', lambda settings_path, now, stored=None:
+                                    collector.LocalSource(settings_path).windows('chatgpt-subscription', now,
+                                                                                 stored=stored))
+        windows.start()
+        self.addCleanup(windows.stop)
         self.project = Path(self.temp.name).resolve() / 'checkout'
         self.project.mkdir()
         routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
