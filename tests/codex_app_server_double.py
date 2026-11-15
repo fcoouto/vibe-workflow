@@ -39,6 +39,16 @@ if scenario == 'exit_at_once':
     sys.exit(3)
 if scenario == 'hang':
     time.sleep(60)
+if scenario == 'no_drain_pages':
+    signal.alarm(30)  # stdout may block too: bound the scenario before writing either pipe
+    send(dict(id=1, result=dict(userAgent='codex_double/0.0')))
+    send(dict(id=2, result=result['accounts'][0]))
+    for page in range(8):
+        send(dict(id=3 + page, result=dict(data=[], nextCursor=chr(0x1f600 + page) * 4096)))
+    log(no_drain_sent=True)
+    time.sleep(30)
+    sys.exit(0)
+account_reads, model_reads = 0, 0
 for line in sys.stdin:
     message = json.loads(line)
     log(received=message)
@@ -48,8 +58,22 @@ for line in sys.stdin:
             send(dict(id=ident, error=dict(code=-32600, message='nope token-xyz')))
             continue
         send(dict(id=ident, result=dict(userAgent='codex_double/0.0', codexHome=os.environ.get('HOME', ''))))
+    elif method == 'account/read':
+        accounts = result.get('accounts', [])
+        if accounts:
+            send(dict(id=ident, result=accounts[min(account_reads, len(accounts) - 1)]))
+            account_reads += 1
+        else:
+            send(dict(id=ident, result=dict(account=None, requiresOpenaiAuth=True)))
+    elif method == 'model/list':
+        pages = result.get('pages', [])
+        if model_reads < len(pages):
+            send(dict(id=ident, result=pages[model_reads]))
+            model_reads += 1
+        else:
+            send(dict(id=ident, error=dict(code=-32600, message='missing synthetic page')))
     elif method == 'account/rateLimits/read':
-        if scenario == 'slow':
+        if scenario in ('slow', 'account_slow'):
             time.sleep(0.6)
         if scenario == 'hang_read':
             time.sleep(60)
@@ -74,7 +98,7 @@ for line in sys.stdin:
         elif scenario == 'wrong_id':
             send(dict(id=7, result=result))
         else:
-            send(dict(id=ident, result=result))
+            send(dict(id=ident, result=result.get('limits', result)))
     elif ident is not None:
         send(dict(id=ident, error=dict(code=-32601, message='unexpected')))
 log(stdin='eof', at=time.monotonic())
