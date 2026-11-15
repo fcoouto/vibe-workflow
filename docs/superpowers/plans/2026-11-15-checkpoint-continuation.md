@@ -15,7 +15,7 @@
 - Preserve the original agreement, explicit pauses, finite allowances, credential boundaries and unresolved ownership.
 - Do not renew budgets, launch live operations, re-prompt automatically or modify user-installed Superpowers.
 - Reuse Objective, Scope, Constraints and Action/owner in the existing task context.
-- Publish through the repository's draft `[BLOCKED]` PR lifecycle, independently review, and merge only if readiness holds.
+- Publish through the repository's draft `[BLOCKED]` PR lifecycle. Do not merge or deploy this candidate without a supported improvement under policy 09.
 - Source validation and observed model behavior are separate evidence. No reliability or cross-client claim follows from one replay.
 
 ## Review focus
@@ -51,8 +51,8 @@ Title baseline: `￻▰▱▱▱▱ Checkpoint continuation`, confirmed by nativ
 - [x] Run one native baseline/candidate comparison, with identical prompts, model controls and initial files. Maximum eight minutes per worker; no children, live operations or automatic retries.
 - [x] Inspect actual tool actions and independently check all outputs and protected input hashes.
 - [x] Validate, commit, then run affected instruction-delivery, startup, package and harness tests on the committed candidate.
-- [ ] Obtain one independent whole-change behavior/security review; fix substantiated findings and rerun affected checks.
-- [ ] Publish, verify final readiness, merge under existing permission, and synchronize without switching primary branches.
+- [x] Obtain one independent whole-change behavior/security review; fix or disposition findings and rerun affected checks.
+- [ ] Publish the draft `[BLOCKED]` PR and finish final static validation; retain the baseline without merge or deployment.
 
 ### Replay acceptance cases
 
@@ -82,7 +82,7 @@ Ruling: use the project's bounded native evaluation and existing plan as the led
 - Native tool records confirm source reads before writes, the exact deliverable patches, local verification commands and no network or child dispatch. This is stronger than a worker success message but is still a synthetic file-based replay.
 - The replay did not reproduce the original report-only failure. It did not deliver a real child-completion event into a waiting parent. Both used the same inherited repository instruction index, with their assigned old/candidate lifecycle files read separately.
 - The final recovery entry preserves “Missing pointers or authority block only dependent actions”; the replay snapshot used the shorter “Missing authority blocks dependent actions.” The checkpoint trigger and lifecycle procedure were identical. No exact-byte native qualification of that preservation-only adjustment is claimed.
-- Candidate `d876698a93f24dfb01bd87bb085478570e9525c7`: package validation passed; recovery entry 135 words. Existing bundle-size warning remains; no client execution is implied.
+- Candidate `d876698a93f24dfb01bd87bb085478570e9525c7`: package validation passed; recovery entry 134 words. Existing bundle-size warning remains; no client execution is implied.
 - `python3 -B scripts/test_sharded.py test_prepared_instructions test_instruction_drain test_harness_evaluation test_package test_package_manifest test_package_versions test_startup test_checkout_stability_instructions`: 236 tests across eight modules passed, zero skipped, 100.7 seconds. No edits occurred during the run.
 - Full-suite/release qualification and installed-client deployment were not run: no runtime code changed and no release or installation was selected.
 
@@ -90,4 +90,18 @@ Ruling: use the project's bounded native evaluation and existing plan as the led
 
 The bounded comparison shows preserved tested behavior, not improved follow-through or discovery: the old run also found recovery and continued. Under Workflow Maintenance's “adopt only a supported improvement; otherwise retain the baseline” rule, do not merge or deploy this candidate on these results.
 
-Next owner: independent reviewer assesses source behavior/security, evidence sufficiency and this disposition; coordinator completes final static validation and draft publication. A more faithful matched native completion-event comparison needs a concrete design and a separately agreed finite evaluation limit before another trial.
+### Independent review and disposition
+
+Native reviewer `ses_e20264f96ffeLX5DTAfsfw72LT`, requested `claude-agent/opus` without an effort override, reviewed base through `54fcfcb4595950b3c1c3cf6944926afda97bff93`. One read-only review, no children or live probes. The native completion is the identity receipt; provider-internal execution is not independently exposed.
+
+The reviewer found no defect on the five review-focus points and agreed to withhold merge/deployment because neither replay reproduced the failure. Review coverage was static source/diff inspection and comparison of replay summaries/snapshots; the reviewer did not independently inspect every tool record or evaluator internal.
+
+- F2, delegated continuation (low, hypothesis): no confirmed authority conflict. The action must already be authorized; both the new procedure and unchanged delegation/report rules deny authority from receipt alone. Defer redundant wording until evidence warrants it.
+- F3, positive grant-reuse wording (low, optional improvement): original finite limits and unchanged decision-time observations still apply. Reuse with a valid remaining grant was not behavior-tested; retain that limit rather than add untested prose.
+- F4, policy-index checkpoint trigger (low, pre-existing): retain as a discovery-coverage limitation. The candidate's skill path was actually loaded in both replays, so no measured discovery gain supports expanding this change.
+- F5, broader skill triggering (low, optional improvement): possible overhead remains unmeasured. Do not claim token savings or general lightweight behavior.
+- F6, stale merge checklist (low, confirmed): fixed the global constraint and checklist to say draft publication only, no merge/deployment on these results. This record correction changes no instruction source or test definition.
+
+Ruling: do not merge or deploy an unproven candidate despite passing safety checks. This follows the existing adoption rule; the cost is leaving the original continuation failure unresolved until a discriminating evaluation exists.
+
+Next owner: coordinator completes final static validation and draft publication. Then the user owns the decision on another bounded trial. A more faithful matched native completion-event comparison needs a concrete design and a separately agreed finite evaluation limit before another trial. No background worker remains active.
