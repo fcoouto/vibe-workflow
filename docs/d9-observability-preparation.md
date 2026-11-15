@@ -22,7 +22,7 @@ merges in D9c still require D7c. Observability cannot grant merge authority.
 
 ### Four remaining outcomes
 
-1. [ ] **Accurate plan and status semantics.** Keep supported sources, current
+1. [x] **Accurate plan and status semantics.** Keep supported sources, current
    collection eligibility and observed end-to-end qualification distinct.
    `collection` reports the current gate. The existing
    `native_collection_qualified` field and `collection_sources` describe source
@@ -69,10 +69,19 @@ merges in D9c still require D7c. Observability cannot grant merge authority.
    risk-appropriate independent behavior/numerical/privacy review, combined when
    one qualified reviewer covers all three. Re-run only invalidated evidence.
 
-**Next code task:** `runtime/state.py` owns task-start capture;
-`runtime/setup_observation.py` owns parent projection/readback and retained
-consumption; `runtime/adapters/codex.py` owns native observation. Use
-`tests/test_native_behavior_owner.py` for the real-owner transport fixture.
+**Software checkpoint — 15 November 2026:** the parent-only path is implemented
+and independently reviewed in this candidate. Ten real-owner tests with fake
+native transport pass, including retained consumption, first-hook revision,
+receipt/canary/source rejection and failed-birth rollback. Legacy parent/child
+owner and before-state tests also passed. No live parent observation or ordinary
+collection qualification follows; outcomes 2–4 remain pending their real proof.
+
+**Parent implementation owners:** `runtime/state.py` publishes task start;
+`runtime/managed_observation.py` captures and validates before-state, projection
+and readback; `runtime/setup_observation.py` retains the entry points and receipt
+consumer. `runtime/adapters/codex_managed.py` observes native evidence through the
+unchanged `runtime/adapters/codex.py` entry point. `tests/test_parent_observation.py`
+reuses the real-owner transport fixture in `tests/test_native_behavior_owner.py`.
 Cover missing/forged before-state, stale or conflicted receipts, changed
 pins/revision/canary, wrong surface/session/turn/call and unstable source.
 Keep public signatures and historical fragments. If the legacy file ceilings
