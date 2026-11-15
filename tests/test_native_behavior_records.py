@@ -387,22 +387,45 @@ class NativeBehaviorRecordTests(unittest.TestCase):
         ]))
         rows = [session(), started(), patch, completed, result]
 
-        def observe(rows, call_id='inner'):
+        def observe(rows, call_id='inner', child_patch=True):
             return codex._native_managed_tool(self.records(rows), raw=encoded(rows), submitted_patch=PATCH,
-                turn_id='native-turn', call_id=call_id, case_id='post-tool-handling', child_patch=True)
+                turn_id='native-turn', call_id=call_id, case_id='post-tool-handling', child_patch=child_patch)
 
         fact = observe(rows)
         self.assertEqual(fact['call_id'], 'inner')
+        self.assertEqual(fact['native_call_id'], 'outer')
         self.assertEqual(fact['post_hook_fingerprint'], codex._tool_fingerprint(dict(tool_name='apply_patch',
             tool_input=dict(command=PATCH), tool_response=response)))
         self.assertEqual(len(fact['sources']), 2)
+        for child_patch in (False, True):
+            outer = observe(rows, call_id='outer', child_patch=child_patch)
+            inner = observe(rows, child_patch=child_patch)
+            self.assertEqual(outer, inner)
+            self.assertEqual(outer['native_call_id'], 'outer')
+            self.assertEqual(outer['call_id'], 'inner')
+            self.assertEqual(outer['sources'], fact['sources'])
         with self.assertRaises(doctor.ObservationError):
-            observe(rows, call_id='outer')
+            observe(rows, call_id='wrong-selector')
         for changed in ([session(), started(), patch, result], [*rows[:4], completed, result],
                         [*rows[:2], completed, patch, result], [*rows, completed],
                         [*rows[:2], completed, *rows[2:]]):
             with self.assertRaises(doctor.ObservationError):
                 observe(changed)
+        from copy import deepcopy
+        for target, value in (('thread_id', 'other-thread'), ('turn_id', 'other-turn')):
+            changed = deepcopy(rows)
+            changed[3]['payload'][target] = value
+            with self.subTest(target=target), self.assertRaises(doctor.ObservationError):
+                observe(changed, call_id='outer')
+        for inner_id in ('outer', ''):
+            changed = deepcopy(rows)
+            changed[3]['payload']['item']['id'] = inner_id
+            with self.subTest(inner_id=inner_id), self.assertRaises(doctor.ObservationError):
+                observe(changed, call_id='outer')
+        collision = call()
+        collision['payload']['call_id'] = 'inner'
+        with self.assertRaises(doctor.ObservationError):
+            observe([*rows, collision], call_id='outer')
 
     def managed_wrapped_denial(self):
         patch, result = wrapped_patch_denial()
@@ -412,23 +435,18 @@ class NativeBehaviorRecordTests(unittest.TestCase):
         return [session(), started(), patch,
             row('token_usage_record', dict(usage={})), result]
 
-    def test_managed_parent_wrapped_denial_keeps_outer_identity_and_original_sources(self):
+    def test_managed_parent_wrapped_denial_needs_native_hook_correlation(self):
         rows = self.managed_wrapped_denial()
-        raw = encoded(rows)
-        fact = codex._native_managed_tool(self.records(rows), raw=raw, submitted_patch=PATCH,
-            turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement')
-        self.assertEqual(fact['call_id'], 'native-call')
-        self.assertEqual(fact['turn_id'], 'native-turn')
-        self.assertEqual(fact['submitted_patch_sha256'], hashlib.sha256(PATCH.encode()).hexdigest())
-        expected = []
-        for index in (2, 4):
-            line = encoded([rows[index]])
-            offset = len(encoded(rows[:index]))
-            expected.append(dict(reference=f'/public/native-rollout.jsonl#bytes:{offset}:{len(line)}',
-                sha256=hashlib.sha256(line).hexdigest()))
-            self.assertEqual(raw[offset:offset+len(line)], line)
-        self.assertEqual(startup._canonical_plain(fact['sources']), expected)
-        self.assertNotIn('post_hook_fingerprint', fact)
+        for raw in (None, encoded(rows)):
+            with self.subTest(raw=raw is not None), self.assertRaisesRegex(
+                    doctor.ObservationError, '^native_hook_correlation_unavailable$'):
+                codex._native_managed_tool(self.records(rows), raw=raw, submitted_patch=PATCH,
+                    turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement')
+        printed = row('response_item', dict(type='message', role='assistant', content=[
+            dict(type='output_text', text='{"native_call_id":"native-call","hook_call_id":"exec-inner"}')]))
+        with self.assertRaisesRegex(doctor.ObservationError, '^native_hook_correlation_unavailable$'):
+            codex._native_managed_tool(self.records([*rows, printed]), raw=encoded([*rows, printed]),
+                submitted_patch=PATCH, turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement')
 
     def test_managed_parent_wrapped_denial_rejects_substitution_and_ambiguous_pairs(self):
         from copy import deepcopy
