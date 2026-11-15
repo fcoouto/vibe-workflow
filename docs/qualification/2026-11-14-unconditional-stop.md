@@ -401,3 +401,52 @@ This confirms the narrow diagnostic arm fix against the native runtime. It does
 not qualify the native release method, completion race, TUI, Claude bridge or a
 release candidate. No campaign replay or further native attempt followed.
 Claude testing, the full release-candidate Python suite and release remain held.
+
+## Race-only preparation blocked at prelaunch review — 15 November
+
+After independent strategy review, the user approved layered qualification and
+then one conditional race-only allocation: 20 minutes of offline preparation,
+10 minutes of prelaunch review, one 20-minute native attempt and 10 minutes of
+evidence review. Live ceilings were 80 model requests and 120 controller
+actions. Approval required stopping if readiness review found unresolved issues.
+
+Preparation finished in **808.146 seconds**. All **27 offline checks passed**,
+including exact-route admission through the actual registered hook, shared
+actor/kind counting, retry veto, capture bounds, schema/identity validation,
+barrier ordering/no-mutation and completion-tracker closure. The committed
+`cb711094c4ea2ebac620e63299a3d3a39d58903d` focused wrapper also passed two Python
+checks with zero skips, including the unchanged Node suites.
+
+The fresh disposable controller removed shared-service discovery and TUI work.
+The fresh observer removed synthetic fault methods. The fixed-schema timing
+copy added only a tested trace-size bound; the original fixed helper remained
+unchanged. An offline containment self-check initially failed from nested
+quotation syntax before its child ran. After correcting that self-check, profile
+compilation and inherited-child write containment passed. The immutable checker
+still failed at values 0–5 and passed at 99.
+
+Astra's independent prelaunch review nevertheless found two important gaps in
+the **qualification harness**, which the coordinator confirmed by source inspection:
+
+- **R1 — Hard-deadline coverage:** synchronous `lsof` had no timeout, and cleanup
+  awaited process closure and event-task completion without absolute deadlines.
+  Signalling timers and a later elapsed-time assertion did not bound those waits.
+- **R2 — Qualification-observer EOF:** an unexpected normal event-stream end did
+  not close admission or mark evidence unhealthy. That journal supplies the
+  approval-request observations, so missing events could be mistaken for absence.
+  Existing completion-tracker closure tests did not cover this observer path.
+
+Both findings remain open. Readiness was rejected, no accepted prelaunch receipt
+was created, and the allocation was closed without a repair/review cycle.
+**Zero native launches, native model requests, HTTP/SDK/RPC requests or
+authentication actions occurred.** The native attempt record, runtime database,
+generated native configuration and native evidence logs were absent. All source,
+protected and prior-receipt pins matched. No owned native process required cleanup.
+
+Private result SHA-256:
+`bb7a55d2e15bc44d856e2fec8da71900afcd4639cff95da9bcbf9ca575a4a439`.
+
+Offline passes do not override the rejected readiness review. This is neither
+native race qualification nor a demonstrated production-gate defect. Unused
+live capacity admits no retry. Native UI, Claude, exact release-candidate full
+suite and release holds remain unchanged.

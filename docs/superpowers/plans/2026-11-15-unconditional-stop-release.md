@@ -192,6 +192,15 @@ that trustworthy UI proof requires an exported renderer-ID interface. The user
 approved this plan revision only. A witnessed original-TUI procedure is a
 candidate, not an accepted method or a request for user participation.
 
+The user later approved one conditional race-only allocation. Preparation
+completed in 808.146 seconds with 27 offline checks and two committed-candidate
+focused Python checks passing. Astra rejected prelaunch readiness: synchronous
+`lsof` and cleanup waits lacked hard deadlines, and the qualification observer
+did not treat unexpected normal stream EOF as evidence failure. Both findings
+remain open; no native process, model request or authentication action occurred.
+The allocation is closed, not available for repair or replay. See
+[the owning result](../../qualification/2026-11-14-unconditional-stop.md#race-only-preparation-blocked-at-prelaunch-review--15-november).
+
 ## Acceptance and stopping
 
 Each case passes only with every assigned behavioral assertion, valid identities,

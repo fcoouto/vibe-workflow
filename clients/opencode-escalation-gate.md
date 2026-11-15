@@ -27,6 +27,12 @@ A later authorized fix removed only that keyword from a fresh disposable helper.
 Offline validation and one model-free native arm confirmation passed; no OpenCode
 binary, user setting or production gate source changed. See
 [the confirmation](../docs/qualification/2026-11-14-unconditional-stop.md#fixed-helper-model-free-confirmation--15-november).
+A later approved race-only preparation passed its offline checks, but independent
+prelaunch review found unbounded controller waits and an unhandled normal EOF in
+the qualification observer. Launch was blocked and that allocation closed, with
+no native attempt or model request. These are harness findings, not demonstrated
+production-gate defects; see
+[the prelaunch result](../docs/qualification/2026-11-14-unconditional-stop.md#race-only-preparation-blocked-at-prelaunch-review--15-november).
 
 ## What it does
 
