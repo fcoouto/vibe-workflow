@@ -85,8 +85,12 @@ Owned server cleanup passed. Source/protected/prior-evidence hashes matched,
 but shared OpenCode settings changed during the window with unknown attribution.
 Coordinator raw checks confirm partial-only coverage; independent assessment
 accepted the accurate failure record, not execution qualification. Package
-validation passed with the existing bundle-size warning. Publication and
-committed-candidate focused checks remain pending. No Claude probe, full-suite
-run or release has occurred.
+validation and two committed-candidate Python checks passed; the latter include
+the unchanged Node suites. The existing bundle-size warning remains.
+The failure record is published as draft
+[PR #310](https://github.com/fcoouto/vibe-workflow/pull/310), `[BLOCKED]`, unmerged.
+No Claude probe, full-suite run or release has occurred. Further native attempts
+need a separately authorized allocation after diagnosis; the existing failed
+attempt cannot be replayed.
 Earlier source and 57-request public-route proof remain unchanged and scoped;
 they do not satisfy the newly requested Claude/UI/race observations.
