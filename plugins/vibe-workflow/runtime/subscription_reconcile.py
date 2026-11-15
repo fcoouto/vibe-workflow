@@ -31,6 +31,11 @@ CLOCK_MARGIN = 60
 HINT = ('Uncertain subscription holds (one-shot reconcile_subscription; stop the worker first): host_usage settles '
         "from the launcher's re-read of the idle derived session; abandon closes the open attempt and keeps the "
         'window claim as a debit until telemetry shows a window that began after the abandon.')
+SHARED_DEBIT_POOL = 'claude-subscription'  # claude_usage.POOL; this module cannot import it at load time
+SHARED_DEBIT_HINT = ('Claude subscription pool debits (win:claude-subscription/...) never clear from telemetry: the '
+                     "shared pool's readings may come from different logins. Each lowers included room until the "
+                     'operator reviews it and runs one-shot drop_debit{key, marker, event_id} with the marker listed '
+                     'under drop_debit.')
 
 
 def reconcile_event(value):
@@ -150,6 +155,11 @@ def clear_debits(ledger, data, observations):
         return data
     for key in sorted(debits):
         pool, _, window_id = key[len(WIN):].partition('/')
+        if pool == SHARED_DEBIT_POOL:
+            # Account-ambiguous (15 November ruling): native and OpenCode readings of this shared pool may come
+            # from different logins and a debit names no account, so no observation releases it; it stays held
+            # until the operator's `drop_debit`.
+            continue
         windows = (observations['pools'].get(pool) or {}).get('windows') or []
         found = [window for window in windows if window.get('id') == window_id]
         entry = debits[key]
@@ -236,8 +246,11 @@ def _counted(items, field='ids'):
 
 def summary(data, listed, hint):
     """Add the uncertain subscription holds and the window debits, each with its `drop_debit` marker, to the
-    operator's reconcile listing. The hint gains HINT while such a hold is open; a debit alone needs no operator action
-    (telemetry clears a fixed window's debit; `drop_debit` is for one that never clears)."""
+    operator's reconcile listing. The hint gains HINT while such a hold is open. While a Claude pool debit exists the
+    `drop_debit` listing carries SHARED_DEBIT_HINT as `guidance` (no telemetry releases it; only `drop_debit` does);
+    it is informational and never enters the hint, which dollar preflight treats as blocking. Another pool's debit
+    alone needs no operator action (telemetry clears a fixed window's debit; `drop_debit` is for one that never
+    clears)."""
     uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
                  if hold['state'] == 'uncertain' and not hold.get('amount') and hold.get('organization') is None]
     debits = data.get(DEBITS, {})
@@ -247,4 +260,6 @@ def summary(data, listed, hint):
                   drop_debit=dict(debits=shown, more=max(0, len(debits) - len(shown))))
     if uncertain:
         hint = HINT if hint is None else hint + ' ' + HINT
+    if any(key[len(WIN):].partition('/')[0] == SHARED_DEBIT_POOL for key in debits):
+        listed['drop_debit']['guidance'] = SHARED_DEBIT_HINT
     return listed, hint

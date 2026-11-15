@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 import time
 
-from runtime import routing, routing_launch, routing_observations as collector, routing_paths
+from runtime import claude_usage, routing, routing_launch, routing_observations as collector, routing_paths
 from runtime.adapters import native_catalog
 
 CLIENTS = native_catalog.HOSTS
@@ -197,6 +197,10 @@ def command_prepare(service, body):
     reason = _runtime_delegation(service.project, client)
     if reason is not None:
         return _blocked(reason)
+    if client == claude_usage.CLIENT and native_catalog.catalog(service.settings_path, client)[1] is not None:
+        # Cold or changed account: one bounded read bootstraps account, catalog and usage before the catalog gate;
+        # the collector then reuses its windows instead of reading again.
+        claude_usage.refresh(service.settings_path)
     entries, reason = native_catalog.catalog(service.settings_path, client)
     if reason is not None:
         return _blocked(reason)
@@ -211,6 +215,33 @@ def command_complete(service, body):
 
 
 # -- activation source readiness (F4R-03) -------------------------------------------------------------------------
+def acquire_billing(projects, settings_path):
+    """One-shot preactivation acquisition, before readiness and ledger locks; readiness itself remains pure.
+
+    Resolved qualified paths supply the scope, not a pretend account binding. Only a qualified source can
+    establish that binding and group aliases. No production source has this capability yet.
+    """
+    from runtime import delegation_routing, subscription_billing
+    from scripts import routing as command
+    source = collector.default_source(settings_path)
+    if not callable(getattr(source, 'acquire_billing', None)):
+        return
+    rules, qualified = routing_paths.load_rules(), routing_paths.qualifications(settings_path)
+    paths = [item for item in routing_paths.resolved(rules, qualified)
+             if item['billing_class'] == routing_paths.SUBSCRIPTION and item.get('status') != routing_paths.TEST_ONLY]
+    relevant = {}
+    for project in projects:
+        for host in delegation_routing.enrolled_hosts(project):
+            if host not in command.MANAGED_HOSTS:
+                continue
+            if host == 'claude-code' and _runtime_delegation(project, host) is not None:
+                continue  # readiness refuses this host before billing; no read can make its bridge usable
+            for path in paths:
+                if (host == 'opencode' and 'host' not in path) or path.get('host') == CLIENTS.get(host):
+                    relevant[path['path']] = dict(path, route=path['path'] + ':activation')
+    subscription_billing.acquire(source, list(relevant.values()), int(time.time()))
+
+
 def _usable(paths, settings_path, client, native, now):
     """None when one qualified subscription path of `paths` has a current billing fact (and, for the native bridge,
     a bound catalog), else the first reason found."""

@@ -47,9 +47,9 @@ Source assessment only, for the [redesign plan's F4.5](superpowers/plans/2026-11
 
 **Implemented (package only, checkpoints 10–12):** the parser; the shared subscription-only billing gate for every family at eligibility and dispatch; the model-free path `opencode-go-subscription` (windows `rolling`, `weekly`, `monthly`; `demand_scope: per_model`) with an absent per-model demand producer (`demand_unverified`); and the launcher's stale-and-needed usage read, which returns before any read while no meter binding is qualified. Synthetic P8 (`tests/test_routing_production_flows.py`) launches a Go route only with labelled doubles for billing, demand and meter semantics. With the real producers every Go route sends nothing.
 
-**Still gated (release blockers for Go):** the observable no-paid-crossover producer; meter rolling/fixed semantics, the monthly length and the observation-time/cache semantics; model-dependent demand normalization and measured demand; this machine's actual `opencode-go` connection and catalog. Each needs separately authorized evidence. Until then the Go path is unavailable and the route row above is unchanged.
+**Still gated (release blockers for Go):** an account producer for the Go workspace (since the [15 November account amendment](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026) it need not prove paid crossover disabled; the dated row above stays as observed); meter rolling/fixed semantics, the monthly length and the observation-time/cache semantics; model-dependent demand normalization and measured demand; this machine's actual `opencode-go` connection and catalog. Each needs separately authorized evidence. Until then the Go path is unavailable and the route row above is unchanged.
 
-**Activation (initial-review correction F4R-03):** a project joins `managed_projects` only when each of its managed hosts has a qualified subscription path with a current billing fact (native hosts also need a catalog bound to the current client). No billing producer is qualified, so activation refuses every host today (`<host>_billing_unverified`). A Go completion reports no reading, so it marks its pool's readings as used until a later reading arrives.
+**Activation (initial-review correction F4R-03, amended 15 November):** a project joins `managed_projects` only when each of its managed hosts has a qualified subscription path with a current account fact (native hosts also need a catalog bound to the current account read). Only the native Claude path has a producer (package support, synthetic proof only); every other host still refuses (`<host>_billing_unverified`). A Go completion reports no reading, so it marks its pool's readings as used until a later reading arrives.
 
 ## Contradictions and risks
 
@@ -170,6 +170,55 @@ Open P0.8 item: the live event stream flagged `version_changed` on every session
 | P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. Re-qualified live on 9 November 2026 for a worker attempt with a command-spawned child, its title, event tracking, resync and subscription settlement (#146); auxiliary kinds other than the title, retries and API-funded holds were not observed. |
 
 Claude metadata source status (14 November 2026): `tests/qualification/claude_usage.py` provides explicit-command, bare-mode qualification tooling for `initialize` and `get_usage` with `skip_behaviors: true`. Synthetic executables test the known wire protocol, safe projection and bounded cleanup; every diagnostic projection remains `qualified: false` and is not a billing fact or routing window observation. There is no production caller or executable discovery. Account/alias binding, field-specific freshness, provider-enforced paid overflow, scoped-window mapping and authenticated startup/idle/failure qualification remain open; this tooling does not establish native support or v1 readiness.
+
+**Billing acquisition ordering (14 November 2026, source-only):** nonserved collection now offers a code-selected source acquisition before billing eligibility and the single shortlist. One-shot project addition offers it before source readiness and ledger locks; the ranked canary boundary offers request-scoped acquisition before its pure preview. Fresh facts need no acquisition, and any incidental windows remain available to the existing window reader. Preview, status, check, source readiness and served preparation never acquire. Acquisition returns are not facts: the normal eligibility and pre-dispatch checks still validate source evidence. At that date `LocalSource` had no acquisition capability; the 15 November account-based implementation below adds the native Claude reader as its only one. Synthetic `test_subscription_acquisition` exercises this ordering, not account or native-client qualification.
+
+**Account-based implementation (15 November 2026, package only).** Under the [15 November account amendment](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026), `runtime/claude_usage.py` is the production producer for the native Claude path: one bounded `initialize`/`get_usage` (`skip_behaviors: true`) exchange with the user's own sign-in and settings, accepting only a claude.ai subscriber (no `tokenSource` or `apiKeySource`), zero-inference telemetry and the successful answer marker (raw `limits` kept and empty, `model_scoped: []`); any raw limit element, scoped or unknown meter, fallback or partial answer leaves usage unknown. Windows are bound to the derived account key and exchange, so another client's or account's reading of the shared pool never counts for the native consumer and OpenCode ignores native-bound rows. Extra Usage is reported, not required: when fresh included room (after reported use, holds and debits) cannot cover the reservation, the route dispatches as `provider_managed_fallback` with no included claim. The UUID, disabled-overflow and full coordinator-attestation requirements below are superseded; that paragraph is kept as dated evidence. Synthetic tests prove package behaviour only; no installed-client or account observation exists, and raw-limit semantics beyond `weekly_scoped` remain unevidenced (refused).
+
+Further installed-source assessment (14 November) does not close that source gate. The examined initialization and public account-info projection omit stable account UUID. A successful usage control can retain aggregate meters and an Extra Usage flag from a failed-fetch fallback; those fields alone cannot receive the shorter successful-cache freshness bound. Model-scoped display rows are filtered projections, and `is_active` identifies the displayed indicator, not the only enforced constraint. A false Extra Usage flag must distinguish explicit provider disablement from temporary exhausted-credit or spending-limit states. Effective settings from a new metadata process cannot attest another running coordinator. These gaps require supported identity/control bindings, complete applicable window and demand semantics, provider-disablement evidence and separately authorized live qualification; this source-only change supplies none of them.
+
+### Native Claude reader attempt, 15 November 2026
+
+One real `runtime/claude_usage.refresh` attempt on committed `3315165f`, using
+Claude Code 2.1.311 and private qualification stores, returned
+`failed / claude_account_unsupported`. It sent only the two metadata controls;
+the response reported zero cost, zero API duration, empty model usage and no
+behavior scan. The one child exited and was reaped; no process remained in its
+owned group. No model prompt, native task launch, production-state change or
+retry occurred. This adds failed-attempt evidence to the package-only checkpoint
+above, not a successful account/source qualification.
+
+Installed-source inspection separately established a parser-contract bug:
+initialization's `account.subscriptionType` is a display label, possibly
+`Claude <plan>`, whereas the same exchange's `usage.subscription_type` is the
+machine enum. The reader now classifies from that enum, preserving first-party,
+identity, token/key-source and catalog checks. Synthetic regressions cover valid
+display labels and missing/unknown machine types.
+
+The exact live rejection branch was not retained beyond its fixed reason.
+The attempt also reported 24 unrecognized usage keys and absent empty raw/scoped
+completeness markers. The repair does not ignore these fields or turn partial
+usage into capacity. A separately bounded, redacted field-shape observation is
+still needed before any new usage mapping; no successful post-repair read or
+native launch is claimed.
+
+**Approved second read, after the classification repair:** On reviewed `b85b4cfc`,
+one separately authorized zero-inference exchange confirmed the native account
+fact and account-bound catalog (14 entries, 64 alias-effort identities).
+Usage still returned `claude_limits_unsupported`: the parser rejected 24
+unrecognized keys before its raw/scoped checks. Three raw limit rows and one
+model-scoped row were also present, with extra metadata/nullable rollout fields.
+No usable windows were produced. Only redacted field names/types and private
+derived state were retained. One child completed in 1.203 seconds, was reaped and
+left no owned-group process. Account/catalog observation now exists; complete
+usage, demand, native launch and activation remain unqualified. There was no
+retry or remaining live allowance.
+
+Installed-source follow-up found no exact catalog-to-model-bucket membership:
+the client joins a filtered display-label projection for UI use. This does not
+establish complete per-route applicability. A positive scoped-window mapping is
+still blocked on a supported binding or an explicitly accepted conservative
+design; no model-name inference or extra capacity was added.
 
 ## Live checks still open
 

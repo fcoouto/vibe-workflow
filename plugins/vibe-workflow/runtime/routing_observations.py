@@ -3,8 +3,9 @@
 It reads local trusted records only: the path rules and qualifications (routes are generated in memory from them,
 never stored), stored rate-limit observations, the entitlement record, the ledger it is given and
 `openrouter_settings.status`. It never reads a secret, makes a network call, calls a model or takes the OpenRouter
-admission lock; the one exception is the opt-in Codex window read (`refresh_windows`, R7), which runs
-`codex app-server` read-only for a kept stale route. Window and entitlement files live next to the routing settings
+admission lock; the exceptions are the opt-in reads (`refresh_windows`, R7): `codex app-server` read-only for a kept
+stale route, and the native Claude account/usage read (`runtime/claude_usage.py`) as account acquisition before
+eligibility. Window and entitlement files live next to the routing settings
 path the caller gives, never under a path derived from HOME.
 """
 from contextlib import closing, contextmanager
@@ -178,8 +179,18 @@ class LocalSource:
         return None
 
     def billing(self, route, now):
-        """No qualified subscription-only billing producer exists (F4.5/F4.6): none, read from nowhere."""
-        return None
+        """The native Claude path's account-bound fact from its private account store (`claude_usage`); no other
+        path has a producer, so it answers None and reads nothing for them."""
+        from runtime import claude_usage
+        return claude_usage.billing_fact(self.settings_path, route, now) if claude_usage.applies(route) else None
+
+    def acquire_billing(self, routes, now):
+        """One bounded native Claude account/usage read when an applicable route's account is not current; only
+        `acquire_billing`/preactivation call it, never a pure read, preview or served preparation."""
+        from runtime import claude_usage
+        need = {window for route in routes if claude_usage.applies(route) for window in route.get('demand') or ()}
+        if any(map(claude_usage.applies, routes)) and self.settings_path is not None:
+            claude_usage.refresh(self.settings_path, need=tuple(sorted(need)))
 
     def model_demand(self, route):
         """No per-model demand mapping is qualified (OpenCode Go's allowance is model-dependent): none."""
@@ -276,8 +287,9 @@ def _write(path, value):
 
 
 def _valid_window(window):
-    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'source'} \
-            or window.get('source', SEED_SOURCE) != SEED_SOURCE:
+    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'source', 'account'} \
+            or window.get('source', SEED_SOURCE) != SEED_SOURCE or not routing._optional(window.get('account'),
+                                                                                       routing._part):
         return False
     if 'unit' in window and not routing._text(window['unit']):
         return False
@@ -289,10 +301,13 @@ def _valid_window(window):
             and (window.get('organization') is None or routing._text(window['organization'])))
 
 
-def pool_state(stored, pool):
-    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary.
-    Any reading stored for the pool, or a moved boundary, changes it; another pool's activity does not."""
-    raw = json.dumps([stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)], sort_keys=True,
+def pool_state(stored, pool, confirmation=None):
+    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary,
+    plus, for a native Claude snapshot, the account confirmation its readings depend on (`claude_usage.
+    confirmation`). Any reading stored for the pool, a moved boundary or a changed confirmation changes it; another
+    pool's activity does not."""
+    parts = [stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)]
+    raw = json.dumps(parts if confirmation is None else [*parts, confirmation], sort_keys=True,
                      separators=(',', ':'), allow_nan=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -543,20 +558,24 @@ def _ledger_data(ledger_path):
 
 
 def refresh_needed(specs, settings_path, marks=()):
-    """R7: make the Codex pool's reading fresh before it is read, only for the routes `shortlist` kept for this
-    request (`runtime/codex_rate_limits.py`: on demand, one reader per pool, a fixed reason and no retry on failure).
-    Returns `{pool: reason}` for each pool left without a fresh reading (`reader_busy` or a `codex_*` reason)."""
-    from runtime import codex_rate_limits
+    """R7: make the Codex pool's and the native Claude account's readings fresh before they are read, only for the
+    routes `shortlist` kept for this request (`runtime/codex_rate_limits.py`, `runtime/claude_usage.py`: on demand,
+    one reader per pool, a fixed reason and no retry on failure). A Claude reading the account read before
+    eligibility already stored is reused, not read again. Returns `{pool: reason}` for each pool left without a
+    fresh reading (`reader_busy` or a `codex_*`/`claude_*` reason)."""
+    from runtime import claude_usage, codex_rate_limits
     need = {}
     for spec in specs:
-        if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks \
-                and codex_rate_limits.applies(spec):
-            need.setdefault(spec['pool'], set()).update(spec['demand'])
+        if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks:
+            reader = codex_rate_limits if codex_rate_limits.applies(spec) else claude_usage \
+                if claude_usage.applies(spec) else None
+            if reader is not None:
+                need.setdefault((reader, spec['pool']), set()).update(spec['demand'])
     failed = {}
-    for pool, windows in need.items():
-        outcome = codex_rate_limits.refresh(settings_path, need=tuple(sorted(windows)))
+    for (reader, pool), windows in need.items():
+        outcome = reader.refresh(settings_path, need=tuple(sorted(windows)))
         if outcome.get('state') not in ('fresh', 'stored'):
-            failed[pool] = outcome.get('reason') if outcome.get('reason') in codex_rate_limits.REASONS \
+            failed[pool] = outcome.get('reason') if outcome.get('reason') in reader.REASONS \
                 else 'observation_store_invalid'
     return failed
 
@@ -586,6 +605,49 @@ def _requested(source, table, strategy_ids, choices):
             spec.get('billing_class')))) for entry in choices)]
 
 
+def _static_cut(source, settings_path, table, strategy_ids, choices, harnesses):
+    """Request/host/manifest/entitlement exclusions before billing, windows or the one ranked shortlist."""
+    allowed = set(harnesses or ())
+    try:
+        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
+        marks_reason = None
+    except (OSError, ValueError, KeyError, TypeError):
+        marks, marks_reason = set(), 'entitlement_unavailable'
+    routes, excluded = [], []
+    for spec in _requested(source, table, strategy_ids, choices):
+        if spec.get('harness') not in allowed:
+            continue
+        reason = _manifest_reason(spec)
+        if reason is None:
+            reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
+        if reason is None and strategy_ids is not None and spec['billing_class'] in routing.FUNDED:
+            reason = 'billing_class_excluded'  # ranked dollar routes stay out before any funding read (decision B)
+        if reason is None and spec['billing_class'] == 'included_subscription' \
+                and not routing._text(spec.get('window_unit')):
+            reason = 'window_unit_undeclared'  # its demand's unit is unknown: fail closed
+        if reason is None:
+            routes.append(spec)
+        else:
+            excluded.append(dict(route=spec.get('route') if routing._text(spec.get('route')) else None, reason=reason))
+    return routes, excluded
+
+
+def acquire_billing(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
+                    source=None):
+    """Acquire only the request's statically relevant billing facts, outside served preparation and pure reads.
+
+    LocalSource acquires only the native Claude account read (`claude_usage`), which owns its account key, bounded
+    transport and freshness; other paths start nothing. Neither requests nor settings can supply a source.
+    """
+    source = source if source is not None else default_source(settings_path)
+    if not callable(getattr(source, 'acquire_billing', None)):
+        return
+    routes, _ = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
+    routes = [spec for spec in routes if spec.get('demand_scope') != routing_paths.MODEL_DEMAND
+              or _model_demand(source, spec)]
+    subscription_billing.acquire(source, routes, int(time.time()))
+
+
 def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
               source=None):
     """The shared pre-window cut `collect` and the internal request preview both use: `{routes, excluded, shortlist,
@@ -600,32 +662,18 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
     `shortlist` holds strategy ids."""
     source = source if source is not None else default_source(settings_path)
     now = int(time.time())
-    allowed = set(harnesses or ())
     scope = assignment.get('scope') if type(assignment) is dict else None
-    try:
-        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
-        marks_reason = None
-    except (OSError, ValueError, KeyError, TypeError):
-        marks, marks_reason = set(), 'entitlement_unavailable'
-    routes, excluded, cache = [], [], {}
+    candidates, excluded = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
+    routes, cache = [], {}
     seen = dict(openrouter_revision=None)
 
     def leave(route, reason):
         excluded.append(dict(route=route.get('route') if type(route) is dict and routing._text(route.get('route'))
                              else None, reason=reason))
 
-    for spec in _requested(source, table, strategy_ids, choices):
-        if spec.get('harness') not in allowed:
-            continue
-        reason = _manifest_reason(spec)
-        if reason is None:
-            reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
-        if reason is None and strategy_ids is not None and spec['billing_class'] in routing.FUNDED:
-            reason = 'billing_class_excluded'  # ranked dollar routes stay out before any funding read (decision B)
-        if reason is None and spec['billing_class'] == 'included_subscription' \
-                and not routing._text(spec.get('window_unit')):
-            reason = 'window_unit_undeclared'  # its demand's unit is unknown: fail closed
-        if reason is None and spec['billing_class'] == 'included_subscription' \
+    for spec in candidates:
+        reason = None
+        if spec['billing_class'] == 'included_subscription' \
                 and not subscription_billing.verified(source, spec, now):
             reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
         if reason is None and spec.get('demand_scope') == routing_paths.MODEL_DEMAND \
@@ -676,10 +724,15 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     any window), plus `excluded`, one fixed reason per route left out, and `routes_version`; `seen` holds only the
     revisions read: `openrouter_revision` (null when unread or not needed).
 
-    `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
-    `codex app-server` first when a kept route needs its reading and it is missing or stale; this is the collector's
-    only process or network use, and a failed read leaves the route stale or unobserved."""
+    `refresh_windows` (the routing service outside `--serve` only) first permits billing acquisition for statically
+    relevant paths, before eligibility (the native Claude account read). It then lets a kept route's missing or stale
+    Codex or Claude reading be read first (`refresh_needed`); these are the collector's only process uses, and a
+    failed read leaves the route stale or unobserved."""
+    from runtime import claude_usage
     source = source if source is not None else default_source(settings_path)
+    if refresh_windows and type(source) is LocalSource:
+        acquire_billing(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
+                        choices=choices, harnesses=harnesses, source=source)
     cut = shortlist(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
                     choices=choices, harnesses=harnesses, source=source)
     excluded, seen = cut['excluded'], cut['seen']
@@ -688,7 +741,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     if refresh_windows and type(source) is LocalSource and cut['routes']:
         unread = refresh_needed(cut['routes'], settings_path)
     now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
-    routes, pools, boundaries = [], {}, {}
+    routes, pools, boundaries, binding = [], {}, {}, {}
 
     def leave(route, reason):
         excluded.append(dict(route=route['route'], reason=reason))
@@ -700,6 +753,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         route.update(capable=True, permitted=True)
         if billing == 'included_subscription':
             route['binding_enforceable'] = spec.get('binding_enforceable', True) is True
+            # The account's provider manages its own overflow once included room cannot cover the reservation,
+            # after reported use, holds and debits (account amendment).
+            route['provider_fallback'] = claude_usage.applies(spec)
         if billing == 'gateway':
             route['integration_enabled'] = True
         if spec['pool'] not in pools:
@@ -715,6 +771,13 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             own = stored is not None and type(source) is LocalSource and source.settings_path is not None \
                 and Path(source.settings_path) == Path(settings_path)
             found = source.windows(spec['pool'], now, stored=stored) if own else source.windows(spec['pool'], now)
+            native = binding[spec['pool']] = claude_usage.applies(spec)
+            if native and boundaries[spec['pool']] is not None:  # the admission rechecks the account confirmation
+                boundaries[spec['pool']] = pool_state(stored, spec['pool'], claude_usage.confirmation(settings_path))
+            # Shared-pool provenance: the native Claude consumer uses only rows of its current account's latest
+            # confirmed exchange; every other consumer only unbound rows (no other login is assumed to match).
+            found = (claude_usage.usable_windows(settings_path, now, stored) if own else []) if native \
+                else [window for window in found if 'account' not in window]
             for window in found:
                 if not _valid_window(window):
                     continue
@@ -728,6 +791,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             if dollar:
                 pools[spec['pool']]['billing_class'] = billing
         pool = pools[spec['pool']]
+        if binding[spec['pool']] != claude_usage.applies(spec):
+            leave(spec, 'window_unobserved')  # another consumer's readings of the pool are not this route's
+            continue
         demanded = [window for window in pool['windows'] if window['id'] in spec['demand']]
         if spec['pool'] in unread and (len(demanded) < len(spec['demand']) or not all(w['fresh'] for w in demanded)):
             leave(spec, unread[spec['pool']])  # the Codex reader's fixed reason (R7), instead of stale or unobserved
@@ -769,13 +835,17 @@ class _Rechecked:
         return getattr(self._ledger, name)
 
     def admit(self, attempt_id, decide):
+        from runtime import claude_usage
+
         def rechecked(data):
             try:
                 stored = _read(window_path(self._settings))
             except (OSError, ValueError, TypeError):  # TypeError: no settings path
                 stored = None
+            confirmation = claude_usage.confirmation(self._settings) if stored is not None else None
             for pool, state in self._boundaries.items():
-                if stored is None or state is None or pool_state(stored, pool) != state:
+                if stored is None or state is None or state not in (pool_state(stored, pool), pool_state(
+                        stored, pool, confirmation)):
                     for window in self._observations.get('pools', {}).get(pool, {}).get('windows', []):
                         window['fresh'] = False
             return decide(data)

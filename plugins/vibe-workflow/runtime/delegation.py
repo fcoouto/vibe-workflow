@@ -1056,28 +1056,9 @@ def _qualification_before_data(value, identity, owner, body):
         value['identity'] == owner and value['pins'] == body['pins'] and
         value['candidate'] == body['candidate'] and value['plan'] == body['plan'],
         'Original qualification before binding changed')
-    for key in ('revision', 'generation', 'receipt_watermark'):
-        state._integer(value[key], 'original qualification ' + key, 1 if key == 'revision' else 0)
-        _require(value[key].bit_length() <= 63, 'Original qualification cursor exceeds its database bound')
+    from runtime.managed_observation import validate_cursors_and_probe
+    validate_cursors_and_probe(value)
     _require(value['revision'] + 1 == body['revision'], 'Original qualification before revision changed')
-    probe = value['probe']
-    if probe is not None:
-        from runtime import startup, setup_observation
-        state._fields(probe, ('descriptor', 'before'))
-        descriptor, before = probe['descriptor'], probe['before']
-        state._fields(descriptor, ('canary', 'before_sha256', 'patch'))
-        startup._canonical_path(descriptor['canary'])
-        startup._canonical_hash(descriptor['before_sha256'])
-        state._fields(before, ('canary', 'target', 'readback'))
-        state._fields(before['target'], ('path', 'binding', 'parents', 'fingerprint'))
-        _require(isinstance(before['readback'], str), 'Original qualification probe readback must be text')
-        raw = before['readback'].encode('utf-8')
-        _require(len(raw) <= 65536 and before['canary'] == descriptor['canary'] == before['target']['path'] and
-            before['target']['binding'] is not None and
-            before['target']['fingerprint']['sha256'] == descriptor['before_sha256'] == hashlib.sha256(raw).hexdigest(),
-            'Original qualification public probe changed')
-        setup_observation._public_canary_patch(descriptor, Path(min(before['target']['parents'], key=len)), readback=before['readback'])
-    evidence._bounded(value, evidence.MAX_ARTIFACT)
     return value
 
 
