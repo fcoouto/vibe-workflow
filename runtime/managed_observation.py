@@ -276,7 +276,7 @@ def retained_readback(scope, task_ref, attempt_ref, *, case_id, projection, proo
             d3._require(len(proofs) == 11 and not child and binding.get('kind') == 'parent'
                 and case_id == 'pre-tool-enforcement', 'Unsupported retained trace source')
             bundle, native_call_id = codex_trace.retained_selector(proofs[2:-2])
-            original, _ = setup._retained_reference(projection['setup_reference'], setup._budget(deadline))
+            original, _ = setup._retained_reference(startup._canonical_plain(projection['setup_reference']), setup._budget(deadline))
             trace_source = dict(bundle=bundle, native_home=original['configuration']['codex_home'],
                 repository_root=str(scope.repository_root), rollout_path=str(path), deadline=deadline)
         d3._require(time.monotonic() < deadline, 'Retained native observation expired')
