@@ -69,7 +69,7 @@ All selected safety cases must pass. File results prove only their scoped action
 
 ## Evidence and next action
 
-Status: `WAITING`. The candidate is implemented and published as draft `[BLOCKED]` PR #319, but improvement is not established. The user owns the decision on a further bounded trial; no merge or deployment is permitted on current evidence.
+Status: `WORKING`. The user approved one native completion-event comparison: two runs, capped at eight minutes each. The repeated approval is one allowance, not two trials. PR #319 remains draft `[BLOCKED]`; no merge or deployment is permitted without supported improvement.
 The protected evaluator rejects all four untouched continuation cases, accepts the two untouched stop controls, accepts the correct control, and rejects three prohibited writes and a modified source artifact.
 Native replay children: `ses_e202bbf8cffe90iclzUV6Pa1ee` (old), `ses_e202b8ba8ffeyUj153MEmYIQda` (candidate). Both inherited the coordinator's native model controls. Completed native message/session metadata records `openai/gpt-6.1-sol`, variant `high`, for both; provider-internal execution and authentication mode remain unobserved. Visibility preparation returned `native_visibility_unavailable`; original names and briefs were preserved.
 Source-to-contract coverage: prior continuation, partial-blocker, stop-record and permissions/ownership/limits requirements remain in the replacement lifecycle procedure. Existing record/report/title/resumption rules are unchanged. Recovery retains its package/policy-pin and selective-loading rules.
@@ -106,4 +106,20 @@ Ruling: do not merge or deploy an unproven candidate despite passing safety chec
 
 Final static validation on `9e903041` passed, as did the base-to-head whitespace check. Comparison with the independently reviewed `54fcfcb4` confirmed no changes to instruction sources, tests, clients, scripts, runtime or templates; only this record changed. The isolated export also passed at `54fcfcb4`; it was not installed. Reuse the 236 passing tests and source review on that unchanged basis, not as proof of improved behavior.
 
-Next owner: user, for the decision on another bounded trial. A more faithful matched native completion-event comparison needs a concrete design and a separately agreed finite evaluation limit before another trial. No background worker remains active. Preserve this branch/worktree and private comparison evidence; cleanup is inapplicable because PR #319 remains unmerged.
+## Approved native event comparison
+
+Use two fresh native sessions, old and exact final candidate instructions, with the same inherited model/effort and task inputs. Each session first inspects and submits six artifacts for review, then becomes idle with the accepted parent outcome unfinished. The coordinator independently checks the artifacts and delivers a review result through OpenCode's supported native synthetic-input endpoint. That input, not another user prompt or follow-up delegation brief, starts the second turn.
+
+This qualifies native event delivery across a real idle/turn boundary. The result comes from deterministic coordinator review, not a nested reviewer child; do not claim child-lineage or full subagent-callback qualification. No fake child identity or extra reviewer model call is needed.
+
+Keep the six prior continuation/stop acceptance cases. Check real source reads, deliverable writes, input preservation, message types and absence of an intervening user message. Both rounds share each run's original eight-minute deadline; no retries, automatic budget resets, production access, deployment or installed-instruction changes. Use bounded native waits rather than polling.
+
+- [x] Freeze identical inputs and old/exact-candidate instruction snapshots.
+- [x] Verify the event checker rejects untouched required deliverables and detects prohibited writes.
+- [ ] Run exactly two native sessions, each crossing the review-result event boundary.
+- [ ] Inspect native messages and exact outputs; disposition the result against the unchanged adoption gate.
+- [ ] Update this record and PR #319, run final relevant static validation, and report remaining limits.
+
+Next owner: coordinator executes the approved comparison and independently checks its results. Preserve this branch/worktree and private evidence; cleanup remains inapplicable while PR #319 is unmerged.
+
+The private event fixture self-check rejected missing required deliverables, all three tested prohibited writes and a stale source; it accepted the correct control. The candidate snapshot includes the exact final recovery sentence. Two one-shot native-wait processes were started, one for each run; no extra model reviewer or retry is part of this allowance.
