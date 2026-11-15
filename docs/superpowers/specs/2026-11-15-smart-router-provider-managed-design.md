@@ -1,16 +1,18 @@
 # Smart Router: trustworthy quota optimization with provider-managed fallback
 
-Status: design proposed for approval. On 15 November 2026 the user selected
-approach 3 as the basis for this revision, not as approval of this written design,
-implementation, activation or new live operations.
+Status: written design approved by the user on 15 November 2026 after independent
+review and the exposure-lifecycle clarification. The user authorized implementation
+plan preparation and an Opus review, not implementation, activation or new live
+operations.
 
 Base: `main` at `ce1170192a9661ff1dca9504a085c8203bc9189d`.
 This is a focused amendment to the
 [approved redesign](2026-11-10-smart-routing-redesign-design.md), especially its
 account-based amendment and sections 5.4 and 5.6. Unchanged requirements remain
-in force. The [delivery plan](../plans/2026-11-15-smart-router-delivery-streams.md)
-must be revised after this design is approved; its old quota prerequisites are
-not silently marked passed.
+in force. The [focused implementation plan](../plans/2026-11-15-smart-router-provider-managed.md)
+revises the affected work in the
+[delivery plan](../plans/2026-11-15-smart-router-delivery-streams.md); old quota
+prerequisites are not silently marked passed.
 
 ## 1. Intent and decision
 
