@@ -148,8 +148,14 @@ def clear_debits(ledger, data, observations):
     debits, now = data.get(DEBITS), observations['now']
     if not debits:
         return data
+    from runtime import claude_usage
     for key in sorted(debits):
         pool, _, window_id = key[len(WIN):].partition('/')
+        if pool == claude_usage.POOL:
+            # Account-ambiguous (15 November ruling): native and OpenCode readings of this shared pool may come
+            # from different logins and a debit names no account, so no observation releases it; it stays held
+            # until the operator's `drop_debit`.
+            continue
         windows = (observations['pools'].get(pool) or {}).get('windows') or []
         found = [window for window in windows if window.get('id') == window_id]
         entry = debits[key]

@@ -502,5 +502,72 @@ class FallbackReplayTest(BridgeTest):
         self.assertNotEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')
 
 
+class SharedPoolBoundaryTest(Reader):
+    """Parent ruling (15 November): an account-ambiguous Claude pool debit is never released automatically, and a
+    collected native snapshot is rechecked against its account confirmation as well as the window store."""
+
+    ROUTE = dict(provider='anthropic', model='invented-small', effort='high', harness='claude-native',
+                 funding='subscription')
+
+    def collect(self):
+        routing_paths.qualify(self.settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5},
+                              evidence='synthetic-1', now=self.now)
+        found = collector.collect(str(self.root), dict(scope='s'), settings_path=self.settings,
+                                  ledger_path=self.ledger_path, refresh_windows=True, choices=[self.ROUTE],
+                                  harnesses=['claude-native'])
+        self.assertEqual(len(found['observations']['routes']), 1, found['observations']['excluded'])
+        return found
+
+    def recheck(self, found):
+        class Ledger:
+            def admit(self, attempt, decide):
+                return decide({})
+        observations = found['observations']
+        collector.rechecked_ledger(Ledger(), self.settings, observations, found['boundaries']).admit('a', lambda d: d)
+        return [window['fresh'] for window in observations['pools'][claude_usage.POOL]['windows']]
+
+    def test_an_unchanged_account_keeps_the_snapshot(self):
+        self.assertEqual(self.recheck(self.collect()), [True, True])
+
+    def test_invalidated_or_changed_account_confirmation_makes_the_snapshot_stale(self):
+        key = lambda: claude_usage._state(self.settings)['account']['key']  # noqa: E731
+        cases = dict(
+            failed=lambda: (self.answer(initialize(), usage(self.now, limits=None)), self.refresh(force=True)),
+            partial=lambda: (self.answer(initialize(), dict(usage(self.now), rate_limits=dict(
+                usage(self.now)['rate_limits'], seven_day=None))), self.refresh(force=True)),
+            changed=lambda: claude_usage._save(self.settings, account=dict(
+                claude_usage._state(self.settings)['account'], key='b' * 32)),
+            switched_back=lambda: claude_usage._save(self.settings, account=dict(
+                claude_usage._state(self.settings)['account'], usage_at=0)))
+        for name, invalidate in cases.items():
+            with self.subTest(name):
+                self.answer(initialize(), usage(self.now))
+                self.assertEqual(self.refresh(force=True)['state'], 'stored')
+                found = self.collect()
+                rows = collector.window_path(self.settings).read_bytes()
+                before = key()
+                invalidate()
+                if name in ('failed', 'partial'):
+                    self.assertEqual(collector.window_path(self.settings).read_bytes(), rows)  # store unchanged
+                    self.assertEqual(key(), before)
+                self.assertEqual(self.recheck(found), [False, False])
+
+    def test_no_claude_pool_debit_is_released_by_an_observation(self):
+        from runtime import subscription_reconcile as reconcile
+        now = int(time.time())
+        mark = now - 7200
+        window = dict(id='5h', limit=1000, used=0, length=18000, reset_at=now + 3600 * 4, rolling=False, fresh=True)
+        other = {reconcile.DEBITS: {routing.WIN + 'sub/5h': dict(units=6, at=mark, marker='dd_' + '1' * 32)}}
+        with self.assertRaises(AttributeError):  # the same window still qualifies for an unaffected pool
+            reconcile.clear_debits(object(), other, dict(now=now, pools=dict(sub=dict(windows=[dict(window)]))))
+        for name in ('native', 'opencode', 'after_account_change'):
+            with self.subTest(name):
+                data = {reconcile.DEBITS: {routing.WIN + 'claude-subscription/5h': dict(units=6, at=mark,
+                                                                                        marker='dd_' + '0' * 32)}}
+                observations = dict(now=now, pools={'claude-subscription': dict(windows=[dict(window)])})
+                kept = reconcile.clear_debits(object(), data, observations)  # never reaches the ledger
+                self.assertEqual(set(kept[reconcile.DEBITS]), {routing.WIN + 'claude-subscription/5h'})
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -350,6 +350,14 @@ def usable_windows(settings_path, now, stored=None):
             and row.get('account') == current['key'] and row['observed_at'] >= current['usage_at']]
 
 
+def confirmation(settings_path):
+    """What a native snapshot's readings depend on beyond the window store: the stored account key and confirmed
+    exchange time (both None when absent), read without a freshness cut so that any change is visible."""
+    found = _state(settings_path).get('account')
+    found = found if type(found) is dict else {}
+    return [found.get('key'), found.get('usage_at')]
+
+
 def usable(settings_path, now):
     """Whether both of the path's windows are usable rows (freshness is the collector's check)."""
     return set(METERS.values()) <= {row['id'] for row in usable_windows(settings_path, now)}

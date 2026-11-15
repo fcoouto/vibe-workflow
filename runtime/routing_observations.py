@@ -301,10 +301,13 @@ def _valid_window(window):
             and (window.get('organization') is None or routing._text(window['organization'])))
 
 
-def pool_state(stored, pool):
-    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary.
-    Any reading stored for the pool, or a moved boundary, changes it; another pool's activity does not."""
-    raw = json.dumps([stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)], sort_keys=True,
+def pool_state(stored, pool, confirmation=None):
+    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary,
+    plus, for a native Claude snapshot, the account confirmation its readings depend on (`claude_usage.
+    confirmation`). Any reading stored for the pool, a moved boundary or a changed confirmation changes it; another
+    pool's activity does not."""
+    parts = [stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)]
+    raw = json.dumps(parts if confirmation is None else [*parts, confirmation], sort_keys=True,
                      separators=(',', ':'), allow_nan=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -768,6 +771,8 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
                 and Path(source.settings_path) == Path(settings_path)
             found = source.windows(spec['pool'], now, stored=stored) if own else source.windows(spec['pool'], now)
             native = binding[spec['pool']] = claude_usage.applies(spec)
+            if native and boundaries[spec['pool']] is not None:  # the admission rechecks the account confirmation
+                boundaries[spec['pool']] = pool_state(stored, spec['pool'], claude_usage.confirmation(settings_path))
             # Shared-pool provenance: the native Claude consumer uses only rows of its current account's latest
             # confirmed exchange; every other consumer only unbound rows (no other login is assumed to match).
             found = (claude_usage.usable_windows(settings_path, now, stored) if own else []) if native \
@@ -829,13 +834,17 @@ class _Rechecked:
         return getattr(self._ledger, name)
 
     def admit(self, attempt_id, decide):
+        from runtime import claude_usage
+
         def rechecked(data):
             try:
                 stored = _read(window_path(self._settings))
             except (OSError, ValueError, TypeError):  # TypeError: no settings path
                 stored = None
+            confirmation = claude_usage.confirmation(self._settings) if stored is not None else None
             for pool, state in self._boundaries.items():
-                if stored is None or state is None or pool_state(stored, pool) != state:
+                if stored is None or state is None or state not in (pool_state(stored, pool), pool_state(
+                        stored, pool, confirmation)):
                     for window in self._observations.get('pools', {}).get(pool, {}).get('windows', []):
                         window['fresh'] = False
             return decide(data)
