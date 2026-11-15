@@ -33,6 +33,11 @@ the qualification observer. Launch was blocked and that allocation closed, with
 no native attempt or model request. These are harness findings, not demonstrated
 production-gate defects; see
 [the prelaunch result](../docs/qualification/2026-11-14-unconditional-stop.md#race-only-preparation-blocked-at-prelaunch-review--15-november).
+Separately authorized preparation-only fixes later passed 37 offline checks and
+Astra's bounded review. R1/R2 are resolved in a fresh harness copy at code/offline
+level only; the rejected case remains preserved and closed. No native attempt
+was authorized or launched by that repair; see
+[the repair result](../docs/qualification/2026-11-14-unconditional-stop.md#preparation-only-r1r2-fixes--15-november).
 
 ## What it does
 

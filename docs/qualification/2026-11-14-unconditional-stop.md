@@ -450,3 +450,46 @@ Offline passes do not override the rejected readiness review. This is neither
 native race qualification nor a demonstrated production-gate defect. Unused
 live capacity admits no retry. Native UI, Claude, exact release-candidate full
 suite and release holds remain unchanged.
+
+## Preparation-only R1/R2 fixes — 15 November
+
+The user separately authorized preparation-only fixes, explicitly invoking task
+context recovery. The accepted local package pointer and task-specific policies,
+preservation decisions and closed allocation were retained. Work used a fresh
+private copy; the rejected harness, receipts and terminal result were unchanged.
+
+Five focused regressions first failed for the intended R1/R2 reasons. The fixes
+were confined to the disposable controller, its deadline helper and the
+qualification observer:
+
+- **R1:** `lsof` now receives a remaining-work timeout, capped at five seconds,
+  with `SIGKILL` on timeout. Process closure and event-task waits use an absolute
+  cleanup deadline, no later than the native hard deadline. Group checks run in
+  `finally`, and unresolved waits produce failure receipts rather than a pass.
+- **R2:** unexpected normal observer EOF now enters the evidence-error path and
+  closes admission. Intentional cancellation remains non-error cleanup.
+- **Late evidence:** final controller acceptance also requires observer
+  ready/cleanup records without evidence errors, so an earlier behavioral success
+  cannot mask a later journal failure.
+
+Preparation finished in **462.219 seconds**. All **37 offline checks passed**,
+with zero failures/skips. Tests execute the actual controller cleanup blocks with
+inert process/filesystem boundaries and the actual observer hooks with a controlled
+iterator; they do not launch native processes or call endpoints. The focused
+wrapper on committed `1f9a2ad8bbd00f328244e53483d56f336bb9289c` also passed two
+Python checks, zero skips, including unchanged Node gate suites.
+
+Astra independently accepted both fixes at **code/offline-regression level only**,
+with no Critical or Important findings substantiated in scope. Reviewed source,
+old/new receipt and initial fixture hashes matched. Configuration and profile
+were byte-identical after owned-path normalization; production gate, timing,
+barrier, evaluator, permissions and authentication settings were not changed.
+
+Private result SHA-256:
+`4815857c1e80b594bf76ca34a5f88baf0ebd44a375ee6d6cc4ac6071ace55ebe`.
+
+No native launch, native model request, HTTP/SDK/RPC request or authentication
+action occurred. No native admission was created. The previous allocation remains
+closed; this repair acceptance grants no fresh attempt or release authority.
+OS termination, native wait/release, runtime isolation effectiveness and native
+race/UI/Claude qualification remain unobserved or incomplete.

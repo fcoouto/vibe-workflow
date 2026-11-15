@@ -201,6 +201,16 @@ remain open; no native process, model request or authentication action occurred.
 The allocation is closed, not available for repair or replay. See
 [the owning result](../../qualification/2026-11-14-unconditional-stop.md#race-only-preparation-blocked-at-prelaunch-review--15-november).
 
+The user subsequently authorized preparation-only R1/R2 repairs in a fresh copy.
+Five intended regressions reproduced the gaps, then 37 offline checks and two
+focused Python checks passed. Astra accepted the bounded code/offline fixes:
+deadline-bounded waits keep group checks and failure receipts reachable, and
+normal observer EOF closes admission and prevents final evidence acceptance.
+The old rejected case remains unchanged and closed. No native execution or
+prelaunch admission is authorized by this repair result; a fresh allocation and
+exact readiness decision remain necessary. See
+[the repair evidence](../../qualification/2026-11-14-unconditional-stop.md#preparation-only-r1r2-fixes--15-november).
+
 ## Acceptance and stopping
 
 Each case passes only with every assigned behavioral assertion, valid identities,
