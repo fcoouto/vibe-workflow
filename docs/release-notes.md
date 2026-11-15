@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.41
+
+- **Upgrade source reconciliation.** Upgrades now inspect dependent instruction and skill pointers, preserve custom sources and deliberate task pins, verify source contents, and require fresh OpenCode catalog evidence. Installed-version records alone do not certify discovery or instruction delivery. This machine's OpenCode skills use the maintained development export instead of a removable Codex version cache; no new updater or hook is added.
+- **Native account readers and conservative routing.** Adds bounded account/catalog readers for native Claude and Codex, account-bound Claude observations, and ordinary provider-managed overflow without changing account settings or inventing included quota. Acquisition precedes eligibility where supported; status and served paths remain read-only. The Codex reader retains deadline-safe partial writes and supplies metadata, not usable quota or OpenCode account-sharing proof. Observed Claude account/catalog confirmation does not qualify unsupported scoped usage.
+- **Parent-only qualification evidence.** Captures admitted parent before-state transactionally and retains exact native/Core denial proof without requiring a child assignment. Existing child/delegated paths, immutable purpose, source pins, deadlines and canary checks remain. Software evidence does not complete live D9 qualification.
+- **Unconditional escalation stop.** Held-file edits remain denied at the final stage, including after late completions. Separate explicit user continuation clears only the named target without replaying a pending edit. Recorded mechanical native coverage, earlier failed attempts and remaining client/race/semantic limitations stay explicit; no general enforcement guarantee.
+- **Verification reliability and delivery guidance.** Pins a recovery fixture's registration to its observation clock and canonicalizes a macOS funding fixture without weakening runtime guards. Adds the provider-oriented Smart Router delivery map with shared-file ownership and separate source, live, canary and release gates.
+- This maintenance release does not complete Smart Routing cutover, live account/launch qualification or D9's installed journey. API Usage obligations and production OpenRouter work remain separately scoped. Package and suite checks do not establish fresh installed-client startup or automatic skill adoption.
+
 ## 0.1.40
 
 - **Task-context recovery.** Adds the agent-facing `recovering-task-context` skill. It routes recovery through canonical scope, planning and lifecycle contracts, preserving accepted policy pins, pauses, ownership and remaining limits. Representative native checks covered actual compaction, accepted-context recovery, a whole-task pause and an unknown live-attempt allowance. One permitted missing-file probe received an explicit non-blocking disposition; original failed evaluator results remain preserved. No new hook or general-reliability claim.
