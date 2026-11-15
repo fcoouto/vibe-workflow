@@ -45,6 +45,12 @@ metadata alone did not prove gate readiness. Cleanup and selected preservation
 checks passed. Astra accepted the bounded failed-run record, not native race
 qualification; the allocation is closed without retry. See
 [the latest result](../docs/qualification/2026-11-14-unconditional-stop.md#fresh-race-only-attempt--15-november).
+A subsequent offline diagnosis reproduced a missing fixture prerequisite: without
+a Git checkout, feature resolution fails and the adapter registers no status
+tool. A Git-backed identical control resolves the feature and registers the tool.
+No failed fixture or production source was repaired, and native qualification
+remains incomplete; see
+[the diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#offline-gate-readiness-diagnosis--15-november).
 
 ## What it does
 

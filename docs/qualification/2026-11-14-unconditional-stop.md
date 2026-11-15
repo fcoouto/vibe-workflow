@@ -570,3 +570,54 @@ zero model use does not renew it. No diagnosis probe, repair or rerun follows
 automatically. Native race, original-TUI evidence, Claude qualification, final
 candidate review, exact release-candidate full suite and release remain incomplete.
 PR #294 remains deferred; PR #310 remains draft/BLOCKED, unmerged and unreleased.
+
+## Offline gate-readiness diagnosis — 15 November
+
+The user separately authorized a bounded model-free diagnosis. This was one
+20-minute read/offline-check phase, with no native server or native HTTP/SDK/RPC call,
+inference, authentication change, repair or campaign replay.
+
+**A missing fixture prerequisite reproduces the status absence:** the rebuilt
+fixture is not a Git checkout. Its enabled settings file alone is insufficient.
+The adapter's default feature loader calls `workflow.py features status`, whose
+resolver requires `git rev-parse --show-toplevel` to succeed before reading
+project settings. The retained failed fixture has no Git metadata; the earlier
+successful sequential-drill fixture does.
+
+Running that exact read-only feature command against the failed fixture returned
+exit 1 and `ok:false`, with an error ending:
+
+```text
+is not inside a Git checkout
+```
+
+An identical fresh synthetic copy also failed. Adding only Git metadata to that
+copy made the same command return exit 0 and `escalation_gate.effective:true`.
+All copied fixture file bytes remained identical. The failed fixture and every
+closed attempt remained unchanged.
+
+A second offline check imported the unchanged production adapter and executed its
+real default Python subprocess against both directories, using an inert host
+context rather than a native server. The non-Git fixture registered no status
+tool; the Git-backed control registered `escalation_gate_status`, returning
+`held:[]` and `lastError:null`. Assertions passed, with exactly two feature
+subprocesses and zero model requests. This establishes the feature-resolution
+failure mechanism, not native tool lookup or race qualification.
+
+The adapter parses the failed command's JSON without exposing its process error;
+`activeSettings` then returns null and skips tool registration. Merely waiting
+longer cannot make a non-Git fixture effective. Separately, both offline setups
+returned before registering a tool, confirming that plugin activation alone
+does not establish feature readiness even for a valid fixture.
+
+The original native feature subprocess output was not retained, so this does
+not recover its exact historical response or exclude additional native issues.
+No product stop-state defect is established. No fix was applied to production,
+the failed fixture or any prior harness.
+
+Private offline adapter-result SHA-256:
+`cf1bd423f46a8cbf2fec740bf999bb81d0b7fb4876392eb237bb7bf5ea90c0c3`.
+
+Source, fixture and prior-evidence hashes matched after the checks. This
+diagnosis does not reopen the closed native allocation or authorize repair,
+another probe, inference, UI, Claude testing or release.

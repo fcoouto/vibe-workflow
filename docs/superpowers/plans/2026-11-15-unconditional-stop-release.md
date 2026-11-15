@@ -229,6 +229,16 @@ zero model use grants no replacement attempt or diagnosis probe. See
 [the latest result](../../qualification/2026-11-14-unconditional-stop.md#fresh-race-only-attempt--15-november).
 Race/UI, Claude, final review/full suite and release gates remain incomplete.
 
+A separately authorized bounded offline diagnosis then reproduced the missing
+Git-checkout prerequisite in the rebuilt fixture. The real feature command fails
+before reading its enabled settings; the unchanged adapter consequently registers
+no status tool. An identical synthetic Git-backed control resolves the feature
+and registers the tool. Both setups return before feature registration completes,
+so plugin activation alone remains insufficient readiness proof. Original native
+subprocess output was not retained; additional native issues remain unexcluded.
+No product/fixture/harness repair or native rerun occurred. See
+[the offline diagnosis](../../qualification/2026-11-14-unconditional-stop.md#offline-gate-readiness-diagnosis--15-november).
+
 ## Acceptance and stopping
 
 Each case passes only with every assigned behavioral assertion, valid identities,
