@@ -12,6 +12,7 @@ from pathlib import Path
 import stat
 import sys
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -639,15 +640,13 @@ class ReviewFixTest(Reader):
         from runtime import codex_rate_limits as lifecycle
         order = []
         real_killpg = os.killpg
-        with mock.patch.object(lifecycle.os, 'waitid', create=True) as waitid:
-            del lifecycle.os.waitid
+        without = types.SimpleNamespace(**{name: getattr(os, name) for name in dir(os) if name != 'waitid'})
+        without.killpg = lambda pid, sig: (order.append(sig), real_killpg(pid, sig))
+        with mock.patch.object(lifecycle, 'os', without):
             self.assertFalse(hasattr(lifecycle.os, 'waitid'))
-            with mock.patch.object(lifecycle.os, 'killpg', side_effect=lambda pid, sig: (order.append(sig),
-                                                                                       real_killpg(pid, sig))):
-                self.assertEqual(self.refresh()['state'], 'stored')  # a successful exchange still completes
-                self.answer(initialize(), usage(self.now), hang='get_usage')
-                self.assertEqual(self.refresh(force=True, timeout=0.5)['reason'], 'claude_timeout')
-            del waitid
+            self.assertEqual(self.refresh()['state'], 'stored')  # a successful exchange still completes
+            self.answer(initialize(), usage(self.now), hang='get_usage')
+            self.assertEqual(self.refresh(force=True, timeout=0.5)['reason'], 'claude_timeout')
         self.assertIn(signal_module().SIGKILL, order)  # the owned group was signalled while its leader was unreaped
 
 
