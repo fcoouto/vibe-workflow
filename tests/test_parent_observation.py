@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -86,8 +87,7 @@ class ParentObservationTests(unittest.TestCase):
         witness = codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
         content = doctor._native_witness_content(witness)
         self.assertEqual(len(content['observations']['pre-tool-enforcement']), 4)
-        assessment = deepcopy(self.prepared['published']['source'].content['assessment'])
-        assessment = startup._canonical_plain(assessment)
+        assessment = startup._canonical_plain(self.prepared['published']['source'].content['assessment'])
         case = next(row for row in assessment['cases'] if row['id'] == 'pre-tool-enforcement')
         case.update(status='verified', evidence=content['observations']['pre-tool-enforcement'])
         observed = source.collect_retained_setup(self.prepared['published']['binding']['receipt'],
@@ -109,21 +109,67 @@ class ParentObservationTests(unittest.TestCase):
         selected = self.deny()
         for changes in (dict(session_id='foreign'), dict(turn_id='foreign'), dict(call_id='foreign'),
                 dict(expected_revision=selected['expected_revision'] + 1)):
-            with self.subTest(changes=changes), self.assertRaises(startup.StartupError):
+            with self.subTest(changes=changes), self.assertRaises((startup.StartupError, codex.ObservationError)):
                 codex.observe_managed_case(self.scope, selected | changes, self.allocation['reference'], 'pre-tool-enforcement')
-        with self.assertRaises(startup.StartupError):
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
             codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'post-tool-handling')
         self.original['canary'].write_text('different\n')
-        with self.assertRaises(startup.StartupError):
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
             codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
 
-    def test_parent_observation_rejects_conflicted_or_stale_receipt(self):
+    def test_parent_observation_rejects_conflicted_receipt(self):
         task = self.begin()['task']
         self.assertIn('qualification_before', task)
         selected = self.deny()
         with state._database(self.scope, write=True) as db:
             db.execute("update receipts set conflicted=1 where tool_call_id='parent-only-call'")
-        with self.assertRaises(startup.StartupError):
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+
+    def test_parent_receipt_must_match_the_exact_patch(self):
+        self.begin()
+        selected = self.deny()
+        codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+        with state._database(self.scope, write=True) as db:
+            db.execute("update receipts set fingerprint=? where tool_call_id='parent-only-call'",
+                (codex.patch_input_fingerprint(PATCH.replace('+after', '+unapproved')),))
+        with self.assertRaises(codex.ObservationError):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+
+    def test_parent_receipt_must_be_newer_than_task_start(self):
+        with state._database(self.scope, write=True) as db:
+            db.execute('insert into receipts values(?,?,?,?,?,?,?,0)', (state._scope_id(self.scope),
+                'codex', self.identity['session_id'], 'parent-only-turn', 'parent-only-call',
+                'PreToolUse', codex.patch_input_fingerprint(PATCH)))
+        self.begin()
+        selected = self.deny()
+        with self.assertRaises(codex.ObservationError):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+
+    def test_parent_source_must_keep_its_surface_and_bytes(self):
+        self.begin()
+        selected = self.deny()
+        codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+        data = json.loads(self.original['settings'].read_bytes())
+        thread = data['threads'][self.identity['session_id']]
+        original_originator = thread['originator']
+        thread['originator'] = 'codex_desktop'
+        self.original['settings'].write_text(json.dumps(data))
+        with self.assertRaises(codex.ObservationError):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
+        thread['originator'] = original_originator
+        self.original['settings'].write_text(json.dumps(data))
+        read = source.d3._read_file
+        changed = False
+        def changing(path, *args, **kwargs):
+            nonlocal changed
+            raw = read(path, *args, **kwargs)
+            if Path(path) == self.original['rollout'] and not changed:
+                changed = True
+                with Path(path).open('ab') as stream:
+                    stream.write(b'\n')
+            return raw
+        with patch.object(source.d3, '_read_file', side_effect=changing), self.assertRaises(codex.ObservationError):
             codex.observe_managed_case(self.scope, selected, self.allocation['reference'], 'pre-tool-enforcement')
 
 
