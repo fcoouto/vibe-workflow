@@ -1,14 +1,30 @@
-# Unconditional Stop Execution and Release Plan
+# Unconditional Stop Qualification and Release Plan
 
-> **For agentic workers:** Use `executing-plans` for inline verification work, with independent design/evidence and final release review. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` for approved inline verification work, with independent design/evidence and final release review. Unchecked steps are not execution authority.
 
 **Goal:** Verify Claude execution, real native UI behavior and late-completion races, then independently review and fully test the exact release candidate before publishing.
 
-**Architecture:** Keep the merged stop implementation unchanged unless a reproduced defect requires a narrow fix. Reuse the private native fixture, original tools, immutable checks and bounded observation controls. Extend only disposable timing observation for genuine native races; never seed state or fabricate completion events.
+**Architecture:** Keep the merged stop implementation unchanged unless a reproduced defect requires a narrow fix. Separate reusable deterministic proof, genuine native race proof and original-TUI proof; all remain mandatory for overall qualification. A missing UI observation method blocks the UI case, not independently approved race work. Claude qualification and release retain their separate holds.
 
 **Tech Stack:** Python standard library, TypeScript/Node, installed native OpenCode/Claude and repository release tooling.
 
-**Spec:** User's 15 November request; `clients/opencode-escalation-gate.md`; existing source and qualification report `docs/qualification/2026-11-14-unconditional-stop.md`.
+**Spec:** User's 15 November execution request and subsequent plan-only approval of layered qualification; [current behavior](../../../clients/opencode-escalation-gate.md); [qualification evidence](../../qualification/2026-11-14-unconditional-stop.md). Current unconditional-stop requirements supersede earlier approval-based stop behavior.
+
+## Approval and approaches
+
+After Astra's independent strategy review, the user approved revising this plan,
+**without authorizing new qualification execution**. This revision preserves every
+behavioral requirement and changes only qualification organization.
+
+- **Combined race/UI campaign:** avoids rebuilding stop state, but its UI-evidence
+  prerequisite blocked independent race proof. Retained as historical design,
+  not the next execution dependency.
+- **Layered qualification — selected:** reuse compatible deterministic evidence,
+  then qualify race and original TUI separately. Separate fresh cases may repeat
+  stop reconstruction; do not assume separation saves model calls.
+- **Product redesign:** not selected. Harness compatibility and missing screen
+  evidence do not establish a product defect. Reproduce a state, adapter, lineage
+  or native-hook limitation before proposing a narrow fix or broader redesign.
 
 ## Global Constraints
 
@@ -17,9 +33,12 @@
 - PR #294 stays deferred, draft/BLOCKED, unmerged and unreleased. No custom approval UI or automatic continuation.
 - Existing Claude authentication may be used only through a verified authorized native path. No credential copying, secret inspection, new sign-in, separately billed API route or unapproved shared Keychain refresh risk.
 - Native qualification uses fresh exclusive attempt records and finite per-case allocations established before launch. Count all model kinds/actors; no retries or automatic renewal.
+- All prior allowances remain closed. The earlier proposed 96 requests, 160 controller actions and 25 minutes remain unapproved; splitting cases neither grants nor duplicates them. Obtain explicit fresh per-case and aggregate limits before execution, including cleanup reserves and finite callback/capture limits.
+- Use only the previously selected anonymous zero-cost public route for proposed OpenCode cases, after exact provider/model/variant and free-route admission checks. No fallback or separately billed spill.
 - Synthetic public fixtures only. Protect evaluators/configuration; correlate real permission, tool, lineage and completion identities and preserve before/after hashes.
 - A timing barrier may delay an original native callback but must not change its fields, fabricate events, invoke production state methods or supply a replacement writer. Label instrumented scheduling separately from uninstrumented execution.
 - UI proof must use an actual native frontend. A private standalone TUI is the existing safe candidate; Desktop coverage remains a separate observation, never inferred from API or terminal text.
+- No exported renderer-ID interface is prescribed. UI evidence must still distinguish the new native refusal from old redraws, assistant quotations and erased or relocated text. A witnessed alternative needs an accepted evidence procedure and explicit participant approval before use.
 - Release only after the requested execution evidence and independent review pass, then a successful full Python suite on the exact final committed release candidate, including version and release notes.
 - Use `docs/release.md` for version/tag/package/marketplace publication and disposable install verification. Do not update personal installed clients or other projects as a release side effect.
 
@@ -31,6 +50,22 @@
 - A real edit admitted before the stop must deliver its successful completion after the stop; stopped state and subsequent refusal must persist.
 - A race harness must preserve genuine tool/call/session identity and distinguish physical write timing from completion-notification timing.
 
+## Coverage and dependencies
+
+| Required proof | Existing basis and remaining observation |
+| --- | --- |
+| Stop denial and late-completion invariants | Existing gate/adapter tests, including `tests/opencode_workflow/plugin.test.ts:640–697`; reuse only after source, test and execution-assumption comparison. Not a substitute for native concurrency. |
+| Native permissions, lineage and explicit continuation | The recorded 57-request flow covers selected sequential controls. Bind reuse to its exact sources and scope; do not relabel it race or new-TUI proof. |
+| Original completion delivered after genuine stop | Task 3, independently admissible after common preflight and its fresh execution approval. |
+| Visible native refusal and separate user continuation | Task 4; its evidence method remains unresolved. Task 3 does not depend on resolving it. |
+| Claude bridge execution | Task 2 remains held by Preserve login; no OpenCode result substitutes for it. |
+| Preservation, route/budget enforcement and cleanup | Required for every applicable live case; incomplete evidence prevents that case passing. |
+| Overall qualification and release | Require every required layer, independent evidence acceptance and the exact release-candidate full suite. No averaging or partial-pass release. |
+
+Modify this plan and the owning qualification report when new results arrive.
+Reuse private helpers by exact source pins, not by executing old controllers
+against old state. Keep failed receipts and the ignored task ledger intact.
+
 ## Task 1: Verify prerequisites and safe execution design
 
 - [x] Observe task/primary identities and preserve source/settings; create a native task worktree from current `main`.
@@ -38,30 +73,53 @@
 - [x] Independently review the Claude isolation/authentication path without starting a probe or reading credentials.
 - [x] Inspect the original native hook ordering and existing TUI harness.
 - [x] Record exact acceptance, attempt budgets, ownership and stopping conditions before any native inference.
+- [ ] Map reusable checks and native receipts to current source/test/environment hashes and invalidate only affected evidence. The completed baseline above is historical, not a fresh release-candidate run.
+- [ ] For each public-route OpenCode case, verify the existing isolation recipe before startup: fresh private HOME/XDG/configuration/database/temp and empty credential store; clean environment without real provider keys, proxy or injection variables; filesystem containment including inherited-child restrictions; Claude provider absent and Claude execution forbidden; no Keychain access or shared-service discovery/reload; ephemeral authentication only for the owned server. The separate Claude case remains held and gains no authority from this recipe.
+- [ ] Before any new live case, qualify its actual pre-transmission guard offline: exact route admitted; wrong/missing route rejected before an inert downstream sentinel; shared actor/kind counting, exhaustion/deadline boundaries and retry veto checked. Existing observer budget checks alone do not prove route admission.
+- [ ] Verify unchanged barrier/schema, completion tracking, timeout, capture and cleanup checks applicable to the chosen case. Failed or missing proof blocks that case; do not add a framework.
+- [ ] Record a fresh case allocation, protected source/configuration pins, ownership, preservation checks and independent evidence-review bounds; obtain execution approval. This plan revision supplies none.
 
-## Task 2: Observe Claude and native UI execution
+## Task 2: Observe Claude execution — held
 
 - [x] Record the unavailable isolated Claude authentication prerequisite without weakening preservation.
 - [ ] Exercise original native Claude read/edit/check/status and child permissions through the current stop implementation.
-- [ ] Exercise the final refusal and separate explicit continuation in an actual native frontend; retain rendered output alongside native records.
 - [ ] Verify unrelated work, source/protected inputs, selected shared fingerprints, actor settlement and owned process cleanup.
 
 ## Task 3: Observe genuine native late-completion races
 
 - [x] Implement only the minimal disposable scheduling barrier after source-backed hook-order inspection.
 - [x] Self-test its matching, one-shot release, timeout and no-field-mutation behavior.
-- [ ] Observe actual successful edit permission/completion with completion delayed across a genuine final-stop transition.
-- [ ] Release the real callback; require identical stopped state and a fresh native edit refusal afterward.
+- [ ] In a fresh private fixture, reach genuine re-evaluation, complete the required original read-only architecture child and perform the fourth repair/check. Never seed or restore gate state.
+- [ ] Admit a genuine child edit, verify its physical marker write and hold that same successful callback before the unchanged subject sees it. Correlate root/child, permission source, tool call and callback identity.
+- [ ] While held, reach final stop on both files through the fifth real repair/check. Save complete held state and file bytes, then release the original callback once with every field unchanged.
+- [ ] Require real child completion, identical stopped state/bytes and a fresh native child edit denial afterward, without a matching approval request. Require an unrelated edit to succeed with matching allowed permission, completed tool identity and exact intended byte change; both stopped files must remain unchanged.
+- [ ] Verify protected/prior/shared fingerprints, no internal adapter error, inactive actors and clean owned-server exit/reaping/group absence. Retain separately any preservation uncertainty or forced cleanup.
+- [ ] Obtain independent read-only acceptance of correlated raw evidence. A passed race case does not qualify the UI or authorize release.
 - [x] Independently assess the failed attempt's raw identities, bytes and preservation; retain unexecuted race/UI limits.
 
-## Task 4: Independent review and release preparation
+This proves a physical write **before** stop with completion notification **after**
+stop. It does not prove prevention of physical writes already admitted.
+
+## Task 4: Observe original native TUI — evidence method pending
+
+- [ ] Review a bounded evidence procedure before launch. It must correlate the actual visible native tool-error block and relevant prompt/tool-input context with this root turn and native permission/tool/message records. Retain continuous visible context and native records, not assistant narration or an isolated substring.
+- [ ] If proposing a witnessed interaction instead of automated capture, specify the witness's actions, retained evidence and independent acceptance checks; obtain explicit participant and method approval. This plan does not grant either.
+- [ ] Require the method to reject old-refusal redraws, assistant quotations and erased/relocated text; unsupported or ambiguous capture remains unverified. Do not repeat an open-ended source hunt or require internal renderer access merely as a preferred implementation.
+- [ ] With common preflight and fresh UI execution approval satisfied, use a new private original-TUI case with two genuinely stopped files. Retain frontend provenance; do not assume a stopped race runtime remains available.
+- [ ] Submit a distinct edit request. Require the new native refusal visibly associated with that turn/tool, native denial, unchanged stopped state/bytes and no matching permission approval request.
+- [ ] Separately type a root-user request to reset only canary.py and acknowledge without editing. Require only canary released, sibling still stopped, and no tool/permission/byte change or pending-edit resumption.
+- [ ] Type a distinct repair request. Require the original edit to 99 and immutable `python3 -B -m unittest test_canary` exit 0 while sibling remains stopped at 5.
+- [ ] Verify preservation, actor settlement and clean original-TUI/server exit, reaping and absent owned groups. Forced shutdown preserves safety but does not qualify clean frontend exit.
+- [ ] Obtain independent read-only acceptance of visible and native evidence. If association remains ambiguous, record the UI case incomplete; neither a race pass nor human acknowledgment fills the gap.
+
+## Task 5: Independent review and release preparation
 
 - [x] Update the owning qualification report and client status with observed results and remaining limits.
 - [ ] Obtain independent behavior/security/evidence review of the exact candidate; fix only substantiated in-scope defects with regression proof.
 - [ ] Select the next unused version after observing current manifests/tags and concurrent release state.
 - [ ] Update both manifests and release notes; validate, commit, run focused checks, publish a draft PR and follow ordinary readiness/merge rules.
 
-## Task 5: Qualify and publish the release
+## Task 6: Qualify and publish the release
 
 - [ ] Pin the exact merged release commit in a clean task checkout.
 - [ ] Run `python3 -B scripts/test_sharded.py` without changing that checkout; retain full output and failures/skips.
@@ -71,12 +129,19 @@
 
 ## Current State
 
+**Plan revision approved; new execution not approved.** Astra's strategy review
+supports separating the required layers, not changing the gate to accommodate
+its harness. Existing source/tests and the sequential native flow provide
+counterevidence to a product-defect claim, not proof of native race/UI correctness.
+Deterministic evidence reuse still needs its recorded compatibility comparison.
+Race and UI each need fresh allocations; no later layer is marked passed here.
+
 The user explicitly chose **Preserve login** after disclosure of shared Keychain
 refresh and separate-lock interference risk. Do not perform Claude probes,
 Keychain visibility queries, inference or release while that decision applies.
 Astra found no supported Claude path satisfying every preservation constraint.
-Continue independently safe public-route UI/race tests and current-candidate
-checks; none may substitute for Claude qualification or authorize release.
+Only separately approved public-route cases may proceed. None may substitute
+for Claude qualification or authorize release.
 
 The single combined public-route UI/race attempt failed at `Timing RPC arm: 400`
 after 25 requests and four repair rounds, before race scheduling or frontend
@@ -114,3 +179,29 @@ qualification remain pending. No further native call is authorized by that
 closed confirmation allowance.
 Earlier source and 57-request public-route proof remain unchanged and scoped;
 they do not satisfy the newly requested Claude/UI/race observations.
+
+The later reviewed combined proposal never launched. Its approved twenty-minute
+offline readiness pass stopped after 112.973 seconds because exact rendered-turn
+association was not established. No model/HTTP/SDK/RPC/native-launch/authentication
+or test execution occurred in that pass. The new route guard and UI negative
+fixtures were not implemented or tested. Earlier helper compatibility fixes
+remain valid scoped progress, not evidence that the entire process was churn.
+
+Astra subsequently supported layered qualification and corrected the inference
+that trustworthy UI proof requires an exported renderer-ID interface. The user
+approved this plan revision only. A witnessed original-TUI procedure is a
+candidate, not an accepted method or a request for user participation.
+
+## Acceptance and stopping
+
+Each case passes only with every assigned behavioral assertion, valid identities,
+required preservation evidence, route/budget compliance, clean cleanup and
+independent evidence acceptance. Wrong identity/order, cleared stop, allowed held
+edit, automatic resumption, wrong-file reset, failing checker, internal error,
+route drift, exhausted limits, ambiguous/truncated required evidence or failed
+cleanup prevents a pass.
+
+Report behavioral defects, harness/provider failures, preservation uncertainty
+and missing prerequisites separately. Stop only the dependent layer; preserve
+independently accepted proof. No retry, renewed budget, product patch, accepted
+scope reduction or release follows automatically from a blocked case.
