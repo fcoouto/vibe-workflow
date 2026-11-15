@@ -202,7 +202,7 @@ test("three escalations lead to re-evaluation, accepted when not weaker", () => 
   assert.equal(effect(g), "allow")
 })
 
-test("re-evaluation resets once; the next exhaustion asks; an approved edit clears", () => {
+test("re-evaluation resets once; the next exhaustion denies further edits and diagnoses", () => {
   const ladder = ["p/m", "p/n", "p/o", "p/q", "p/r", "p/s", "p/t"]
   const g = gate(R("m"), ladder)
   trip(g)
@@ -219,15 +219,12 @@ test("re-evaluation resets once; the next exhaustion asks; an approved edit clea
   }
   assert.equal(held(g)[0].stage, "stop")
   const decision = g.editDecision(ROOT, [FA])
-  assert.equal(decision.effect, "ask")
+  assert.equal(decision.effect, "deny")
   diagnose(g, R("t", "max"))  // no second reset
-  assert.equal(effect(g), "ask")
-  g.edited(ROOT, [FA])  // the user approved the ask
-  assert.equal(effect(g), "allow")
-  assert.deepEqual(held(g), [])
+  assert.equal(effect(g), "deny")
 })
 
-test("no ranked option above goes to re-evaluation, then asks", () => {
+test("no ranked option above goes to re-evaluation, then stops until explicit user control", () => {
   const g = gate(R("m", "max"))
   trip(g)
   assert.equal(held(g)[0].stage, "reevaluation")
@@ -235,7 +232,31 @@ test("no ranked option above goes to re-evaluation, then asks", () => {
   assert.equal(effect(g), "allow")
   retrip(g)
   assert.equal(held(g)[0].stage, "stop")
-  assert.equal(effect(g), "ask")
+  for (let i = 0; i < 3; i++) assert.equal(effect(g), "deny")
+  assert.equal(effect(g, ROOT, [FA, FB]), "deny")
+  assert.equal(effect(g, ROOT, [FB]), "allow")
+  g.created("ses_other", null)
+  assert.equal(effect(g, "ses_other"), "allow")
+  assert.deepEqual(g.reset(ROOT, { files: ["a.ts"] }), [FA])
+  assert.equal(effect(g), "allow")
+  assert.deepEqual(held(g), [])
+})
+
+test("late completed edits preserve stopped entries while unrelated edits still count", () => {
+  const g = gate(R("m", "max"))
+  trip(g)
+  diagnose(g, R("m", "max"))
+  retrip(g)
+  const before = g.status(ROOT)
+  g.created("ses_late_editor", ROOT)
+  g.routed("ses_late_editor", R("m", "max"))
+  for (const editor of [ROOT, "ses_late_editor"]) {
+    g.edited(editor, [FA, FB])
+    assert.deepEqual(g.status(ROOT), before)
+    assert.equal(effect(g, editor), "deny")
+  }
+  trip(g, [FB])
+  assert.equal(effect(g, ROOT, [FB]), "deny")
 })
 
 test("ranking: ladder order, then variants; unranked is null", () => {
@@ -320,7 +341,7 @@ test("final review: mixed files deny when any held file still needs a diagnosis"
   diagnose(g, R("m", "max"))  // re-evaluation accepted for a.ts
   retrip(g, [FA])  // a.ts now at stop
   trip(g, [FB])  // b.ts held at re-evaluation
-  assert.equal(effect(g, ROOT, [FA]), "ask")
+  assert.equal(effect(g, ROOT, [FA]), "deny")
   assert.equal(effect(g, ROOT, [FA, FB]), "deny")
 })
 
