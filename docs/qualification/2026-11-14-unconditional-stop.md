@@ -11,6 +11,10 @@ PR #302's ordinary delivery status is separate from this qualification result.
 PR #294 remains deferred, draft/BLOCKED, unmerged and unreleased.
 No installed-package change, shared-service restart or release occurred.
 
+The later UI/race attempt stopped before either requested case executed; see
+[the failed attempt](#ui-and-native-race-attempt--15-november). Claude execution
+and release remain held under the user's explicit Preserve-login decision.
+
 ## Original 14 November outcome
 
 **Partial native qualification; final-stop verification was unfinished.**
@@ -198,3 +202,95 @@ Claude-specific bridging, Desktop/TUI presentation, semantic diagnosis quality,
 general reliability and installed-package activation remain unqualified.
 The original TLS failure and unknown shared-file mismatch remain historical
 failures; this successful fresh window does not reclassify them.
+
+## UI and native race attempt — 15 November
+
+**The single allocated combined attempt failed before race/UI execution.**
+Do not count its source-backed design or passing harness self-checks as native
+race or TUI evidence. The earlier accepted 57-request drill remains separate.
+
+The user requested Claude/UI execution and native late-completion races, then
+independent review, the full Python suite and release. Astra's static assessment
+found no supported Claude route satisfying the authentication constraints.
+A private HOME can keep the shared Keychain namespace while moving OAuth refresh
+locks elsewhere, potentially interfering with other sessions. After disclosure,
+the user explicitly chose **Preserve login**. No Claude probe, Keychain query,
+credential copy, sign-in or Claude inference ran. Claude verification and release
+remain blocked until a genuinely isolated authentication arrangement exists or
+the user explicitly changes that decision.
+
+### Attempt and observed partial coverage
+
+Candidate: `9dea8e51e1b48c19599cc11f001d8be9ad701216`; both runtime hashes
+listed above still matched. The fresh private fixture added a `RACE` marker
+without changing the immutable checker. Values 0–5 failed and 99 passed before
+inference. Sandbox grandchild-write and Claude-exec denial self-checks passed.
+
+One fresh allocation allowed 120 native requests, 200 controller operations
+(20 reserved for cleanup), 40 minutes of inference and five minutes of cleanup.
+No retry, model fallback or automatic renewal was allowed. The actual route was
+anonymous public zero-cost `opencode/deepseek-v4.1-flash-free#max` on original
+native OpenCode 2.2.6. All **25/120 requests** were primary; the controller used
+**25/200 operations** and **113,380 ms**.
+
+Four genuine repair/check rounds completed. Both files reached `reevaluation`
+after round three. A fresh original foreground read-only native child completed
+and released them once. Round four left both values at 4, the marker at 0, and
+no files held. Eight original successful edits matched their native permission
+source IDs; four literal unittest calls returned exit 1 as expected.
+All six status snapshots reported `lastError: null`.
+
+The controller created a genuine native race child, then received:
+
+```text
+Timing RPC arm: 400
+```
+
+The timing log contains only startup and cleanup, with no arm, held callback or
+release record. The race child received no model request or edit. Round five,
+final stop, late completion and all TUI steps were **not run**. No terminal
+capture exists. The HTTP response body was not retained, so this receipt alone
+does not establish the precise RPC rejection cause. No production defect is
+established by this harness failure.
+
+### Preservation and cleanup
+
+Source, protected test/instructions/settings/profile/private configuration and
+all pinned prior-evidence hashes matched. Shared service PID/version and selected
+Claude directory metadata matched. Five of six selected shared-file existence/
+content records matched; the shared `opencode.json` content hash changed during
+the observation window. The writer and cause are unknown. No shared file was
+restored, and no credentials or unrelated conversations were inspected.
+The filesystem sandbox constrains this campaign's writes; it does not prove
+blanket machine preservation or identify another writer.
+
+The owned server exited zero, was reaped by the controller, and its process group
+was independently confirmed absent. No frontend was launched. Structured result:
+behavior `failed`, preservation `not_established`, cleanup
+`owned_processes_stopped`; overall `failed_preservation_or_cleanup`.
+The shell wrapper was later observed as defunct, not running native work.
+
+Private raw-evidence SHA-256 bindings:
+
+- Native observation log: `b440a26c6093c4df7489859353b60a4026a2b94e96aaaf61404c1e41d28eeecb`.
+- Native completion events: `070426202c669b8d1cab12c0495a603f09c813326abf3fd722378268f08ec20f`.
+- Checkpoints: `46bb893338d7057b1c375e45a7922628df04dec359baba4a7b5ff3f9c2171789`.
+- Timing log: `433e12feb585ec5a9f724bab529640cf5e1af22fe51793e959847c6cb8334736`.
+- Result: `32ea8ebca7fc8d8e59808aef008b44ec826a5c45d6eb5cce0e0d5d688f8b3045`.
+
+### Remaining work
+
+Astra independently parsed the raw records, verified the documented evidence
+hashes and accepted this partial-only failure report. No documentation or
+evidence-integrity finding blocked publishing the draft record. This assessment
+does not clear failed execution qualification or preservation uncertainty.
+
+Preserve this failed receipt and its consumed allocation. Do not replay it or
+infer permission for a replacement campaign from unused request capacity.
+Actual UI/race execution evidence remains pending. A future
+authorized race case must distinguish physical write timing from delayed
+completion notification; neither occurred in this attempt.
+The full Python suite has not run for this task. No version bump, tag, package
+publication, marketplace update or personal installation occurred.
+Claude execution and final release qualification remain blocked separately;
+PR #294 stays deferred, draft/BLOCKED, unmerged and unreleased.

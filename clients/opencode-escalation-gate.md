@@ -14,6 +14,11 @@ automatic edits. The earlier transport failure remains recorded; see the
 [qualification report](../docs/qualification/2026-11-14-unconditional-stop.md#fresh-authorized-follow-up--15-november).
 The custom approval-panel work in PR #294 remains deferred,
 draft/BLOCKED, unmerged and unreleased.
+The later 15 November UI/race attempt stopped at a timing-RPC HTTP 400 before
+either case executed. It also observed a changed shared-settings hash with
+unknown attribution. Neither native race nor new TUI coverage is qualified;
+see the [attempt report](../docs/qualification/2026-11-14-unconditional-stop.md#ui-and-native-race-attempt--15-november).
+The user's Preserve-login decision holds Claude testing and release.
 
 ## What it does
 
