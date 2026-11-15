@@ -81,6 +81,9 @@ REASONS = ('reader_busy', 'claude_unavailable', 'claude_exited', 'claude_timeout
            'claude_window_missing', 'claude_catalog_invalid', 'observation_store_unsafe', 'observation_store_invalid')
 
 
+ACCOUNT_REFUSALS = ('claude_account_unsupported', 'claude_inference_observed')
+
+
 class ReadError(Exception):
     """A fixed reason from REASONS; never native text, an identifier or a credential."""
 
@@ -386,7 +389,10 @@ def binding(settings_path):
 
 @contextmanager
 def _lock(settings_path, wait):
-    folder = lifecycle._store_dir(settings_path)
+    try:
+        folder = lifecycle._store_dir(settings_path)
+    except lifecycle.ReadError as error:  # the shared helper's own error type: this reader's fixed reason
+        raise ReadError(str(error) if str(error) in REASONS else 'observation_store_invalid') from None
     fd = os.open(folder / LOCK_FILE, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         end = time.monotonic() + wait
@@ -480,7 +486,10 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                                                       reason='claude_usage_unconfirmed'))
                     return dict(state='failed', reason='claude_usage_unconfirmed')
             except ReadError as error:
-                _save(settings_path, failure=dict(at=int(time.time()), reason=str(error)))
+                # An explicit account-level refusal ends the earlier account confirmation (its fact and catalog
+                # binding); stored window rows stay as observed history, unusable without a confirmation.
+                ended = dict(account=None) if str(error) in ACCOUNT_REFUSALS else {}
+                _save(settings_path, failure=dict(at=int(time.time()), reason=str(error)), **ended)
                 return dict(state='failed', reason=str(error))
             except (OSError, ValueError):
                 _save(settings_path, failure=dict(at=int(time.time()), reason='observation_store_invalid'))

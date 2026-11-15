@@ -466,7 +466,7 @@ def _candidate(data, route, observations, assignment, settings, held, now):
         else:
             vector[key] = reserve
         if reserve > room and (funding or not (short := route.get('provider_fallback') is True)):
-            return None, ['insufficient_headroom']  # fresh exhausted included quota falls back to account overflow
+            return None, ['insufficient_headroom']  # included room short of the reservation (holds too): overflow
         constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
                                 resets_at=window.get('reset_at')))
     if funding and any(vector[ORG + funding] > item['headroom'] for item in constraints):

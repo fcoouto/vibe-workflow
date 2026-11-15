@@ -26,9 +26,10 @@ def subscription_shortlist(strategy_ids, routes):
 
 
 def prefer_included(candidates):
-    """Included allowance first: provider-managed fallback candidates (`fallback`: fresh readings show the included
-    quota exhausted, so no included claim is made and the enabled account's provider applies its own overflow
-    configuration) are considered only when no candidate has included room."""
+    """Included allowance first: provider-managed fallback candidates (`fallback`: on fresh readings the included room
+    left after reported use, held reservations and debits cannot cover the reservation, so no included claim is made
+    and the enabled account's provider applies its own overflow configuration) are considered only when no candidate
+    has included room."""
     return [item for item in candidates if not item.get('fallback')] or candidates
 
 

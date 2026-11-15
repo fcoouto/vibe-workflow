@@ -569,5 +569,59 @@ class SharedPoolBoundaryTest(Reader):
                 self.assertEqual(set(kept[reconcile.DEBITS]), {routing.WIN + 'claude-subscription/5h'})
 
 
+class ReviewFixTest(Reader):
+    """Independent review (e437ad97): F1 exception boundary, F2 operator guidance, F4 account-level refusals."""
+
+    def test_an_unsafe_state_folder_fails_with_a_fixed_reason_and_starts_nothing(self):
+        folder = collector.window_path(self.settings).parent
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        folder.chmod(0o777)
+        self.addCleanup(folder.chmod, 0o700)
+        self.assertEqual(self.refresh(), dict(state='failed', reason='observation_store_unsafe'))
+        self.assertEqual(collector.refresh_needed([dict(
+            route='claude-native-subscription:choice:0123456789abcdef', status='qualified', account='claude-plan',
+            pool='claude-subscription', billing_class='included_subscription', demand={'5h': 5, '7d': 5},
+            provider='anthropic', model='m', effort='high', harness='claude-native')], self.settings),
+            {'claude-subscription': 'observation_store_unsafe'})
+        self.assertEqual(self.spawns(), [])
+
+    def test_a_refused_sign_in_or_observed_inference_ends_the_earlier_account_confirmation(self):
+        route = AccountFactTest.ROUTE
+        base = usage(self.now)
+        for name, init, use in (
+                ('sign_in', initialize(tokenSource='CLAUDE_CODE_OAUTH_TOKEN'), base),
+                ('inference', initialize(), dict(base, session=dict(base['session'], total_cost_usd=0.5)))):
+            with self.subTest(name):
+                self.answer(initialize(), usage(self.now))
+                self.assertEqual(self.refresh(force=True)['state'], 'stored')
+                self.assertIsNotNone(claude_usage.billing_fact(self.settings, route, int(time.time())))
+                rows = collector.window_path(self.settings).read_bytes()
+                self.answer(init, use)
+                self.assertEqual(self.refresh(force=True)['state'], 'failed')
+                self.assertIsNone(claude_usage.billing_fact(self.settings, route, int(time.time())))
+                self.assertIsNone(claude_usage.binding(self.settings))
+                self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
+                self.assertEqual(collector.window_path(self.settings).read_bytes(), rows)  # observations kept
+
+    def test_claude_pool_debits_carry_drop_debit_guidance(self):
+        from runtime import subscription_reconcile as reconcile
+        claude = {routing.WIN + 'claude-subscription/5h': dict(units=6, at=self.now, marker='m')}
+        other = {routing.WIN + 'sub/5h': dict(units=6, at=self.now, marker='m')}
+        uncertain = dict(u1=dict(state='uncertain', closed=False, windows={routing.WIN + 'sub/5h': 6}))
+
+        def hint(debits, holds=None, given=None):
+            return reconcile.summary(dict(identity='ledger-invented', holds=holds or {}, window_debits=debits), {},
+                                     given)[1]
+        self.assertEqual(reconcile.SHARED_DEBIT_POOL, claude_usage.POOL)
+        self.assertEqual(hint(claude), reconcile.SHARED_DEBIT_HINT)
+        self.assertIn('drop_debit', reconcile.SHARED_DEBIT_HINT)
+        self.assertLessEqual(len(reconcile.SHARED_DEBIT_HINT), 512)
+        self.assertEqual(hint(claude, given=routing.RECONCILE_HINT),
+                         routing.RECONCILE_HINT + ' ' + reconcile.SHARED_DEBIT_HINT)
+        self.assertEqual(hint(claude, uncertain), reconcile.HINT + ' ' + reconcile.SHARED_DEBIT_HINT)
+        self.assertIsNone(hint(other))  # another pool's debit still clears from telemetry: unchanged
+        self.assertEqual(hint(other, uncertain, routing.RECONCILE_HINT), routing.RECONCILE_HINT + ' ' + reconcile.HINT)
+
+
 if __name__ == '__main__':
     unittest.main()

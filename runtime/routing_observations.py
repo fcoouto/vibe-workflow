@@ -753,7 +753,8 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         route.update(capable=True, permitted=True)
         if billing == 'included_subscription':
             route['binding_enforceable'] = spec.get('binding_enforceable', True) is True
-            # The account's provider manages its own overflow once included quota is exhausted (account amendment).
+            # The account's provider manages its own overflow once included room cannot cover the reservation,
+            # after reported use, holds and debits (account amendment).
             route['provider_fallback'] = claude_usage.applies(spec)
         if billing == 'gateway':
             route['integration_enabled'] = True
