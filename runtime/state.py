@@ -1948,11 +1948,9 @@ def _task_unaccounted(db, scope_id, client, session, task_id=None, *, historical
 
 def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=False):
     _fields(task, ("client", "session_id", "task_id", "scope_ref", "mode", "decision_ref", "state", "revision",
-                   "pins", "reason", "reference", "conditions", "turn_id", "turn_uncertain", *(["accepted_identity"] if version == 3 else [])), ("resolution_ref", "evidence", "retirement", "delegation", "milestones", "delivery", *(["lifecycle","writer_stop","qualification_attempt","user_attention"] if version == 3 else [])))
-    if 'qualification_attempt' in task:
-        _canonical_ref(task['qualification_attempt'])
-        if task['state'] == 'DONE':
-            raise StateError('Qualification task cannot acquire ordinary completion')
+                   "pins", "reason", "reference", "conditions", "turn_id", "turn_uncertain", *(["accepted_identity"] if version == 3 else [])), ("resolution_ref", "evidence", "retirement", "delegation", "milestones", "delivery", *(["lifecycle","writer_stop","qualification_attempt","qualification_before","user_attention"] if version == 3 else [])))
+    from runtime.managed_observation import validate_task
+    validate_task(task)
     if "delivery" in task:
         from runtime.delivery import validate_record
         validate_record(task["delivery"])
@@ -2029,17 +2027,13 @@ def _save(db, scope_id, task):
         raise StateError('Historical task mutation requires its original pinned package; current authority requires approved D4 birth')
     previous = db.execute('select data from tasks where scope_id=? and client=? and session_id=? and task_id=?',
         (scope_id,task['client'],task['session_id'],task['task_id'])).fetchone()
+    original = None
     if previous is not None:
         original = json_object(previous[0], limit=4 * 1024 * 1024)
         if original.get('state') not in STATES or original.get('pins') != task['pins']:
             raise StateError('Historical task vocabulary and pins cannot be rewritten')
-        if (original.get('qualification_attempt') != task.get('qualification_attempt')
-                or ('qualification_attempt' in original) != ('qualification_attempt' in task)):
-            raise StateError('Original qualification purpose is immutable')
-    if 'qualification_attempt' in task:
-        _canonical_ref(task['qualification_attempt'])
-        if task['state'] == 'DONE':
-            raise StateError('Qualification task cannot acquire ordinary completion')
+    from runtime.managed_observation import validate_task
+    validate_task(task, original)
     if 'milestones' in task:_milestones(task['milestones'])
     if task['state'] not in ATTENTION_STATES:
         task.pop('user_attention', None)
@@ -2222,6 +2216,8 @@ def start_task(scope, request):
         if admission.mode == 'qualification':
             task['qualification_attempt'] = _canonical_plain(admission.attempt_ref)
         _save(db, scope_id, task)
+        from runtime.managed_observation import capture_task_start
+        capture_task_start(scope, db, task, admission)
         db.execute("insert or replace into bindings values(?,?,?,?)", (scope_id, request["client"], request["session_id"], request["task_id"]))
         return _status(db, scope, request["client"], request["session_id"])
 
