@@ -4,6 +4,37 @@
 
 **Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
+## Native Claude reader attempt, 15 November 2026
+
+**Outcome: failed qualification, no retry.** The first production-reader attempt
+used `runtime/claude_usage.py` at `3315165f` with installed Claude Code 2.1.311,
+an eight-second reader timeout and private settings/cache paths outside all
+repositories. Only `initialize` and `get_usage` with `skip_behaviors: true` were
+sent. No user/assistant prompt, task launch, production setting/ledger change,
+activation or model-send cap was involved.
+
+The attempt completed in 1.515 seconds and returned
+`failed / claude_account_unsupported`. Native telemetry showed zero cost, zero
+API duration, empty model usage and `behaviors: null`. One child was started,
+reaped and observed with no remaining owned-group process. Account fact, native
+catalog binding and usable windows all remained unavailable. Raw account/model
+identifiers and control responses were not retained; only derived state and fixed
+diagnostic predicates were permitted in owner-only qualification storage.
+
+Subsequent installed-source inspection found a deterministic contract mismatch:
+initialization's subscription field is a human-readable display label; the
+normalized `pro`/`max`/`team`/`enterprise` classification belongs to the same
+exchange's usage answer. The narrow account parser repair uses that machine
+value and synthetic tests mirror the actual display/machine distinction.
+This is source evidence, not proof of the exact unretained live account branch.
+
+Usage diagnostics also counted 24 unrecognized keys and no empty raw/scoped
+completeness markers. Those conditions still refuse; no new field is ignored,
+no unknown usage becomes quota, and no successful post-repair read or native
+launch is claimed. The next live dependency is one separately bounded,
+field-shape-only observation after the corrected source passes review and checks.
+Model launch/demand qualification and activation retain their separate authority.
+
 ## Live session runbook
 
 The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) need. The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.

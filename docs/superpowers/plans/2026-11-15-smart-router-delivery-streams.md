@@ -10,10 +10,21 @@
 
 **Spec:** [Approved redesign and dated amendments](../specs/2026-11-10-smart-routing-redesign-design.md), [existing implementation plan](2026-11-10-smart-routing-redesign.md), [qualification runbook](../../smart-routing-qualification.md) and [registered validation](../../smart-routing-validation.md).
 
-**Status, 15 November 2026:** Proposed execution split for user confirmation.
-Planning does not start implementation streams or authorize live observations.
+**Status, 15 November 2026:** User confirmed execution: prioritize native Claude
+qualification while other streams progress independently. The plan alone does not
+authorize new observations, model-send budgets or activation.
 Base: `e41c3f59c07d198108a1a91760d1548e6a6a84f5` (PR #309).
 Workstreams is enabled; no project is currently managed and API Usage is disabled.
+
+**First execution checkpoint:** One bounded native reader attempt returned
+`claude_account_unsupported`, with zero-inference telemetry and clean process
+shutdown. It did not qualify the path. Source inspection found that initialization
+reports a display plan label, while usage reports the machine subscription type;
+the narrow parser repair uses the latter without relaxing unknown-usage gates.
+OC/CC/GO source investigations identified concrete contracts and remaining
+blockers. Native Codex account/catalog work can proceed independently; OpenCode
+identity/sharing and Go age/semantics/demand remain unproved. See the
+[native reader result](../../smart-routing-qualification.md#native-claude-reader-attempt-15-november-2026).
 
 ## Global Constraints
 
