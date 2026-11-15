@@ -569,6 +569,11 @@ class SharedPoolBoundaryTest(Reader):
                 self.assertEqual(set(kept[reconcile.DEBITS]), {routing.WIN + 'claude-subscription/5h'})
 
 
+def signal_module():
+    import signal
+    return signal
+
+
 class ReviewFixTest(Reader):
     """Independent review (e437ad97): F1 exception boundary, F2 operator guidance, F4 account-level refusals."""
 
@@ -609,18 +614,41 @@ class ReviewFixTest(Reader):
         other = {routing.WIN + 'sub/5h': dict(units=6, at=self.now, marker='m')}
         uncertain = dict(u1=dict(state='uncertain', closed=False, windows={routing.WIN + 'sub/5h': 6}))
 
-        def hint(debits, holds=None, given=None):
+        def summary(debits, holds=None, given=None):
             return reconcile.summary(dict(identity='ledger-invented', holds=holds or {}, window_debits=debits), {},
-                                     given)[1]
+                                     given)
+
+        def hint(*args):
+            return summary(*args)[1]
         self.assertEqual(reconcile.SHARED_DEBIT_POOL, claude_usage.POOL)
-        self.assertEqual(hint(claude), reconcile.SHARED_DEBIT_HINT)
         self.assertIn('drop_debit', reconcile.SHARED_DEBIT_HINT)
         self.assertLessEqual(len(reconcile.SHARED_DEBIT_HINT), 512)
-        self.assertEqual(hint(claude, given=routing.RECONCILE_HINT),
-                         routing.RECONCILE_HINT + ' ' + reconcile.SHARED_DEBIT_HINT)
-        self.assertEqual(hint(claude, uncertain), reconcile.HINT + ' ' + reconcile.SHARED_DEBIT_HINT)
-        self.assertIsNone(hint(other))  # another pool's debit still clears from telemetry: unchanged
+        # Guidance lives in the drop_debit listing; the blocking reconcile hint is unchanged (review N1).
+        self.assertEqual(summary(claude)[0]['drop_debit']['guidance'], reconcile.SHARED_DEBIT_HINT)
+        self.assertNotIn('guidance', summary(other)[0]['drop_debit'])
+        self.assertIsNone(hint(claude))
+        self.assertEqual(hint(claude, None, routing.RECONCILE_HINT), routing.RECONCILE_HINT)
+        self.assertEqual(hint(claude, uncertain), reconcile.HINT)
+        self.assertIsNone(hint(other))
         self.assertEqual(hint(other, uncertain, routing.RECONCILE_HINT), routing.RECONCILE_HINT + ' ' + reconcile.HINT)
+        status = dict(state='ok', project_pinned=True, ledger=dict(authority_required=True, unstamped_open_holds=0,
+                                                                   reconcile_hint=hint(claude)))
+        self.assertIsNone(routing_launch.preflight(status, dollar=True))  # a Claude debit alone never blocks dollars
+
+    def test_cleanup_without_non_reaping_waitid_signals_the_group_before_reaping(self):
+        from runtime import codex_rate_limits as lifecycle
+        order = []
+        real_killpg = os.killpg
+        with mock.patch.object(lifecycle.os, 'waitid', create=True) as waitid:
+            del lifecycle.os.waitid
+            self.assertFalse(hasattr(lifecycle.os, 'waitid'))
+            with mock.patch.object(lifecycle.os, 'killpg', side_effect=lambda pid, sig: (order.append(sig),
+                                                                                       real_killpg(pid, sig))):
+                self.assertEqual(self.refresh()['state'], 'stored')  # a successful exchange still completes
+                self.answer(initialize(), usage(self.now), hang='get_usage')
+                self.assertEqual(self.refresh(force=True, timeout=0.5)['reason'], 'claude_timeout')
+            del waitid
+        self.assertIn(signal_module().SIGKILL, order)  # the owned group was signalled while its leader was unreaped
 
 
 if __name__ == '__main__':

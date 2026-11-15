@@ -246,9 +246,11 @@ def _counted(items, field='ids'):
 
 def summary(data, listed, hint):
     """Add the uncertain subscription holds and the window debits, each with its `drop_debit` marker, to the
-    operator's reconcile listing. The hint gains HINT while such a hold is open, and SHARED_DEBIT_HINT while a
-    Claude pool debit exists (no telemetry releases it; only `drop_debit` does). Another pool's debit alone needs no
-    operator action (telemetry clears a fixed window's debit; `drop_debit` is for one that never clears)."""
+    operator's reconcile listing. The hint gains HINT while such a hold is open. While a Claude pool debit exists the
+    `drop_debit` listing carries SHARED_DEBIT_HINT as `guidance` (no telemetry releases it; only `drop_debit` does);
+    it is informational and never enters the hint, which dollar preflight treats as blocking. Another pool's debit
+    alone needs no operator action (telemetry clears a fixed window's debit; `drop_debit` is for one that never
+    clears)."""
     uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
                  if hold['state'] == 'uncertain' and not hold.get('amount') and hold.get('organization') is None]
     debits = data.get(DEBITS, {})
@@ -259,5 +261,5 @@ def summary(data, listed, hint):
     if uncertain:
         hint = HINT if hint is None else hint + ' ' + HINT
     if any(key[len(WIN):].partition('/')[0] == SHARED_DEBIT_POOL for key in debits):
-        hint = SHARED_DEBIT_HINT if hint is None else hint + ' ' + SHARED_DEBIT_HINT
+        listed['drop_debit']['guidance'] = SHARED_DEBIT_HINT
     return listed, hint
