@@ -724,9 +724,12 @@ class RealScopeResolver(ManagedDelegation):
         now = int(__import__('time').time())
         routing_paths.qualify(settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='synthetic-1',
                               now=now)
-        for window, length in (('5h', 18000), ('7d', 604800)):
+        from runtime import claude_usage
+        from tests.test_routing_observations import NATIVE_KEY
+        for window, length in (('5h', 18000), ('7d', 604800)):  # rows a native account read binds to its account
             routing_observations.store_window(settings, 'claude-subscription', dict(
-                id=window, limit=1000, used=100, length=length, reset_at=now + 3600, rolling=False, observed_at=now,
+                id=claude_usage.bound_id(window, NATIVE_KEY), account=NATIVE_KEY, limit=1000, used=100,
+                length=length, reset_at=now + 3600, rolling=False, observed_at=now,
                 unit=routing_observations.WINDOW_UNIT))
         profile = routing.ensure_profile(job())
         row = '|'.join((profile['work_kind'], profile['complexity_band'], profile['risk_band']))
@@ -740,9 +743,11 @@ class RealScopeResolver(ManagedDelegation):
         native_catalog.store_snapshot(settings, 'codex', dict(binding=binding, models=[
             dict(alias='invented-codex', resolved=None, efforts=['high'])]))
         double = subscription_billing.double('real-enrolment')
+        record = dict(key=NATIVE_KEY, observed_at=now, client_version='invented-2', overflow='unknown', usage_at=now)
         doubles = [mock.patch.object(native_catalog, 'current_binding', lambda client: binding),
                    mock.patch.object(routing_observations.LocalSource, 'billing',
-                                     lambda source, route, at: double(route, at))]
+                                     lambda source, route, at: double(route, at)),
+                   mock.patch.object(claude_usage, 'account', lambda path, at: dict(record))]  # the account read
 
         def run(request):
             stdout = io.BytesIO()
@@ -766,13 +771,13 @@ class RealScopeResolver(ManagedDelegation):
         refused = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
         self.assertEqual((refused['state'], refused['reason']), ('blocked', 'managed_path_incomplete'), refused)
         self.assertEqual(refused['codes'], {'subscription_sources': ['claude_code_billing_unverified']})  # F4R-03
-        with doubles[0], doubles[1]:  # the real gate's children, plus this host's sources (labelled doubles)
+        with doubles[0], doubles[1], doubles[2]:  # the real gate's children, plus labelled source doubles
             joined = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
         self.assertEqual(joined['state'], 'updated', joined)
         self.assertEqual(run(dict(v=1, op='set', authority_required=True))['state'], 'updated')
         unverified = native('claude-code', 'bridge-0')
         self.assertEqual((unverified['state'], unverified['reason']), ('blocked', 'native_binding_unverified'))
-        with doubles[0], doubles[1]:
+        with doubles[0], doubles[1], doubles[2]:
             permit = native('claude-code', 'bridge-1')
             self.assertEqual((permit['state'], permit['model'], permit['effort']),
                              ('dispatched', 'invented-claude', 'high'), permit)
