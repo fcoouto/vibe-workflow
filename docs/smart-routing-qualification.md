@@ -23,8 +23,8 @@ diagnostic predicates were permitted in owner-only qualification storage.
 
 Subsequent installed-source inspection found a deterministic contract mismatch:
 initialization's subscription field is a human-readable display label; the
-normalized `pro`/`max`/`team`/`enterprise` classification belongs to the same
-exchange's usage answer. The narrow account parser repair uses that machine
+normalized classification belongs to the same exchange's usage answer (the
+reader accepts `pro`, `max`, `team` and `enterprise`). The narrow account parser repair uses that machine
 value and synthetic tests mirror the actual display/machine distinction.
 This is source evidence, not proof of the exact unretained live account branch.
 
@@ -34,6 +34,40 @@ no unknown usage becomes quota, and no successful post-repair read or native
 launch is claimed. The next live dependency is one separately bounded,
 field-shape-only observation after the corrected source passes review and checks.
 Model launch/demand qualification and activation retain their separate authority.
+
+### Approved second read
+
+After the user approved one further field-name/type-only read, reviewed candidate
+`b85b4cfc` ran the same bounded controls once, with no Claude worker active.
+The account predicates passed: first-party subscriber metadata, native email,
+no token/key source, initialization's display label distinct from the supported
+machine subscription type. The real native source confirmed a current account
+fact and a bound catalog with 14 entries / 64 alias-effort identities.
+
+**Usage still failed:** `claude_limits_unsupported`, with no usable windows.
+The projected shape contained three raw limit rows, one model-scoped row,
+`weekly_scoped_shares`, breakdown/spend metadata and nullable rollout fields.
+Only redacted names/types and private derived state were retained, not account,
+model, limit-kind or scalar usage values. Field presence alone does not establish
+complete constraint applicability or model-bucket membership.
+
+The exchange took 1.203 seconds, showed zero inference and no behavior scan, and
+left no owned-group process after reaping its one child. No retry, task launch,
+demand sample, activation or production-state write occurred. The new observation
+confirms the account/catalog boundary, not a usable native routing path. Further
+source work must establish complete raw/scoped-limit semantics before positive
+usage mapping; this read supplies no remaining live allowance.
+
+**Source follow-up:** The inspected client exposes only a display label for
+model-scoped bucket membership, not an exact catalog-to-bucket binding.
+Its `model_scoped` list is a filtered UI projection of raw scoped limits, and
+`is_active` selects a displayed indicator rather than applicable constraints.
+Neither is sufficient to omit a constraint from a native route.
+The current implementation therefore remains fail-closed; no display-name
+matching, blanket null-field ignore or scope-to-every-route policy was added.
+An exact supported binding, or a separately reviewed and approved conservative
+design preserving shared allowance and included-usage preference, remains a
+dependency. Another generic usage read alone would not establish membership.
 
 ## Live session runbook
 

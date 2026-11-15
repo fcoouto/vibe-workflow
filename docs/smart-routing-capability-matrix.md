@@ -202,6 +202,23 @@ usage into capacity. A separately bounded, redacted field-shape observation is
 still needed before any new usage mapping; no successful post-repair read or
 native launch is claimed.
 
+**Approved second read, after the classification repair:** On reviewed `b85b4cfc`,
+one separately authorized zero-inference exchange confirmed the native account
+fact and account-bound catalog (14 entries, 64 alias-effort identities).
+Usage still returned `claude_limits_unsupported`: three raw limit rows and one
+model-scoped row were present, with extra metadata/nullable rollout fields.
+No usable windows were produced. Only redacted field names/types and private
+derived state were retained. One child completed in 1.203 seconds, was reaped and
+left no owned-group process. Account/catalog observation now exists; complete
+usage, demand, native launch and activation remain unqualified. There was no
+retry or remaining live allowance.
+
+Installed-source follow-up found no exact catalog-to-model-bucket membership:
+the client joins a filtered display-label projection for UI use. This does not
+establish complete per-route applicability. A positive scoped-window mapping is
+still blocked on a supported binding or an explicitly accepted conservative
+design; no model-name inference or extra capacity was added.
+
 ## Live checks still open
 
 1. **OpenCode with ChatGPT:** partly observed on 10 November 2026 ([report](smart-routing-qualification.md#chatgpt-attempts-5-and-6)). Sign in with ChatGPT through an isolated server works end to end for `gpt-6-luna`: one request, tokens recorded, window settlement, no dollar charge. `gpt-5.5`, listed by OpenCode, was refused with 400 `model_not_found`, so a listed model is not an entitled one. Still open: the ChatGPT usage page entry and its credits setting, whether the route shares Codex's pool (the Codex rate limits before and after one request; there is no reader), and `native.rateLimit`, which this route does not report.
