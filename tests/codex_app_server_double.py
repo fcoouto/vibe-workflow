@@ -39,6 +39,15 @@ if scenario == 'exit_at_once':
     sys.exit(3)
 if scenario == 'hang':
     time.sleep(60)
+if scenario == 'no_drain_pages':
+    signal.alarm(30)  # stdout may block too: bound the scenario before writing either pipe
+    send(dict(id=1, result=dict(userAgent='codex_double/0.0')))
+    send(dict(id=2, result=result['accounts'][0]))
+    for page in range(8):
+        send(dict(id=3 + page, result=dict(data=[], nextCursor=chr(0x1f600 + page) * 4096)))
+    log(no_drain_sent=True)
+    time.sleep(30)
+    sys.exit(0)
 account_reads, model_reads = 0, 0
 for line in sys.stdin:
     message = json.loads(line)

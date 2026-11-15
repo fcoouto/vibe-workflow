@@ -1,6 +1,8 @@
 """Native Codex account/catalog acquisition against a synthetic stdio server only."""
 import importlib
 import json
+import os
+import signal
 import threading
 import time
 import unittest
@@ -248,6 +250,72 @@ class AcquisitionTests(Sandbox):
             with self.subTest(method=method), self.assertRaises(lifecycle.ReadError) as caught:
                 lifecycle._message(method, 4, params, account=True)
             self.assertEqual(str(caught.exception), 'codex_method_refused')
+
+    def test_no_drain_unicode_pagination_respects_deadline_and_releases_account_and_pool(self):
+        self.acquire()
+        self.assertIsNotNone(account.binding(self.settings))
+        self.log.unlink()  # isolate the one no-drain process from the preceding successful confirmation
+        processes, answers, errors = [], [], []
+        ownership = threading.Lock()
+        real_spawn = lifecycle.subprocess.Popen
+
+        def spawn(*args, **kwargs):
+            process = real_spawn(*args, **kwargs)
+            real_wait = process.wait
+            def wait(*args, **kwargs):
+                with ownership:
+                    return real_wait(*args, **kwargs)
+            process.wait = wait  # watchdog signals only an owned group whose leader has not been reaped
+            processes.append(process)
+            return process
+
+        def acquire():
+            try:
+                answers.append(self.acquire(scenario='no_drain_pages', force=True, timeout=0.5))
+            except BaseException as error:
+                errors.append(error)
+
+        def stop_owned():
+            with ownership:
+                for process in processes:
+                    if process.returncode is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
+        worker = threading.Thread(target=acquire)
+        started = time.monotonic()
+        watchdog = False
+        with mock.patch.object(lifecycle.subprocess, 'Popen', side_effect=spawn):
+            try:
+                worker.start()
+                worker.join(5)
+                watchdog = worker.is_alive()
+                if watchdog:
+                    stop_owned()
+                    worker.join(3)
+            finally:
+                if worker.is_alive():
+                    stop_owned()
+                    worker.join(32)  # the double's pre-write alarm bounds even a broken cleanup path
+        elapsed = time.monotonic() - started
+        self.assertFalse(worker.is_alive(), 'owned watchdog worker did not stop')
+        self.assertEqual(errors, [])
+        print('\nCC-R1 no-drain: watchdog_fired=%s outcome=%s wall_s=%.3f spawns=%d'
+              % (watchdog, answers, elapsed, self.spawns()))
+        self.assertEqual(answers, [dict(state='failed', reason='codex_timeout')])
+        self.assertFalse(watchdog, 'watchdog rescued a blocked write instead of the shared deadline')
+        self.assertLess(elapsed, 0.5 + 2 * lifecycle.STOP_GRACE + 1.5)
+        self.assertEqual(self.spawns(), 1)
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].returncode)
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(processes[0].pid, 0)
+        self.assertIsNone(account.binding(self.settings))
+        self.assertIsNone(account.billing_fact(self.settings, self.route, int(time.time())))
+        self.assertEqual(self.acquire(), dict(state='backoff', reason='codex_timeout'))
+        self.assertEqual(self.spawns(), 1)  # backoff, rather than busy, also proves the pool lock was released
 
 
 if __name__ == '__main__':

@@ -161,11 +161,26 @@ class _Session:
         self.selector = selectors.DefaultSelector()
         os.set_blocking(process.stdout.fileno(), False)
         self.selector.register(process.stdout, selectors.EVENT_READ)
+        os.set_blocking(process.stdin.fileno(), False)
+        self.writer = selectors.DefaultSelector()
+        self.writer.register(process.stdin, selectors.EVENT_WRITE)
 
     def send(self, method, ident=None, params=None):
+        pending = memoryview(_message(method, ident, params, account=self.account))
         try:
-            self.process.stdin.write(_message(method, ident, params, account=self.account))
-            self.process.stdin.flush()
+            while pending:
+                if self.deadline - time.monotonic() <= 0:
+                    raise ReadError('codex_timeout')
+                try:
+                    written = os.write(self.process.stdin.fileno(), pending)
+                except BlockingIOError:
+                    written = 0
+                if written:
+                    pending = pending[written:]
+                    continue
+                left = self.deadline - time.monotonic()
+                if left <= 0 or not self.writer.select(left):
+                    raise ReadError('codex_timeout')
         except OSError:
             raise ReadError('codex_exited') from None
 
