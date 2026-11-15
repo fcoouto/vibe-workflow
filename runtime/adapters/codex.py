@@ -1171,61 +1171,9 @@ def _native_policy_rejection(records, *, submitted_patch, turn_id, startup_read_
 
 def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id, child_patch=False, raw=None):
     """Correlate native tool records; post success additionally requires Core-owned effects."""
-    from runtime.startup import MAX_INPUT, _canonical_freeze, _canonical_plain
-    try:
-        data = _canonical_plain(records)
-        if (case_id not in {'pre-tool-enforcement', 'post-tool-handling'}
-                or not isinstance(submitted_patch, str) or len(submitted_patch.encode()) > MAX_INPUT
-                or not submitted_patch.startswith('*** Begin Patch\n')
-                or not submitted_patch.rstrip('\n').endswith('\n*** End Patch')
-                or submitted_patch.count('*** Update File: ') != 1
-                or not any(line.startswith(('+', '-')) for line in submitted_patch.splitlines())
-                or turn_id not in data['turn_ids']):
-            raise ValueError
-        _review_id(call_id)
-        calls = [row for row in data['records'] if row['payload'].get('call_id') == call_id
-            and row['payload']['type'] in {'custom_tool_call', 'custom_tool_call_output',
-                'function_call', 'function_call_output', 'local_shell_call'}]
-        if child_patch and raw is not None:
-            pairs = _exec_wrapped_pairs(raw, data, turn_id, tools=('apply_patch',))
-            matches = [pair for pair in pairs.values() if pair[0]['payload']['call_id'] == call_id]
-            if matches:
-                if calls or len(matches) != 1:
-                    raise ValueError
-                calls = matches[0]
-        if len(calls) != 2:
-            raise ValueError
-        call, output = calls
-        item, result = call['payload'], output['payload']
-        wrapped = case_id == 'pre-tool-enforcement' and not child_patch and item.get('name') == 'exec'
-        if (call['turn_id'] != turn_id or output['turn_id'] != turn_id
-                or item['type'] != 'custom_tool_call' or item.get('name') != ('exec' if wrapped else 'apply_patch')
-                or item.get('namespace') not in (None, 'functions') or not wrapped and item.get('input') != submitted_patch
-                or item.get('call_id') != call_id or result['type'] != 'custom_tool_call_output'
-                or result.get('call_id') != call_id or result.get('name') not in (None, item['name'])
-                or wrapped and result.get('namespace') not in (None, 'functions')):
-            raise ValueError
-        text = result.get('output')
-        if case_id == 'pre-tool-enforcement':
-            reason = 'Patching requires a WORKING editable bound task without applicable blockers'
-            if not _native_patch_denied(item, text, submitted_patch,
-                    rejection=f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}'):
-                raise ValueError
-        elif not (isinstance(text, str) or isinstance(text, list) and all(isinstance(part, dict)
-                and part.get('type') == 'input_text' and isinstance(part.get('text'), str) for part in text)):
-            raise ValueError
-        fact = dict(thread_id=data['thread_id'], turn_id=turn_id, call_id=call_id,
-            submitted_patch_sha256=hashlib.sha256(submitted_patch.encode()).hexdigest(), sources=[call['source'], output['source']])
-        if child_patch:
-            if isinstance(text, list) and len(text) == 1:
-                text = text[0]['text']
-            if case_id != 'post-tool-handling' or not isinstance(text, str):
-                raise ValueError
-            fact['post_hook_fingerprint'] = _tool_fingerprint(dict(tool_name='apply_patch',
-                tool_input=dict(command=submitted_patch), tool_response=text))
-        return _canonical_freeze(fact)
-    except (StartupError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
-        raise ObservationError('native_managed_tool_unobserved') from None
+    from runtime.adapters.codex_managed import native_managed_tool
+    return native_managed_tool(records, submitted_patch=submitted_patch, turn_id=turn_id,
+        call_id=call_id, case_id=case_id, child_patch=child_patch, raw=raw)
 
 
 def _setup_executable(process):
