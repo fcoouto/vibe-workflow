@@ -422,7 +422,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
         self.request = request
         return dict(scope=scope, decision=decision, allocation=allocation, binding=binding, source=retained, directory=directory)
 
-    def _qualified_context(self, *, managed_pre=False, limited=False, legacy_context=False, developer_context=False):
+    def _qualified_context(self, *, managed_pre=False, limited=False, legacy_context=False, developer_context=False, parent_only=False):
         import copy
         import os
         import sys
@@ -468,9 +468,9 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             parent = actual['result']['content']['native']['threads'][0]['id']
             reference = dict(reference='fixture:original-managed-parent-pre', sha256='f'*64)
             managed = dict(reference=reference, task=dict(client='codex', session_id=parent, task_id='managed-parent-pre'),
-                native_sessions=[parent], operations=['task-start', 'task-patch', 'native-worker'],
-                capability_keys=['pre-tool-enforcement', 'post-tool-handling', 'stop-ownership', 'interrupt-ownership'],
-                limits=dict(deadline=time.time()+120, max_attempts=2, max_resource_units=1),
+                native_sessions=[parent], operations=['task-start', 'task-patch'] if parent_only else ['task-start', 'task-patch', 'native-worker'],
+                capability_keys=['pre-tool-enforcement'] if parent_only else ['pre-tool-enforcement', 'post-tool-handling', 'stop-ownership', 'interrupt-ownership'],
+                limits=dict(deadline=time.time()+120, max_attempts=1 if parent_only else 2, max_resource_units=1),
                 stop_conditions=['Observe one parent guard; preserve unresolved worker ownership'],
                 probe=dict(canary=str(original['canary']), patch=PATCH,
                     before_sha256=hashlib.sha256(original['canary'].read_bytes()).hexdigest()))
