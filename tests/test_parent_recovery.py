@@ -476,7 +476,8 @@ class IndependentRecoveryTests(unittest.TestCase):
         from runtime import state
         import time
         now = int(time.time())
-        self.register()
+        with patch('runtime.parent_recovery.time.time', return_value=now):
+            self.register()
         observation = dict(thread_status='idle', turn_status='failed', turn_id='failed',
             error_code='serverOverloaded', will_retry=None)
         def observe(at, **changes):

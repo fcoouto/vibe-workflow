@@ -45,7 +45,7 @@ for line in sys.stdin:
 
 
 def initialize(email='person@example.invalid', organization='Invented Org', **account):
-    value = dict(email=email, subscriptionType='max', apiProvider='firstParty')  # claude.ai: no tokenSource
+    value = dict(email=email, subscriptionType='Claude Max', apiProvider='firstParty')  # display label; no tokenSource
     if organization is not None:
         value['organization'] = organization
     value.update(account)
@@ -235,7 +235,7 @@ class ExchangeTest(Reader):
 
     def test_key_backed_or_third_party_sign_in_is_not_a_subscription_account(self):
         for account in (dict(apiKeySource='ANTHROPIC_API_KEY'), dict(apiKeySource='/login managed key'),
-                        dict(apiProvider='bedrock'), dict(subscriptionType=None), dict(email=None),
+                        dict(apiProvider='bedrock'), dict(email=None),
                         dict(tokenSource='CLAUDE_CODE_OAUTH_TOKEN'), dict(tokenSource='claude.ai'),
                         dict(tokenSource=''), dict(organization=7)):
             with self.subTest(account):
@@ -243,6 +243,54 @@ class ExchangeTest(Reader):
                 self.answer(initialize(**account), usage(self.now))
                 self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_account_unsupported'))
                 self.assertIsNone(claude_usage.account(self.settings, int(time.time())))
+
+    def test_display_plan_label_is_not_the_subscription_classifier(self):
+        """Installed-source evidence (2.1.311): initialize reports the user-visible plan label ("Claude Max", or a
+        dynamic "Claude <plan>") in `account.subscriptionType`, while `get_usage` reports the normalized machine
+        type. The machine type classifies the sign-in; a friendly label is never matched or parsed."""
+        for label, machine in (('Claude Max', 'max'), ('Claude Pro', 'pro'), ('Claude Team', 'team'),
+                               ('Claude Enterprise', 'enterprise'), ('Claude Max 20x', 'max')):
+            with self.subTest(label):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(initialize(subscriptionType=label), dict(usage(self.now), subscription_type=machine))
+                self.assertEqual(self.refresh(force=True)['state'], 'stored')
+                self.assertEqual({item['id'] for item in claude_usage.usable_windows(self.settings, int(time.time()))},
+                                 {'5h', '7d'})
+                self.assertIsNotNone(claude_usage.account(self.settings, int(time.time())))
+                self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
+                                 'account:' + claude_usage.account(self.settings, int(time.time()))['key'])
+
+    def test_missing_or_unknown_machine_subscription_fails_closed_whatever_the_display_label(self):
+        """A friendly label, even one equal to a machine value, never stands in for the usage answer's type."""
+        base = usage(self.now)
+        del_type = {key: value for key, value in base.items() if key != 'subscription_type'}
+        cases = dict(missing=del_type, null=dict(base, subscription_type=None),
+                     unknown=dict(base, subscription_type='free'), label=dict(base, subscription_type='Claude Max'),
+                     case=dict(base, subscription_type='MAX'), kind=dict(base, subscription_type=['max']))
+        for label in ('Claude Max', 'max'):
+            for name, value in cases.items():
+                with self.subTest(label=label, case=name):
+                    claude_usage._store(self.settings).unlink(missing_ok=True)
+                    self.answer(initialize(subscriptionType=label), value)
+                    self.assertEqual(self.refresh(force=True),
+                                     dict(state='failed', reason='claude_account_unsupported'))
+                    self.assertIsNone(claude_usage.account(self.settings, int(time.time())))
+                    self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
+                    self.assertIsNone(native_catalog.stored(self.settings, 'claude-code'))
+
+    def test_display_label_does_not_weaken_usage_or_account_refusals(self):
+        label = dict(subscriptionType='Claude Max')
+        for name, account in dict(key=dict(apiKeySource='ANTHROPIC_API_KEY'), provider=dict(apiProvider='bedrock'),
+                                  token=dict(tokenSource='CLAUDE_CODE_OAUTH_TOKEN')).items():
+            with self.subTest(name):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(initialize(**label, **account), usage(self.now))
+                self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_account_unsupported'))
+        claude_usage._store(self.settings).unlink(missing_ok=True)
+        unknown = usage(self.now, **{'unrecognized_%d' % index: None for index in range(24)})
+        self.answer(initialize(**label), unknown)
+        self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_limits_unsupported'))
+        self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
 
     def test_account_change_invalidates_earlier_readings_and_catalog(self):
         self.assertEqual(self.refresh()['state'], 'stored')
