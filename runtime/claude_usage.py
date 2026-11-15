@@ -190,7 +190,7 @@ def exchange(command, environ, timeout=TIMEOUT):
                                    start_new_session=True, close_fds=True)
     except OSError:
         raise ReadError('claude_unavailable') from None
-    normal = False
+    normal, init = False, None
     try:
         session = _Session(process, time.monotonic() + timeout)
         session.send('vw-init', 'initialize')
@@ -199,6 +199,9 @@ def exchange(command, environ, timeout=TIMEOUT):
         session.send('vw-usage', 'get_usage')
         use = session.response('vw-usage')
         normal = True
+    except (ReadError, OSError) as error:
+        error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
+        raise
     finally:
         lifecycle._stop(process, normal)
     return init, use, started
@@ -462,11 +465,22 @@ def _save(settings_path, **change):
     _transition(settings_path, lambda state: change)
 
 
+def _owned(path):
+    """The producer state for a write: a malformed but safe private file proves nothing and is reinitialized by that
+    write (atomically, under the lock); an unsafe, oversized or unreadable one is never rewritten (it raises)."""
+    try:
+        return observations._read(path) or dict(version=1)
+    except ValueError as error:
+        if str(error) == 'observation_store_unsafe':
+            raise
+        return dict(version=1)
+
+
 def _transition(settings_path, step):
     """One read-validate-write of the producer state under its lock: `step(state)` validates the state just read and
     returns the change to write (ValueError aborts with nothing written)."""
     with observations._locked(_store(settings_path)) as path:
-        value = observations._read(path) or dict(version=1)
+        value = _owned(path)
         value.update(step(value))
         observations._write(path, value)
 
@@ -581,8 +595,9 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             now = int(time.time())
             if not force and _fresh(settings_path, need, now):
                 return dict(state='fresh')
-            # Read strictly: an unreadable state could record neither the exchange nor its failure, so none starts.
-            failure = observations._read(_store(settings_path)).get('failure')
+            # An unsafe or unreadable state could record neither the exchange nor its failure, so none starts; a
+            # malformed private one is reinitialized by the fence below.
+            failure = _owned(_store(settings_path)).get('failure')
             if not force and type(failure) is dict and routing._amount(failure.get('at')) \
                     and 0 <= now - failure['at'] < FAILURE_BACKOFF:
                 return dict(state='backoff', reason=failure.get('reason'))
@@ -591,9 +606,10 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             try:
                 try:
                     init, use, started = exchange(command or default_command(environ), environ, timeout)
-                except (ReadError, OSError):
-                    _transition(settings_path, lambda state: _settle(state, held))  # transport only: nothing seen
-                    raise
+                except (ReadError, OSError) as error:
+                    if not getattr(error, 'initialized', False):  # transport only, before any account material
+                        _transition(settings_path, lambda state: _settle(state, held))
+                    raise  # after initialization the fence stays: unprovable, rotated on the next success
                 windows = _record(settings_path, init, use, started, held)
                 if not windows:
                     raise ReadError('claude_usage_unconfirmed')

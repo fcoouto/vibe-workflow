@@ -144,10 +144,21 @@ def _save(settings_path, **change):
     _transition(settings_path, lambda state: change)
 
 
+def _owned(path):
+    """The state for a write: a malformed but safe private file proves nothing and is reinitialized by that write;
+    an unsafe, oversized or unreadable one is never rewritten (it raises)."""
+    try:
+        return observations._read(path) or dict(version=1)
+    except ValueError as error:
+        if str(error) == 'observation_store_unsafe':
+            raise
+        return dict(version=1)
+
+
 def _transition(settings_path, step):
     """One read-validate-write of the state under its lock: `step(state)` returns the change (ValueError aborts)."""
     with observations._locked(_store(settings_path)) as path:
-        value = observations._read(path) or dict(version=1)
+        value = _owned(path)
         value.update(step(value))
         observations._write(path, value)
 
@@ -267,7 +278,7 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             if not held:
                 return dict(state='busy', reason='reader_busy')
             now = int(time.time())
-            state = _state(settings_path)
+            state = _owned(_store(settings_path))  # unsafe: no exchange; malformed: reinitialized by the fence
             current = _account(settings_path, now)
             snapshot = native_catalog.stored(settings_path, CLIENT)
             if not force and current is not None and snapshot is not None \

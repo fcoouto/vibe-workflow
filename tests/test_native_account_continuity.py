@@ -61,12 +61,70 @@ class Generations:
                          connection)
 
 
-class ClaudeContinuityTest(Generations, claude_tests.Reader):
+class Recovery:
+    """Review R-1: only a malformed but safe producer-owned state is reinitialized, through acquisition."""
+
+    def count(self):
+        return self.spawns() if type(self.spawns()) is int else len(self.spawns())
+
+    def test_a_malformed_private_state_recovers_only_through_acquisition(self):
+        self.read()
+        seen = {self.generation()}
+        for raw in (b'{not json', b'[]', b'{"version": 2}'):
+            with self.subTest(raw=raw):
+                self.producer._store(self.settings).write_bytes(raw)
+                self.assert_nothing_eligible()  # pure reads of it stay ineligible
+                self.assertEqual(self.failed_attempt()['state'], 'failed')  # a failed attempt revives nothing
+                self.assert_nothing_eligible()
+                self.assertEqual(self.read()['state'], 'stored')
+                self.assertNotIn(self.generation(), seen)
+                self.assert_bound(self.generation())
+                seen.add(self.generation())
+
+    def test_an_unsafe_state_file_is_never_rewritten_or_acquired_for(self):
+        self.read()
+        path, spawns = self.producer._store(self.settings), self.count()
+        target = path.parent / 'elsewhere.json'
+        target.write_bytes(b'{not json')
+        target.chmod(0o600)
+        raw = path.read_bytes()
+        cases = (('mode', lambda: path.chmod(0o644)), ('symlink', lambda: (path.unlink(), path.symlink_to(target))),
+                 ('oversized', lambda: (path.unlink(), path.write_bytes(b' ' * (collector.MAX_FILE + 1)),
+                                        path.chmod(0o600))))
+        for name, make in cases:
+            with self.subTest(name):
+                make()
+                before = (path.is_symlink(), path.read_bytes() if not path.is_symlink() else None, target.read_bytes())
+                self.assertEqual(self.read()['state'], 'failed')
+                self.assertEqual((path.is_symlink(), path.read_bytes() if not path.is_symlink() else None,
+                                  target.read_bytes()), before)
+                self.assertEqual(self.count(), spawns)
+                self.assert_nothing_eligible()
+                if name == 'mode':
+                    self.assertEqual(path.read_bytes(), raw)
+                    path.chmod(0o600)
+
+
+class ClaudeContinuityTest(Recovery, Generations, claude_tests.Reader):
     producer, route = claude_usage, CLAUDE_ROUTE
 
     def read(self, init=None, use=None):
         self.answer(init or claude_tests.initialize(), use or claude_tests.usage(self.now))
         return self.refresh(force=True)
+
+    def failed_attempt(self):  # a timeout before initialization: transport only
+        self.answer(claude_tests.initialize(), claude_tests.usage(self.now), hang='initialize')
+        return self.refresh(force=True, timeout=0.5)
+
+    def test_a_partial_exchange_never_restores_a_conflicting_account(self):
+        self.read()
+        first = self.generation()
+        self.answer(claude_tests.initialize(email='other@example.invalid'), claude_tests.usage(self.now),
+                    hang='get_usage')  # B's initialization arrives, its usage answer never does
+        self.assertEqual(self.refresh(force=True, timeout=0.5)['reason'], 'claude_timeout')
+        self.assert_nothing_eligible()
+        self.read()
+        self.assertNotIn(self.generation(), (None, first))
 
     def test_same_second_a_b_a_rotates_and_never_reuses_old_rows(self):
         self.enterContext(mock.patch('time.time', return_value=float(self.now)))  # one identical clock
@@ -149,9 +207,8 @@ class ClaudeContinuityTest(Generations, claude_tests.Reader):
         self.assertNotIn(recreated, (None, first))
         claude_usage._store(self.settings).write_text('{not json')
         self.assert_nothing_eligible()
-        spawns = len(self.spawns())
-        self.assertEqual(self.read(), dict(state='failed', reason='observation_store_invalid'))
-        self.assertEqual(len(self.spawns()), spawns)  # an unreadable state starts no exchange it could not record
+        self.assertEqual(self.read()['state'], 'stored')  # review R-1: a malformed private state is reinitialized
+        self.assertNotIn(self.generation(), (None, first, recreated))  # unsafe states: see the unsafe-file test
 
     def test_warmed_publication_faults_never_keep_or_resurrect_the_earlier_account(self):
         # Writes: 1 fence, 2 observed identity, 3 catalog, 4 complete account, 5-6 rows, 7 quota confirmation.
@@ -199,8 +256,11 @@ class ClaudeContinuityTest(Generations, claude_tests.Reader):
                     self.assert_bound(self.generation())
 
 
-class CodexContinuityTest(Generations, codex_tests.Sandbox):
+class CodexContinuityTest(Recovery, Generations, codex_tests.Sandbox):
     producer, route = codex_account, CODEX_ROUTE
+
+    def failed_attempt(self):  # the account is observed, its catalog refused
+        return self.read(codex_tests.payload(pages=[dict(data=[], nextCursor=None)]))
 
     def read(self, value=None, scenario='account'):
         return codex_account.refresh(self.settings, force=True, environ=self.environ,
