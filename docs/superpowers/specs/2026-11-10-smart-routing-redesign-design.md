@@ -2,6 +2,12 @@
 
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
+**Approved design revision, 15 November:** the user approved trustworthy quota
+optimization plus provider-managed fallback in the
+[focused amendment](2026-11-15-smart-router-provider-managed-design.md).
+Its implementation plan is being prepared; design approval changes no runtime,
+activation or live budget. Existing account-settings permissions remain in force.
+
 ## Account-based routing simplification, approved 15 November 2026
 
 The user approved routing to an enabled account **with its existing settings**,
