@@ -27,14 +27,32 @@ Apply with the [shared contract rules](00-index.md).
 
 Use the existing task context or plan for starts, meaningful checkpoints, completion and unfinished work. Keep standing context once and update only changes, in short prose or the optional [task record template](../templates/task-record.md). Keep planned, observed, reviewable and accepted results distinct, and stopped, running and unknown workers or processes; claim background work only when active execution is verified.
 
-At each meaningful checkpoint, the coordinator executes the next required,
-authorized action whose prerequisites are satisfied, without waiting for
-another user prompt. Pending review, verification or delivery is unfinished
-work, not a stopping reason. A blocker holds only dependent actions. Before
-stopping with unfinished scope, establish why no remaining authorized action
-can proceed and record the blocker, next owner and resumption condition in
-the existing task context. Preserve user pauses, permissions, ownership and
-existing limits.
+### Checkpoint procedure
+
+Handle a review result, child delivery or completed repair as a return to the
+parent plan, not as a new report-only assignment:
+
+1. Recover the agreed outcome, remaining plan, constraints and next action from
+   the existing task context. Reconcile newer user instructions and actual state;
+   a stale next-action note cannot override a pause or exhausted allowance.
+2. Verify the returned result and its prerequisites before accepting it. A child
+   report is neither acceptance nor permission; uncertain writers retain ownership.
+3. Select and execute the next required, authorized, dependency-ready action in
+   the same handling, without another user nudge. This may be verification,
+   review, delivery or the next implementation step. Use the existing owner's
+   supported continuation operation when delegated; do not take over active work.
+4. If no action can proceed, record the specific blocker or met stop condition,
+   next owner and resumption condition in the existing task context. A partial
+   blocker holds only dependent work; check independent authorized work before
+   stopping. An explicit whole-pass stop or user pause holds its entire scope.
+
+Update the existing Action/owner or equivalent prose with that decision; add no
+parallel record or mandatory fields. A milestone summary may accompany execution,
+but is not a handoff while an authorized action remains ready. Preserve original
+permissions, credential boundaries and finite limits: recovering an accepted
+grant never creates or renews one. This procedure starts no automatic model turn.
+
+### Reports
 
 A child report sends this record's changed result, snapshot-bound candidate/proof references when output changes, material exceptions and necessary next action/owner. Reuse known assignment context, saved role declarations and native sender identity; supply compact context when the receiver cannot resolve it after resume or reassignment. Reports grant no authority and replace neither independent verification nor required decision-time observations of readiness, permissions, liveness and ownership.
 
