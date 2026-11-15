@@ -129,7 +129,8 @@ stop. It does not prove prevention of physical writes already admitted.
 
 ## Current State
 
-**Plan revision approved; new execution not approved.** Astra's strategy review
+**Latest fresh race failed before inference; its allocation is closed.**
+Astra's strategy review
 supports separating the required layers, not changing the gate to accommodate
 its harness. Existing source/tests and the sequential native flow provide
 counterevidence to a product-defect claim, not proof of native race/UI correctness.
@@ -210,6 +211,23 @@ The old rejected case remains unchanged and closed. No native execution or
 prelaunch admission is authorized by this repair result; a fresh allocation and
 exact readiness decision remain necessary. See
 [the repair evidence](../../qualification/2026-11-14-unconditional-stop.md#preparation-only-r1r2-fixes--15-november).
+
+The user then approved one fresh race under the reviewed 80-request,
+120-action and 20-native-minute limits, within 60 aggregate minutes. Fresh
+preparation passed 37 checks and Astra accepted exact-spec prelaunch readiness.
+The one native attempt failed its initial gate-status snapshot: HTTP 200 reported
+no status tool, executor or state through the observer lookup. It used zero
+model requests, 13 actions and
+801 ms; no repair/check round or timing/race step ran. Plugin-active inventory
+did not establish effective gate readiness; cause remains unresolved.
+The server exited zero without forced cleanup, owned processes were absent, and
+fixture/source/protected/prior pins and selected shared-window hashes matched.
+Astra accepted the failed-run classification and bounded evidence integrity,
+not race qualification. Preflight assertions were traversed but complete raw
+preflight responses were not retained. Preserve the closed allocation;
+zero model use grants no replacement attempt or diagnosis probe. See
+[the latest result](../../qualification/2026-11-14-unconditional-stop.md#fresh-race-only-attempt--15-november).
+Race/UI, Claude, final review/full suite and release gates remain incomplete.
 
 ## Acceptance and stopping
 

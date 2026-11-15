@@ -14,6 +14,9 @@ No installed-package change, shared-service restart or release occurred.
 The later UI/race attempt stopped before either requested case executed; see
 [the failed attempt](#ui-and-native-race-attempt--15-november). Claude execution
 and release remain held under the user's explicit Preserve-login decision.
+A later fresh race-only attempt stopped at its initial gate-status snapshot,
+before inference; see [the latest attempt](#fresh-race-only-attempt--15-november).
+Native race qualification remains incomplete.
 
 ## Original 14 November outcome
 
@@ -493,3 +496,77 @@ action occurred. No native admission was created. The previous allocation remain
 closed; this repair acceptance grants no fresh attempt or release authority.
 OS termination, native wait/release, runtime isolation effectiveness and native
 race/UI/Claude qualification remain unobserved or incomplete.
+
+## Fresh race-only attempt — 15 November
+
+The user separately approved one fresh race after the preparation-only repairs.
+The rejected allocation and all previous receipts remained closed and unchanged.
+Fresh preparation passed **37 offline checks**, with zero failures/skips, and
+Astra accepted prelaunch readiness for the exact frozen spec. Compared with the
+reviewed repair, only controller candidate metadata and owned runtime paths
+changed. Neither prelaunch acceptance nor offline checks establish native behavior.
+
+Candidate: `d2dc276a6d7196d5245a6746fed5e8421d6973f1`; production adapter and
+gate hashes listed above remained unchanged. The allocation allowed one attempt,
+**80 model requests** across all actors/kinds, **120 controller actions**
+(100 work/20 cleanup) and **20 native minutes** (15 work/5 cleanup).
+Preparation/prelaunch/native/evidence phases had 20/10/20/10 minutes within a
+60-minute aggregate limit. Callback arrival/hold limits were 60/90 seconds;
+capture limits were 64 KiB per RPC and 16 MiB of events. No retries or fallback.
+
+### Observed failure
+
+**The attempt failed before inference or any race step.** Native OpenCode 2.2.6
+startup, active plugin inventory, private database, empty credentials and the
+exact anonymous zero-cost `opencode/deepseek-v4.1-flash-free#max` catalog checks
+passed. The first gate snapshot returned HTTP 200:
+
+```json
+{"output":{"requests":0,"stopped":false,"hasStatus":false,"hasExecutor":false,"state":null}}
+```
+
+The assertion `assert.ok(value.hasStatus && value.hasExecutor && value.state)`
+failed. Plugin-active metadata did not establish effective gate readiness.
+Status absence was observed through the qualification observer's tool lookup,
+not an independent global inventory of native tools.
+The adapter loads feature status and registers the tool asynchronously; startup
+readiness is a plausible explanation, not a proven cause. Effective-feature
+failure, lookup failure and other causes have not been ruled out. Earlier
+preflight assertions were traversed, but their complete raw response transcripts
+were not retained. No production stop defect is established by this observation.
+
+Actual use: **zero model requests**, **13 controller actions**, **801 ms**.
+No repair/check round, architecture child, native tool, timing arm/wait/release,
+completion race or frontend ran. The observer retained only ready, root-session
+creation and cleanup; the timing log retained only ready/cleanup. The controller
+stream contained only `server.connected`; server stderr was empty.
+
+### Cleanup and evidence limits
+
+The server exited zero without forced cleanup. Coordinator inspection confirmed
+the native process group and controller process absent. Fixture bytes and all
+source/protected/prior-evidence pins matched. All six selected shared-file
+existence/content hashes matched during this window; this is not blanket machine
+preservation and does not resolve earlier mismatches. Immutable private database
+inspection observed zero accounts, credentials, messages and events, with one
+session; inspection left the database hash unchanged.
+
+Controller exit zero means the controller finished reporting, **not** that
+qualification passed. The result explicitly records `outcome: failed`.
+
+Private SHA-256 bindings:
+
+- Frozen spec: `dfb87437aac250655c04a4b7039b5a01d5d2d365dad0fefe76c83e44ca13a948`.
+- Result: `4f71d154eab311cdecc6671b0e9914ed68ef082976d457f218f6875f28a8e7b2`.
+- Snapshot: `4563ba2797712e3829fa27434b65b2b46f3f0138e6a12ed6d2b505f47d4c80bf`.
+
+Astra independently accepted the **failed-run classification and bounded
+evidence integrity**, with no Critical or Important reporting gap substantiated
+in that scope. It verified the raw logs, hashes, assertion order, counts,
+unchanged fixture and generated configuration. Process absence and immutable
+database counts remain coordinator observations, not fresh reviewer probes.
+This assessment is not native race qualification. This allocation is closed;
+zero model use does not renew it. No diagnosis probe, repair or rerun follows
+automatically. Native race, original-TUI evidence, Claude qualification, final
+candidate review, exact release-candidate full suite and release remain incomplete.
+PR #294 remains deferred; PR #310 remains draft/BLOCKED, unmerged and unreleased.

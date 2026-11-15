@@ -38,6 +38,13 @@ Astra's bounded review. R1/R2 are resolved in a fresh harness copy at code/offli
 level only; the rejected case remains preserved and closed. No native attempt
 was authorized or launched by that repair; see
 [the repair result](../docs/qualification/2026-11-14-unconditional-stop.md#preparation-only-r1r2-fixes--15-november).
+A separately approved fresh race then passed prelaunch review but failed its
+initial status snapshot: the observer found no status tool or executor. It used zero
+model requests; no race step ran. Cause remains unresolved, and plugin-active
+metadata alone did not prove gate readiness. Cleanup and selected preservation
+checks passed. Astra accepted the bounded failed-run record, not native race
+qualification; the allocation is closed without retry. See
+[the latest result](../docs/qualification/2026-11-14-unconditional-stop.md#fresh-race-only-attempt--15-november).
 
 ## What it does
 
