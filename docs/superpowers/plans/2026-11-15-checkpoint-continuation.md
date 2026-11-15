@@ -52,7 +52,7 @@ Title baseline: `￻▰▱▱▱▱ Checkpoint continuation`, confirmed by nativ
 - [x] Inspect actual tool actions and independently check all outputs and protected input hashes.
 - [x] Validate, commit, then run affected instruction-delivery, startup, package and harness tests on the committed candidate.
 - [x] Obtain one independent whole-change behavior/security review; fix or disposition findings and rerun affected checks.
-- [ ] Publish the draft `[BLOCKED]` PR and finish final static validation; retain the baseline without merge or deployment.
+- [x] Publish draft [PR #319](https://github.com/fcoouto/vibe-workflow/pull/319); static validation passed on the published candidate. Retain the baseline without merge or deployment.
 
 ### Replay acceptance cases
 
@@ -69,7 +69,7 @@ All selected safety cases must pass. File results prove only their scoped action
 
 ## Evidence and next action
 
-Status: `REVIEW`. The candidate is implemented, but improvement is not established.
+Status: `WAITING`. The candidate is implemented and published as draft `[BLOCKED]` PR #319, but improvement is not established. The user owns the decision on a further bounded trial; no merge or deployment is permitted on current evidence.
 The protected evaluator rejects all four untouched continuation cases, accepts the two untouched stop controls, accepts the correct control, and rejects three prohibited writes and a modified source artifact.
 Native replay children: `ses_e202bbf8cffe90iclzUV6Pa1ee` (old), `ses_e202b8ba8ffeyUj153MEmYIQda` (candidate). Both inherited the coordinator's native model controls. Completed native message/session metadata records `openai/gpt-6.1-sol`, variant `high`, for both; provider-internal execution and authentication mode remain unobserved. Visibility preparation returned `native_visibility_unavailable`; original names and briefs were preserved.
 Source-to-contract coverage: prior continuation, partial-blocker, stop-record and permissions/ownership/limits requirements remain in the replacement lifecycle procedure. Existing record/report/title/resumption rules are unchanged. Recovery retains its package/policy-pin and selective-loading rules.
@@ -104,4 +104,6 @@ The reviewer found no defect on the five review-focus points and agreed to withh
 
 Ruling: do not merge or deploy an unproven candidate despite passing safety checks. This follows the existing adoption rule; the cost is leaving the original continuation failure unresolved until a discriminating evaluation exists.
 
-Next owner: coordinator completes final static validation and draft publication. Then the user owns the decision on another bounded trial. A more faithful matched native completion-event comparison needs a concrete design and a separately agreed finite evaluation limit before another trial. No background worker remains active.
+Final static validation on `9e903041` passed, as did the base-to-head whitespace check. Comparison with the independently reviewed `54fcfcb4` confirmed no changes to instruction sources, tests, clients, scripts, runtime or templates; only this record changed. The isolated export also passed at `54fcfcb4`; it was not installed. Reuse the 236 passing tests and source review on that unchanged basis, not as proof of improved behavior.
+
+Next owner: user, for the decision on another bounded trial. A more faithful matched native completion-event comparison needs a concrete design and a separately agreed finite evaluation limit before another trial. No background worker remains active. Preserve this branch/worktree and private comparison evidence; cleanup is inapplicable because PR #319 remains unmerged.
