@@ -23,6 +23,10 @@ A separately approved model-free probe later reproduced rejection of the timing
 RPC's JSON Schema `pattern` keyword. That is a diagnostic-harness failure, not a
 stop-gate denial; native UI/race qualification is still pending. See
 [the diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#model-free-timing-rpc-diagnosis--15-november).
+A later authorized fix removed only that keyword from a fresh disposable helper.
+Offline validation and one model-free native arm confirmation passed; no OpenCode
+binary, user setting or production gate source changed. See
+[the confirmation](../docs/qualification/2026-11-14-unconditional-stop.md#fixed-helper-model-free-confirmation--15-november).
 
 ## What it does
 

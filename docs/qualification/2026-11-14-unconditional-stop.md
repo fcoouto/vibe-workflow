@@ -354,3 +354,50 @@ HTTP 400. It does not recover that missing original response or retroactively
 establish complete original diagnostic-source provenance. No schema fix,
 replacement inference campaign, full Python suite or release followed.
 Native UI/race execution and Claude qualification remain pending.
+
+## Fixed-helper model-free confirmation — 15 November
+
+The user then approved the one-keyword test-helper fix, offline validation and
+one fresh confirmation, limited to three HTTP calls, five minutes and no retries.
+Only a fresh copy of the disposable timing plugin changed: `actor.pattern` was
+removed. String types, required fields, `additionalProperties: false` and the
+barrier implementation remained unchanged. Prior helpers and receipts were
+preserved; no OpenCode binary, user setting or production gate source changed.
+
+Offline checks used installed `@opencode/plugin` 2.3.0 and Effect 4.1.0, separately
+from native OpenCode 2.2.6. Before the change, two schema-import checks failed on
+the disabled pattern keyword while two existing barrier-safety checks passed.
+After the change, all 11 capture/sequence/validation checks passed. These covered
+default-policy schema import for arm/release, malformed arm identities before
+state changes, and exact session/call release matching. Declared shape checks
+used an explicitly strict offline decoder; native malformed-input and release
+calls were not exercised. Error status/shape and advertised schema format may
+differ from the former contract.
+
+The single fresh native confirmation completed its activation wait, verified
+active guard/timing plugins with Claude absent, then called `arm` once:
+
+```json
+{"output":{"armed":true}}
+```
+
+Result: **HTTP 200**, **three HTTP calls**, **zero model requests**, **742 ms**.
+The timing log contained `ready`, `armed`, then `cleanup`. No session, prompt,
+edit, delayed tool callback or frontend was created. The private account,
+credential, session, message and event tables were empty.
+
+The server exited zero, was reaped, and its owned process group was independently
+confirmed absent. All fixed/base source and prior-result pins matched. The six
+selected shared-file existence/content records matched during this window.
+Earlier preservation uncertainty remains unresolved.
+
+Private confirmation SHA-256 bindings:
+
+- Fixed timing plugin: `498f9ecdc544b59a3823687b7faecedad82cad57bf3c8218f66d9265ac3d789d`.
+- Captured response: `ba54378e51b55629477d5af414b8ae9de6d3c682544e972975e01c2ca7d89bec`.
+- Result: `f2b267dc98ce491663684e23acebe3a5fdbeccd90f17113b209311f7302ddb1e`.
+
+This confirms the narrow diagnostic arm fix against the native runtime. It does
+not qualify the native release method, completion race, TUI, Claude bridge or a
+release candidate. No campaign replay or further native attempt followed.
+Claude testing, the full release-candidate Python suite and release remain held.

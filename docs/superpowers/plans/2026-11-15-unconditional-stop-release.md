@@ -102,5 +102,15 @@ This identifies a copied-schema failure mechanism, not native race/UI proof or
 the missing historical response body. No schema fix or further native attempt
 is authorized by that closed diagnostic allocation. Claude and release remain
 held; all earlier failed receipts remain preserved.
+
+The user subsequently authorized the one-keyword helper fix and one fresh
+three-call/five-minute/no-retry model-free confirmation. A fresh helper copy
+removed `actor.pattern`; existing barrier checks stayed unchanged. All 11 offline
+checks passed, then native OpenCode 2.2.6 returned HTTP 200 with `armed: true`.
+The confirmation used three HTTP calls, zero model requests and 742 ms.
+Cleanup, selected shared hashes and prior/source pins matched. This closes only
+the diagnostic arm issue; native release/race/UI, Claude and final release
+qualification remain pending. No further native call is authorized by that
+closed confirmation allowance.
 Earlier source and 57-request public-route proof remain unchanged and scoped;
 they do not satisfy the newly requested Claude/UI/race observations.
