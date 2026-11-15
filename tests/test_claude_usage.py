@@ -126,7 +126,7 @@ class ExchangeTest(Reader):
         self.assertNotIn('example.invalid', json.dumps(account))  # a derived key, never the raw identity
         snapshot = native_catalog.stored(self.settings, 'claude-code')
         self.assertEqual([item['alias'] for item in snapshot['models']], ['invented-small', 'invented-large'])
-        self.assertEqual(snapshot['binding']['connection'], 'account:' + account['key'])
+        self.assertEqual(snapshot['binding']['connection'], 'account:%s:%s' % (account['key'], account['generation']))
         raw = claude_usage._store(self.settings).read_bytes()
         self.assertNotIn(b'person@', raw)
         self.assertEqual(stat.S_IMODE(os.stat(claude_usage._store(self.settings)).st_mode), 0o600)
@@ -257,8 +257,9 @@ class ExchangeTest(Reader):
                 self.assertEqual({item['id'] for item in claude_usage.usable_windows(self.settings, int(time.time()))},
                                  {'5h', '7d'})
                 self.assertIsNotNone(claude_usage.account(self.settings, int(time.time())))
+                current = claude_usage.account(self.settings, int(time.time()))
                 self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
-                                 'account:' + claude_usage.account(self.settings, int(time.time()))['key'])
+                                 'account:%s:%s' % (current['key'], current['generation']))
 
     def test_missing_or_unknown_machine_subscription_fails_closed_whatever_the_display_label(self):
         """A friendly label, even one equal to a machine value, never stands in for the usage answer's type."""
@@ -302,7 +303,8 @@ class ExchangeTest(Reader):
         self.assertFalse(claude_usage.usable(self.settings, int(time.time())))  # the first account's readings
         self.assertEqual(collector.consumed_at(self.settings, claude_usage.POOL), 0)  # nothing re-dated
         self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
-                         'account:' + second)
+                         claude_usage.binding(self.settings)['connection'])
+        self.assertEqual(claude_usage.binding(self.settings)['connection'].split(':')[1], second)
         self.assertNotEqual(claude_usage.account_key(dict(email='a@x', organization='One')),
                             claude_usage.account_key(dict(email='a@x', organization='Two')))
         self.assertNotEqual(claude_usage.account_key(dict(email='a@x')),

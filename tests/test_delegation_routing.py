@@ -721,10 +721,13 @@ class RealScopeResolver(ManagedDelegation):
         routing_paths.qualify(settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='synthetic-1',
                               now=now)
         from runtime import claude_usage
-        from tests.test_routing_observations import NATIVE_KEY
-        for window, length in (('5h', 18000), ('7d', 604800)):  # rows a native account read binds to its account
+        from tests.test_routing_observations import NATIVE_GENERATION, NATIVE_KEY
+        record = dict(key=NATIVE_KEY, generation=NATIVE_GENERATION, observed_at=now, client_version='invented-2',
+                      overflow='unknown', usage_at=now)
+        token = claude_usage.row_account(record)
+        for window, length in (('5h', 18000), ('7d', 604800)):  # rows a native account read binds to its generation
             routing_observations.store_window(settings, 'claude-subscription', dict(
-                id=claude_usage.bound_id(window, NATIVE_KEY), account=NATIVE_KEY, limit=1000, used=100,
+                id=claude_usage.bound_id(window, token), account=token, limit=1000, used=100,
                 length=length, reset_at=now + 3600, rolling=False, observed_at=now,
                 unit=routing_observations.WINDOW_UNIT))
         profile = routing.ensure_profile(job())
@@ -739,7 +742,6 @@ class RealScopeResolver(ManagedDelegation):
         native_catalog.store_snapshot(settings, 'codex', dict(binding=binding, models=[
             dict(alias='invented-codex', resolved=None, efforts=['high'])]))
         double = subscription_billing.double('real-enrolment')
-        record = dict(key=NATIVE_KEY, observed_at=now, client_version='invented-2', overflow='unknown', usage_at=now)
         doubles = [mock.patch.object(native_catalog, 'current_binding', lambda client: binding),
                    mock.patch.object(routing_observations.LocalSource, 'billing',
                                      lambda source, route, at: double(route, at)),

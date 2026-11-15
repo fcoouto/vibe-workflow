@@ -15,8 +15,11 @@ while a header-seeded fallback strips both. The only raw limit kind with known m
 fallback, partial or malformed answer leaves usage unknown, never zero or spare. Session telemetry must show zero
 inference (cost, API duration, model usage) and no transcript behaviors, or nothing at all is stored.
 
-Windows are stored bound to the account key and the exchange (under `<window>@<key prefix>` with `account`, so they
-never replace another client's row of the shared pool, nor it theirs; and the observed time): the native consumer uses
+The account key carries a random generation (`identity={key, generation}`) kept only across proved continuity of
+the same key (account-continuity design); the catalog binding, the fact's producer and the rows carry it.
+Windows are stored bound to the account key, its generation and the exchange (under `<window>@<token prefix>` with
+the full `account` token, so they never replace another client's row of the shared pool, nor it theirs, and a
+legacy or other-generation row is never this generation's; and the observed time): the native consumer uses
 only rows of the current account's latest confirmed exchange (`usable_windows`), so another client's or account's
 reading of the shared pool, or an earlier exchange's window beside a partial newer one, is never its headroom.
 Extra Usage is recorded as `enabled`, `disabled` or `unknown` and is never a dispatch prerequisite: an enabled
@@ -41,6 +44,7 @@ import json
 import math
 import os
 import re
+import secrets
 import selectors
 import subprocess
 import time
@@ -213,6 +217,17 @@ def parse_account(init, use):
     first-party provider, an email, a known subscription type and neither a `tokenSource` (an environment token or
     other source) nor an `apiKeySource` (a key). The subscription type is the normalized one of the same exchange's
     usage answer: initialization carries only the user-visible plan label ("Claude Max"), which is never matched."""
+    key = parse_identity(init, use)
+    from runtime.adapters import native_catalog
+    models = native_catalog.from_claude_initialize(init)
+    version = init.get('claude_code_version')
+    if not models or not routing._text(version):
+        raise ReadError('claude_catalog_invalid')
+    return key, version, models
+
+
+def parse_identity(init, use):
+    """The account key `parse_account` checks first (the exchange's account observation), before its catalog."""
     account = init.get('account')
     if type(account) is not dict or not routing._text(account.get('email')) \
             or account.get('apiProvider') != 'firstParty' or use.get('subscription_type') not in SUBSCRIPTIONS \
@@ -220,12 +235,7 @@ def parse_account(init, use):
             or 'apiKeySource' in account and account['apiKeySource'] is not None \
             or not routing._optional(account.get('organization'), routing._text):
         raise ReadError('claude_account_unsupported')
-    from runtime.adapters import native_catalog
-    models = native_catalog.from_claude_initialize(init)
-    version = init.get('claude_code_version')
-    if not models or not routing._text(version):
-        raise ReadError('claude_catalog_invalid')
-    return account_key(account), version, models
+    return account_key(account)
 
 
 def _zero(value, kind):
@@ -326,12 +336,34 @@ def _state(settings_path):
         return {}
 
 
+def _hex(value):
+    return type(value) is str and re.fullmatch('[0-9a-f]{32}', value) is not None
+
+
+def _proved(state, key=None):
+    """The generation `state` proves (for `key`, when given), else None: its `identity={key, generation}` and its
+    complete account (same key and generation) or pending account (`{pending: True, generation}`) agree. A legacy,
+    cleared, corrupt or otherwise incoherent state proves none, whatever identity it retains."""
+    identity = state.get('identity') if type(state) is dict else None
+    found = state.get('account') if type(state) is dict else None
+    if type(identity) is not dict or set(identity) != {'key', 'generation'} or not _hex(identity['key']) \
+            or not _hex(identity['generation']) or key not in (None, identity['key']) or type(found) is not dict:
+        return None
+    if found == dict(pending=True, generation=identity['generation']) or 'pending' not in found and \
+            found.get('key') == identity['key'] and found.get('generation') == identity['generation']:
+        return identity['generation']
+    return None
+
+
 def account(settings_path, now):
-    """The current account record `{key, observed_at, client_version, overflow}`, or None when absent or stale."""
+    """The current complete account record `{key, generation, observed_at, client_version, overflow, usage_at}`
+    proved by its identity, or None when absent, pending, legacy, incoherent or stale."""
     if settings_path is None:
         return None
-    found = _state(settings_path).get('account')
-    if type(found) is not dict or not routing._amount(found.get('observed_at')) \
+    state = _state(settings_path)
+    found = state.get('account')
+    if type(found) is not dict or 'pending' in found or _proved(state) is None \
+            or not routing._amount(found.get('observed_at')) \
             or not (0 <= now - found['observed_at'] <= observations.FRESH_SECONDS):
         return None
     return found
@@ -342,25 +374,33 @@ def bound_id(window, key):
     return '%s@%s' % (window, key[:12])
 
 
+def row_account(current):
+    """The opaque `account` binding of an account record's window rows: a digest of its key and generation, so a
+    legacy row or another generation's row of the same account is never this generation's reading."""
+    raw = json.dumps(['claude-native-rows', current['key'], current['generation']], separators=(',', ':'))
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
 def usable_windows(settings_path, now, stored=None):
-    """The pool rows the native consumer may use: bound to the current account and observed no earlier than its
-    latest confirmed exchange (`usage_at`; none after a failed, partial or fallback read). `stored` is one read of
-    the window store when the caller has it."""
+    """The pool rows the native consumer may use: bound to the current account's key and generation (the full row
+    token) and observed no earlier than its latest confirmed exchange (`usage_at`; none after a failed, partial or
+    fallback read). `stored` is one read of the window store when the caller has it."""
     current = account(settings_path, now)
     if current is None or not routing._amount(current.get('usage_at')):
         return []
+    token = row_account(current)
     rows = observations.LocalSource(settings_path).windows(POOL, now, stored=stored)
-    by_id = {bound_id(window, current['key']): window for window in METERS.values()}
+    by_id = {bound_id(window, token): window for window in METERS.values()}
     return [dict(row, id=by_id[row['id']]) for row in rows if row['id'] in by_id
-            and row.get('account') == current['key'] and row['observed_at'] >= current['usage_at']]
+            and row.get('account') == token and row['observed_at'] >= current['usage_at']]
 
 
 def confirmation(settings_path):
-    """What a native snapshot's readings depend on beyond the window store: the stored account key and confirmed
-    exchange time (both None when absent), read without a freshness cut so that any change is visible."""
+    """What a native snapshot's readings depend on beyond the window store: the stored account key, generation and
+    confirmed exchange time (None when absent), read without a freshness cut so that any change is visible."""
     found = _state(settings_path).get('account')
     found = found if type(found) is dict else {}
-    return [found.get('key'), found.get('usage_at')]
+    return [found.get('key'), found.get('generation'), found.get('usage_at')]
 
 
 def usable(settings_path, now):
@@ -376,17 +416,23 @@ def billing_fact(settings_path, route, now):
     if current is None:
         return None
     state = dict(enabled='provider_managed', disabled='provider_blocked').get(current['overflow'], 'unknown')
-    return dict(producer='claude-native:' + current['key'][:16], **subscription_billing.scope(route),
-                observed_at=current['observed_at'], valid_until=current['observed_at'] + observations.FRESH_SECONDS,
-                paid_crossover=state)
+    return dict(producer='claude-native:%s:%s' % (current['key'][:16], current['generation']),
+                **subscription_billing.scope(route), observed_at=current['observed_at'],
+                valid_until=current['observed_at'] + observations.FRESH_SECONDS, paid_crossover=state)
+
+
+def _connection(key, generation):
+    return 'account:%s:%s' % (key, generation)
 
 
 def binding(settings_path):
-    """The native catalog binding of the current account read, or None."""
+    """The native catalog binding of the current account read (its key and generation), or None."""
     current = account(settings_path, int(time.time()))
     if current is None:
         return None
-    return dict(client_version=current['client_version'], connection='account:' + current['key'], controls=CONTROLS)
+    return dict(client_version=current['client_version'], connection=_connection(current['key'],
+                                                                                 current['generation']),
+                controls=CONTROLS)
 
 
 @contextmanager
@@ -413,10 +459,57 @@ def _lock(settings_path, wait):
 
 
 def _save(settings_path, **change):
+    _transition(settings_path, lambda state: change)
+
+
+def _transition(settings_path, step):
+    """One read-validate-write of the producer state under its lock: `step(state)` validates the state just read and
+    returns the change to write (ValueError aborts with nothing written)."""
     with observations._locked(_store(settings_path)) as path:
         value = observations._read(path) or dict(version=1)
-        value.update(change)
+        value.update(step(value))
         observations._write(path, value)
+
+
+def _fence(state, held):
+    """Before an exchange: keep in `held`, for this attempt only, what the old state proves (key, generation, record),
+    and leave an unprovable in-flight state (no identity; a pending account under a random fence), so that an
+    interrupted or unrecorded observation never carries the generation forward."""
+    generation = _proved(state)
+    held.update(generation=generation, key=state['identity']['key'] if generation else None,
+                account=state.get('account'), fence=secrets.token_hex(16))
+    return dict(identity=None, account=dict(pending=True, generation=held['fence']))
+
+
+def _ours(state, held):
+    return state.get('identity') is None and state.get('account') == dict(pending=True, generation=held.get('fence'))
+
+
+def _settle(state, held):
+    """After an exchange that observed nothing (transport only): the proved state back, unless another writer came."""
+    if not held.get('generation') or not _ours(state, held):
+        return {}
+    return dict(identity=dict(key=held['key'], generation=held['generation']), account=held['account'])
+
+
+def _observe(key, held):
+    """The exchange's account observation, recorded before its catalog or usage is validated: the proved generation
+    only for the same key with this attempt's fence untouched, else a fresh random one; the account stays pending."""
+    def step(state):
+        same = held.get('generation') and key == held.get('key') and _ours(state, held)
+        held['observed'] = held['generation'] if same else secrets.token_hex(16)
+        return dict(identity=dict(key=key, generation=held['observed']),
+                    account=dict(pending=True, generation=held['observed']))
+    return step
+
+
+def _expect(key, generation, change):
+    """A step writing `change` only while the state still proves `generation` for `key` (no other writer since)."""
+    def step(state):
+        if _proved(state, key) != generation:
+            raise ValueError('observation_store_invalid')
+        return change
+    return step
 
 
 def _fresh(settings_path, need, now):
@@ -436,29 +529,36 @@ def _fresh(settings_path, need, now):
                and stored[key]['observed_at'] > boundary for key in need)
 
 
-def _record(settings_path, init, use, started):
-    """Store one exchange's account, catalog and windows. Telemetry and the account are checked before anything is
-    written. A usage problem still records the account and catalog, with no confirmed exchange, so no earlier row
-    stays usable. Another account's rows never match the new key; nothing earlier is re-dated."""
+def _record(settings_path, init, use, started, held):
+    """Store one exchange's account, catalog and windows. The account and telemetry are checked before anything is
+    written. Then, in order: the observed identity (the generation `held` proves for this key under this attempt's
+    untouched fence, else a fresh random one) with a pending account, before the catalog is checked; the catalog
+    bound to it; the complete account; and only after every row is stored, the confirmed exchange. A usage problem
+    still records the account and catalog, with no confirmed exchange, so no earlier row stays usable. Rows are bound
+    to the key and generation, so another account's or generation's rows never match; nothing earlier is re-dated."""
     from runtime.adapters import native_catalog
-    key, version, models = parse_account(init, use)
+    key = parse_identity(init, use)
     check_quiet(use)
+    _transition(settings_path, _observe(key, held))  # recorded before the catalog can refuse the exchange
+    generation = held['observed']
+    key, version, models = parse_account(init, use)
     now = int(time.time())
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
     except ReadError as error:
         windows, overflow, problem = [], 'unknown', error
     usage_at = windows[0]['observed_at'] if windows else None
-    _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow,
-                                      usage_at=None))
+    current = dict(key=key, generation=generation, observed_at=now, client_version=version, overflow=overflow,
+                   usage_at=None)
     native_catalog.store_snapshot(settings_path, CLIENT, dict(binding=dict(
-        client_version=version, connection='account:' + key, controls=CONTROLS), models=models))
+        client_version=version, connection=_connection(key, generation), controls=CONTROLS), models=models))
+    _transition(settings_path, _expect(key, generation, dict(account=current)))
     if problem is not None:
         raise problem
+    token = row_account(current)
     for item in windows:
-        observations.store_window(settings_path, POOL, dict(item, id=bound_id(item['id'], key), account=key))
-    _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow,
-                                      usage_at=usage_at))  # confirmed only after every row is stored
+        observations.store_window(settings_path, POOL, dict(item, id=bound_id(item['id'], token), account=token))
+    _transition(settings_path, _expect(key, generation, dict(account=dict(current, usage_at=usage_at))))
     return windows
 
 
@@ -481,13 +581,20 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             now = int(time.time())
             if not force and _fresh(settings_path, need, now):
                 return dict(state='fresh')
-            failure = _state(settings_path).get('failure')
+            # Read strictly: an unreadable state could record neither the exchange nor its failure, so none starts.
+            failure = observations._read(_store(settings_path)).get('failure')
             if not force and type(failure) is dict and routing._amount(failure.get('at')) \
                     and 0 <= now - failure['at'] < FAILURE_BACKOFF:
                 return dict(state='backoff', reason=failure.get('reason'))
+            held = {}
+            _transition(settings_path, lambda state: _fence(state, held))  # unstored: no exchange starts
             try:
-                init, use, started = exchange(command or default_command(environ), environ, timeout)
-                windows = _record(settings_path, init, use, started)
+                try:
+                    init, use, started = exchange(command or default_command(environ), environ, timeout)
+                except (ReadError, OSError):
+                    _transition(settings_path, lambda state: _settle(state, held))  # transport only: nothing seen
+                    raise
+                windows = _record(settings_path, init, use, started, held)
                 if not windows:
                     raise ReadError('claude_usage_unconfirmed')
                 if not set(need) <= {item['id'] for item in windows}:
@@ -499,9 +606,9 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                                                       reason='claude_usage_unconfirmed'))
                     return dict(state='failed', reason='claude_usage_unconfirmed')
             except ReadError as error:
-                # An explicit account-level refusal ends the earlier account confirmation (its fact and catalog
-                # binding); stored window rows stay as observed history, unusable without a confirmation.
-                ended = dict(account=None) if str(error) in ACCOUNT_REFUSALS else {}
+                # An explicit account-level refusal ends the earlier account confirmation and its continuity (its
+                # fact, catalog binding and generation); stored window rows stay as observed history, unusable.
+                ended = dict(account=None, identity=None) if str(error) in ACCOUNT_REFUSALS else {}
                 _save(settings_path, failure=dict(at=int(time.time()), reason=str(error)), **ended)
                 if not need and _fresh(settings_path, need, int(time.time())):
                     return dict(state='stored', windows=[], reason=str(error))  # metadata current, usage unknown

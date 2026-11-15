@@ -108,20 +108,22 @@ def refuse(name):
     return call
 
 
-NATIVE_KEY = 'a' * 32  # an invented derived native Claude account key
+NATIVE_KEY, NATIVE_GENERATION = 'a' * 32, 'c' * 32  # an invented derived native Claude account key and generation
 
 
 def native_reading(settings, windows, at):
-    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record and
-    `claude-subscription` rows bound to it. A code-level fixture, never a qualified observation."""
+    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record proved
+    by its key+generation identity and `claude-subscription` rows bound to both. A code-level fixture only."""
     from runtime import claude_usage
     current = claude_usage._state(settings).get('account') or {}
     first = min([item['observed_at'] for item in windows] + ([current['usage_at']] if current.get('usage_at') else []))
-    claude_usage._save(settings, account=dict(key=NATIVE_KEY, observed_at=at, client_version='invented-2',
-                                              overflow='unknown', usage_at=first))
+    account = dict(key=NATIVE_KEY, generation=NATIVE_GENERATION, observed_at=at, client_version='invented-2',
+                   overflow='unknown', usage_at=first)
+    claude_usage._save(settings, identity=dict(key=NATIVE_KEY, generation=NATIVE_GENERATION), account=account)
+    token = claude_usage.row_account(account)
     for item in windows:
-        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], NATIVE_KEY),
-                                                                 account=NATIVE_KEY))
+        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], token),
+                                                                 account=token))
 
 
 class Stores(unittest.TestCase):
