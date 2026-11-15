@@ -16,6 +16,10 @@ Per ledger identity it walks the records in `at` order (file order breaks ties):
 - **Worker-choice records** (point 3), the pilot's old shape and new ones alike: the class must be the funding class
   of the billing class and the record must hold its constraints. A new one (with `ranking.shortlist`) must have an
   empty shortlist and no `pressure.candidates`. They are counted apart and claim no reproduced ranked route.
+- **Provider-managed fallback records** (`provider_managed_fallback` in `reason_codes`, 15 November account
+  amendment) hold no included claim: an empty reservation and no chosen constraints, and every stored ranked
+  candidate is marked `fallback` (none had included room). Any other record must have no `fallback` candidate. A
+  mismatch is a funding violation, so fallback is never replayed as free included quota.
 - **Every record**: each stored constraint's cost and the record's reservation in that window fit its headroom
   (funding violations; Edit 8 point 3 removed the concurrency cap). A later record of the same ledger whose headroom in
   a pool/window is higher than the last one seen, with no reset between them, is resurrected capacity; a reset is a
@@ -97,11 +101,29 @@ def _constraints(record):
     return found
 
 
+def _fallback(record):
+    return routing.FALLBACK in (record.get("reason_codes") or [])
+
+
+def _fallback_violation(record):
+    """A fallback record holding an included claim or beside an included candidate, or a fallback candidate in an
+    ordinary record."""
+    pressure = record.get("pressure") if isinstance(record.get("pressure"), dict) else {}
+    marks = [item.get("fallback") is True for item in pressure.get("candidates") or [] if isinstance(item, dict)]
+    if not _fallback(record):
+        return any(marks)
+    return (record.get("reserved") != {} or bool(pressure.get("constraints")) or not all(marks)
+            or record.get("billing_class") != routing_funding.SUBSCRIPTION)
+
+
 def _funding_violation(record):
-    """A stored constraint costing more than its headroom, or the reservation in that window exceeding it."""
+    """A stored constraint costing more than its headroom, the reservation in that window exceeding it, or a
+    fallback record that does not match its own shape."""
     pressure = record.get("pressure") if isinstance(record.get("pressure"), dict) else {}
     reserved = record.get("reserved") if isinstance(record.get("reserved"), dict) else {}
     chosen = [c for c in pressure.get("constraints") or [] if isinstance(c, dict)]
+    if _fallback_violation(record):
+        return True
     for item in _constraints(record):
         cost, headroom = item.get("cost"), item.get("headroom")
         if not (_number(cost) and _number(headroom)) or cost > headroom:
@@ -181,7 +203,7 @@ def _worker_choice(record):
     pressure = record.get("pressure") if isinstance(record.get("pressure"), dict) else {}
     new = "shortlist" in ranking
     failed = (_funding_violation(record) or record.get("class") is None or record.get("class") != routing.FUNDING_OF.get(record.get("billing_class"))
-              or not [c for c in pressure.get("constraints") or [] if isinstance(c, dict)]
+              or not (_fallback(record) or [c for c in pressure.get("constraints") or [] if isinstance(c, dict)])
               or (new and (ranking["shortlist"] != [] or "candidates" in pressure)))
     return new, failed
 

@@ -287,8 +287,9 @@ def _write(path, value):
 
 
 def _valid_window(window):
-    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'source'} \
-            or window.get('source', SEED_SOURCE) != SEED_SOURCE:
+    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'source', 'account'} \
+            or window.get('source', SEED_SOURCE) != SEED_SOURCE or not routing._optional(window.get('account'),
+                                                                                       routing._part):
         return False
     if 'unit' in window and not routing._text(window['unit']):
         return False
@@ -737,7 +738,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     if refresh_windows and type(source) is LocalSource and cut['routes']:
         unread = refresh_needed(cut['routes'], settings_path)
     now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
-    routes, pools, boundaries = [], {}, {}
+    routes, pools, boundaries, binding = [], {}, {}, {}
 
     def leave(route, reason):
         excluded.append(dict(route=route['route'], reason=reason))
@@ -766,6 +767,11 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             own = stored is not None and type(source) is LocalSource and source.settings_path is not None \
                 and Path(source.settings_path) == Path(settings_path)
             found = source.windows(spec['pool'], now, stored=stored) if own else source.windows(spec['pool'], now)
+            native = binding[spec['pool']] = claude_usage.applies(spec)
+            # Shared-pool provenance: the native Claude consumer uses only rows of its current account's latest
+            # confirmed exchange; every other consumer only unbound rows (no other login is assumed to match).
+            found = (claude_usage.usable_windows(settings_path, now, stored) if own else []) if native \
+                else [window for window in found if 'account' not in window]
             for window in found:
                 if not _valid_window(window):
                     continue
@@ -779,6 +785,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             if dollar:
                 pools[spec['pool']]['billing_class'] = billing
         pool = pools[spec['pool']]
+        if binding[spec['pool']] != claude_usage.applies(spec):
+            leave(spec, 'window_unobserved')  # another consumer's readings of the pool are not this route's
+            continue
         demanded = [window for window in pool['windows'] if window['id'] in spec['demand']]
         if spec['pool'] in unread and (len(demanded) < len(spec['demand']) or not all(w['fresh'] for w in demanded)):
             leave(spec, unread[spec['pool']])  # the Codex reader's fixed reason (R7), instead of stale or unobserved

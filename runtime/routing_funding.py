@@ -121,7 +121,8 @@ def _replay(item, ranked):
     constraints = [{key: value for key, value in constraint.items() if key != 'pool'}
                    for constraint in item['constraints']]
     return dict(route=item['route'], strategy_id=item['spec'].get('strategy_id') if ranked else None,
-                cls=item['cls'], pool=item['pool'], constraints=constraints)
+                cls=item['cls'], pool=item['pool'], constraints=constraints,
+                **({'fallback': True} if item.get('fallback') else {}))  # replay tells fallback from included room
 
 
 def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking, settings, observations,

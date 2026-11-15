@@ -3,12 +3,29 @@
 One bounded zero-inference exchange with the native client: two newline-delimited control requests, `initialize`
 and `get_usage` with `skip_behaviors: true`, and no user or assistant message. The native client keeps its own
 sign-in and settings; hooks, tools, MCP servers and session persistence are off for the read. From one exchange it
-derives the account key (a digest of email, organization when present and sign-in type: raw identifiers are never
-stored), the native catalog snapshot (`native_catalog.store_snapshot`) and, only from the examined successful
-raw-limits branch, the pool's 5h/7d windows dated conservatively at request start minus the client's 60 s cache
-ceiling. A fallback reply without raw limits, a scoped or unmatched raw limit, and malformed or partial meters leave
-usage unknown, never zero or spare. Extra Usage is recorded as `enabled`, `disabled` or `unknown` and is never a
-dispatch prerequisite: an enabled account's provider applies its own paid-overflow configuration.
+derives the account key (a digest of email, organization when present and the claude.ai sign-in type: raw identifiers
+are never stored), the native catalog snapshot (`native_catalog.store_snapshot`) and, only from the examined
+successful branch, the pool's 5h/7d windows dated conservatively at request start minus the client's 60 s cache
+ceiling. Installed-source evidence (2.1.311, bytes only): a claude.ai subscriber's initialization reports email,
+organization and subscription type with no `tokenSource` (environment OAuth tokens and keys report one), and a
+successful usage answer keeps the raw `limits` array and adds `model_scoped: []` when no per-model window exists,
+while a header-seeded fallback strips both. The only raw limit kind with known meaning is `weekly_scoped` under
+`scope.model`. So any raw limit element, scoped meter or unknown key is refused rather than mapped or ignored, and a
+fallback, partial or malformed answer leaves usage unknown, never zero or spare. Session telemetry must show zero
+inference (cost, API duration, model usage) and no transcript behaviors, or nothing at all is stored.
+
+Windows are stored bound to the account key and the exchange (`account`, observed time): the native consumer uses
+only rows of the current account's latest confirmed exchange (`usable_windows`), so another client's or account's
+reading of the shared pool, or an earlier exchange's window beside a partial newer one, is never its headroom.
+Extra Usage is recorded as `enabled`, `disabled` or `unknown` and is never a dispatch prerequisite: an enabled
+account's provider applies its own paid-overflow configuration.
+
+The child keeps the user's native sign-in and provider selection (`CLAUDE_*`/`ANTHROPIC_*` and the user's settings
+files) because changing them would read another login. It cannot run extra code or inference through them: no
+prompt is ever sent, hooks are disabled by `--settings`, MCP is limited to an empty `--strict-mcp-config`, tools are
+empty, sessions are not persisted, `skip_behaviors` skips the transcript scan, and the telemetry check above refuses
+any answer showing inference. Only the derived key, client version, overflow state, times and fixed reasons are
+written; no environment value, credential or native text is stored or logged.
 
 On demand only (a demanded stale route, preactivation or native preparation), never from `status`, a preview, a
 pure check or `--serve`. One reader at a time, a fixed reason and FAILURE_BACKOFF after a failure, no retry. Under
@@ -48,14 +65,18 @@ LOCK_FILE = '.claude-account.lock'
 ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL')
 ENV_PREFIXES = ('CLAUDE_', 'ANTHROPIC_')  # the native client's own account and provider selection, passed unchanged
 SUBSCRIPTIONS = ('pro', 'max', 'team', 'enterprise')
+SIGN_IN = 'claude.ai'  # the one sign-in type accepted: a native claude.ai subscriber login
 METERS = dict(five_hour='5h', seven_day='7d')
 SCOPED_METERS = ('seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet')
-KNOWN_RATE = {*METERS, *SCOPED_METERS, 'extra_usage', 'limits', 'model_scoped'}
-LIMIT_SCOPES = ('model', 'surface')
+UNKNOWN_METERS = ('cinder_cove', 'wattle_ember')  # known server keys without evidenced meaning
+KNOWN_RATE = {*METERS, *SCOPED_METERS, *UNKNOWN_METERS, 'extra_usage', 'limits', 'model_scoped'}
+SESSION = {'total_cost_usd', 'total_api_duration_ms', 'total_duration_ms', 'total_lines_added', 'total_lines_removed',
+           'model_usage'}
 ISO = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)')
 REASONS = ('reader_busy', 'claude_unavailable', 'claude_exited', 'claude_timeout', 'claude_protocol_invalid',
            'claude_protocol_unexpected', 'claude_protocol_error', 'claude_account_unsupported',
            'claude_usage_unconfirmed', 'claude_usage_invalid', 'claude_limits_scoped', 'claude_limits_unsupported',
+           'claude_inference_observed',
            'claude_window_missing', 'claude_catalog_invalid', 'observation_store_unsafe', 'observation_store_invalid')
 
 
@@ -176,18 +197,21 @@ def exchange(command, environ, timeout=TIMEOUT):
 
 # -- parsing -----------------------------------------------------------------------------------------------------
 def account_key(account):
-    """The nonsecret account key: email, organization when present and sign-in type, digested."""
-    raw = json.dumps([account.get('email', '').strip().casefold(), account.get('organization') or None,
-                      account.get('tokenSource') or None], separators=(',', ':'))
+    """The nonsecret account key: email, organization when present and the accepted sign-in type, digested."""
+    raw = json.dumps([account.get('email', '').strip().casefold(), account.get('organization') or None, SIGN_IN],
+                     separators=(',', ':'))
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
 def parse_account(init):
-    """`(key, client_version, models)` of a first-party subscription sign-in, else `claude_account_unsupported`."""
+    """`(key, client_version, models)` of a claude.ai subscriber sign-in, else `claude_account_unsupported`: a
+    first-party provider, an email, a known subscription type and neither a `tokenSource` (an environment token or
+    other source) nor an `apiKeySource` (a key)."""
     account = init.get('account')
     if type(account) is not dict or not routing._text(account.get('email')) \
             or account.get('apiProvider') != 'firstParty' or account.get('subscriptionType') not in SUBSCRIPTIONS \
-            or account.get('apiKeySource') not in (None, 'none') \
+            or 'tokenSource' in account and account['tokenSource'] is not None \
+            or 'apiKeySource' in account and account['apiKeySource'] is not None \
             or not routing._optional(account.get('organization'), routing._text):
         raise ReadError('claude_account_unsupported')
     from runtime.adapters import native_catalog
@@ -196,6 +220,24 @@ def parse_account(init):
     if not models or not routing._text(version):
         raise ReadError('claude_catalog_invalid')
     return account_key(account), version, models
+
+
+def _zero(value, kind):
+    return type(value) is kind and value == 0
+
+
+def check_quiet(use):
+    """Refuse an answer showing inference or transcript scanning, before anything is stored."""
+    session = use.get('session')
+    if type(session) is not dict or not set(session) <= SESSION or type(session.get('model_usage')) is not dict \
+            or type(use.get('rate_limits_available')) is not bool \
+            or use.get('subscription_type') not in (None, *SUBSCRIPTIONS):
+        raise ReadError('claude_usage_invalid')
+    if not (_zero(session.get('total_cost_usd'), int) or _zero(session.get('total_cost_usd'), float)) \
+            or not _zero(session.get('total_api_duration_ms'), int) or session['model_usage']:
+        raise ReadError('claude_inference_observed')
+    if use.get('behaviors') is not None:
+        raise ReadError('claude_usage_invalid')  # skip_behaviors was ignored: a transcript scan ran
 
 
 def _time(value):
@@ -223,12 +265,12 @@ def _overflow(rate):
 
 
 def parse_usage(use, started, now):
-    """`(windows, overflow)`; windows are [] unless the reply is the successful raw-limits branch, in which case each
-    raw limit must be unscoped and equal (percent and reset) to an aggregate meter it is enforced through."""
+    """`(windows, overflow)`. Windows come only from a complete successful answer: both meters, the raw `limits`
+    array present and empty, and `model_scoped: []`; anything else is a fixed reason, never a partial reading."""
     rate = use.get('rate_limits')
     if use.get('rate_limits_available') is not True or type(rate) is not dict:
-        return [], 'unknown'
-    if set(rate) - KNOWN_RATE:
+        raise ReadError('claude_usage_unconfirmed')
+    if set(rate) - KNOWN_RATE or any(rate.get(key) is not None for key in UNKNOWN_METERS):
         raise ReadError('claude_limits_unsupported')
     overflow = _overflow(rate)
     if any(rate.get(key) is not None for key in SCOPED_METERS) or rate.get('model_scoped') not in (None, []):
@@ -237,29 +279,26 @@ def parse_usage(use, started, now):
     for key, window in METERS.items():
         meter = rate.get(key)
         if meter is None:
-            continue
+            raise ReadError('claude_window_missing')
         if type(meter) is not dict:
             raise ReadError('claude_usage_invalid')
         meters[window] = (_percent(meter.get('utilization')), _time(meter.get('resets_at')))
-    if 'limits' not in rate:
-        return [], overflow  # header-seeded fallback: no fresh time, so no reading
-    limits = rate['limits']
-    if type(limits) is not list or len(limits) > 32:
+    limits = rate.get('limits')
+    if type(limits) is list:
+        for item in limits:
+            scope = item.get('scope') if type(item) is dict else None
+            scoped = item.get('kind') == 'weekly_scoped' and type(scope) is dict and scope.get('model') is not None \
+                if type(item) is dict else False
+            raise ReadError('claude_limits_scoped' if scoped else 'claude_limits_unsupported')
+    elif limits is not None:
         raise ReadError('claude_usage_invalid')
-    for item in limits:
-        if type(item) is not dict or not routing._text(item.get('kind')):
-            raise ReadError('claude_usage_invalid')
-        if any(item.get(scope) is not None for scope in LIMIT_SCOPES):
-            raise ReadError('claude_limits_scoped')
-        if not routing._optional(item.get('is_active'), lambda value: type(value) is bool):
-            raise ReadError('claude_usage_invalid')
-        shape = (_percent(item.get('percent')), _time(item.get('resets_at')))
-        if shape not in meters.values():
-            raise ReadError('claude_limits_unsupported')
+    if limits is None or rate.get('model_scoped') != []:
+        raise ReadError('claude_usage_unconfirmed')  # a cached or header-seeded answer: no fresh time
     observed = max(0, math.floor(started) - CACHE_CEILING)
     found = []
-    for window, (percent, reset) in meters.items():
-        length = observations.RATE_WINDOWS[next(key for key, item in METERS.items() if item == window)][1]
+    for key, window in METERS.items():
+        percent, reset = meters[window]
+        length = observations.RATE_WINDOWS[key][1]
         if not now < reset <= now + length + observations.CLOCK_MARGIN:
             raise ReadError('claude_usage_invalid')
         found.append(dict(id=window, limit=observations.WINDOW_UNITS, length=length, reset_at=reset, rolling=False,
@@ -290,6 +329,22 @@ def account(settings_path, now):
             or not (0 <= now - found['observed_at'] <= observations.FRESH_SECONDS):
         return None
     return found
+
+
+def usable_windows(settings_path, now, stored=None):
+    """The pool rows the native consumer may use: bound to the current account and to its latest confirmed
+    exchange. `stored` is one read of the window store when the caller has it."""
+    current = account(settings_path, now)
+    if current is None or not routing._amount(current.get('usage_at')):
+        return []
+    rows = observations.LocalSource(settings_path).windows(POOL, now, stored=stored)
+    return [row for row in rows if row.get('account') == current['key'] and row.get('observed_at') == current[
+        'usage_at']]
+
+
+def usable(settings_path, now):
+    """Whether both of the path's windows are usable rows (freshness is the collector's check)."""
+    return set(METERS.values()) <= {row['id'] for row in usable_windows(settings_path, now)}
 
 
 def billing_fact(settings_path, route, now):
@@ -343,33 +398,35 @@ def _save(settings_path, **change):
 def _fresh(settings_path, need, now):
     if account(settings_path, now) is None:
         return False
-    stored = {item['id']: item for item in observations.LocalSource(settings_path).windows(POOL, now)}
+    stored = {item['id']: item for item in usable_windows(settings_path, now)}
     boundary = observations.consumed_at(settings_path, POOL)
     return all(key in stored and 0 <= now - stored[key]['observed_at'] <= observations.FRESH_SECONDS
                and stored[key]['observed_at'] > boundary for key in need)
 
 
 def _record(settings_path, init, use, started):
-    """Store one exchange's account, catalog and windows. An account change first makes every earlier reading of
-    the pool stale (the consumed boundary), so another account's headroom is never reused."""
+    """Store one exchange's account, catalog and windows. Telemetry and the account are checked before anything is
+    written. A usage problem still records the account and catalog, with no confirmed exchange, so no earlier row
+    stays usable. Another account's rows never match the new key; nothing earlier is re-dated."""
     from runtime.adapters import native_catalog
     key, version, models = parse_account(init)
+    check_quiet(use)
     now = int(time.time())
-    previous = _state(settings_path).get('account')
-    if type(previous) is dict and previous.get('key') != key:
-        observations.mark_consumed(settings_path, POOL, max(0, math.floor(started) - CACHE_CEILING),
-                                   'account:%s:%d' % (key, now))
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
-    except ReadError as error:  # the account and catalog are still this exchange's; only usage stays unknown
+    except ReadError as error:
         windows, overflow, problem = [], 'unknown', error
-    _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow))
+    usage_at = windows[0]['observed_at'] if windows else None
+    _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow,
+                                      usage_at=None))
     native_catalog.store_snapshot(settings_path, CLIENT, dict(binding=dict(
         client_version=version, connection='account:' + key, controls=CONTROLS), models=models))
     if problem is not None:
         raise problem
     for item in windows:
-        observations.store_window(settings_path, POOL, item)
+        observations.store_window(settings_path, POOL, dict(item, account=key))
+    _save(settings_path, account=dict(key=key, observed_at=now, client_version=version, overflow=overflow,
+                                      usage_at=usage_at))  # confirmed only after every row is stored
     return windows
 
 

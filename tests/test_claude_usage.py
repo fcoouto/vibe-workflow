@@ -44,7 +44,7 @@ for line in sys.stdin:
 
 
 def initialize(email='person@example.invalid', organization='Invented Org', **account):
-    value = dict(email=email, subscriptionType='max', tokenSource='claude.ai', apiProvider='firstParty')
+    value = dict(email=email, subscriptionType='max', apiProvider='firstParty')  # claude.ai: no tokenSource
     if organization is not None:
         value['organization'] = organization
     value.update(account)
@@ -60,11 +60,13 @@ def iso(at):
 
 
 def usage(now, five=40, seven=20, limits=(), extra=None, **rate):
-    limits_value = list(limits) if limits is not None else None
+    """The installed client's successful endpoint answer (status ok): raw `limits` kept, `model_scoped: []`.
+    `limits=None` is its header-seeded fallback, which strips `limits` and adds no `model_scoped`."""
     value = dict(five_hour=dict(utilization=five, resets_at=iso(now + 3600)),
-                 seven_day=dict(utilization=seven, resets_at=iso(now + 86400)), **rate)
-    if limits_value is not None:
-        value['limits'] = limits_value
+                 seven_day=dict(utilization=seven, resets_at=iso(now + 86400)))
+    if limits is not None:
+        value.update(limits=list(limits), model_scoped=[])
+    value.update(rate)
     if extra is not None:
         value['extra_usage'] = extra
     return dict(session=dict(total_cost_usd=0, total_api_duration_ms=0, model_usage={}), subscription_type='max',
@@ -142,33 +144,73 @@ class ExchangeTest(Reader):
         self.assertEqual(self.refresh()['state'], 'backoff')
         self.assertEqual(len(self.spawns()), 1)
 
-    def test_scoped_or_unmatched_raw_limits_are_refused_not_ignored(self):
+    def test_raw_limits_without_source_evidenced_semantics_are_refused(self):
+        """Installed-source evidence: the one raw kind with known meaning is `weekly_scoped` under
+        `scope.model` (model-scoped); no unscoped raw kind has evidenced semantics, so none is mapped or ignored."""
+        reset = iso(self.now + 86400)
         cases = dict(
-            scoped=[dict(kind='weekly', group='g', percent=20, resets_at=iso(self.now + 86400),
-                         model=dict(display_name='invented'))],
-            surface=[dict(kind='weekly', group='g', percent=20, resets_at=iso(self.now + 86400),
-                          surface=dict(display_name='invented'))],
-            unmatched=[dict(kind='other', group='g', percent=55, resets_at=iso(self.now + 999))],
-            model_scoped=None)
-        for name, limits in cases.items():
+            model=([dict(kind='weekly_scoped', group='weekly', percent=20, resets_at=reset,
+                         scope=dict(model=dict(display_name='invented')))], {}, 'claude_limits_scoped'),
+            surface=([dict(kind='weekly', group='weekly', percent=20, resets_at=reset,
+                           scope=dict(surface=dict(display_name='invented')))], {}, 'claude_limits_unsupported'),
+            same_as_meter=([dict(kind='session', group='g', percent=40, resets_at=iso(self.now + 3600))], {},
+                           'claude_limits_unsupported'),
+            model_scoped=([], dict(model_scoped=[dict(display_name='x', utilization=1, resets_at=reset)]),
+                          'claude_limits_scoped'),
+            no_marker=([], dict(model_scoped=None), 'claude_usage_unconfirmed'),
+            unknown_meter=([], dict(cinder_cove=dict(utilization=1, resets_at=reset)), 'claude_limits_unsupported'),
+            unknown_key=([], dict(invented_meter=None), 'claude_limits_unsupported'))
+        for name, (limits, rate, reason) in cases.items():
             with self.subTest(name):
                 claude_usage._store(self.settings).unlink(missing_ok=True)
-                rate = dict(model_scoped=[dict(x=1)]) if name == 'model_scoped' else {}
-                self.answer(initialize(), usage(self.now, limits=limits or [], **rate))
-                outcome = self.refresh(force=True)
-                self.assertEqual(outcome['state'], 'failed')
-                self.assertIn(outcome['reason'], ('claude_limits_scoped', 'claude_limits_unsupported'))
+                value = usage(self.now, limits=limits, **rate)
+                if rate.get('model_scoped', 0) is None:
+                    del value['rate_limits']['model_scoped']
+                self.answer(initialize(), value)
+                self.assertEqual(self.refresh(force=True), dict(state='failed', reason=reason))
+                self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
 
-    def test_matching_unscoped_raw_limit_is_covered_by_its_window(self):
-        limit = dict(kind='session', group='g', percent=40, resets_at=iso(self.now + 3600), is_active=True,
-                     severity='normal')
-        self.answer(initialize(), usage(self.now, limits=[limit]))
+    def test_zero_inference_telemetry_is_required(self):
+        base = usage(self.now)
+        cases = dict(cost=dict(total_cost_usd=0.01), boolean=dict(total_cost_usd=False),
+                     duration=dict(total_api_duration_ms=5), models=dict(model_usage={'invented': {}}))
+        for name, session in cases.items():
+            with self.subTest(name):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(initialize(), dict(base, session=dict(base['session'], **session)))
+                self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_inference_observed'))
+                self.assertIsNone(claude_usage.account(self.settings, int(time.time())))
+        for name, change in dict(behaviors=dict(behaviors=dict(day={})), available=dict(rate_limits_available=1),
+                                 plan=dict(subscription_type='invented')).items():
+            with self.subTest(name):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(initialize(), dict(base, **change))
+                self.assertEqual(self.refresh(force=True)['state'], 'failed')
+                self.assertIsNone(claude_usage.account(self.settings, int(time.time())))
+        self.assertNotIn(b'invented', claude_usage._store(self.settings).read_bytes()
+                         if claude_usage._store(self.settings).exists() else b'')
+
+    def test_a_failed_or_partial_read_never_reuses_the_earlier_windows(self):
         self.assertEqual(self.refresh()['state'], 'stored')
+        self.assertTrue(claude_usage.usable(self.settings, int(time.time())))
+        partial = usage(self.now)
+        del partial['rate_limits']['seven_day']
+        for value, reason in ((partial, 'claude_window_missing'), (usage(self.now, limits=None),
+                                                                    'claude_usage_unconfirmed')):
+            with self.subTest(reason):
+                self.answer(initialize(), value)
+                self.assertEqual(self.refresh(force=True), dict(state='failed', reason=reason))
+                self.assertFalse(claude_usage.usable(self.settings, int(time.time())))  # old 7d + new 5h: never
+                self.answer(initialize(), usage(self.now))
+                self.assertEqual(self.refresh(force=True)['state'], 'stored')
 
     def test_malformed_future_and_partial_readings(self):
         cases = dict(boolean=usage(self.now, five=True), high=usage(self.now, five=101),
                      past=dict(usage(self.now), rate_limits=dict(usage(self.now)['rate_limits'],
                                                                  five_hour=dict(utilization=1, resets_at=iso(1)))),
+                     future=dict(usage(self.now), rate_limits=dict(usage(self.now)['rate_limits'],
+                                                                   five_hour=dict(utilization=1, resets_at=iso(
+                                                                       self.now + 30 * 86400)))),
                      scoped_meter=usage(self.now, seven_day_opus=dict(utilization=1, resets_at=iso(self.now + 60))),
                      extra=usage(self.now, extra=dict(is_enabled='yes')))
         for name, value in cases.items():
@@ -191,8 +233,10 @@ class ExchangeTest(Reader):
                 self.assertEqual(claude_usage.account(self.settings, int(time.time()))['overflow'], state)
 
     def test_key_backed_or_third_party_sign_in_is_not_a_subscription_account(self):
-        for account in (dict(apiKeySource='ANTHROPIC_API_KEY'), dict(apiProvider='bedrock'),
-                        dict(subscriptionType=None), dict(email=None)):
+        for account in (dict(apiKeySource='ANTHROPIC_API_KEY'), dict(apiKeySource='/login managed key'),
+                        dict(apiProvider='bedrock'), dict(subscriptionType=None), dict(email=None),
+                        dict(tokenSource='CLAUDE_CODE_OAUTH_TOKEN'), dict(tokenSource='claude.ai'),
+                        dict(tokenSource=''), dict(organization=7)):
             with self.subTest(account):
                 claude_usage._store(self.settings).unlink(missing_ok=True)
                 self.answer(initialize(**account), usage(self.now))
@@ -206,13 +250,14 @@ class ExchangeTest(Reader):
         self.assertEqual(self.refresh(force=True)['reason'], 'claude_usage_unconfirmed')
         second = claude_usage.account(self.settings, int(time.time()))['key']
         self.assertNotEqual(first, second)
-        boundary = collector.consumed_at(self.settings, claude_usage.POOL)
-        self.assertTrue(all(item['observed_at'] <= boundary
-                            for item in collector.LocalSource(self.settings).windows(claude_usage.POOL, 0)))
+        self.assertFalse(claude_usage.usable(self.settings, int(time.time())))  # the first account's readings
+        self.assertEqual(collector.consumed_at(self.settings, claude_usage.POOL), 0)  # nothing re-dated
         self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
                          'account:' + second)
-        self.assertNotEqual(claude_usage.account_key(dict(email='a@x', organization='One', tokenSource='t')),
-                            claude_usage.account_key(dict(email='a@x', organization='Two', tokenSource='t')))
+        self.assertNotEqual(claude_usage.account_key(dict(email='a@x', organization='One')),
+                            claude_usage.account_key(dict(email='a@x', organization='Two')))
+        self.assertNotEqual(claude_usage.account_key(dict(email='a@x')),
+                            claude_usage.account_key(dict(email='a@x', organization='One')))
 
     def test_timeout_stops_the_client_and_backs_off(self):
         self.answer(initialize(), usage(self.now), hang='get_usage')
@@ -365,6 +410,96 @@ class BridgeTest(native_tests.NativeBase, Reader):
         refused = self.complete('n1', dict(kind='not_started'))
         self.assertEqual(refused['disposition'], 'uncertain')
         self.assertEqual(self.prepare('claude-code')['reason'], 'already_prepared')
+
+
+class ProvenanceTest(BridgeTest):
+    """The shared `claude-subscription` pool: only readings bound to the current native account (and its latest
+    confirmed exchange) count for the native consumer; nothing else is assumed to be the same login."""
+
+    def opencode_reading(self, used=0):
+        at = int(time.time())
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            collector.store_window(self.settings, claude_usage.POOL, dict(
+                id=window, limit=1000, used=used, length=length, reset_at=at + 3600, rolling=False, observed_at=at,
+                unit=collector.WINDOW_UNIT))
+
+    def test_an_unbound_reading_never_restores_native_headroom(self):
+        self.answer(initialize(), usage(self.now, limits=None))  # this account's usage stays unknown
+        self.opencode_reading(used=0)  # another client's newer reading with ample room, unbound
+        self.assertEqual(self.prepare('claude-code')['state'], 'pending')
+        self.assertEqual(self.data()['admissions'], [])
+
+    def test_another_accounts_reading_is_unknown(self):
+        self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
+        self.complete('n1', dict(kind='complete'))
+        self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
+        self.answer(initialize(email='other@example.invalid'), usage(self.now, limits=None))
+        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'pending')
+
+    def test_the_opencode_consumer_never_uses_native_bound_readings(self):
+        self.assertEqual(claude_usage.refresh(self.settings)['state'], 'stored')
+        routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
+                              evidence='synthetic-1', now=int(time.time()))
+        choice = dict(provider='claude-agent', model='invented-claude-small', effort='low',
+                      harness='claude-agent-sdk via opencode', funding='subscription')
+        self.billing()  # the OpenCode path has no account producer; a labelled double stands in for it
+        local = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
+                                  ledger_path=self.ledger_path, choices=[choice],
+                                  harnesses=['claude-agent-sdk via opencode'])
+        self.assertEqual({item['reason'] for item in local['observations']['excluded']}, {'window_unobserved'})
+        self.assertEqual(local['observations']['routes'], [])
+
+    def test_same_account_aliases_share_one_included_allowance(self):
+        self.answer(initialize(), usage(self.now, five=99.3))  # room for one reservation only
+        self.assertEqual(self.prepare('claude-code', 'a1')['state'], 'dispatched')
+        self.assertEqual(self.prepare('claude-code', 'a2', band='high')['state'], 'dispatched')
+        records = {item['attempt_id']: item for item in self.data()['admissions']}
+        self.assertTrue(records['a1']['reserved'])
+        self.assertEqual(records['a2']['reserved'], {})  # never a second included claim for the other alias
+        self.assertEqual(len(self.spawns()), 1)
+
+
+class FallbackReplayTest(BridgeTest):
+    """Strict replay (`tests/qualification/replay_strict.py`) over real fallback admissions."""
+
+    def replay(self):
+        from tests.qualification import replay_strict
+        return replay_strict.replay_records(self.data()['admissions'])
+
+    def exhausted(self):
+        self.answer(initialize(), usage(self.now, five=100, seven=100))
+
+    def test_ranked_fallback_replays_and_tampering_fails(self):
+        self.exhausted()
+        self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
+        self.assertTrue(self.replay()['passed'], self.replay())
+        from tests.qualification import replay_strict
+        record = self.data()['admissions'][0]
+        self.assertTrue(all(item['fallback'] for item in record['pressure']['candidates']))
+        for change in (lambda r: r['pressure']['candidates'][0].update(fallback=False),
+                       lambda r: r.update(reserved={routing.WIN + 'claude-subscription/5h': 6}),
+                       lambda r: r.update(reason_codes=[])):
+            tampered = json.loads(json.dumps(record))
+            change(tampered)
+            self.assertFalse(replay_strict.replay_records([tampered])['passed'])
+
+    def test_explicit_choice_fallback_and_lifecycle_replay(self):
+        self.exhausted()
+        identity = routing_launch.route_identity('claude_native', model='invented-large', effort='low')
+        permit = self.prepare('claude-code', choice=dict(identity, funding='subscription'))
+        self.assertEqual(permit['state'], 'dispatched', permit)
+        self.assertEqual(self.prepare('claude-code', choice=dict(identity, funding='subscription'))['reason'],
+                         'already_prepared')
+        self.assertTrue(self.replay()['passed'], self.replay())
+        self.assertEqual(self.complete('n1', dict(kind='complete'))['state'], 'recorded')
+        self.assertTrue(self.replay()['passed'])
+        self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
+        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')
+        uncertain = self.complete('n2', dict(kind='unknown'))
+        self.assertEqual((uncertain['disposition'], uncertain['recovery']), ('uncertain', 'reconcile_subscription'))
+        self.assertEqual(self.holds()['n2']['state'], 'uncertain')
+        self.assertTrue(self.replay()['passed'])
+        self.assertNotEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')
 
 
 if __name__ == '__main__':
