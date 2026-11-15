@@ -182,6 +182,11 @@ class CodexTraceTests(unittest.TestCase):
             with patch.object(codex_trace.d3, '_read_file', side_effect=expiring), self.assertRaisesRegex(codex.ObservationError, 'timeout'):
                 self.fact(deadline=5)
 
+    def test_nonfinite_deadline_cannot_remove_the_operation_bound(self):
+        for deadline in (float('inf'), float('-inf'), float('nan')):
+            with self.subTest(deadline=deadline), self.assertRaises(codex.ObservationError):
+                self.fact(deadline=deadline)
+
 
 if __name__ == '__main__':
     unittest.main()

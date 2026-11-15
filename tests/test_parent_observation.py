@@ -180,6 +180,11 @@ class ParentObservationTests(unittest.TestCase):
         os.replace(replacement, path)
         with self.assertRaises(startup.StartupError):
             self.consume_trace(witness)
+        relocated = bundle.with_name('relocated')
+        bundle.rename(relocated)
+        with patch.dict(os.environ, CODEX_ROLLOUT_TRACE_ROOT=str(relocated)):
+            with self.assertRaises(startup.StartupError):
+                self.consume_trace(witness)
 
     def test_trace_cannot_select_missing_wrong_or_old_core_receipt(self):
         started, selected, bundle, rows, _ = self.trace_denial()
