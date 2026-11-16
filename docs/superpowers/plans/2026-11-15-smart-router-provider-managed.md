@@ -393,6 +393,14 @@ is never released by this identity check. Preserve prior-turn close refusal.
 
 ### Task 4: Carry the same contract to OpenCode without inventing identity
 
+**Negative scope accepted:** `71f3bac`, eight committed modules, 177 tests,
+zero skips, independent review approved. All three real OpenCode families refuse
+inferred identity; synthetic connection-change consumer proof covers Claude
+through the shared gate. **Task 4 remains blocked:** no supported selected-account
+projection exists in the accepted evidence for Claude or ChatGPT; Go lacks
+member/sign-in identity and provider-to-meter linkage. No positive source was
+implemented or qualified, and all-five readiness remains incomplete.
+
 **Files:** Task 4 files in the map; existing `tests/test_opencode_launcher.py`,
 `test_opencode_subscription.py`, `test_opencode_subscription_wiring.py`,
 `test_routing_production_flows.py`. Reserve a new projection file only after an
@@ -402,11 +410,11 @@ actual supported selected-connection source establishes its shape.
 fact shape, selected-connection catalog and `routing_launch.admitted_check`.
 Missing quota is optional; missing selected-account identity remains a refusal.
 
-- [ ] **1. Pin negative tests for all three OpenCode families.** Same provider,
+- [x] **1. Pin negative tests for all three OpenCode families.** Same provider,
   same pool label, native login and matching environment must not satisfy
   OpenCode identity. Changed connection refuses an unsent admission.
   Go's unknown reset/demand semantics never manufacture included quota.
-- [ ] **2. Use the accepted source notes once; do not repeat upstream scans.**
+- [x] **2. Use the accepted source notes once; do not repeat upstream scans.**
   The existing Claude/ChatGPT notes have no supported selected-account source;
   leave those positive bindings blocked unless new authorized local evidence
   supplies one. Apply the same check to Go's account/workspace provenance.
@@ -415,7 +423,7 @@ Missing quota is optional; missing selected-account identity remains a refusal.
   launch test, implement the minimal connection-bound fact, then verify fallback
   through the existing launcher.** A double proves consumer behavior, not that the
   real producer exists. Unsupported families stay explicitly incomplete.
-- [ ] **4. Validate, commit any actual changes and run**
+- [x] **4. Validate, commit any actual changes and run**
   `python3 -B scripts/test_sharded.py test_opencode_launcher test_opencode_subscription test_opencode_subscription_wiring test_routing_production_flows`.
   Review each positive source before integration. Blocked OpenCode work does not
   hold native delivery, but it does block an all-five-path release claim.
