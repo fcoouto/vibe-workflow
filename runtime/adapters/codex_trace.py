@@ -248,7 +248,7 @@ def read_rejection(source, *, thread_id, turn_id, native_call_id, source_js, sub
         selected = [turn_start, cell_start, tool_start, tool_end, cell_initial, cell_end, turn_end]
         _require([event['seq'] for event in selected] == sorted({event['seq'] for event in selected})
             and thread_start['seq'] < turn_start['seq']
-            and thread_start['thread_id'] == thread
+            and thread_start['thread_id'] is None and thread_start['codex_turn_id'] is None
             and turn_start['payload']['thread_id'] == thread
             and all(event['thread_id'] == thread and event['codex_turn_id'] == turn for event in selected)
             and tool_end['payload']['status'] == cell_initial['payload']['status'] == cell_end['payload']['status'] == 'failed'
