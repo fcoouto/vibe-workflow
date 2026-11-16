@@ -71,9 +71,9 @@ def terminal(record):
     (unknown consumption), or an included claim on the OpenCode Claude path, which draws on the native login's bound
     rows that its own reply readings can never cover (Task 12, F1). Native completions mark through
     `native_complete`."""
-    from runtime import routing_paths
+    from runtime import opencode_account, routing_paths
     return is_fallback(record) or isinstance(record, dict) and record.get('billing_class') == 'included_subscription' \
-        and routing_paths.path_of(record.get('route')) == 'opencode-claude-subscription'
+        and routing_paths.path_of(record.get('route')) == opencode_account.PATHS['claude']
 
 
 def active_pools(data):

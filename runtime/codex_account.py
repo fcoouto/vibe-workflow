@@ -135,20 +135,21 @@ def _usage_problem(limits):
 
 
 def _quota(limits, started):
-    """The gate reading `{windows: [{used_percent, reset_at}], ordinary_allowed, read_at}` of every present window
-    (`primary` and `secondary`; a weekly-only plan may report only one; read start as its time), or None when none
-    is present or any is malformed. `rateLimitResetCredits` is a user action, never required here."""
+    """The gate reading `{windows: [{used_percent, reset_at}], ordinary_allowed, read_at}` of every well-formed present
+    window (`primary` and `secondary`; a weekly-only plan may report only one; read start as its time), or None when
+    none is well-formed. A malformed window is left out, never hiding a valid one and never gating on its own.
+    `rateLimitResetCredits` is a user action, never required here."""
     by_limit = limits.get('rateLimitsByLimitId')
     snapshot = by_limit.get('codex') if type(by_limit) is dict else limits.get('rateLimits')
     present = [snapshot.get(name) for name in ('primary', 'secondary') if snapshot.get(name) is not None] \
         if type(snapshot) is dict else []
     ordinary = limits.get('ordinaryUsageAllowed')
-    if not present or ordinary not in (None, True, False) or any(
-            type(item) is not dict or type(item.get('usedPercent')) not in (int, float)
-            or not 0 <= item['usedPercent'] <= 100 or type(item.get('resetsAt')) is not int for item in present):
+    windows = [dict(used_percent=item['usedPercent'], reset_at=item['resetsAt']) for item in present
+               if type(item) is dict and type(item.get('usedPercent')) in (int, float)
+               and 0 <= item['usedPercent'] <= 100 and type(item.get('resetsAt')) is int]
+    if not windows or ordinary not in (None, True, False):
         return None
-    return dict(windows=[dict(used_percent=item['usedPercent'], reset_at=item['resetsAt']) for item in present],
-                ordinary_allowed=ordinary, read_at=started)
+    return dict(windows=windows, ordinary_allowed=ordinary, read_at=started)
 
 
 def quota_problem(settings_path, route, now):
@@ -156,8 +157,9 @@ def quota_problem(settings_path, route, now):
     100% with its reset ahead. Never a claim: `usable_windows` stays empty."""
     current = _account(settings_path, now) if applies(route) and route.get('pool') == POOL else None
     quota = (current or {}).get('quota')
-    if type(quota) is not dict or not 0 <= now - quota['read_at'] <= QUOTA_FRESH_SECONDS:
-        return None
+    if type(quota) is not dict or type(quota.get('windows')) is not list \
+            or not 0 <= now - quota['read_at'] <= QUOTA_FRESH_SECONDS:
+        return None  # an older flat reading (no `windows`) is no reading
     if quota['ordinary_allowed'] is False or any(item['used_percent'] >= 100 and item['reset_at'] > now
                                                   for item in quota['windows']):
         return 'quota_exhausted'

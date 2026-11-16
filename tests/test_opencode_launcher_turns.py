@@ -117,6 +117,25 @@ class ConsumptionTests(LauncherBase):
         self.assertEqual(second['admission']['reserved'], {}, second)
         self.assertIn(routing.FALLBACK, second['admission']['reason_codes'])
 
+    def test_a_refused_attach_after_dispatch_still_marks_the_pool(self):
+        """Task 13 (M1): nothing was sent, yet the closing `complete` marks an OpenCode Claude claim's pool (as for a
+        fallback): an availability cost only, never over-admission."""
+        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.host.attach_ok = False
+        result = self.launch()
+        self.assertEqual((result['state'], result['reason']), ('blocked', 'attach_failed'), result)
+        self.assertEqual([item for item in self.order if item in ('create', 'prompt')], [])  # nothing sent
+        self.assertGreater(collector.consumed_at(self.settings, POOL), 0)
+
+    def test_a_refusal_before_dispatch_leaves_the_pool_unmarked(self):
+        """Task 13 (P2): an OpenCode Claude claim closed before dispatch (`not_dispatched`) consumed nothing."""
+        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.host.health_after = 1  # the health re-check right before dispatch fails
+        result = self.launch()
+        self.assertEqual(result['state'], 'blocked', result)
+        self.assertNotIn('dispatch', self.order)
+        self.assertEqual(collector.consumed_at(self.settings, POOL), 0)
+
     def test_another_path_with_a_covering_reply_is_unchanged(self):
         self.covering_reply()  # control: `claude-haiku-low` is no OpenCode Claude path; its own reading covers it
         self.assertEqual(self.launch()['state'], 'recorded')

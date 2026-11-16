@@ -130,6 +130,19 @@ class ClaudeScopeTest(claude_tests.Reader):
     def gate(self, model):
         return claude_usage.quota_problem(self.settings, native_route(model), int(time.time()))
 
+    def test_a_versioned_scope_gates_its_whole_family(self):
+        """H3: numbers are not family words, so an "Opus 4" scope gates every Opus route (a broader, refuse-only
+        effect: at worst a false refusal), never Haiku or Sonnet."""
+        value = self.init()
+        value['models'] += [dict(value='opus', resolvedModel='claude-opus-4-1', supportsEffort=True,
+                                 supportedEffortLevels=['low']),
+                            dict(value='sonnet', resolvedModel='claude-sonnet-9', supportsEffort=True,
+                                 supportedEffortLevels=['low'])]
+        self.answer(value, self.scoped(name='Opus 4'))
+        self.assertEqual(self.refresh()['state'], 'stored')
+        self.assertEqual([self.gate(model) for model in ('opus', 'haiku', 'sonnet', 'fable')],
+                         ['quota_exhausted', None, None, None])
+
     def test_a_fable_scope_gates_fable_routes_only_and_keeps_the_account_wide_windows(self):
         self.answer(self.init(), self.scoped())
         self.assertEqual(self.refresh(), dict(state='stored', windows=['5h', '7d']))
@@ -202,6 +215,28 @@ class CodexGateTest(Stores):
             self.assertEqual(codex_account._usage_problem(dict(limits, rateLimitsByLimitId=dict(codex=changed))),
                              'codex_limits_unsupported')
         self.assertEqual(codex_account._quota(limits, 7)['windows'][0]['used_percent'], 99)
+
+    def test_a_malformed_window_never_hides_a_valid_full_one(self):
+        """H4: the gate reads the well-formed windows; a malformed one alone never gates; an older flat stored
+        reading (no `windows`) is no reading."""
+        now = int(time.time())
+        full, broken = dict(usedPercent=100, resetsAt=now + 600), dict(usedPercent='full', resetsAt=None)
+        for primary, secondary, expected in ((full, broken, 'quota_exhausted'), (broken, broken, None),
+                                             (broken, dict(usedPercent=10, resetsAt=now + 600), None)):
+            with self.subTest(primary=primary, secondary=secondary):
+                snapshot = dict(limitId='codex', primary=primary, secondary=secondary, spendControlReached=False)
+                found = codex_account._quota(dict(rateLimitsByLimitId=dict(codex=snapshot)), now)
+                if found is None:
+                    self.assertIsNone(expected)
+                    continue
+                self.seed(**{key: value for key, value in found.items() if key != 'read_at'})
+                self.assertEqual(self.gate(), expected)
+        now = int(time.time())
+        codex_account._save(self.settings, identity=dict(key='b' * 32, generation='d' * 32), account=dict(
+            key='b' * 32, generation='d' * 32, observed_at=now, client_version='unknown',
+            usage_reason=codex_account.USAGE_UNCONFIRMED,
+            quota=dict(used_percent=100, reset_at=now + 600, ordinary_allowed=True, read_at=now)))
+        self.assertIsNone(self.gate())  # the Task 11 flat shape: no `windows`, no reading, no KeyError
 
     def test_any_present_window_can_exhaust_and_an_unknown_shape_never_gates(self):
         """H1: the secondary window counts too, and a weekly-only plan may report it with no primary."""

@@ -669,7 +669,7 @@ def _store_settled(attempt, admission, settings_path):
     left a newer one in place covers nothing) and it was observed no earlier than the admission (an earlier one cannot
     show this launch's use). A launch that reported none returns none; a store failure raises (it covers nothing). A
     refused attach created no session and sent nothing, so it used none of its claims: every claimed window is
-    covered."""
+    covered (an OpenCode Claude claim's closing `complete` still marks its pool, `subscription_fallback.terminal`)."""
     if attempt.refusal is not None and not attempt.attached:
         return [key.split('/', 1)[1] for key in (admission.get('reserved') or {}) if key.startswith(routing.WIN)]
     if attempt.read is None:
@@ -677,10 +677,12 @@ def _store_settled(attempt, admission, settings_path):
     admitted_at, covered = admission.get('at'), []
     # An OpenCode Claude claim draws on the native login's bound rows: its own unbound reply readings never cover it,
     # so the pool is marked consumed as a native completion marks it (Task 12, F1; `subscription_fallback.terminal`).
-    native = routing_paths.path_of(admission.get('route')) == 'opencode-claude-subscription'
+    from runtime import opencode_account
+    opencode_claude = routing_paths.path_of(admission.get('route')) == opencode_account.PATHS['claude']
     for window in windows(attempt.read['result'].get('rate_limit')):
         held = routing_observations.store_window(settings_path, admission['pool'], window)
-        if held is True and not native and routing._amount(admitted_at) and window['observed_at'] >= admitted_at:
+        if held is True and not opencode_claude and routing._amount(admitted_at) \
+                and window['observed_at'] >= admitted_at:
             covered.append(window['id'])
     return covered
 
