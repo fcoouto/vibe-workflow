@@ -125,6 +125,16 @@ test("a record that appears later is picked up without rebinding", async () => {
   assert.equal(blocks(second).length, 1)
 })
 
+test("recovery is reported once so a stale failure code can be cleared", async () => {
+  const checkout = fixture()
+  const { reminder, codes } = make(checkout, "later.md")
+  await reminder.apply(draft() as any)
+  writeFileSync(join(checkout, "later.md"), "x")
+  await reminder.apply(draft() as any)
+  await reminder.apply(draft() as any)
+  assert.deepEqual(codes, ["record_unavailable", ""])
+})
+
 test("dispose invalidates in-flight work", async () => {
   const checkout = fixture()
   let release!: (value: unknown) => void
@@ -236,5 +246,17 @@ test("plugin: an unsupported context hook never breaks setup or the other hooks"
   const cleanup = await createWorkflowPlugin({ featureStatus: gate(true), contextReminder: bind(checkout) as any }).setup(t.ctx)
   assert.ok("session.model.request" in t.hooks && "permission.evaluate" in t.hooks)
   assert.equal("session.context" in t.hooks, false)
+  cleanup()
+})
+
+test("plugin: a context hook registration that never settles cannot stall setup", async () => {
+  const checkout = fixture()
+  const t = fakeCtx(checkout)
+  const original = t.ctx.session.hook
+  t.ctx.session.hook = ((name: string, callback: any) => name === "context" ? new Promise(() => {}) : original(name, callback)) as any
+  const started = Date.now()
+  const cleanup = await createWorkflowPlugin({ featureStatus: gate(true), contextReminder: bind(checkout) as any }).setup(t.ctx)
+  assert.ok(Date.now() - started < 3000)
+  assert.ok("permission.evaluate" in t.hooks)
   cleanup()
 })

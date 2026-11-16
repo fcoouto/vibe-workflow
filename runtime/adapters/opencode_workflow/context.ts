@@ -53,7 +53,8 @@ export function createContextReminder(
 ): Reminder {
   let disposed = false
   let state = ""
-  const report = (code: string) => { if (code !== state) { state = code; if (code) diagnostic(code) } }
+  // A recovery is reported as the empty code, once, so a caller can clear the failure it recorded.
+  const report = (code: string) => { if (code !== state) { const recovered = state !== "" && code === ""; state = code; if (code || recovered) diagnostic(code) } }
 
   async function isBoundRoot(sessionID: string): Promise<boolean> {
     let info: any

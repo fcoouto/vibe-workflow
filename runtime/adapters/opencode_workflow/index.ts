@@ -21,6 +21,7 @@ const FAILED_LOOKUP_MS = 5000
 const MAX_REMEMBERED = 256
 const EDIT_ACTIONS = new Set(["edit", "write", "patch"])
 const SHELL_TOOLS = new Set(["shell", "bash"])
+const REMINDER_ERRORS = new Set(["session_lookup_failed", "record_unavailable", "context_reminder_failed", "context_hook_unavailable"])
 const FINISHED = "session.execution.succeeded"
 const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+\/-]{0,127}$/
@@ -254,12 +255,12 @@ export function createWorkflowPlugin(config: Config = {}) {
       if (binding) {
         const bound = createContextReminder(binding,
           (sessionID) => within(Promise.resolve().then(() => ctx.session.get({ sessionID })), LOOKUP_TIMEOUT_MS),
-          (code) => { lastError = code })
+          (code) => { if (code) lastError = code; else if (lastError && REMINDER_ERRORS.has(lastError)) lastError = null })
+        reminder = bound
         try {
-          contextHook = await ctx.session.hook("context", async (event: any) => {
+          contextHook = await within(Promise.resolve(ctx.session.hook("context", async (event: any) => {
             try { await bound.apply(event) } catch { lastError = "context_reminder_failed" }
-          })
-          reminder = bound
+          })), LOOKUP_TIMEOUT_MS)
         } catch { lastError = "context_hook_unavailable" }
       }
 
