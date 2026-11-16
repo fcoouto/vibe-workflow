@@ -475,7 +475,7 @@ class AdmissionReplay:
                          account=d['account'], billing_class=d['billing_class'], pool=d['pool'],
                          demand=dict(d['demand']), capable=True, permitted=True)
             if d['billing_class'] == 'included_subscription':
-                route['binding_enforceable'] = True
+                route.update(binding_enforceable=True, account_marker='c0de' * 16)  # Task 3B: labelled synthetic marker
             else:
                 route.update(funding_verified=True, credential=dict(ref='keychain:opaque', scope='scope1', state='ready'))
             routes.append(route)
