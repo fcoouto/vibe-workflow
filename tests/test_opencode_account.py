@@ -414,6 +414,7 @@ class LocalSourceTest(Base):
         with mock.patch.object(opencode_account, 'refresh', side_effect=spy):
             subscription_billing.acquire(source, [route_of('go')], now)
             self.assertEqual(calls, [dict(families=('go',))])
+            now = int(time.time())  # the read took seconds: a stale `now` would date the fact in the future
             fact = subscription_billing.fact(source, route_of('go'), now)
             self.assertTrue(fact['producer'].startswith('opencode-go:'))
             self.assertRegex(subscription_billing.marker(fact, route_of('go'), now), '^[0-9a-f]{64}$')
