@@ -306,5 +306,137 @@ class WorkerChoiceInstructionTests(unittest.TestCase):
             self.assertEqual(run(status)['settings']['worker_choices'], choice)
 
 
+def linked_worktree(primary, worktree, name='wt', relative=False):
+    """A linked worktree laid out as `git worktree add` writes it, by hand (no Git process)."""
+    gitdir = primary / '.git' / 'worktrees' / name
+    gitdir.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    if relative:  # `worktree.useRelativePaths`: each link is relative to the file's own directory
+        (worktree / '.git').write_text('gitdir: %s\n' % os.path.relpath(gitdir, worktree))
+        (gitdir / 'gitdir').write_text('%s\n' % os.path.relpath(worktree / '.git', gitdir))
+    else:
+        (worktree / '.git').write_text('gitdir: %s\n' % gitdir)
+        (gitdir / 'gitdir').write_text('%s\n' % (worktree / '.git'))
+    (gitdir / 'commondir').write_text('../..\n')
+    return gitdir
+
+
+class LinkedWorktreeTests(unittest.TestCase):
+    """O5: a linked worktree of a managed primary checkout, wherever it lives, is managed too."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.path = self.root / 'routing' / 'settings.json'
+        self.primary = self.root / 'primary'
+        (self.primary / '.git').mkdir(parents=True)
+        (self.primary / 'sub').mkdir()
+        self.worktree = self.root / 'elsewhere' / 'task-worktree'
+        self.gitdir = linked_worktree(self.primary, self.worktree)
+        (self.worktree / 'src').mkdir()
+        routing_settings.update(self.path, dict(managed_projects=[str(self.primary)]), 0)
+
+    def managed(self, path):
+        return routing_settings.managed_project(path, settings_path=self.path)
+
+    def test_primary_subdirectory_linked_worktree_and_paths_inside_it_are_managed(self):
+        with unittest.mock.patch('subprocess.Popen', side_effect=AssertionError('no Git process')), \
+                unittest.mock.patch('subprocess.run', side_effect=AssertionError('no Git process')):
+            for path in (self.primary, self.primary / 'sub', self.worktree, self.worktree / 'src',
+                         self.worktree / 'not-yet' / 'deeper'):
+                with self.subTest(path):
+                    self.assertIs(self.managed(path), True)
+        self.assertIs(self.managed(self.worktree.parent), False)  # only the worktree, not its parent folder
+
+    def test_relative_links_and_symlinked_spellings_resolve(self):
+        relative = self.root / 'relative-worktree'
+        linked_worktree(self.primary, relative, name='rel', relative=True)
+        (self.root / 'link').symlink_to(self.worktree)
+        for path in (relative, relative / 'deeper', self.root / 'link' / 'src'):
+            with self.subTest(path):
+                self.assertIs(self.managed(path), True)
+        (self.root / 'primary-link').symlink_to(self.primary)  # a registered root spelled through a symlink
+        routing_settings.update(self.path, dict(managed_projects=[str(self.root / 'primary-link')]), 1)
+        self.assertIs(self.managed(self.worktree), True)
+
+    def test_a_forged_or_unlinked_git_file_never_joins(self):
+        forged = self.root / 'forged'
+        forged.mkdir()
+        cases = ['gitdir: %s\n' % self.gitdir,  # the real gitdir names the real worktree, not this folder
+                 'gitdir: %s\n' % (self.primary / '.git'),  # no back-pointer at all
+                 'not a gitdir line\n', 'gitdir: ' + 'x' * 5000 + '\n', '']
+        for text in cases:
+            with self.subTest(text[:40]):
+                (forged / '.git').write_text(text)
+                self.assertIs(self.managed(forged), False)
+                self.assertIs(self.managed(forged / 'inside'), False)
+        planted = self.root / 'planted'  # a FIFO where the back-pointer should be is refused, never waited on
+        gitdir = linked_worktree(self.primary, planted, name='planted')
+        (gitdir / 'gitdir').unlink()
+        os.mkfifo(gitdir / 'gitdir')
+        self.assertIs(self.managed(planted), False)
+
+    def test_a_self_consistent_forged_chain_outside_the_common_worktrees_never_joins(self):
+        forged = self.root / 'forged-chain'  # F5: its own admin dir names it back and points at the managed common dir
+        admin = forged / 'x'
+        admin.mkdir(parents=True)
+        (forged / '.git').write_text('gitdir: %s\n' % admin)
+        (admin / 'gitdir').write_text('%s\n' % (forged / '.git'))
+        (admin / 'commondir').write_text('%s\n' % (self.primary / '.git'))
+        self.assertIs(self.managed(forged), False)
+        self.assertIs(self.managed(forged / 'inside'), False)
+
+    def test_an_empty_or_absent_list_walks_no_git_link(self):
+        with unittest.mock.patch.object(routing_settings, '_linked_primary', side_effect=AssertionError('walked')):
+            self.assertIs(routing_settings.managed_state(self.worktree, self.root / 'absent' / 'settings.json'), False)
+            routing_settings.update(self.path, dict(managed_projects=[]), 1)
+            self.assertIs(self.managed(self.worktree), False)
+
+    def test_link_files_are_type_checked_before_they_are_opened(self):
+        opened, real = [], os.open
+
+        def spy(path, *args, **kwargs):
+            opened.append(str(path))
+            return real(path, *args, **kwargs)
+        with unittest.mock.patch('os.open', side_effect=spy):
+            with self.assertRaises(ValueError):
+                routing_settings._small('/dev/null')  # a character device is refused before any open
+        self.assertNotIn('/dev/null', opened)
+        (self.root / 'stray-commondir').write_text('../..\n')
+        (self.gitdir / 'commondir').unlink()
+        (self.gitdir / 'commondir').symlink_to(self.root / 'stray-commondir')  # a symlinked link file is no link
+        self.assertIs(self.managed(self.worktree), False)
+
+    def test_a_worktree_of_an_unlisted_repository_is_not_managed(self):
+        other = self.root / 'other-primary'
+        (other / '.git').mkdir(parents=True)
+        worktree = self.root / 'other-worktree'
+        linked_worktree(other, worktree)
+        self.assertIs(self.managed(worktree), False)
+        self.assertIs(self.managed(other), False)
+
+    def test_removing_the_primary_unmanages_its_worktrees(self):
+        self.assertIs(self.managed(self.worktree), True)
+        routing_settings.update(self.path, dict(managed_projects=[]), 1)
+        self.assertIs(self.managed(self.worktree), False)
+        routing_settings.update(self.path, dict(managed_projects=[str(self.primary)]), 2)
+        import shutil
+        shutil.rmtree(self.primary)  # the primary is gone: its worktree no longer resolves to a listed root
+        self.assertIs(self.managed(self.worktree), False)
+
+    def test_unreadable_settings_still_count_as_managed(self):
+        self.path.write_text('{not json')
+        for path in (self.worktree, self.root / 'unrelated'):
+            with self.subTest(path):
+                self.assertIs(self.managed(path), True)
+
+    def test_an_unresolvable_worktree_of_a_readable_list_is_not_managed(self):
+        (self.gitdir / 'commondir').unlink()
+        self.assertIs(self.managed(self.worktree), False)
+        (self.worktree / '.git').write_text('gitdir: %s\n' % (self.root / 'missing' / 'gitdir'))
+        self.assertIs(self.managed(self.worktree / 'src'), False)
+
+
 if __name__ == '__main__':
     unittest.main()

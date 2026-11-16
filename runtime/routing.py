@@ -867,8 +867,8 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
 
 
 # ---------------------------------------------------------------------------------------------------
-# Single-use dispatch authority (S3.4). The handshake, id derivation and uncertainty rules are defined once in
-# the plan's S3.1 contract (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
+# Single-use dispatch authority (S3.4). The handshake, id derivation and uncertainty rules are defined by the code
+# below; their original text is Task S3.1 of the plan deleted in 11a8927c (see Git history).
 # ---------------------------------------------------------------------------------------------------
 AUTHORITY_BYTES = 32  # secrets.token_urlsafe(32): 43 URL-safe characters, 256 random bits
 MAX_AUTHORITY = 128

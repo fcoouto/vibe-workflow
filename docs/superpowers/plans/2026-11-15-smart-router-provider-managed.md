@@ -23,6 +23,8 @@ approval. Use bounded owner/reviewer checkpoints and Opus for material blockers;
 preserve escalation history and gates. No installation, account access, upstream
 request, live qualification, activation or release grant follows.
 
+**Delivered: merged in PR #320 (`4364c15b`); live authority, activation and release not granted.** The boxes below are ticked from that merge, its tests and the final gates in Task 5; Task 5 step 4's representative instruction-task checks are not recorded here.
+
 Status: Opus passed the corrected plan after the focused review recheck.
 The user authorized implementation after a passing review, without another
 confirmation prompt. No live operations follow from that authority.
@@ -116,7 +118,7 @@ terminal completion only, before ledger release. Extend only
 from its service owner; a fallback cannot close without that required context.
 No `before_close` callback, send-time marker or new timestamp field is needed.
 
-- [ ] **1. Write failing lifecycle tests.** In the new test module, extend existing
+- [x] **1. Write failing lifecycle tests.** In the new test module, extend existing
   `Stores`/real-service fixtures. Pin these assertions:
 
   ```python
@@ -133,9 +135,9 @@ No `before_close` callback, send-time marker or new timestamp field is needed.
   fixture stores, not new production APIs. Also pin prepared-before-send and
   prepared-before-completion refusal, failed terminal write, repeated events,
   empty-reservation reconciliation/abandonment, and exposure surviving pruning.
-- [ ] **2. Run the new module with unittest; observe intended failures.**
+- [x] **2. Run the new module with unittest; observe intended failures.**
   `python3 -B -m unittest tests.test_subscription_fallback`.
-- [ ] **3. Implement the helper and existing terminal seams.** Scan exposure inside the same
+- [x] **3. Implement the helper and existing terminal seams.** Scan exposure inside the same
   ledger transaction used for admission/dispatch. Include fallback holds with
   empty windows. Write terminal boundaries before closing any supported complete/
   reconciled/abandoned fallback; provably-unsent cancellation adds no usage.
@@ -145,7 +147,7 @@ No `before_close` callback, send-time marker or new timestamp field is needed.
   event and before closing. Keep existing once-per-attempt idempotence and `max()`
   ordering across concurrent completions. Read-only checks start no process.
   Failed marks retain the attempt/exposure. Add no send-time store write.
-- [ ] **4. Verify focused tests pass; validate and commit.** Then run
+- [x] **4. Verify focused tests pass; validate and commit.** Then run
   `python3 -B scripts/test_sharded.py test_subscription_fallback test_routing_dispatch test_routing_launch test_routing_subscription_reconcile test_delegation_routing_consumed test_native_routing`.
   Obtain independent lifecycle/accounting review before Task 2 uses this seam.
 
@@ -170,7 +172,7 @@ for subscription account/launch qualification. Retain `LocalSource.billing`,
 Nullable demand and empty window lists are valid only for eligible subscription
 fallback; paid routes and included claims retain their strict shapes.
 
-- [ ] **1. Write failing tests for launch-only qualification and both branches.**
+- [x] **1. Write failing tests for launch-only qualification and both branches.**
 
   ```python
   # test_subscription_launch_qualification_does_not_require_quota_seed
@@ -186,20 +188,20 @@ fallback; paid routes and included claims retain their strict shapes.
   `test_known_included_wins_unless_explicit_choice_excludes_it`, unknown overflow,
   provider refusal, nullable gateway rejection and unchanged historical replay.
   Empty or malformed numeric demand must never become an included claim.
-- [ ] **2. Run affected unittest modules; observe failures for the new assertions.**
-- [ ] **3. Remove only quota prerequisites from account eligibility.** Update
+- [x] **2. Run affected unittest modules; observe failures for the new assertions.**
+- [x] **3. Remove only quota prerequisites from account eligibility.** Update
   qualification parsing/generation, `_model_demand` prefilters and collection so
   missing demand/windows do not hide an eligible account. Keep billing/identity,
   catalog, host, authority, entitlement and path-qualification checks.
   Do not start a known unsupported quota reader just to choose fallback.
-- [ ] **4. Extend the existing candidate decision.** Perform non-quota eligibility
+- [x] **4. Extend the existing candidate decision.** Perform non-quota eligibility
   first. If complete supported quota/demand fits and Task 1 permits it, use the
   unchanged reservation allocator. Otherwise create the existing empty-constraint
   fallback candidate with its quota disposition. Apply explicit constraints
   before `prefer_included`; then included first, otherwise shortlist value order.
   Reuse `routing_funding.record`; export/replay actual decisions without live reads.
   Do not catch unrelated integrity, identity or provider-refusal errors as fallback.
-- [ ] **5. Verify, validate, commit and run**
+- [x] **5. Verify, validate, commit and run**
   `python3 -B scripts/test_sharded.py test_routing_paths test_routing_observations test_subscription_acquisition test_routing_ordered_fallback test_routing_production_flows test_qualification_replay_strict`.
   Require independent behavior/funding review. No production activation.
 
@@ -214,20 +216,20 @@ and `native_catalog.catalog(settings_path, client)`. Claude account/catalog succ
 survives quota failure; Codex's `usable_windows` remains `[]`. `LocalSource` chooses
 these producers by exact native path, never by a request/env/settings source name.
 
-- [ ] **1. Write failing tests:** `test_native_metadata_without_quota_reaches_fallback`,
+- [x] **1. Write failing tests:** `test_native_metadata_without_quota_reaches_fallback`,
   `test_codex_metadata_does_not_start_legacy_quota_reader`,
   `test_failed_quota_does_not_repeat_fresh_metadata_exchange`, and
   `test_changed_native_binding_refuses_prepared_send`.
   Reuse existing wire responses and native-tool doubles. Assert one exact permit,
   no included reservation, no second process for fresh metadata, and unknown
   served effort/cost remaining unknown. Missing identity/catalog sends nothing.
-- [ ] **2. Run affected unittest modules; observe intended wiring failures.**
-- [ ] **3. Connect only the existing metadata producers.** Preserve bounded
+- [x] **2. Run affected unittest modules; observe intended wiring failures.**
+- [x] **3. Connect only the existing metadata producers.** Preserve bounded
   locking/backoff and own-account provenance. Make required metadata acquisition
   reusable independently of optional quota. Native catalog/bootstrap/readiness
   consume the producer's real binding. Do not infer an atomic cross-process
   identity fence from cached Codex auth; report the supported visibility limit.
-- [ ] **4. Verify, validate, commit and run**
+- [x] **4. Verify, validate, commit and run**
   `python3 -B scripts/test_sharded.py test_claude_usage test_codex_account test_native_routing test_subscription_billing test_subscription_acquisition`.
   Obtain native-source/consumer review; synthetic proof is not live qualification.
 
@@ -504,7 +506,7 @@ pure and a fallback-ready result grants neither activation nor a live-send budge
   with provider-managed charge-risk acknowledgment and refusal/uncertainty stops.
   Keep isolation, lost-ack drill, strict replay, platform/release, activation and
   user cutover/default-ON decisions. Do not execute the packet.
-- [ ] **4. Run affected tests, self-review spec coverage, validate and commit.**
+- [x] **4. Run affected tests, self-review spec coverage, validate and commit.**
   For policy/client instruction edits, use the skill-creator authoring standard
   in `docs/development.md` and check representative included, fallback, identity-
   blocked and uncertain-send tasks; package checks alone are not instruction proof.
@@ -512,7 +514,7 @@ pure and a fallback-ready result grants neither activation nor a live-send budge
   Require independent behavior/accounting/security review of that exact tree.
   Record current Python 3.11 and available Linux proof separately; missing platform
   proof remains pending, never a passing skip. No competing full suites.
-- [ ] **5. Publish reviewed source through the normal draft/ready PR lifecycle.**
+- [x] **5. Publish reviewed source through the normal draft/ready PR lifecycle.**
   Stop at implementation proof and the explicit missing-source/live/platform
   matrix. Installation, qualification, activation and release need their own
   existing prerequisites and authority; this plan supplies none of them.
@@ -521,8 +523,8 @@ pure and a fallback-ready result grants neither activation nor a live-send budge
 
 - [x] Self-review this plan against every requirement in the approved amendment.
 - [x] Obtain the requested bounded Opus review for correctness and simplicity.
-- [ ] Resolve substantiated findings, validate links/package and publish the plan.
-- [ ] After Opus clears the corrected plan, proceed under the user's conditional
+- [x] Resolve substantiated findings, validate links/package and publish the plan.
+- [x] After Opus clears the corrected plan, proceed under the user's conditional
   implementation authority. Preserve the previously chosen execution method;
   do not ask for another confirmation or start new live operations.
 

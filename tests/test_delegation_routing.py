@@ -128,6 +128,16 @@ class ManagedSelectionModes(ManagedDelegation):
         self.assertEqual(delegation_routing.admitted_route(self.scope, prepared['attempt_id'])['model'],
                          'new-native-model')
 
+    def test_a_refusal_carries_the_routing_exclusion_reasons(self):
+        # C1: a `prepare` that admitted nothing names why (`quota_exhausted` here) beside its reason.
+        answer = dict(state='pending', reason='no_feasible_route', reasons=['no_feasible_route', 'quota_exhausted'])
+        with self.managed(OTHER), mock.patch.object(delegation_routing, 'admit', return_value=answer):
+            request = self.prepare_request(dispatch_id='c1-1')
+            prepared = self.api.prepare_assignment(self.scope, request)
+        self.assertFalse(prepared['launch_admitted'])
+        self.assertEqual(prepared['routing'], answer)
+        delegation_routing.release(self.scope, request, prepared['attempt_id'], 'routing_pending')
+
     def test_explicit_and_inherit_never_get_a_substituted_route(self):
         with self.managed(OTHER):  # only another native model is qualified, and worker_choices list it
             self.worker_choices(self.native('other-native-model'))
@@ -498,7 +508,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         # re-check after the write removes the project again before refusing.
         settings, committed = self.settings_path(), []
 
-        def gate(settings_path=None, projects=()):
+        def gate(settings_path=None, projects=(), authority=None):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -542,7 +552,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         self.addCleanup(shutil.rmtree, other)
         routing_settings.update(settings, dict(managed_projects=[str(other)]), 0)
 
-        def gate(settings_path=None, projects=()):
+        def gate(settings_path=None, projects=(), authority=None):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -766,13 +776,13 @@ class RealScopeResolver(ManagedDelegation):
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
         self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])  # no runtime scope to read
         settings, run, native, doubles = self.bridged()
+        self.assertEqual(run(dict(v=1, op='set', authority_required=True))['state'], 'updated')  # E2: before joining
         refused = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
         self.assertEqual((refused['state'], refused['reason']), ('blocked', 'managed_path_incomplete'), refused)
         self.assertEqual(refused['codes'], {'subscription_sources': ['claude_code_billing_unverified']})  # F4R-03
         with doubles[0], doubles[1], doubles[2]:  # the real gate's children, plus labelled source doubles
             joined = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
         self.assertEqual(joined['state'], 'updated', joined)
-        self.assertEqual(run(dict(v=1, op='set', authority_required=True))['state'], 'updated')
         unverified = native('claude-code', 'bridge-0')
         self.assertEqual((unverified['state'], unverified['reason']), ('blocked', 'native_binding_unverified'))
         with doubles[0], doubles[1], doubles[2]:

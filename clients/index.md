@@ -10,8 +10,10 @@ For workspace preparation or a checkout-affecting operation, including review-on
 | [Codex task runtime](runtime.md) | A Codex task needs explicit task controls, a doctor report, or lifecycle troubleshooting. |
 | [Workstreams](../skills/workstreams/SKILL.md) | Name threads, manage saved mode, or coordinate a suitable enabled assignment. |
 | [Claude Code](claude-code.md) | Claude Code startup activates the workflow, or you implement, validate or diagnose its adapter. |
-| [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch. Not a startup or onboarding client. |
+| [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch; or you launch a worker or reviewer from OpenCode in a managed project (load only [the launch procedure](opencode.md#launch-a-managed-worker)). Not a startup or onboarding client. |
 | [OpenCode escalation gate](opencode-escalation-gate.md) | You install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. |
+
+To enable, disable or operate Smart Routing for a project, use the [Smart Routing procedure](../skills/manage-usage-routing/references/smart-routing.md).
 
 The [workspace requirements](workspace-requirements.md) list what every installed client needs; `prepare-my-workspace` and `onboard-my-project` read it through `workflow.py workspace status`.
 

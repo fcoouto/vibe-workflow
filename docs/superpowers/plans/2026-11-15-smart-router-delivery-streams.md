@@ -313,7 +313,7 @@ qualification fixes only where existing harness consumers lack required source b
 ## Recovered pre-canary, cutover and default-ON obligations
 
 The inherited 8 November plan was removed by `11a8927c`; its last text is
-[pinned in Git history](https://github.com/fcoouto/vibe-workflow/blob/02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6/docs/superpowers/plans/2026-11-08-smart-routing.md).
+[pinned in Git history](https://github.com/fcoouto/vibe-workflow/blob/02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6/docs/superpowers/plans/2026-11-08-smart-routing.md) (deleted in `11a8927c`; see Git history).
 Read it with `git show 02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6:docs/superpowers/plans/2026-11-08-smart-routing.md`.
 Do not restore its obsolete criteria or treat historical checkboxes as current proof.
 

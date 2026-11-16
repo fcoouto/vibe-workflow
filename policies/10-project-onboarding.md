@@ -34,7 +34,7 @@ When using managed planning, present the [Reviewed Configuration](../skills/onbo
 
 Every onboarding and authorized update adopts [checkout stability](02-task-planning.md#planning-and-verification), including its [delivery preparation and adoption procedure](../clients/delivery.md#prepare-the-destination). Record the primary checkout, designated branch and source in the existing setup record; reconcile older branch-only instructions and standing worktree opt-outs through the accepted conflict/update procedure. Preserve historical records and active-task pins; do not silently migrate checkouts or other projects. Missing designation or an unresolved conflict blocks only dependent changes, not safe inspection or independent setup work.
 
-If the user selects managed delivery or merge enforcement, load only that capability's additional procedure, prerequisites and authority. Basic checkout stability grants no merge, publication, external-route or runtime permission and adds no enforcement prerequisite. Preserve existing repository protections and explicitly selected enforcement. Local worktree cleanup remains client-owned.
+If the user selects managed delivery, merge enforcement or Smart Routing (the [Smart Routing procedure](../skills/manage-usage-routing/references/smart-routing.md)), load only that capability's additional procedure, prerequisites and authority. Basic checkout stability grants no merge, publication, external-route or runtime permission and adds no enforcement prerequisite. Preserve existing repository protections and explicitly selected enforcement. Local worktree cleanup remains client-owned.
 
 ## Client startup integration
 

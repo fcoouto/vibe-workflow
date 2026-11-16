@@ -11,7 +11,7 @@ managed project the service builds `prepare`'s observations itself, and `set man
 behind the activation gate (C.3 design 3.3, 4.2: docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md).
 
 The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
-the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
+docs/smart-routing-contract.md (it replaces Task S3.1 of the plan deleted in 11a8927c; see Git history).
 """
 from contextlib import closing
 import importlib
@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from runtime import (ledger_versions, routing, routing_funding, routing_gates, routing_paths,  # noqa: E402
                      routing_settings, subscription_reconcile, usage_budget)
 from runtime.routing_settings import SettingsError  # noqa: E402
+from runtime.routing_activation import (CAPABILITIES, MANAGED_HOSTS, SELF_CHECK_CHILD, SELF_CHECK_CODE,  # noqa: E402,F401
+                                        SELF_CHECK_MARK, SELF_CHECK_REAP, SELF_CHECK_TIMEOUT, _package, _self_check,
+                                        activation_gate, host_refusal)
 from runtime.usage_budget import BudgetError  # noqa: E402
 
 VERSION = 1
@@ -80,62 +83,14 @@ PROFILE_FIELDS = ('semantic_digest', 'work_kind', 'complexity_band', 'risk_band'
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
                  'invalid_binding', 'admission_error')
+# C1: a managed `prepare` that admits nothing for these reasons also names the collector's exclusion codes (for example
+# `quota_exhausted`, `billing_unverified`) in `reasons`: deduplicated, fixed codes only, never a route, id or value.
+EXCLUSION_REASONS = ('no_feasible_route', 'explicit_choice_unavailable')
+EXCLUSION_CODE = re.compile(r'[a-z][a-z0-9_]{0,63}')
+MAX_EXCLUSION_REASONS = 16
 # The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
 # `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
-# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's check passes. In a
-# child: `module` `<module>:<function>(workdir)`, `script` PACKAGE/<target>'s `managed_self_check(workdir)`, `paths`
-# `<module>:<function>(settings path)`, `heading` a `Managed projects` heading; in process: `sources` (F4R-03).
-CAPABILITIES = (
-    ('collector_and_launcher', 'module', 'runtime.routing_launch:managed_self_check'),  # C3-1
-    ('route_manifest', 'paths', 'runtime.routing_paths:gate'),  # F4: path rules, qualifications and the table
-    ('subscription_sources', 'sources', 'runtime.native_routing:activation_readiness'),  # F4R-03: per managed host
-    ('native_delegation', 'module', 'runtime.delegation_routing:managed_self_check'),  # C3-2
-    ('opencode_launcher', 'module', 'runtime.opencode_launcher:managed_self_check'),  # C3-3
-    ('openrouter_proposals', 'script', 'scripts/openrouter_proposals.py'),  # C3-4a
-    ('openrouter_workers', 'script', 'scripts/openrouter_workers.py'),  # C3-4b
-    ('api_usage', 'module', 'runtime.usage_routing:managed_self_check'),  # C3-5
-    ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
-)
-# Clients with a managed delegation path (policy 03 `Managed projects`): codex (C3-2, the native bridge), opencode (the
-# launcher, C3-3), claude-code (the native bridge, F4.6); a project enrolled only for others: `advisory_host_unmanaged`.
-MANAGED_HOSTS = ('codex', 'opencode', 'claude-code')
-SELF_CHECK_TIMEOUT = 10
-SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
-SELF_CHECK_MARK = 'managed-self-check:'
-SELF_CHECK_CODE = re.compile(r'[a-z0-9_]{1,64}')
-# Runs in the child: the package root (argv[1]) first on the import path, never the project checkout.
-SELF_CHECK_CHILD = r'''
-import sys
-sys.path.insert(0, sys.argv[1])
-import importlib, importlib.util, json, os, re
-package, kind, target, workdir, settings = sys.argv[1:6]
-def run():
-    if kind in ('module', 'paths'):
-        name, _, function = target.partition(':')
-        try:
-            check = getattr(importlib.import_module(name), function)
-        except (ImportError, AttributeError):
-            return ['self_check_missing']
-        return check(settings if kind == 'paths' else workdir)
-    path = os.path.join(package, target)
-    if not os.path.isfile(path):
-        return ['self_check_missing']
-    if kind == 'script':
-        spec = importlib.util.spec_from_file_location('managed_self_check_script', path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        check = getattr(module, 'managed_self_check', None)
-        return ['self_check_missing'] if check is None else check(workdir)
-    with open(path, encoding='utf-8') as handle:
-        text = handle.read()
-    return [] if re.search(r'^#+ Managed projects[ \t]*$', text, re.M) else ['heading_missing']
-try:
-    result = run()
-except Exception:
-    result = ['self_check_error']
-sys.stdout.write('\n' + %r + json.dumps(result, default=str) + '\n')
-''' % SELF_CHECK_MARK
 
 
 class Blocked(Exception):
@@ -205,6 +160,16 @@ def _table_shape(value):
 
 def _public(record):
     return {key: record[key] for key in ADMISSION_FIELDS if key in record}
+
+
+def _pending_reasons(result, observations):
+    """`admit`'s reason codes, plus the collector's exclusion codes when nothing was feasible (C1)."""
+    excluded = observations.get('excluded') if type(observations) is dict else None
+    if result['reason_code'] not in EXCLUSION_REASONS or type(excluded) is not list:
+        return result['reason_codes']
+    codes = dict.fromkeys(item.get('reason') for item in excluded if type(item) is dict)
+    codes = [code for code in codes if type(code) is str and EXCLUSION_CODE.fullmatch(code)]
+    return list(dict.fromkeys([*result['reason_codes'], *codes[:MAX_EXCLUSION_REASONS]]))
 
 
 def _busy(error):
@@ -402,6 +367,11 @@ class Service:
         except Exception:  # noqa: BLE001 - fail closed: caller observations are refused
             return True
 
+    def _authority(self):
+        """The ledger's one-way `authority_required` switch as `status` reports it (`ledger_summary`); no ledger: off."""
+        ledger = self._ledger(False)
+        return ledger is not None and routing.ledger_summary(ledger.snapshot())['authority_required']
+
     def _collect(self, selected):
         """The collector's snapshot and `seen` revisions for a managed project; `seen` passes through as an opaque
         mapping. The collector reads this service's own stores, never the defaults. A missing or failing collector
@@ -493,7 +463,8 @@ class Service:
                                workflow=None if bound is None else bound[1], clear_debits=clear)
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
-            return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'], **echo)
+            return dict(state='pending', reason=result['reason_code'],
+                        reasons=_pending_reasons(result, observations if seen is not None else None), **echo)
         stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
                     workflow_bound=stored.get('job') is not None,
@@ -691,6 +662,7 @@ class Service:
                     settings_revision=revision, settings_warnings=self._warnings, legacy_caps=legacy, ledger=ledger,
                     test_inputs=self.test_inputs,
                     project_pinned=self.project is not None,
+                    **(dict(managed=self._managed()) if self.project is not None else {}),  # E6: `managed_project`
                     windows=windows)
 
     def _set(self, body):
@@ -771,15 +743,16 @@ class Service:
             routing_settings._managed_projects(value)  # still distinct once resolved
         except (SettingsError, OSError, RuntimeError):
             raise Blocked('invalid_managed_projects') from None
-        if set(value) - set(self._settings()['managed_projects']):
+        added = sorted(set(value) - set(self._settings()['managed_projects']))
+        if added:
             from runtime import delegation_routing  # C3-2: no project joins with an unrouted native launch open
-            _require_managed_hosts(delegation_routing, sorted(set(value) - set(self._settings()['managed_projects'])))
-            require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
-                'managed_projects']))), 'open_unrouted_assignments')
+            refusal = host_refusal(delegation_routing, added)
+            if refusal is not None:
+                raise Blocked(refusal[0], projects=refusal[1])
+            require(not any(map(delegation_routing.open_unrouted_assignments, added)), 'open_unrouted_assignments')
             from runtime import native_routing
-            native_routing.acquire_billing(
-                sorted(set(value) - set(self._settings()['managed_projects'])), self.settings_path)
-            codes = activation_gate(self.settings_path, sorted(set(value) - set(self._settings()['managed_projects'])))
+            native_routing.acquire_billing(added, self.settings_path)
+            codes = activation_gate(self.settings_path, added, authority=self._authority)
             if codes:
                 raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
         return dict(change, managed_projects=value)
@@ -837,7 +810,7 @@ def serve(service, stdin, stdout):
 
 
 def default_settings():
-    return Path.home() / '.local/state/vibe-workflow/routing/settings.json'
+    return routing_settings.default_path()
 
 
 def default_ledger():
@@ -853,88 +826,6 @@ def managed_service(checkout, scope=None):
     resolve = None if scope is None else (lambda locator: scope)
     return Service(default_settings(), default_ledger(), project=project,
                    workflow=routing_gates.D6Workflow(resolve=resolve, project=project))
-
-
-def _package():
-    from runtime import state  # the plugin package root, never the project checkout
-    return state.PACKAGE
-
-
-def _self_check(kind, target, settings_path):
-    """One capability's self-check in a child of this interpreter, in a fresh owner-only sandbox with a fixed
-    environment, deleted afterwards; `paths` checks read the service's absolute `settings_path`, the others ignore
-    it. Returns its failure codes ([] when it passes)."""
-    import shutil, signal, subprocess, tempfile  # noqa: E401 - only `set managed_projects` runs self-checks
-    folder = Path(tempfile.mkdtemp(prefix='routing-self-check-')).resolve()
-    try:
-        for name in ('home', 'tmp', 'work'):
-            (folder / name).mkdir(mode=0o700)
-        env = dict(PATH='/usr/bin:/bin', HOME=str(folder / 'home'), TMPDIR=str(folder / 'tmp'), LANG='C.UTF-8')
-        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, str(_package()), kind, target,
-                                  str(folder / 'work'), str(settings_path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, env=env, cwd=folder / 'work', start_new_session=True)
-        try:
-            output, _ = child.communicate(timeout=SELF_CHECK_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(child.pid, signal.SIGKILL)  # the whole process group, not just the child
-            except OSError:
-                pass
-            try:
-                child.communicate(timeout=SELF_CHECK_REAP)
-            except subprocess.TimeoutExpired:
-                child.stdout.close()
-                child.wait()
-            return ['self_check_timeout']
-        lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
-        try:
-            codes = json.loads(lines[-1][len(SELF_CHECK_MARK):])
-        except (IndexError, ValueError):
-            return ['self_check_error']
-        if type(codes) is not list or len(codes) > 16 or not all(
-                type(code) is str and SELF_CHECK_CODE.fullmatch(code) for code in codes):
-            return ['self_check_invalid']
-        return codes if child.returncode == 0 or codes else ['self_check_error']
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
-
-
-def _require_managed_hosts(delegation_routing, projects):
-    """Refuse adding a project none of whose configured or active clients is in MANAGED_HOSTS. A project with neither
-    a canonical record nor a resolving legacy codex scope is `not_enrolled`; an unreadable enrolment fails closed
-    (`enrolment_unavailable`). Read-only, before the self-checks and any ledger lock."""
-    unreadable, unenrolled, advisory = [], [], []
-    for project in projects:
-        try:
-            hosts = delegation_routing.enrolled_hosts(project)
-        except delegation_routing.NotEnrolled:
-            unenrolled.append(project)
-            continue
-        except Exception:  # noqa: BLE001 - e.g. RuntimeScopeError or OSError: unknown enrolment never joins
-            unreadable.append(project)
-            continue
-        if not set(hosts) & set(MANAGED_HOSTS):
-            advisory.append(project)
-    if unreadable:
-        raise Blocked('enrolment_unavailable', projects=unreadable)
-    if unenrolled:
-        raise Blocked('not_enrolled', projects=unenrolled)
-    if advisory:
-        raise Blocked('advisory_host_unmanaged', projects=advisory)
-
-
-def activation_gate(settings_path, projects=()):
-    """The failing capabilities as {name: codes}; empty when every check passes."""
-    failures = {}
-    for name, kind, target in CAPABILITIES:
-        if kind == 'sources':
-            module, _, function = target.partition(':')
-            codes = getattr(importlib.import_module(module), function)(list(projects), settings_path)
-        else:
-            codes = _self_check(kind, target, settings_path)
-        if codes:
-            failures[name] = codes
-    return failures
 
 
 def _arguments(argv):

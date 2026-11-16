@@ -145,11 +145,12 @@ class AcquisitionTests(Stores):
         native_catalog.store_snapshot(self.settings, 'claude-code', dict(
             binding=binding, models=[dict(alias=IDENTITY['model'], resolved=None, efforts=['high'])]))
         service = self.service_for_project(one_shot=True)
+        self.assertEqual(service.handle(b'{"v":1,"op":"set","authority_required":true}')['state'], 'updated')  # E2
         with mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=['claude-code']), \
                 mock.patch.object(delegation_routing, 'open_unrouted_assignments', return_value=[]), \
                 mock.patch.object(native_routing, '_runtime_delegation', return_value=None), \
                 mock.patch.object(native_catalog, 'current_binding', return_value=binding), \
-                mock.patch.object(command, '_self_check', return_value=[]):
+                mock.patch('runtime.routing_activation._self_check', return_value=[]):
             answer = service.handle(json.dumps(dict(v=1, op='set', expected_revision=0,
                 change=dict(managed_projects=[str(self.project)]))).encode())
             self.assertEqual(answer['state'], 'updated', answer)
@@ -178,7 +179,7 @@ class AcquisitionTests(Stores):
         with mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=['claude-code']), \
                 mock.patch.object(delegation_routing, 'open_unrouted_assignments', return_value=[]), \
                 mock.patch.object(native_routing, '_runtime_delegation', return_value='managed_delegation_required'), \
-                mock.patch.object(command, '_self_check', return_value=[]):
+                mock.patch('runtime.routing_activation._self_check', return_value=[]):
             answer = service.handle(json.dumps(dict(v=1, op='set', expected_revision=0,
                 change=dict(managed_projects=[str(self.project)]))).encode())
         self.assertEqual(answer['codes']['subscription_sources'], ['claude_code_native_bridge_unavailable'])

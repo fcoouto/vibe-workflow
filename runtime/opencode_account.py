@@ -9,7 +9,7 @@ store.
 
 - Claude: the active `claude-agent` credential must be `external`/`claude-login`, which is the native Claude Code
   login. Its identity is the native one (`claude_usage.account`, rechecked at every read); when it is not current,
-  the existing native reader runs once with no window demanded (`need=()`: account identity; quota unknown). Its
+  the existing native reader runs once, asking for `5h`/`7d` only when a route demands them (else `need=()`). Its
   zero-token `get_usage` exchange is how that identity is read. None proved: refused.
 - ChatGPT: the active `openai` credential must be `oauth`/`chatgpt-token-sharing`. The key is the access JWT's `sub`
   claim (its payload is decoded locally; no signature check is possible or claimed) with the credential id, so a token
@@ -18,8 +18,9 @@ store.
   the `x-opencode-org-id` header the Go provider sends: that proves where Go requests are attributed. That the key
   belongs to the workspace is user-attested. A replaced key or another Console account changes the generation.
 
-A fact only confirms the account: these routes' quota stays unknown, so they are provider-managed fallback, never an
-included claim. The OpenCode ChatGPT subject and the native Codex login are never merged into one identity.
+A fact only confirms the account. Go and ChatGPT quota stays unknown (provider-managed fallback, never an included
+claim); OpenCode Claude may claim from the native login's bound rows while that login is current (`native_rows`).
+The OpenCode ChatGPT subject and the native Codex login are never merged into one identity.
 """
 import base64
 import hashlib
