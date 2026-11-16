@@ -396,10 +396,28 @@ is never released by this identity check. Preserve prior-turn close refusal.
 **Negative scope accepted:** `71f3bac`, eight committed modules, 177 tests,
 zero skips, independent review approved. All three real OpenCode families refuse
 inferred identity; synthetic connection-change consumer proof covers Claude
-through the shared gate. **Task 4 remains blocked:** no supported selected-account
-projection exists in the accepted evidence for Claude or ChatGPT; Go lacks
-member/sign-in identity and provider-to-meter linkage. No positive source was
-implemented or qualified, and all-five readiness remains incomplete.
+through the shared gate.
+
+**Positive sources delivered (2026-11-16, user-authorized real-account
+exploration):** the earlier "no supported source" finding is superseded. On
+OpenCode 2.2.6 the selected connections are readable through one bounded
+`opencode api --standalone GET /api/credential` (parsed in memory; only
+domain-separated digests, a per-family generation and fixed reasons persist, in a
+private 0600 store). `runtime/opencode_account.py` derives identity for Claude
+(native Claude login plus an identity-only native read), ChatGPT (JWT `sub` plus
+credential id; unsigned-trust, not merged with native Codex) and Go (Console
+account/org, Go credential id and key digest; attribution proved by the
+`x-opencode-org-id` header of exactly one `opencode-go` entry in `GET
+/api/provider` equal to the Console org; key-to-workspace is user-attested). Every
+OpenCode fact has quota unknown, so these routes are provider-managed fallback
+only, never an included claim. Commits `3ee5117c`, `7b041df4`, `c9d9e2e3`,
+`95d1d4e3`, `cd8b0126`, `8ef00a06`, `6de6a74a`, `4ceb0c33`; two independent
+reviews found no secret leak, permit bypass, wrong model/variant or hidden charge.
+Real launcher runs found and fixed: a literal `none` variant being dropped (our
+shim refused `route_mismatch`), failed host turns reported as success
+(`host_turn_failed`, settlement unchanged), and a created-session model readback
+check. Variant-less models are refused before sending on 2.2.6 (documented
+unqualified).
 
 **Files:** Task 4 files in the map; existing `tests/test_opencode_launcher.py`,
 `test_opencode_subscription.py`, `test_opencode_subscription_wiring.py`,
@@ -419,7 +437,7 @@ Missing quota is optional; missing selected-account identity remains a refusal.
   leave those positive bindings blocked unless new authorized local evidence
   supplies one. Apply the same check to Go's account/workspace provenance.
   Report the exact missing field/source; no speculative parser or new API proposal.
-- [ ] **3. For an evidenced source only, write its failing positive projection/
+- [x] **3. (done 2026-11-16; see delivered sources above.) For an evidenced source only, write its failing positive projection/
   launch test, implement the minimal connection-bound fact, then verify fallback
   through the existing launcher.** A double proves consumer behavior, not that the
   real producer exists. Unsupported families stay explicitly incomplete.
@@ -435,8 +453,13 @@ needed no runtime change. New real-source regressions and current guidance
 separate account/catalog readiness, included optimization and live authority.
 The new tests passed initially and are regression proof, not earlier TDD.
 Validation Edit 15 retains historical limits and proposes, but does not authorize
-or execute, a separate finite fallback packet. Full-suite/platform execution,
-independent whole-branch review and final publication remain pending.
+or execute, a separate finite fallback packet. Final gates on `4ceb0c33`: full
+suite 5,073 tests (4 skipped) OK; Python 3.11 29 modules/740 tests OK; partial
+offline Linux 173 tests plus 18 pilot-guard tests, with two errors that are only the
+missing `git` binary in the cached image. A live run with the real launcher on this
+user's three OpenCode accounts completed one tiny request each as provider-managed
+fallback (reserved `{}`, one permit, hold released, no open holds) and refused a
+no-connection control with nothing sent.
 
 **Files:** `runtime/native_routing.py:activation_readiness`,
 `runtime/routing_launch.py:readiness`, `tests/qualification/replay_strict.py`,
