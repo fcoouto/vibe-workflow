@@ -249,3 +249,33 @@ def retained_parent_task(scope, selector, before_ref):
         d3._require(task is not None and task.get('qualification_before') == reference,
             'Original retained parent before binding changed')
         return dict(identity, expected_revision=task['revision'], turn_id=task['turn_id'], call_id=call_id, stream='parent')
+
+
+def retained_readback(scope, task_ref, attempt_ref, *, case_id, projection, proofs):
+    """Recheck the issued native source relation before consuming its Core receipt."""
+    from runtime import doctor
+    from runtime.adapters import codex
+    try:
+        binding = projection['binding']
+        child = task_ref.get('stream') == 'child'
+        thread = binding['worker_id'] if child else binding['parent_session_id']
+        path, separator, _ = proofs[0]['reference'].partition('#bytes:')
+        d3._require(separator and proofs[1]['reference'].startswith(path + '#bytes:'),
+            'Managed native sources belong to different rollouts')
+        path = startup._canonical_path(path)
+        d3._no_links(path)
+        info = path.stat()
+        physical = dict(device=info.st_dev, inode=info.st_ino)
+        raw = d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical)
+        records = doctor.native_behavior_records(raw, thread_id=thread, source_reference=str(path))
+        fact = startup._canonical_plain(codex._native_managed_tool(records,
+            submitted_patch=projection['probe']['patch'], turn_id=task_ref['turn_id'],
+            call_id=task_ref['call_id'], case_id=case_id, child_patch=child, raw=raw))
+        d3._require(fact['call_id'] == task_ref['call_id'] and fact['sources'] == proofs[:2],
+            'Managed native identity relation changed')
+        actual = readback(scope, task_ref, attempt_ref, case_id=case_id)
+        d3._require(d3._read_file(path, codex.NATIVE_MAX_FILE, expected_binding=physical) == raw,
+            'Managed native source changed during retained readback')
+        return fact, actual
+    except (doctor.ObservationError, OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
+        raise startup.StartupError('Retained native hook correlation is unavailable') from None

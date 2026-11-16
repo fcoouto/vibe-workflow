@@ -126,28 +126,61 @@ def _auth_mark(env):
     return 'absent' if marks == [None, None] else tuple(marks)
 
 
-def _message(method, ident=None):
-    if method not in METHODS:
+def _message(method, ident=None, params=None, *, account=False):
+    metadata = account and method in ('account/read', 'model/list')
+    if method not in METHODS and not metadata:
         raise ReadError('codex_method_refused')  # nothing else is ever sent
+    if metadata:
+        if method == 'account/read':
+            valid = type(params) is dict and set(params) == {'refreshToken'} and params['refreshToken'] is False
+        else:
+            valid = (type(params) is dict and {'limit', 'includeHidden'} <= set(params)
+                     and set(params) <= {'limit', 'includeHidden', 'cursor'}
+                     and type(params['limit']) is int and 1 <= params['limit'] <= 32
+                     and params['includeHidden'] is False
+                     and ('cursor' not in params or type(params['cursor']) is str
+                          and 0 < len(params['cursor']) <= 4096 and params['cursor'].isprintable()))
+        if not valid:
+            raise ReadError('codex_method_refused')
+    elif params is not None:
+        raise ReadError('codex_method_refused')
     value = dict(method=method)
     if ident is not None:
         value['id'] = ident
     if method == 'initialize':
         value['params'] = dict(clientInfo=dict(name=CLIENT_NAME, title='vibe-workflow rate-limit reader', version='1'))
+    elif metadata:
+        value['params'] = params
     return (json.dumps(value) + '\n').encode()
 
 
 class _Session:
-    def __init__(self, process, deadline):
+    def __init__(self, process, deadline, *, account=False):
         self.process, self.deadline, self.buffer, self.seen = process, deadline, b'', 0
+        self.account = account
         self.selector = selectors.DefaultSelector()
         os.set_blocking(process.stdout.fileno(), False)
         self.selector.register(process.stdout, selectors.EVENT_READ)
+        os.set_blocking(process.stdin.fileno(), False)
+        self.writer = selectors.DefaultSelector()
+        self.writer.register(process.stdin, selectors.EVENT_WRITE)
 
-    def send(self, method, ident=None):
+    def send(self, method, ident=None, params=None):
+        pending = memoryview(_message(method, ident, params, account=self.account))
         try:
-            self.process.stdin.write(_message(method, ident))
-            self.process.stdin.flush()
+            while pending:
+                if self.deadline - time.monotonic() <= 0:
+                    raise ReadError('codex_timeout')
+                try:
+                    written = os.write(self.process.stdin.fileno(), pending)
+                except BlockingIOError:
+                    written = 0
+                if written:
+                    pending = pending[written:]
+                    continue
+                left = self.deadline - time.monotonic()
+                if left <= 0 or not self.writer.select(left):
+                    raise ReadError('codex_timeout')
         except OSError:
             raise ReadError('codex_exited') from None
 
@@ -190,7 +223,14 @@ class _Session:
 
 def _exited(pid, seconds):
     """Whether the leader exited within `seconds`, polled without reaping it: while it is unreaped its pid and
-    process group id cannot be reused, so a group signal reaches only its own group."""
+    process group id cannot be reused, so a group signal reaches only its own group.
+
+    Without a non-reaping `os.waitid` (macOS Python 3.11) exit cannot be observed without reaping, so this waits the
+    whole grace and answers False: the caller then signals the still-unreaped group (harmless if it already exited)
+    before it reaps. Conservative: a normal exit is also signalled, and each stop takes its full graces."""
+    if not hasattr(os, 'waitid'):
+        time.sleep(seconds)
+        return False
     end = time.monotonic() + seconds
     while True:
         try:
@@ -230,8 +270,9 @@ def _stop(process, normal):
         pass
 
 
-def exchange(command, environ, timeout=TIMEOUT, timing=None):
-    """One short-lived app-server: `initialize`, `initialized`, `account/rateLimits/read`, then kill its group."""
+def exchange(command, environ, timeout=TIMEOUT, timing=None, *, _read=None):
+    """One bounded app-server; quota-only by default. The code-selected native account producer may supply
+    `_read(session, initialize_response)` using only the extra read-only account/catalog methods."""
     env = child_env(environ)
     before = _auth_mark(env)
     started = time.monotonic()
@@ -242,14 +283,17 @@ def exchange(command, environ, timeout=TIMEOUT, timing=None):
         raise ReadError('codex_unavailable') from None
     normal = False
     try:
-        session = _Session(process, started + timeout)
+        session = _Session(process, started + timeout, account=_read is not None)
         session.send('initialize', 1)
-        session.response(1)
+        init = session.response(1)
         if timing is not None:
             timing['spawn_ms'] = int((time.monotonic() - started) * 1000)
         session.send('initialized')
-        session.send('account/rateLimits/read', 2)
-        result = session.response(2)
+        if _read is None:
+            session.send('account/rateLimits/read', 2)
+            result = session.response(2)
+        else:
+            result = _read(session, init)
         normal = True
     finally:
         _stop(process, normal)

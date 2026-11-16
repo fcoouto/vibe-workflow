@@ -2,6 +2,58 @@
 
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
+**Approved design revision, 15 November:** the user approved trustworthy quota
+optimization plus provider-managed fallback in the
+[focused amendment](2026-11-15-smart-router-provider-managed-design.md).
+Its implementation plan is being prepared; design approval changes no runtime,
+activation or live budget. Existing account-settings permissions remain in force.
+
+## Account-based routing simplification, approved 15 November 2026
+
+The user approved routing to an enabled account **with its existing settings**,
+including automatic paid overflow when that account permits it. This amendment
+supersedes earlier requirements to prove paid crossover is disabled, require a
+stable account UUID, or attest another running coordinator's complete effective
+settings. It does not change historical evidence or claim those old checks passed.
+
+- **Account identity:** use email, organization when present, and sign-in type
+  reported by the native client used for the account. Store a nonsecret derived
+  key rather than raw personal identifiers. A changed key invalidates reused
+  account/catalog/usage data. An organization alone is not an account. No UUID,
+  identity framework or cross-process settings fingerprint is required.
+- **Billing:** account enablement permits that account's existing provider-managed
+  paid fallback. Do not require Extra Usage to be disabled, reject an account
+  because it is enabled or unknown, or change credits, caps, billing settings,
+  authentication, permissions or customizations. Do not buy credit or create an
+  account. Distinguish provider-managed overflow from remaining included quota;
+  never manufacture subscription headroom. Exhausting included quota must not
+  silently prohibit the account's normal provider-managed fallback. Reading an
+  Extra Usage flag is not a new dispatch prerequisite: prefer usable included
+  allowance where available, otherwise let the enabled account's provider enforce
+  its own configuration. Represent provider-managed fallback separately from
+  included-quota reservations. Provider refusals still stop work.
+- **Launch controls:** use supported native catalog aliases and model/effort
+  parameters. Preserve explicit choices, native-only provider boundaries,
+  one-use dispatch and uncertain-send handling. Report served-model mismatches
+  where exposed; keep unreported effort unknown. A supported catalog snapshot
+  and these ordinary launch checks replace exhaustive coordinator attestation.
+- **Usage:** read only when stale and needed, reuse existing observations and
+  incidental response data, and keep reads bounded with locking/backoff. Preserve
+  conservative observation time; cached fallback is not a fresh fetch. Missing
+  readings and unsupported applicable constraints remain unknown, not zero or
+  spare capacity. Keep genuine shared pools/reservations without duplicating
+  allowance across aliases.
+- **Scope:** direct API Usage remains required next release and production
+  OpenRouter remains deferred. Their existing funding/reservation/reconciliation
+  controls remain intact. Provider-managed overflow on an enabled native account
+  is not a newly enabled direct API route or a separate workflow credit purchase.
+  No activation or new qualification/model-send budget follows from this amendment.
+
+Keep the existing router, ledger and thin native bridge. Implement the simplest
+producer-to-consumer path with stdlib code, focused regression/end-to-end tests and
+independent review. No new daemon, policy engine, provider-setting manager,
+account-control framework or native-host rewrite is a prerequisite.
+
 ## Advisory replay retirement, 13 November 2026
 
 The user approved retiring the pre-canary historical/prospective advisory replay

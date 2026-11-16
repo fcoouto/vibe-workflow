@@ -108,6 +108,22 @@ def refuse(name):
     return call
 
 
+NATIVE_KEY = 'a' * 32  # an invented derived native Claude account key
+
+
+def native_reading(settings, windows, at):
+    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record and
+    `claude-subscription` rows bound to it. A code-level fixture, never a qualified observation."""
+    from runtime import claude_usage
+    current = claude_usage._state(settings).get('account') or {}
+    first = min([item['observed_at'] for item in windows] + ([current['usage_at']] if current.get('usage_at') else []))
+    claude_usage._save(settings, account=dict(key=NATIVE_KEY, observed_at=at, client_version='invented-2',
+                                              overflow='unknown', usage_at=first))
+    for item in windows:
+        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], NATIVE_KEY),
+                                                                 account=NATIVE_KEY))
+
+
 class Stores(unittest.TestCase):
     """Temporary routing settings and ledger, both away from every default path."""
 
@@ -489,6 +505,8 @@ class GatewayDerivationTests(Stores):
 
 CLAUDE_PATH, CHATGPT_PATH = 'opencode-claude-subscription', 'opencode-chatgpt-subscription'
 CLAUDE_HARNESS, CHATGPT_HARNESS = 'claude-agent-sdk via opencode', 'opencode provider openai'
+CODEX_PATH, CODEX_HARNESS = 'codex-chatgpt-subscription', 'codex-native'
+NATIVE_CODEX, OPENCODE_CHATGPT = CODEX_PATH + ':n1', CHATGPT_PATH + ':o1'  # both draw on one `chatgpt-subscription` pool
 
 
 def strategy(sid, harness=CLAUDE_HARNESS, provider='claude-agent', model=None, effort='high', **extra):
@@ -820,6 +838,67 @@ class LocalSourceTests(Stores):
             result = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CHATGPT_HARNESS])
         self.assertEqual(read, ['chatgpt-subscription'])
         self.assertEqual(set(result['observations']['pools']), {'chatgpt-subscription'})
+
+    # -- native Codex provenance: the shared ChatGPT pool's unbound rows are OpenCode's, never the native login's ----
+    def codex_table(self):
+        self.qualify(CODEX_PATH)
+        self.qualify(CHATGPT_PATH)
+        return table_of(strategy('n1', harness=CODEX_HARNESS, provider='openai'),
+                        strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+
+    def test_native_codex_never_uses_unbound_shared_pool_rows_or_the_legacy_reader(self):
+        from runtime import codex_rate_limits
+        table = self.codex_table()
+        self.store('chatgpt-subscription', '7d')  # a fresh unbound row: OpenCode's reading, not the native login's
+        reader = mock.Mock(return_value=dict(state='stored'))
+        with mock.patch.object(codex_rate_limits, 'refresh', reader):
+            result = self.collect(table=table, strategy_ids=['n1'], harnesses=[CODEX_HARNESS], refresh_windows=True)
+        self.assertEqual((kept(result), excluded(result)), ({}, {NATIVE_CODEX: 'window_unobserved'}))
+        self.assertEqual(reader.call_count, 0)
+
+    def test_an_account_tagged_row_does_not_rescue_native_codex(self):
+        table = self.codex_table()
+        collector.store_window(self.settings, 'chatgpt-subscription', sub_window(self.now, id='7d', account='acct-1'))
+        result = self.collect(table=table, strategy_ids=['n1'], harnesses=[CODEX_HARNESS])
+        self.assertEqual((kept(result), excluded(result)), ({}, {NATIVE_CODEX: 'window_unobserved'}))
+
+    def test_native_codex_does_not_poison_opencode_chatgpt_in_either_shortlist_order(self):
+        table = self.codex_table()
+        self.store('chatgpt-subscription', '7d')
+        for order in (['n1', 'o1'], ['o1', 'n1']):
+            with self.subTest(order=order):
+                result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS])
+                self.assertEqual(set(kept(result)), {OPENCODE_CHATGPT})
+                self.assertEqual(excluded(result), {NATIVE_CODEX: 'window_unobserved'})
+                windows = result['observations']['pools']['chatgpt-subscription']['windows']
+                self.assertEqual([window['id'] for window in windows], ['7d'])
+
+    def test_the_legacy_reader_runs_once_for_opencode_only_in_either_shortlist_order(self):
+        from runtime import codex_rate_limits
+        table = self.codex_table()
+        self.store('chatgpt-subscription', '7d', at=self.now - collector.FRESH_SECONDS - 60)  # stale
+        for order in (['n1', 'o1'], ['o1', 'n1']):
+            with self.subTest(order=order):
+                reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
+                with mock.patch.object(codex_rate_limits, 'refresh', reader):
+                    result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS],
+                                          refresh_windows=True)
+                self.assertEqual(reader.call_count, 1)  # OpenCode's pool read; the native route starts none
+                self.assertEqual(excluded(result), {OPENCODE_CHATGPT: 'codex_unavailable',
+                                                    NATIVE_CODEX: 'window_unobserved'})
+
+    def test_native_codex_uses_only_its_own_window_source(self):
+        """A code-level double stands in for a future qualified native Codex window source (today
+        `codex_account.usable_windows` is `[]`); the collector must take its rows, not the pool's stored ones."""
+        from runtime import codex_account
+        table = self.codex_table()
+        self.store('chatgpt-subscription', '7d')  # the pool's unbound row reads used=100
+        own = [sub_window(self.now, id='7d', used=40)]
+        with mock.patch.object(codex_account, 'usable_windows', lambda settings_path, now, stored=None: list(own)):
+            result = self.collect(table=table, strategy_ids=['n1'], harnesses=[CODEX_HARNESS])
+        self.assertEqual(set(kept(result)), {NATIVE_CODEX})
+        windows = result['observations']['pools']['chatgpt-subscription']['windows']
+        self.assertEqual([window['used'] for window in windows], [40])
 
 
 class ManagedFixtureTests(unittest.TestCase):

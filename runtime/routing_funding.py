@@ -25,6 +25,14 @@ def subscription_shortlist(strategy_ids, routes):
     return found
 
 
+def prefer_included(candidates):
+    """Included allowance first: provider-managed fallback candidates (`fallback`: on fresh readings the included room
+    left after reported use, held reservations and debits cannot cover the reservation, so no included claim is made
+    and the enabled account's provider applies its own overflow configuration) are considered only when no candidate
+    has included room."""
+    return [item for item in candidates if not item.get('fallback')] or candidates
+
+
 def is_ranked(assignment, ranking, settings):
     """`routing._decide`'s mode rule: Smart Routing on, no explicit choice and a non-empty ranking."""
     return bool(settings['smart_routing'] and not assignment.get('choice') and ranking.get('strategy_ids'))
@@ -114,7 +122,8 @@ def _replay(item, ranked):
     constraints = [{key: value for key, value in constraint.items() if key != 'pool'}
                    for constraint in item['constraints']]
     return dict(route=item['route'], strategy_id=item['spec'].get('strategy_id') if ranked else None,
-                cls=item['cls'], pool=item['pool'], constraints=constraints)
+                cls=item['cls'], pool=item['pool'], constraints=constraints,
+                **({'fallback': True} if item.get('fallback') else {}))  # replay tells fallback from included room
 
 
 def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking, settings, observations,
@@ -132,6 +141,8 @@ def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, rea
     now, horizon = observations['now'], observations.get('minimum_horizon', routing.DEFAULT_MINIMUM_HORIZON)
     item = next(c for c in candidates if c['route'] == chosen)
     spec = item['spec']
+    if item.get('fallback'):  # recorded distinctly: provider-managed overflow, never included headroom
+        reasons = [*reasons, routing.FALLBACK]
     credential = spec.get('credential') or {}
     ranked = mode == 'ranked'
     harnesses = assignment.get('allowed_harnesses') or []

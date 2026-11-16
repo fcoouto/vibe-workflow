@@ -94,7 +94,8 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             '  payload=data["tool_hook_payload"];result=subprocess.run(data["tool_hook_command"],input=json.dumps(payload),text=True,capture_output=True,check=True,timeout=5)\n'
             '  pre=json.loads(result.stdout) if result.stdout.strip() else {}\n'
             '  decision=pre.get("hookSpecificOutput",{});command=payload["tool_input"]["command"]\n'
-            '  records=[dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="task_started",turn_id=payload["turn_id"])),dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="custom_tool_call",name="apply_patch",call_id=payload["tool_use_id"],input=command))]\n'
+            '  native_call_id=data.get("native_call_id",payload["tool_use_id"])\n'
+            '  records=[dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="task_started",turn_id=payload["turn_id"])),dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="custom_tool_call",name="apply_patch",call_id=native_call_id,input=command))]\n'
             '  if data.get("post_tool_hook_command"):\n'
             '   assert decision.get("permissionDecision")!="deny"\n'
             '   write=data["approved_write"];path=Path(write["path"]);assert hashlib.sha256(path.read_bytes()).hexdigest()==write["before_sha256"];path.write_text(write["after"])\n'
@@ -103,14 +104,18 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             '   records.extend([dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="function_call",name="fixture_read",call_id=other["tool_use_id"],arguments="{}")),dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="function_call_output",call_id=other["tool_use_id"],output="Public canary read completed"))])\n'
             '   subprocess.run(data["post_tool_hook_command"],input=json.dumps(data["post_tool_hook_payload"]),text=True,capture_output=True,check=True,timeout=5)\n'
             '   text=data["post_tool_hook_payload"]["tool_response"]\n'
+            '   if data.get("wrapped_post"):\n'
+            '    native_call=records.pop(1);native_call["payload"].update(name="exec",input="text(await tools.apply_patch("+json.dumps(command)+"));\\n");records.append(native_call)\n'
+            '    records.append(dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="item_completed",thread_id=payload["session_id"],turn_id=payload["turn_id"],item=dict(type="FileChange",id=payload["tool_use_id"],status="completed",changes={"public-canary.txt":{"type":"update"}},stdout=text,stderr=""))))\n'
+            '    text=[dict(type="input_text",text="Script completed\\nWall time 0.5 seconds\\nOutput:\\n"),dict(type="input_text",text="{}")]\n'
             '  else:\n'
             '   assert decision["permissionDecision"]=="deny"\n'
             '   text="Command blocked by PreToolUse hook: "+decision["permissionDecisionReason"]+". Command: "+command\n'
             '   if data.get("wrapped_pre"):\n'
             '    records[1]["payload"].update(name="exec",input="text(await tools.apply_patch("+json.dumps(command)+"));\\n")\n'
             '    text=[dict(type="input_text",text="Script failed\\nWall time 0.5 seconds\\nOutput:\\n"),dict(type="input_text",text="Script error:\\n"+text)]\n'
-            '  if data.get("child_patch"): text=[dict(type="input_text",text=text)]\n'
-            '  records.extend([dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="custom_tool_call_output",call_id=payload["tool_use_id"],output=text)),dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="task_complete",turn_id=payload["turn_id"]))])\n'
+            '  if data.get("child_patch") and not data.get("wrapped_post"): text=[dict(type="input_text",text=text)]\n'
+            '  records.extend([dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="custom_tool_call_output",call_id=native_call_id,output=text)),dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="task_complete",turn_id=payload["turn_id"]))])\n'
             '  with Path(data["rollout"]).open("ab") as stream: stream.write(b"".join(json.dumps(value).encode()+b"\\n" for value in records))\n'
             '  print(json.dumps(dict(type="thread.started",thread_id=data["thread_id"])),flush=True);sys.exit(0)\n'
             ' if data.get("hook_command"):\n'
@@ -534,10 +539,16 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
     def test_child_patch_receipt_rejects_a_different_tool_at_the_same_call(self):
         self._managed_hook_receipts(child_guard=True, wrong_post_tool=True)
 
-    def test_real_parent_managed_wrapped_denial_uses_original_before_and_hook_receipt(self):
+    def test_real_parent_managed_wrapped_denial_cannot_join_original_hook_receipt(self):
         self._managed_hook_receipts(child_guard=False, wrapped_pre=True)
 
-    def _managed_hook_receipts(self, *, child_guard, wrong_post_tool=False, wrapped_pre=False):
+    def test_real_parent_wrapped_completion_joins_only_the_native_inner_receipt(self):
+        self._managed_hook_receipts(child_guard=False, wrapped_post=True)
+
+    def test_real_child_wrapped_completion_retains_the_native_identity_relation(self):
+        self._managed_hook_receipts(child_guard=True, wrapped_post=True)
+
+    def _managed_hook_receipts(self, *, child_guard, wrong_post_tool=False, wrapped_pre=False, wrapped_post=False):
         import inspect
         import os
         import subprocess
@@ -683,10 +694,17 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
                 data.update(rollout=str(child_rollout), child_patch=True)
             else:
                 data.update(tool_hook_command=[*workflow, 'PreToolUse'], tool_hook_payload=payload, wrapped_pre=wrapped_pre)
+                if wrapped_pre:
+                    data['native_call_id'] = 'call-parent-rejected'
                 original['settings'].write_text(json.dumps(data))
                 subprocess.run([str(original['executable']), 'exec', '--json', 'software-parent-pre'], cwd=self.fixture.repo,
                     check=True, capture_output=True, timeout=10)
                 self.assertTrue(original['rollout'].read_bytes().startswith(before_bytes))
+                if wrapped_pre:
+                    with self.assertRaisesRegex(codex.ObservationError, '^native_hook_correlation_unavailable$'):
+                        codex.observe_managed_case(scope, task_ref(payload) | dict(call_id=data['native_call_id']),
+                            allocation['reference'], 'pre-tool-enforcement')
+                    return
                 pre = codex.observe_managed_case(scope, task_ref(payload), allocation['reference'], 'pre-tool-enforcement')
                 pre_content = doctor._native_witness_content(pre)
                 self.assertEqual(len(pre_content['observations']['pre-tool-enforcement']), 4)
@@ -701,6 +719,8 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             data.update(tool_hook_command=[*workflow, 'PreToolUse'], tool_hook_payload=payload, post_tool_hook_command=[*workflow, 'PostToolUse'], post_tool_hook_payload=post,
                 other_post_payload=other, approved_write=dict(path=str(original['canary']),
                     before_sha256=hashlib.sha256(original['canary'].read_bytes()).hexdigest(), after='after\n'))
+            if wrapped_post:
+                data.update(wrapped_post=True, native_call_id='call-completed-outer')
             original['settings'].write_text(json.dumps(data))
             completed = subprocess.run([str(original['executable']), 'exec', '--json', 'software-managed-post'],
                 cwd=self.fixture.repo, capture_output=True, text=True, timeout=10)
@@ -711,9 +731,32 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
                         case_id='post-tool-handling')
                 self.assertEqual(original['canary'].read_text(), 'after\n')
                 return
-            witness = codex.observe_managed_case(scope, task_ref(payload), allocation['reference'], 'post-tool-handling')
+            selector = task_ref(payload)
+            if wrapped_post:
+                selector['call_id'] = data['native_call_id']
+            witness = codex.observe_managed_case(scope, selector, allocation['reference'], 'post-tool-handling')
             content = doctor._native_witness_content(witness)
             self.assertEqual(len(content['observations']['post-tool-handling']), 4)
+            if wrapped_post:
+                self.assertNotEqual(selector['call_id'], payload['tool_use_id'])
+                assessment = startup._canonical_plain(prepared_scope['published']['source'].content['assessment'])
+                case = next(row for row in assessment['cases'] if row['id'] == 'post-tool-handling')
+                case.update(status='verified', evidence=content['observations']['post-tool-handling'])
+                retained = source.collect_retained_setup(prepared_scope['published']['binding']['receipt'], self.identity,
+                    'fixture:wrapped-completion-retained', assessment, witness=witness)
+                relation = retained.content['source']['managed']['post-tool-handling']['native']
+                self.assertEqual(relation['native_call_id'], 'call-completed-outer')
+                self.assertEqual(relation['call_id'], payload['tool_use_id'])
+                self.assertEqual(relation['sources'], tuple(content['observations']['post-tool-handling'][:2]))
+                rollout = child_rollout if child_guard else original['rollout']
+                raw = rollout.read_bytes()
+                rollout.write_bytes(raw.replace(b'"type": "FileChange"', b'"type": "UnprovenChange"'))
+                try:
+                    with self.assertRaises(startup.StartupError):
+                        source.collect_retained_setup(prepared_scope['published']['binding']['receipt'], self.identity,
+                            'fixture:changed-native-relation', assessment, witness=witness)
+                finally:
+                    rollout.write_bytes(raw)
             actual = startup._canonical_plain(source.managed_observation_readback(scope, task_ref(payload),
                 allocation['reference'], case_id='post-tool-handling'))
             self.assertEqual(actual['post_receipts_count'], 2)
