@@ -167,7 +167,8 @@ class CanaryWiringTests(Temp):
 
     def seed_canary(self):
         state = canary.check_canary_state(self.canary_state, home=self.home)
-        routing = Routing(state["settings"], state["ledger"])
+        routing = trusted_routing(Routing(state["settings"], state["ledger"]))  # Task 3B: labelled synthetic builder
+        self.addCleanup(routing.stop)
         canary.initialize_state(routing)
         answer, _ = routing("prepare", **qual_plan(1, "seed")[0]["body"])
         self.assertEqual(answer["state"], "admitted")
