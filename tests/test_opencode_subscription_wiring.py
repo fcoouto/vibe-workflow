@@ -120,10 +120,11 @@ class DemandGateTests(GoFlowBase):
         return self.service.preview({key: value for key, value in self.request().items() if key not in ('v', 'op')})
 
     def test_a_model_scoped_path_needs_a_verified_model_demand_mapping(self):
+        """Task 2: without a verified mapping the routes stay, with unknown demand (provider-managed fallback only)."""
         self.doubles(demand=False)
         found = self.preview()
-        self.assertEqual(found['routes'], [])
-        self.assertEqual({item['reason'] for item in found['excluded']}, {'demand_unverified'})
+        self.assertEqual((found['routes'], found['unmeasured']), ([GO + ':s-go1', GO + ':s-go2'],) * 2)
+        self.assertEqual(found['excluded'], [])
         self.assertIsNone(collector.LocalSource(self.settings).model_demand(dict(route=GO + ':s-go1')))
 
     def test_a_verified_mapping_keeps_both_aliases_on_one_pool(self):

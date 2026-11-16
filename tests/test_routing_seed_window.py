@@ -285,7 +285,8 @@ class StoreTests(SeedBase):
     def test_a_stored_window_with_another_source_is_never_a_window(self):
         self.write_store(dict({key: value for key, value in sub_window(self.now).items() if key != 'id'},
                               source='other'))
-        self.assertIn(dict(route='sub', reason='window_unobserved'), self.collect()['observations']['excluded'])
+        observations = self.collect()['observations']  # Task 2: never a window, so quota unknown: fallback only
+        self.assertEqual((observations['excluded'], [route['demand'] for route in observations['routes']]), ([], [None]))
 
     def race(self, first, second):
         """Run `first` in this thread; once it has read the store under its lock, start `second` in another thread.
@@ -418,10 +419,12 @@ class EndToEndTests(SeedBase):
             return {(item['pool'], item['window']): item['source']
                     for item in json.loads(stdout.getvalue())['windows']['windows']}
 
-        excluded = self.collect()['observations']['excluded']
-        self.assertIn(dict(route='sub', reason='window_unobserved'), excluded)
-        unobserved = prepare('e1')  # the only candidate is left out, so nothing can be admitted
-        self.assertEqual(unobserved['state'], 'pending', unobserved)
+        observations = self.collect()['observations']  # Task 2: no window yet, so its quota is unknown
+        self.assertEqual((observations['excluded'], [route['demand'] for route in observations['routes']]), ([], [None]))
+        unobserved = prepare('e1')  # admitted (unsent) only as provider-managed fallback: no included claim
+        self.assertEqual((unobserved['state'], unobserved['admission']['reserved'],
+                          unobserved['admission']['reason_codes'][-2:]),
+                         ('admitted', {}, ['quota_unknown', 'provider_managed_fallback']), unobserved)
         self.assertEqual(status(), {})
         self.assertEqual(pinned.handle(json.dumps(seed()).encode())['reason'], 'operator_op_not_served')
 
@@ -435,6 +438,8 @@ class EndToEndTests(SeedBase):
         admitted = prepare('e2')
         self.assertEqual(admitted['state'], 'admitted', admitted)
         self.assertEqual((admitted['admission']['route'], admitted['admission']['pool']), ('sub', 'sub'))
+        self.assertTrue(admitted['admission']['reserved'])  # the seeded window's actual room, an included claim
+        self.assertNotIn('provider_managed_fallback', admitted['admission']['reason_codes'])
 
         collector.store_window(self.settings, 'sub', sub_window(int(time.time()), used=250))
         self.assertEqual(status(), {('sub', '5h'): 'host'})

@@ -572,8 +572,9 @@ class RoundTripTests(Base):
         request = dict(v=1, op='prepare', job=job, observations=observations,
                        assignment=dict(attempt_id='a1', task='t1', role='software-engineer', scope='scope1'))
         results = []
+        from tests.test_routing_account_continuity import trusted_child  # Task 3B: labelled trusted-collection child
         for op, body in (('set', setting), ('prepare', request)):
-            done = subprocess.run([sys.executable, '-B', str(ROUTING), op, '--settings', str(self.settings),
+            done = subprocess.run([sys.executable, '-B', '-c', trusted_child(), op, '--settings', str(self.settings),
                                    '--ledger', str(ledger)], input=json.dumps(body).encode(), capture_output=True,
                                   timeout=60, env=dict(os.environ, HOME=str(self.root)))
             self.assertEqual(done.returncode, 0, done.stderr)

@@ -607,20 +607,19 @@ class CollectorTests(Sandbox):
         return collector.collect(self.temp.name, dict(scope='s'), settings_path=self.settings,
                                  ledger_path=Path(self.temp.name) / 'ledger.sqlite3', **options)
 
-    def test_a_missing_reading_is_read_once_per_pool_and_admitted_fresh(self):
+    def test_a_missing_reading_starts_no_pool_reader_and_admits_on_account_fallback(self):
+        # Task 3B (confirmed defect): the pool-wide reader proves no OpenCode account, so collection never starts it.
         observations = self.collect(refresh_windows=True)['observations']
-        self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.calls[0]['need'], ('7d',))
-        self.assertEqual(sorted(route['route'] for route in observations['routes']),
-                         [FIRST, SECOND])
-        self.assertEqual([(item['id'], item['used'], item['fresh']) for item in observations['pools'][POOL]['windows']],
-                         [('7d', 420, True)])
-        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
+        self.assertEqual((self.calls, self.spawns()), ([], 0))
+        self.assertEqual({route['route']: route['demand'] is None for route in observations['routes']},
+                         {FIRST: True, SECOND: True, CLAUDE: True})  # each account's provider-managed fallback only
+        self.assertEqual(observations['excluded'], [])
 
-    def test_a_fresh_reading_spawns_nothing(self):
-        self.collect(refresh_windows=True)
-        self.collect(refresh_windows=True)
-        self.assertEqual(self.spawns(), 1)
+    def test_an_operator_reading_is_never_an_included_claim(self):
+        self.assertEqual(reader.refresh(self.settings, need=('7d',))['state'], 'stored')  # the operator's one-shot
+        observations = self.collect(refresh_windows=True)['observations']
+        self.assertEqual((len(self.calls), self.spawns()), (1, 1))  # collection started nothing more
+        self.assertTrue(all(route['demand'] is None for route in observations['routes']))  # an unbound row: no claim
 
     def test_entitlement_marked_routes_are_not_read_for(self):
         for route in (FIRST, SECOND):
@@ -630,12 +629,12 @@ class CollectorTests(Sandbox):
         self.assertIn(dict(route=FIRST, reason='not_entitled'), observations['excluded'])
         collector.clear_not_entitled(self.settings, FIRST, 'chatgpt-plan')
         self.collect(refresh_windows=True)
-        self.assertEqual(self.spawns(), 1)
+        self.assertEqual(self.spawns(), 0)  # Task 3B: still no pool reader for an OpenCode alias
 
     def test_without_refresh_windows_nothing_is_read(self):
         observations = self.collect()['observations']
         self.assertEqual((self.calls, self.spawns()), ([], 0))
-        self.assertIn(dict(route=FIRST, reason='window_unobserved'), observations['excluded'])
+        self.assertIs(next(r for r in observations['routes'] if r['route'] == FIRST)['demand'], None)  # unread: unknown
 
     def test_a_static_source_never_reads(self):
         source = collector.StaticSource(collector.LocalSource(self.settings).manifest(TABLE))
@@ -643,32 +642,30 @@ class CollectorTests(Sandbox):
         self.collect(refresh_windows=True, source=source)
         self.assertEqual((self.calls, self.spawns()), ([], 0))
 
-    def test_a_failed_read_leaves_the_route_out_with_the_readers_reason(self):
+    def test_a_failing_reader_is_never_started_and_quota_stays_unknown(self):
         with mock.patch.object(self, 'command', return_value=self.command('exit_at_once')):
             observations = self.collect(refresh_windows=True)['observations']
-        for route in (FIRST, SECOND):
-            self.assertIn(dict(route=route, reason='codex_exited'), observations['excluded'])
-        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
-        self.assertEqual(observations['routes'], [])
-        again = self.collect(refresh_windows=True)['observations']  # the backoff: no process, same reason
-        self.assertIn(dict(route=FIRST, reason='codex_exited'), again['excluded'])
-        self.assertEqual(self.spawns(), 1)
+        self.assertEqual(observations['excluded'], [])  # unknown quota leaves account fallback only
+        self.assertEqual({route['route']: route['demand'] for route in observations['routes']},
+                         {FIRST: None, SECOND: None, CLAUDE: None})
+        self.assertEqual(self.spawns(), 0)  # Task 3B: the collector starts no pool reader at all
 
-    def test_a_stale_reading_with_a_failed_read_is_left_out_with_the_reason(self):
+    def test_a_stale_reading_with_a_failed_read_leaves_quota_unknown(self):
         old = int(time.time()) - collector.FRESH_SECONDS - 5
         collector.store_window(self.settings, POOL, dict(id='7d', limit=1000, used=5, length=604800,
                                                          reset_at=old + 60, unit=collector.WINDOW_UNIT,
                                                          observed_at=old))
         with mock.patch.object(self, 'command', return_value=self.command('read_error')):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route=FIRST, reason='codex_protocol_error'), observations['excluded'])
-        self.assertEqual(observations['routes'], [])
+        self.assertEqual(observations['excluded'], [])  # Task 2: a failed optional read is not an account failure
+        self.assertEqual({route['route']: route['demand'] for route in observations['routes']},
+                         {FIRST: None, SECOND: None, CLAUDE: None})  # provider-managed fallback only, never a claim
 
-    def test_a_busy_reader_is_the_excluded_reason(self):
+    def test_a_busy_reader_leaves_quota_unknown(self):
         self.extra['timeout'] = 0.1  # the lock wait is the timeout plus 1 s
         with reader._pool_lock(self.settings, POOL):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route=FIRST, reason='reader_busy'), observations['excluded'])
+        self.assertIs(next(r for r in observations['routes'] if r['route'] == FIRST)['demand'], None)  # fallback only
 
     def test_the_service_reads_only_outside_serve(self):
         from scripts import routing as command

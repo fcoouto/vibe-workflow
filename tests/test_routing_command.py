@@ -101,7 +101,12 @@ def check(attempt, **extra):
 
 
 class Base(unittest.TestCase):
+    trusted_collection = True  # Task 3B: False keeps the request boundary unpatched (its own negatives)
+
     def setUp(self):
+        if self.trusted_collection:  # a labelled code seam after the boundary stands in for trusted collection
+            from tests.test_routing_account_continuity import install_trusted_snapshots
+            install_trusted_snapshots(self)
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.settings = root / 'routing' / 'settings.json'
@@ -138,9 +143,14 @@ class Base(unittest.TestCase):
         raw = request if isinstance(request, bytes) else json.dumps(request).encode()
         return self.service.handle(raw)
 
+    def script(self):
+        """A test child's command: the trusted-collection bootstrap unless the class opts out (Task 3B)."""
+        from tests.test_routing_account_continuity import trusted_child
+        return ['-c', trusted_child()] if self.trusted_collection else [str(SCRIPT)]
+
     def run_cli(self, args, data):
         raw = data if isinstance(data, bytes) else json.dumps(data).encode()
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), *args, '--settings', str(self.settings),
+        done = subprocess.run([sys.executable, '-B', *self.script(), *args, '--settings', str(self.settings),
                                '--ledger', str(self.ledger)], input=raw, capture_output=True, timeout=60)
         return done
 
@@ -481,7 +491,7 @@ class RecordTests(Base):
 
 class ServeTests(Base):
     def serve(self):
-        return subprocess.Popen([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
+        return subprocess.Popen([sys.executable, '-B', *self.script(), '--serve', '--settings', str(self.settings),
                                  '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
 
@@ -523,7 +533,7 @@ class RaceAndLatencyTests(Base):
         identity = budget.initialize(self.ledger)
         self.assertTrue(identity)
         raw = json.dumps(prepare('race')).encode()
-        children = [subprocess.Popen([sys.executable, '-B', str(SCRIPT), 'prepare', '--settings', str(self.settings),
+        children = [subprocess.Popen([sys.executable, '-B', *self.script(), 'prepare', '--settings', str(self.settings),
                                       '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE) for _ in range(15)]
         for child in children:
@@ -541,7 +551,7 @@ class RaceAndLatencyTests(Base):
 
     def test_check_latency_is_well_under_the_hook_budget(self):
         self.call(prepare('lat'))
-        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
+        child = subprocess.Popen([sys.executable, '-B', *self.script(), '--serve', '--settings', str(self.settings),
                                   '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
         line = json.dumps(check('lat')).encode() + b'\n'

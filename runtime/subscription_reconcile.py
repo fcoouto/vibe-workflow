@@ -14,7 +14,7 @@ import json
 import re
 import secrets
 
-from runtime import usage_budget
+from runtime import subscription_fallback, usage_budget
 from runtime.usage_budget import MAX_INTEGER, WIN, BudgetError, Ledger, integer, require
 
 KIND = 'reconcile_subscription'
@@ -61,16 +61,20 @@ def reconcile_event(value):
     return dict(value, kind=KIND), None
 
 
-def reconcile(ledger, event, now):
-    """Apply one `reconcile_event` in one write transaction; refusals are fixed reasons and store nothing."""
+def reconcile(ledger, event, now, *, settings_path=None):
+    """Apply one `reconcile_event` in one write transaction; refusals are fixed reasons and store nothing.
+
+    A provider-managed fallback attempt's closure commits only after its pool's consumed boundary is written to the
+    service's own window store at `settings_path` (`subscription_fallback.mark_terminal`), after the closure and its
+    event row are applied and before COMMIT; without it nothing is recorded."""
     from runtime import routing
     try:
-        return _reconcile(ledger, event, routing.event_digest(event), now)
+        return _reconcile(ledger, event, routing.event_digest(event), now, settings_path)
     except BudgetError as error:
         return dict(state='blocked', reason=str(error))
 
 
-def _reconcile(ledger, event, digest, now):
+def _reconcile(ledger, event, digest, now, settings_path=None):
     usage_budget.integer(now)
     with ledger.transaction() as data:
         usage_budget._create_tables(ledger.db)
@@ -91,6 +95,12 @@ def _reconcile(ledger, event, digest, now):
             outcome, body = _abandon(data, attempt, hold, now)
         body.update(kind=KIND, recorded_at=now, outcome=dict(outcome))
         ledger._store_event(data, event['event_id'], digest, body, now, effect=True)
+        record = Ledger.admission(data, attempt)
+        if subscription_fallback.terminal(record):
+            try:  # an uncertain fallback (or OpenCode Claude claim) may have consumed an unknown amount: boundary first
+                subscription_fallback.mark_terminal(settings_path, record, now, attempt)
+            except (OSError, ValueError):
+                raise BudgetError('observation_store_unavailable') from None
         return outcome
 
 

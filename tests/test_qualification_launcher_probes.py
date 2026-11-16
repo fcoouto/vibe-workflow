@@ -217,6 +217,7 @@ class ProbeTests(Temp):
         self.assertIs(result["passed"], False)
         self.assertEqual(self.reservations(), [])  # refused before any reservation
         self.env.knobs["models"] = [dict(providerID="claude-agent", id="opus", variants=[])]
+        self.env.knobs["stored_variant"] = {}  # Task 9 (G7): a host that keeps the omission (2.2.6 stores `default`)
         result = self.probes(no_variant_model="claude-agent/opus").run(["A4", "A7"])["A7"]
         self.assertIs(result["passed"], True, result)
         self.assertEqual(result["listed_variants"], [])

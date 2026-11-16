@@ -74,6 +74,41 @@ def usage(now, five=40, seven=20, limits=(), extra=None, **rate):
                 rate_limits_available=True, rate_limits=value, behaviors=None)
 
 
+NATIVE_ROUTE = dict(route='claude-native-subscription:choice:0123456789abcdef', account='claude-plan',
+                    pool='claude-subscription', billing_class='included_subscription')
+
+
+def real_usage(now, five=20, seven=72, **rate):
+    """A sanitized answer in the shape the real Claude Code 2.1.311 returned (2026-11-16): every unknown server key
+    null except spend/dashboard/breakdown data, a raw unscoped `limits` summary and no `model_scoped`. Values are
+    synthetic; the meters are percents 0..100."""
+    def meter(used, at):
+        return dict(utilization=used, resets_at=iso(at), limit_dollars=None, used_dollars=None, remaining_dollars=None,
+                    locked_reason=None)
+    value = dict(five_hour=meter(five, now + 3600), seven_day=meter(seven, now + 86400), seven_day_oauth_apps=None,
+                 seven_day_opus=None, seven_day_sonnet=None, cinder_cove=None, wattle_ember=None,
+                 extra_usage=dict(is_enabled=False, monthly_limit=None, used_credits=None, utilization=None,
+                                  currency=None, disabled_reason=None, decimal_places=None, user_disabled=False,
+                                  spend_limit_reached=False, credits_ever_enabled=False, daily=None, weekly=None),
+                 limits=[dict(kind=kind, group=group, percent=used, resets_at=iso(now + ahead), severity='normal',
+                              is_active=True, scope=None)
+                         for kind, group, used, ahead in (('session', 'session', five, 3600),
+                                                          ('weekly', 'weekly', seven, 86400),
+                                                          ('weekly_all', 'weekly', seven, 86400))],
+                 spend=dict(used=dict(amount_minor=0, currency='USD', exponent=2), limit=None, percent=0,
+                            severity='normal', enabled=False, disabled_reason=None, cap=None, balance=None,
+                            auto_reload=None, disclaimer=None, can_purchase_credits=False, can_toggle=False),
+                 member_dashboard_available=False, seven_day_breakdown=dict(by_surface=[]))
+    value.update(dict.fromkeys(('seven_day_cowork', 'seven_day_omelette', 'tangelo', 'iguana_necktie',
+                                'omelette_promotional', 'nimbus_quill', 'copper_kite', 'brass_thimble',
+                                'harbor_lantern', 'promo_credits', 'amber_ladder', 'granite_teacup', 'amber_cistern',
+                                'amber_cistern_offer', 'juniper_tide', 'cedar_ember', 'starry_waterfall',
+                                'amber_gauge', 'pace', 'indicator')))
+    value.update(rate)
+    return dict(session=dict(total_cost_usd=0, total_api_duration_ms=0, model_usage={}), subscription_type='max',
+                rate_limits_available=True, rate_limits=value)
+
+
 class Reader(Stores):
     """A synthetic native client on a private PATH-less command; the real client is never found or started."""
 
@@ -102,6 +137,59 @@ class Reader(Stores):
         return claude_usage.refresh(self.settings, environ=dict(PATH='/usr/bin:/bin', HOME=str(self.root)), **options)
 
 
+class RealClientShapeTest(Reader):
+    """A0/A2: the real client's answer shape (Claude Code 2.1.311). The account fact depends only on the proved
+    identity and a current account read; the quota parse ignores null and non-meter server keys, and any unmodelled
+    meter leaves quota unknown (no window, no account failure). Account-level refusals are unchanged."""
+
+    def fact(self):
+        return claude_usage.billing_fact(self.settings, NATIVE_ROUTE, int(time.time()))
+
+    def test_the_real_shape_stores_both_meters_and_keeps_the_fact(self):
+        self.answer(initialize(), real_usage(self.now))
+        self.assertEqual(self.refresh(), dict(state='stored', windows=['5h', '7d']))
+        self.assertTrue(claude_usage.usable(self.settings, int(time.time())))
+        self.assertEqual({row['used'] for row in claude_usage.usable_windows(self.settings, int(time.time()))},
+                         {200, 720})  # percents 20 and 72, unchanged scaling
+        self.assertIsNotNone(self.fact())
+        self.assertIsNone(claude_usage._state(self.settings).get('failure'))
+
+    def test_an_unknown_meter_leaves_quota_unknown_and_the_fact_intact(self):
+        for name, rate in dict(
+                unknown_meter=dict(tangelo=dict(utilization=5, resets_at=iso(self.now + 600))),
+                unknown_list=dict(pace=[dict(utilization=5, resets_at=iso(self.now + 600))]),
+                nested_meter=dict(seven_day_breakdown=dict(by_surface=[dict(surface='cli', share=dict(
+                    utilization=5, resets_at=iso(self.now + 600)))])),
+                too_deep=dict(seven_day_breakdown=dict(a=dict(b=dict(c=dict(d=dict(note='x')))))),
+                unmatched_limit=dict(limits=real_usage(self.now)['rate_limits']['limits'] + [dict(
+                    kind='monthly', group='monthly', percent=3, resets_at=iso(self.now + 9 * 86400), severity='normal',
+                    is_active=True, scope=None)])).items():
+            with self.subTest(name):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(initialize(), real_usage(self.now, **rate))
+                self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_limits_unsupported'))
+                self.assertIsNotNone(self.fact())  # account and binding intact, quota unknown
+                self.assertIsNotNone(claude_usage.binding(self.settings))
+                self.assertEqual(claude_usage.usable_windows(self.settings, int(time.time())), [])
+                self.assertEqual(self.refresh(need=()), dict(state='fresh'))  # metadata current: no new read
+
+    def test_a_nested_non_meter_within_the_bound_is_ignored(self):
+        self.answer(initialize(), real_usage(self.now, seven_day_breakdown=dict(by_surface=[dict(
+            surface='cli', share=dict(note='x', amount=3))])))
+        self.assertEqual(self.refresh(), dict(state='stored', windows=['5h', '7d']))
+        self.assertIsNotNone(self.fact())
+
+    def test_account_level_refusals_still_end_the_account(self):
+        self.answer(initialize(), real_usage(self.now))
+        self.assertEqual(self.refresh()['state'], 'stored')
+        value = real_usage(self.now)
+        value['session'] = dict(value['session'], total_cost_usd=0.01)
+        self.answer(initialize(), value)
+        self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_inference_observed'))
+        self.assertIsNone(claude_usage.account(self.settings, int(time.time())))
+        self.assertIsNone(self.fact())
+
+
 class ExchangeTest(Reader):
     def test_sends_only_initialize_and_usage_without_behaviors_or_prompt(self):
         self.assertEqual(self.refresh()['state'], 'stored')
@@ -126,7 +214,7 @@ class ExchangeTest(Reader):
         self.assertNotIn('example.invalid', json.dumps(account))  # a derived key, never the raw identity
         snapshot = native_catalog.stored(self.settings, 'claude-code')
         self.assertEqual([item['alias'] for item in snapshot['models']], ['invented-small', 'invented-large'])
-        self.assertEqual(snapshot['binding']['connection'], 'account:' + account['key'])
+        self.assertEqual(snapshot['binding']['connection'], 'account:%s:%s' % (account['key'], account['generation']))
         raw = claude_usage._store(self.settings).read_bytes()
         self.assertNotIn(b'person@', raw)
         self.assertEqual(stat.S_IMODE(os.stat(claude_usage._store(self.settings)).st_mode), 0o600)
@@ -146,30 +234,27 @@ class ExchangeTest(Reader):
         self.assertEqual(len(self.spawns()), 1)
 
     def test_raw_limits_without_source_evidenced_semantics_are_refused(self):
-        """Installed-source evidence: the one raw kind with known meaning is `weekly_scoped` under
-        `scope.model` (model-scoped); no unscoped raw kind has evidenced semantics, so none is mapped or ignored."""
+        """Installed-source evidence: the one raw kind with known meaning is `weekly_scoped` under `scope.model`
+        (model-scoped; since Task 11 recorded per model, never refused). A2 (real client 2.1.311): an unscoped raw
+        item is only a summary when it repeats a stored meter; any other scope, unscoped item or unknown meter-shaped
+        value leaves quota unknown. Every one is
+        a usage-level refusal: the account fact stays (account-continuity design: identity is independent of quota)."""
         reset = iso(self.now + 86400)
-        cases = dict(
-            model=([dict(kind='weekly_scoped', group='weekly', percent=20, resets_at=reset,
-                         scope=dict(model=dict(display_name='invented')))], {}, 'claude_limits_scoped'),
+        cases = dict(  # Task 11: a model-scoped weekly limit is now recorded per model (tests/test_quota_gates.py)
             surface=([dict(kind='weekly', group='weekly', percent=20, resets_at=reset,
                            scope=dict(surface=dict(display_name='invented')))], {}, 'claude_limits_unsupported'),
-            same_as_meter=([dict(kind='session', group='g', percent=40, resets_at=iso(self.now + 3600))], {},
-                           'claude_limits_unsupported'),
-            model_scoped=([], dict(model_scoped=[dict(display_name='x', utilization=1, resets_at=reset)]),
-                          'claude_limits_scoped'),
-            no_marker=([], dict(model_scoped=None), 'claude_usage_unconfirmed'),
+            other_unscoped=([dict(kind='session', group='g', percent=40, resets_at=iso(self.now + 7200))], {},
+                            'claude_limits_unsupported'),  # not a stored meter's reset: an unmodelled constraint
             unknown_meter=([], dict(cinder_cove=dict(utilization=1, resets_at=reset)), 'claude_limits_unsupported'),
-            unknown_key=([], dict(invented_meter=None), 'claude_limits_unsupported'))
+            unknown_meter_like=([], dict(invented_meter=dict(utilization=1, resets_at=reset)),
+                                'claude_limits_unsupported'))
         for name, (limits, rate, reason) in cases.items():
             with self.subTest(name):
                 claude_usage._store(self.settings).unlink(missing_ok=True)
-                value = usage(self.now, limits=limits, **rate)
-                if rate.get('model_scoped', 0) is None:
-                    del value['rate_limits']['model_scoped']
-                self.answer(initialize(), value)
+                self.answer(initialize(), usage(self.now, limits=limits, **rate))
                 self.assertEqual(self.refresh(force=True), dict(state='failed', reason=reason))
                 self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
+                self.assertIsNotNone(claude_usage.billing_fact(self.settings, NATIVE_ROUTE, int(time.time())))
 
     def test_zero_inference_telemetry_is_required(self):
         base = usage(self.now)
@@ -257,8 +342,9 @@ class ExchangeTest(Reader):
                 self.assertEqual({item['id'] for item in claude_usage.usable_windows(self.settings, int(time.time()))},
                                  {'5h', '7d'})
                 self.assertIsNotNone(claude_usage.account(self.settings, int(time.time())))
+                current = claude_usage.account(self.settings, int(time.time()))
                 self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
-                                 'account:' + claude_usage.account(self.settings, int(time.time()))['key'])
+                                 'account:%s:%s' % (current['key'], current['generation']))
 
     def test_missing_or_unknown_machine_subscription_fails_closed_whatever_the_display_label(self):
         """A friendly label, even one equal to a machine value, never stands in for the usage answer's type."""
@@ -288,9 +374,9 @@ class ExchangeTest(Reader):
                 self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_account_unsupported'))
         claude_usage._store(self.settings).unlink(missing_ok=True)
         unknown = usage(self.now, **{'unrecognized_%d' % index: None for index in range(24)})
-        self.answer(initialize(**label), unknown)
-        self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_limits_unsupported'))
-        self.assertFalse(claude_usage.usable(self.settings, int(time.time())))
+        self.answer(initialize(**label), unknown)  # A2: null server keys carry no meter, so they are ignored
+        self.assertEqual(self.refresh(force=True), dict(state='stored', windows=['5h', '7d']))
+        self.assertTrue(claude_usage.usable(self.settings, int(time.time())))
 
     def test_account_change_invalidates_earlier_readings_and_catalog(self):
         self.assertEqual(self.refresh()['state'], 'stored')
@@ -302,7 +388,8 @@ class ExchangeTest(Reader):
         self.assertFalse(claude_usage.usable(self.settings, int(time.time())))  # the first account's readings
         self.assertEqual(collector.consumed_at(self.settings, claude_usage.POOL), 0)  # nothing re-dated
         self.assertEqual(native_catalog.stored(self.settings, 'claude-code')['binding']['connection'],
-                         'account:' + second)
+                         claude_usage.binding(self.settings)['connection'])
+        self.assertEqual(claude_usage.binding(self.settings)['connection'].split(':')[1], second)
         self.assertNotEqual(claude_usage.account_key(dict(email='a@x', organization='One')),
                             claude_usage.account_key(dict(email='a@x', organization='Two')))
         self.assertNotEqual(claude_usage.account_key(dict(email='a@x')),
@@ -436,14 +523,21 @@ class BridgeTest(native_tests.NativeBase, Reader):
         self.assertEqual(len(self.spawns()), 1)
         done = self.complete('n1', dict(kind='complete', model='invented-small-1'))
         self.assertEqual(done['served']['substituted'], False)
-        self.assertEqual(self.prepare('claude-code', attempt='n2')['reason'], 'no_feasible_route')
-        self.assertEqual(len(self.spawns()), 2)  # a cached reply may predate the completion: not usable, backs off
-        self.assertEqual(self.prepare('claude-code', attempt='n3')['reason'], 'no_feasible_route')
-        self.assertEqual(len(self.spawns()), 2)
+        for attempt in ('n2', 'n3'):  # a cached reply may predate the completion: not usable, backs off
+            self.assertEqual(self.prepare('claude-code', attempt=attempt)['state'], 'dispatched')  # Task 2: fallback
+            self.assertEqual(self.disposition(attempt), ({}, ['quota_unknown', 'provider_managed_fallback']))
+            self.assertEqual(len(self.spawns()), 2)
         self.offset += claude_usage.CACHE_CEILING * 2
         again = self.prepare('claude-code', attempt='n4')
         self.assertEqual(again['state'], 'dispatched', again)
         self.assertEqual(len(self.spawns()), 3)
+        # A fresh covering reading arrived, but n2 and n3 are still open provider-managed attempts on this pool: the
+        # included optimization stays fenced (a real exposure, not a mocked one), and no included claim is made.
+        self.assertEqual(self.disposition('n4'), ({}, ['quota_fenced', 'provider_managed_fallback']))
+
+    def disposition(self, attempt):
+        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == attempt)
+        return record['reserved'], record['reason_codes'][-2:]
 
     def test_exhausted_included_quota_dispatches_on_provider_managed_fallback(self):
         self.answer(initialize(), usage(self.now, five=100, seven=100, extra=dict(is_enabled=False)))
@@ -453,6 +547,52 @@ class BridgeTest(native_tests.NativeBase, Reader):
         self.assertIn('provider_managed_fallback', record['reason_codes'])
         self.assertEqual(record['reserved'], {})
         self.assertEqual(self.prepare('claude-code')['reason'], 'already_prepared')  # one permit only
+
+    def test_native_metadata_without_quota_reaches_fallback(self):
+        """Task 3: an exchange's account and catalog survive its unknown usage and reach provider-managed fallback
+        with one permit and no included claim; unreported served values stay unknown. No catalog sends nothing."""
+        self.answer(dict(initialize(), models=[]), usage(self.now))
+        self.assertEqual(self.prepare('claude-code', 'm0'),
+                         dict(v=1, state='blocked', reason='native_binding_unverified'))
+        self.assertEqual(self.holds(), {})
+        self.offset += claude_usage.FAILURE_BACKOFF
+        self.answer(initialize(), usage(self.now, limits=None))
+        tool = native_tests.NativeTool()
+        permit, done = self.run_native('claude-code', tool, attempt='m1')
+        self.assertEqual((permit['state'], tool.calls), ('dispatched', [dict(model='invented-small', effort='high')]))
+        self.assertEqual(self.disposition('m1'), ({}, ['quota_unknown', 'provider_managed_fallback']))
+        self.assertEqual(done['served'], dict(model='unknown', effort='unknown'))
+        self.assertEqual(self.prepare('claude-code', 'm1')['reason'], 'already_prepared')
+        self.assertEqual(len(self.spawns()), 2)
+
+    def test_failed_quota_does_not_repeat_fresh_metadata_exchange(self):
+        """Task 3: required metadata is reused while current, after the optional quota read failed and its backoff
+        ended; only demanded quota may start another exchange."""
+        routing_paths.qualify(self.settings, claude_usage.PATH, demand=None, evidence='synthetic-1',
+                              now=int(time.time()))
+        self.answer(initialize(), usage(self.now, limits=None))
+        self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
+        self.offset += claude_usage.FAILURE_BACKOFF + 1  # the quota backoff is over; account and catalog are current
+        route = dict(route=claude_usage.PATH + ':activation', account='claude-plan', pool=claude_usage.POOL,
+                     billing_class='included_subscription')
+        collector.LocalSource(self.settings).acquire_billing([route], int(time.time()))
+        self.assertEqual(claude_usage.refresh(self.settings, need=()), dict(state='fresh'))
+        self.assertEqual(self.prepare('claude-code', 'q2')['state'], 'dispatched')
+        self.assertEqual(self.disposition('q2')[0], {})
+        self.assertEqual(len(self.spawns()), 1)
+
+    def test_a_missing_catalog_is_restored_once_with_current_account_and_windows(self):
+        """A current account with fresh windows but no bound catalog is read once at once, not after expiry; the
+        exchange's incidental quota is kept and later preparation reuses the metadata."""
+        self.assertEqual(claude_usage.refresh(self.settings)['state'], 'stored')
+        native_catalog._path(self.settings).unlink()  # only the catalog snapshot is lost
+        self.assertTrue(claude_usage.usable(self.settings, int(time.time())))
+        permit = self.prepare('claude-code', 'c1')
+        self.assertEqual(permit['state'], 'dispatched', permit)
+        self.assertEqual(len(self.spawns()), 2)
+        self.assertTrue(self.disposition('c1')[0])  # an included reservation on the incidental reading
+        self.assertEqual(self.prepare('claude-code', 'c2')['state'], 'dispatched')
+        self.assertEqual(len(self.spawns()), 2)
 
     def test_provider_refusal_is_uncertain_and_never_retried(self):
         self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
@@ -475,15 +615,22 @@ class ProvenanceTest(BridgeTest):
     def test_an_unbound_reading_never_restores_native_headroom(self):
         self.answer(initialize(), usage(self.now, limits=None))  # this account's usage stays unknown
         self.opencode_reading(used=0)  # another client's newer reading with ample room, unbound
-        self.assertEqual(self.prepare('claude-code')['state'], 'pending')
-        self.assertEqual(self.data()['admissions'], [])
+        self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')  # Task 2: fallback, never that room
+        self.assertEqual([(item['reserved'], item['reason_codes'][-2:]) for item in self.data()['admissions']],
+                         [({}, ['quota_unknown', 'provider_managed_fallback'])])
 
     def test_another_accounts_reading_is_unknown(self):
         self.assertEqual(self.prepare('claude-code')['state'], 'dispatched')
         self.complete('n1', dict(kind='complete'))
         self.offset += claude_usage.CACHE_CEILING * 2 + claude_usage.FAILURE_BACKOFF
         self.answer(initialize(email='other@example.invalid'), usage(self.now, limits=None))
-        self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'pending')
+        refused = self.prepare('claude-code', 'n2')  # its collection's own read found another account: never sent
+        self.assertEqual((refused['state'], refused['reason']), ('pending', 'no_feasible_route'))  # account_changed
+        self.assertNotEqual(self.holds().get('n2', {}).get('state'), 'dispatched')
+        self.assertEqual(self.prepare('claude-code', 'n3')['state'], 'dispatched')  # the current account, fallback only
+        record = next(item for item in self.data()['admissions'] if item['attempt_id'] == 'n3')
+        self.assertEqual((record['reserved'], record['reason_codes'][-2:]), ({}, ['quota_unknown',
+                                                                                  'provider_managed_fallback']))
 
     def test_the_opencode_consumer_never_uses_native_bound_readings(self):
         self.assertEqual(claude_usage.refresh(self.settings)['state'], 'stored')
@@ -491,12 +638,13 @@ class ProvenanceTest(BridgeTest):
                               evidence='synthetic-1', now=int(time.time()))
         choice = dict(provider='claude-agent', model='invented-claude-small', effort='low',
                       harness='claude-agent-sdk via opencode', funding='subscription')
-        self.billing()  # the OpenCode path has no account producer; a labelled double stands in for it
+        self.billing()  # a labelled double stands in for the OpenCode account producer here
         local = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
                                   ledger_path=self.ledger_path, choices=[choice],
                                   harnesses=['claude-agent-sdk via opencode'])
-        self.assertEqual({item['reason'] for item in local['observations']['excluded']}, {'window_unobserved'})
-        self.assertEqual(local['observations']['routes'], [])
+        self.assertEqual(local['observations']['excluded'], [])  # Task 2: its own (synthetic) account stays eligible
+        self.assertEqual([route['demand'] for route in local['observations']['routes']], [None])  # fallback only
+        self.assertEqual(local['observations']['pools']['claude-subscription']['windows'], [])  # no native row borrowed
 
     def test_same_account_aliases_share_one_included_allowance(self):
         self.answer(initialize(), usage(self.now, five=99.3))  # room for one reservation only

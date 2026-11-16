@@ -32,7 +32,7 @@ class ManagedDelegation(AdmissionFixture, unittest.TestCase):
             self.plan()
 
     @contextmanager
-    def managed(self, *routes, windows=None):
+    def managed(self, *routes, windows=None, account=None):
         with features.managed_project_fixture(self, self.repo, routes=routes) as stores:
             self.stores = stores
             if windows is not None:  # a mutable window override: (pool, now) -> windows or None for the fixture's
@@ -43,6 +43,10 @@ class ManagedDelegation(AdmissionFixture, unittest.TestCase):
                     found = windows(pool, now)
                     return original(pool, now) if found is None else found
                 source._windows = current
+            if account is not None:  # a mutable account switch: {'known': False} withholds the fixture's billing fact
+                source = routing_observations.default_source()
+                billing = source._billing
+                source._billing = lambda route, now: billing(route, now) if account['known'] else None
             yield stores
 
     def service(self):
@@ -58,6 +62,11 @@ class ManagedDelegation(AdmissionFixture, unittest.TestCase):
     def hold(self, attempt_id):
         found = self.snapshot()['holds'].get(attempt_id)
         return None if found is None else found['state']
+
+    def assert_nothing_held(self, waiting):
+        """The pending first call: no permit, routing admission or hold for the assignment's attempt."""
+        self.assertFalse(waiting['launch_admitted'])
+        self.assertEqual((self.admission(waiting['attempt_id']), self.hold(waiting['attempt_id'])), (None, None))
 
     def worker_choices(self, *identities):
         with closing(self.service()) as service:
@@ -151,19 +160,16 @@ class ManagedSelectionModes(ManagedDelegation):
         self.assertIsNone(prepared['requested_model'])
 
     def test_pending_then_admitted_on_a_replay_grants_exactly_one_permit(self):
-        spent = dict(value=True)
-
-        def windows(pool, now):
-            if pool == 'fixture-codex-subscription' and spent['value']:
-                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
-                             observed_at=now, unit=routing_observations.WINDOW_UNIT)]
-            return None
+        # Task 2: exhausted quota is provider-managed fallback, so the pending premise is an account failure instead:
+        # no billing fact for the account until the replay.
+        account = dict(known=False)
         request = self.prepare_request()
-        with self.managed(NATIVE, windows=windows):
+        with self.managed(NATIVE, account=account):
             waiting = self.api.prepare_assignment(self.scope, request)
             self.assertFalse(waiting['launch_admitted'])
             self.assertEqual(waiting['routing']['state'], 'pending')
-            spent['value'] = False
+            self.assert_nothing_held(waiting)
+            account['known'] = True
             granted = self.api.prepare_assignment(self.scope, request)
             again = self.api.prepare_assignment(self.scope, request)
         self.assertEqual(granted['attempt_id'], waiting['attempt_id'])
@@ -228,18 +234,13 @@ class ManagedRelease(ManagedDelegation):
         self.assertTrue(again['launch_admitted'], again)  # claims and resource units were free again
 
     def test_a_replay_mismatch_closes_the_hold_and_leaves_release_to_the_coordinator(self):
-        spent = dict(value=True)
-
-        def windows(pool, now):
-            if spent['value']:
-                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
-                             observed_at=now, unit=routing_observations.WINDOW_UNIT)]
-            return None
+        account = dict(known=False)  # Task 2: pending because the account has no billing fact, not exhausted quota
         request = self.routed_request()
-        with self.managed(NATIVE, windows=windows):
+        with self.managed(NATIVE, account=account):
             waiting = self.api.prepare_assignment(self.scope, request)
             self.assertEqual(waiting['routing']['state'], 'pending', waiting)
-            spent['value'] = False
+            self.assert_nothing_held(waiting)
+            account['known'] = True
             with mock.patch.object(delegation_routing, '_catalog', return_value=[]):  # the host's catalog lacks it
                 replay = self.api.prepare_assignment(self.scope, request)
             self.assertEqual(replay['routing'], dict(state='blocked', reason='catalog_mismatch',
@@ -250,19 +251,14 @@ class ManagedRelease(ManagedDelegation):
             self.assertEqual(self.raw_assignment(replay['attempt_id'])['status'], 'prepared')
 
     def replay_after_pending(self, **patches):
-        spent = dict(value=True)
-
-        def windows(pool, now):
-            if spent['value']:
-                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
-                             observed_at=now)]
-            return None
+        account = dict(known=False)  # Task 2: pending because the account has no billing fact, not exhausted quota
         request = self.routed_request()
-        with self.managed(NATIVE, windows=windows):
+        with self.managed(NATIVE, account=account):
             self.worker_choices(self.native())
             waiting = self.api.prepare_assignment(self.scope, request)
             self.assertEqual(waiting['routing']['state'], 'pending', waiting)
-            spent['value'] = False
+            self.assert_nothing_held(waiting)
+            account['known'] = True
             with mock.patch.multiple(*patches['target'], **patches['values']):
                 replay = self.api.prepare_assignment(self.scope, request)
             return replay, self.hold(replay['attempt_id'])
@@ -725,10 +721,13 @@ class RealScopeResolver(ManagedDelegation):
         routing_paths.qualify(settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='synthetic-1',
                               now=now)
         from runtime import claude_usage
-        from tests.test_routing_observations import NATIVE_KEY
-        for window, length in (('5h', 18000), ('7d', 604800)):  # rows a native account read binds to its account
+        from tests.test_routing_observations import NATIVE_GENERATION, NATIVE_KEY
+        record = dict(key=NATIVE_KEY, generation=NATIVE_GENERATION, observed_at=now, client_version='invented-2',
+                      overflow='unknown', usage_at=now)
+        token = claude_usage.row_account(record)
+        for window, length in (('5h', 18000), ('7d', 604800)):  # rows a native account read binds to its generation
             routing_observations.store_window(settings, 'claude-subscription', dict(
-                id=claude_usage.bound_id(window, NATIVE_KEY), account=NATIVE_KEY, limit=1000, used=100,
+                id=claude_usage.bound_id(window, token), account=token, limit=1000, used=100,
                 length=length, reset_at=now + 3600, rolling=False, observed_at=now,
                 unit=routing_observations.WINDOW_UNIT))
         profile = routing.ensure_profile(job())
@@ -743,7 +742,6 @@ class RealScopeResolver(ManagedDelegation):
         native_catalog.store_snapshot(settings, 'codex', dict(binding=binding, models=[
             dict(alias='invented-codex', resolved=None, efforts=['high'])]))
         double = subscription_billing.double('real-enrolment')
-        record = dict(key=NATIVE_KEY, observed_at=now, client_version='invented-2', overflow='unknown', usage_at=now)
         doubles = [mock.patch.object(native_catalog, 'current_binding', lambda client: binding),
                    mock.patch.object(routing_observations.LocalSource, 'billing',
                                      lambda source, route, at: double(route, at)),

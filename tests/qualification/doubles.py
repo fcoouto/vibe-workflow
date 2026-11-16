@@ -7,6 +7,8 @@ OpenCode server double with the live-recorded payload shapes whose shim decision
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -30,7 +32,33 @@ def qual_driver(*args, **kwargs):
 
 def qual_run(*args, **kwargs):
     from tests.qualification import opencode_live
-    return opencode_live.Run(*args, **dict(dict(route=QUAL_ROUTE), **kwargs))
+    run = opencode_live.Run(*args, **dict(dict(route=QUAL_ROUTE), **kwargs))
+    trusted_routing(run.routing)
+    return run
+
+
+def trusted_routing(routing):
+    """TEST-ONLY (Task 3B), synthetic builders only: this routing's children (one-shot and `--serve`) start the
+    labelled trusted-collection bootstrap (`trusted_child`), standing in for trusted collection after the request
+    boundary. Production `server.Routing` and real caller-mode refusal are unchanged."""
+    from tests.qualification import server
+    from tests.test_routing_account_continuity import trusted_child
+
+    class TrustedRouting(server.Routing):
+        def __call__(self, op, **body):
+            body = self._body(op, body)
+            began = time.perf_counter()
+            done = subprocess.run([sys.executable, "-B", "-c", trusted_child(), op, *self.argv],
+                                  input=json.dumps(dict(v=1, op=op, **body)), capture_output=True, text=True,
+                                  timeout=60)
+            elapsed = round((time.perf_counter() - began) * 1000, 2)
+            try:
+                return json.loads(done.stdout), elapsed
+            except ValueError:
+                return dict(state="unparsed", code=done.returncode), elapsed
+    routing.__class__ = TrustedRouting
+    routing.child_argv = [sys.executable, "-B", "-c", trusted_child(), "--serve", *routing.argv]
+    return routing
 
 
 class Temp(unittest.TestCase):

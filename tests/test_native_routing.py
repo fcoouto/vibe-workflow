@@ -161,13 +161,18 @@ class NativeBase(Stores):
             return permit, None
         return permit, self.complete(attempt, tool(permit))
 
-    def fallback(self, client, attempt):
+    def fallback(self, client, attempt, disposition=None):
         """The account amendment: exhausted fresh included quota dispatches on the enabled account's own
-        provider-managed overflow, recorded distinctly and holding no included claim."""
+        provider-managed overflow, recorded distinctly and holding no included claim (Task 2: also unknown or fenced
+        quota, with its `disposition` when given)."""
         self.assertEqual(self.prepare(client, attempt)['state'], 'dispatched')
+        self.assert_no_claim(attempt, disposition)
+
+    def assert_no_claim(self, attempt, disposition=None):
         record = next(item for item in self.service._ledger(False).snapshot()['admissions']
                       if item['attempt_id'] == attempt)
         self.assertEqual((record['reserved'], record['reason_codes'][-1]), ({}, routing.FALLBACK))
+        self.assertEqual(record['reason_codes'][-2] if disposition else None, disposition)
 
     def holds(self):
         ledger = self.service._ledger(False)
@@ -246,13 +251,20 @@ class NativeLaunchTests(NativeBase):
 
     def test_native_codex_without_a_qualified_window_source_sends_nothing(self):
         """The shared ChatGPT pool holds fresh unbound readings and billing is verified, but the real native Codex
-        source returns no windows: nothing may be admitted, spawned, held or read from the pool or a process."""
-        self.billing()
+        source returns no windows: never a reservation, a pool row or the legacy reader. Without its account fact
+        nothing is admitted, spawned or held; with it (synthetic), only provider-managed fallback (Task 2)."""
+        from runtime import codex_rate_limits
         tool = NativeTool()
         with mock.patch.object(codex_account, 'usable_windows', REAL_CODEX_WINDOWS):
-            permit, completed = self.run_native('codex', tool)
-        self.assertEqual(permit['state'], 'pending', permit)
+            permit, completed = self.run_native('codex', tool, attempt='n0')
+        self.assertEqual(permit['state'], 'pending', permit)  # no account, no send
         self.assertEqual((tool.calls, completed, self.holds()), ([], None, {}))
+        self.billing()
+        with mock.patch.object(codex_account, 'usable_windows', REAL_CODEX_WINDOWS), \
+                mock.patch.object(codex_rate_limits, 'refresh', side_effect=AssertionError('legacy reader started')):
+            permit, completed = self.run_native('codex', tool)
+        self.assertEqual((permit['state'], len(tool.calls)), ('dispatched', 1), permit)
+        self.assert_no_claim('n1', 'quota_unknown')
 
     def test_native_spawn_receives_the_admitted_settings(self):
         self.billing()
@@ -288,7 +300,7 @@ class NativeLaunchTests(NativeBase):
         before = store.read_bytes()
         self.assertEqual(self.complete('q1', dict(kind='complete'))['state'], 'recorded')
         self.assertEqual(json.loads(store.read_bytes())['pools'], json.loads(before)['pools'])  # no reading invented
-        self.assertEqual(self.prepare('claude-code', 'q3')['state'], 'pending')  # not the same pre-launch headroom
+        self.fallback('claude-code', 'q3', 'quota_unknown')  # not the same pre-launch headroom: no included claim
         pinned = command.Service(self.settings, self.ledger_path, project=self.checkout)
         self.addCleanup(pinned.close)
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
@@ -298,13 +310,14 @@ class NativeLaunchTests(NativeBase):
                  choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
-        self.assertEqual(alias['state'], 'pending', alias)  # the OpenCode alias of the pool is held back too
+        self.assertEqual(alias['state'], 'admitted', alias)  # the OpenCode alias of the pool claims nothing either
+        self.assert_no_claim('oc-q', 'quota_unknown')
         self.assertEqual(self.prepare('codex', 'q-codex')['state'], 'dispatched')  # another pool is unaffected
         self.offset += 3
         self.window('claude-subscription', '5h', 18000, used=100, later=0)  # an older/equal cached reading: no
-        self.assertEqual(self.prepare('claude-code', 'q4')['state'], 'pending')
-        self.newer_readings()  # an independently newer reading restores the pool
-        self.assertEqual(self.prepare('claude-code', 'q5')['state'], 'dispatched')
+        self.fallback('claude-code', 'q4', 'quota_unknown')
+        self.newer_readings()  # an independently newer reading is current, but q2-q4 remain open fallback exposure
+        self.fallback('claude-code', 'q5', 'quota_fenced')  # so no included claim until they resolve
 
     def test_a_failed_completion_boundary_keeps_the_capacity_held(self):
         self.billing()
@@ -389,8 +402,8 @@ class NativeLaunchTests(NativeBase):
         with mock.patch.object(routing, 'admit', interleave):
             racing = self.prepare('claude-code', 'racing')
         self.assertEqual(order, ['completed'])
-        self.assertEqual(racing['state'], 'pending', racing)
-        self.assertNotIn('racing', self.holds())
+        self.assertEqual(racing['state'], 'dispatched', racing)  # never the consumed headroom: fallback only
+        self.assert_no_claim('racing', 'quota_unknown')
 
     def test_an_admission_that_commits_before_the_completion_keeps_its_reservation(self):
         """The inverse order: the second admission commits first (the hold still counted, so it does not fit), then
@@ -403,7 +416,8 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual(self.prepare('claude-code', 'b')['state'], 'dispatched')  # both reservations fit
         self.fallback('claude-code', 'c')  # a third does not fit the included room: account overflow only
         self.assertEqual(self.complete('a', dict(kind='complete'))['state'], 'recorded')
-        self.assertEqual(self.prepare('claude-code', 'd')['state'], 'pending')  # the consumed reading is stale now
+        self.fallback('claude-code', 'd', 'quota_unknown')  # the consumed reading is stale now: no included claim
+        self.assertEqual(self.holds()['b']['state'], 'dispatched')  # b's ordinary reservation still counts
 
     def test_not_started_after_a_permit_is_held_for_operator_recovery(self):
         """13b: once the permit is out, routing cannot verify that an advisory native launch never started, and the
@@ -470,6 +484,27 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual(permit['reason'], 'catalog_mismatch')
         self.assertEqual(self.holds()['n1']['state'], 'released')  # closed `not_dispatched`
 
+    def test_an_open_fallback_fences_included_quota_until_its_completion_marks_the_pool(self):
+        """Design 4.1: while a dispatched fallback can still consume an unknown amount, a newer roomy reading takes
+        no included reservation on its pool; its native completion writes the boundary before the hold releases, and
+        only a reading observed after that restores included quota."""
+        self.billing()
+        self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
+        self.assertEqual(self.prepare('claude-code', 'q1')['state'], 'dispatched')
+        self.fallback('claude-code', 'f1')
+        self.assertEqual(self.complete('q1', dict(kind='complete'))['state'], 'recorded')
+        self.newer_readings()  # roomy and observed after q1's boundary, but f1 is still running
+        self.fallback('claude-code', 'q2')
+        first = self.boundary()
+        self.assertEqual(self.complete('f1', dict(kind='complete'))['state'], 'recorded')
+        self.assertGreater(self.boundary(), first)  # f1's terminal boundary, written before its release
+        self.assertEqual(self.complete('q2', dict(kind='complete'))['state'], 'recorded')
+        self.newer_readings()
+        self.assertEqual(self.prepare('claude-code', 'q3')['state'], 'dispatched')
+        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
+                      if item['attempt_id'] == 'q3')
+        self.assertNotEqual(record['reserved'], {})  # included quota restored after every fallback settled
+
     def test_exhaustion_and_shared_pool_reservations(self):
         self.billing()
         self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
@@ -483,8 +518,11 @@ class NativeLaunchTests(NativeBase):
                  choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
-        self.assertEqual(held['state'], 'admitted', held)  # the OpenCode alias holds the shared Claude allowance
-        self.fallback('claude-code', 'n1')  # the OpenCode alias's included claim is never duplicated
+        self.assertEqual(held['state'], 'admitted', held)  # Task 3B: an unbound reading is never its included claim
+        self.assert_no_claim('oc')  # the OpenCode alias is admitted on its account's fallback only
+        self.assertEqual(self.prepare('claude-code', 'n1')['state'], 'dispatched')  # the native read's room is its own
+        self.assertTrue(next(item for item in self.service._ledger(False).snapshot()['admissions']
+                             if item['attempt_id'] == 'n1')['reserved'])
         self.window('claude-subscription', '5h', 18000, used=1000, later=2)
         self.assertEqual(self.prepare('codex', 'c1')['state'], 'dispatched')  # another pool is unaffected
 

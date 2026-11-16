@@ -94,6 +94,7 @@ class LaunchReadingTests(Temp):
         env = FakeEnv(self.tmp / "work", utilizations=[0.25, 0.262],
                       models=[dict(providerID="claude-agent", id="haiku", variants=[dict(id="low")]),
                               dict(providerID="claude-agent", id="opus", variants=[])])
+        env.knobs["stored_variant"] = {}  # Task 9 (G7): a host that keeps the omission (2.2.6 stores `default`)
         probes = launcher_probes.LauncherProbes(self.private(self.tmp / "q"), self.ledger, "r", env,
                                                 self.private(self.tmp / "real"), "u", safety.Redactor(),
                                                 no_variant_model="claude-agent/opus", demand_log=self.log)

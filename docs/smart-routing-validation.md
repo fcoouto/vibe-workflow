@@ -377,6 +377,86 @@ provenance infrastructure for it.
    live qualification, model/provider calls, activation, spending, budget reset,
    settings change or release permission. All unrelated v1 gaps remain open.
 
+## Edit 15 (16 November 2026): account continuity and provider-managed fallback
+
+Registered before any further governed run. The historical numbers, limits, failures and evidence above stay as they
+were; they assumed quota-denominated launches.
+
+**What a launch needs now.**
+- Every subscription launch needs its path's own current account fact, and a native client also the catalog bound to
+  that account. A missing selected-account identity always refuses.
+- Only included-first optimization needs complete, coherent quota readings and measured demand. An account whose
+  quota or demand is unknown may launch only on its provider-managed fallback, with no included claim.
+- Each admission keeps a marker of the account and its random generation. The dispatch transaction refuses a permit
+  when that marker is missing, unverifiable or names another account or generation, and a continuation is pinned to
+  its root's marker. Caller-supplied markers grant nothing, new unverified admissions reserve nothing, legacy unsent
+  records are refused, and issued or uncertain exposure still settles.
+- An ordinary caller-mode pilot (`scripts/routing.py prepare` with its own observations snapshot) therefore cannot
+  admit a subscription route across the real boundary: its markers are stripped and it is refused
+  (`billing_unverified`). A governed run needs managed collection with a verified account. The quota-denominated
+  canary also refuses any provider-managed fallback admission before dispatch.
+
+**What does not change.** The quota-denominated canary criteria (step 8: samples, coverage and limits) stay as
+registered. Unknown-quota fallback sends never satisfy them and never count toward them. Isolation, the
+lost-acknowledgment drill, strict replay, platform and release gates, activation, user cutover and default-ON
+decisions remain separate prerequisites. Explicit OFF and the kill switch stay. Rollback below this revision and
+mixed versions are unsupported: fix forward, with no manual cache deletion or invented identity migration.
+
+**Known limits.**
+- Native sources are implemented and tested with synthetic transports only. The generation-bound format has no live
+  qualification; older native account observations remain dated historical evidence.
+- Window rows keep their history up to the existing 1 MiB fail-closed store bound (an availability risk).
+  Crash and power-loss durability, and login changes no read has observed, are unproved.
+- When this edit was registered, all three OpenCode positive sources were blocked. Task 6 added
+  `runtime/opencode_account.py`, tested with a synthetic `opencode` double; full real-account verification is pending.
+  - Identity now comes from the OpenCode connection, read through `opencode api GET /api/credential` in memory, keeping
+    only digests. Claude is the native Claude login (`claude-agent`, external `claude-login`). ChatGPT is the access
+    token's `sub` (decoded locally, signature unchecked). Go is the Console account and organization, which must equal
+    the Go provider's `x-opencode-org-id` request header (where Go requests are attributed); the key's workspace is
+    user-attested.
+  - Quota (Task 11, verified shapes 16 November 2026): a refuse-before-send gate (`quota_exhausted`) acts only on a
+    fresh, account-bound reading with a limited or full window whose reset is ahead; it never creates headroom.
+    Go reads `/api/experimental/usage/limits` with its acquisition (gate only). Native Claude keeps its `5h`/`7d`
+    rows (CACHE_CEILING) and applies model-scoped limits per model (an unmatched scope makes every Claude route
+    quota-unknown); OpenCode Claude reuses those native readings only while its native login is current. Native Codex
+    gates on a reading fresh for 15 minutes (`QUOTA_FRESH_SECONDS`). Still not claimed: Go, Codex and OpenCode
+    ChatGPT included quota, Go weekly/monthly reset semantics, Go `limited: true` (never observed: as a
+    refuse-only gate, a throttled-but-usable meaning could only cause a false refusal, never a send), per-model
+    demand, and the ChatGPT-to-Codex link (deferred).
+  - OpenCode Claude also needs a current native Claude account. When it is not current, the acquisition runs the
+    native reader once (stale-and-needed; `5h`/`7d` only when the route demands them, else `need=()`), and an
+    OpenCode Claude completion marks the pool consumed like a native one (Task 12). A0 is
+    merged: the native parse accepts the real 2.1.311 answer shape and keeps the account fact through quota refusals.
+  - Verified on OpenCode 2.2.6 (16 November 2026): the producer reads with `opencode api --standalone`, a private
+    in-process server of the same CLI version that never uses or starts the background service (plain `opencode api`
+    would use whichever service runs, possibly another version, such as the Desktop app's 2.3.0 service); managed
+    launches pass an allowlisted environment, so ambient provider API-key variables cannot override the stored
+    connection; real OpenCode Claude replies carry subscription telemetry (rate-limit windows, overage rejected).
+    Provider options in the user-global OpenCode config remain an unobserved residual.
+  - Go still lacks complete observation, reset, month and demand semantics for included optimization.
+  - Models that list no variants are refused before sending on OpenCode 2.2.6: OpenCode stores their session variant
+    as `default`, which never matches the admitted route (verified by a zero-send probe on 16 November 2026).
+- Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
+  model call or new account framework.
+- API Usage is next-release scope (`API_FUNDING_QUALIFIED=False`, 20% direct API buffer). Production OpenRouter is
+  deferred. L1 to L3 follow the canary; L4 stays conditional and off.
+- Account authentication, settings, overflow, permissions, spending, credit and coordinator choices are unchanged.
+  A provider-managed fallback may be charged under the provider's own policy. Unknown quota or cost never counts as
+  free included usage or as a dollar estimate.
+
+**Proposed separate live packet: PROPOSAL ONLY, not approved and not executed.** A finite fallback-behaviour check,
+distinct from the canary:
+- Scope: one managed project, one native path whose current account and catalog are verified, at most 3 tasks and
+  3 sends (one per task, each a fresh attempt with its own permit) within 30 minutes.
+- Charge risk: before it starts, the user acknowledges that provider-managed fallback sends may be charged under the
+  provider's policy and that unknown quota is not free capacity.
+- Isolation: a disposable checkout and private routing stores; no retry and no route or model substitution.
+- Stops: the first refusal, the first `uncertain` or unknown send, any account or generation change, or the time
+  limit ends the packet. Nothing is retried.
+- Prerequisites on the same build: the lost-acknowledgment drill, operator reconciliation (`reconcile_subscription`)
+  and strict replay. Platform and release proof stay separate.
+- It grants no activation, cutover, default-ON or release decision, and its sends never count toward the canary.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.

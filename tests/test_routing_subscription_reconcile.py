@@ -170,6 +170,17 @@ class AbandonTests(Subscription):
         self.assertEqual(self.call(dict(v=1, op='check', attempt_id='a1', request=facts(),
                                         authority=self.tokens['a1'])), dict(blocked('attempt_closed'), settings_warnings=[]))
 
+    def test_an_included_abandon_keeps_its_debit_and_writes_no_boundary(self):
+        """Design 4.1 changes only fallback closure: an included claim is still counted as a debit, with no
+        window-store context required and no consumed boundary written."""
+        self.sub_uncertain('a1')
+        event, _ = sub.reconcile_event(dict(event_id='s1', attempt_id='a1', evidence=ABANDON))
+        with self.open_ledger() as ledger:
+            self.assertEqual(sub.reconcile(ledger, event, now())['state'], 'recorded')
+        self.assertIn(KEY, self.debits())
+        from runtime import routing_observations
+        self.assertEqual(routing_observations.consumed_at(self.settings, 'sub'), 0)
+
     def admit_pending(self, attempt):
         response = self.call(prepare(attempt, observations=observations(account='acct-' + attempt),
                                      constraints=dict(allowed_strategy_ids=['s-sub'])))
@@ -554,7 +565,8 @@ class ServeClearingTests(Subscription):
         self.service.close()
         request = prepare('b2', observations=dict(obs, routes=[dict(r, account='acct-b2') for r in obs['routes']]),
                           constraints=dict(allowed_strategy_ids=['s-sub']))
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--test-inputs', '--settings',
+        from tests.test_routing_account_continuity import trusted_child  # Task 3B: the seam in the child too
+        done = subprocess.run([sys.executable, '-B', '-c', trusted_child(), '--serve', '--test-inputs', '--settings',
                                str(self.settings), '--ledger', str(self.ledger)],
                               input=json.dumps(request).encode() + b'\n', capture_output=True, timeout=60)
         self.assertEqual((done.returncode, done.stderr), (0, b''))
@@ -563,7 +575,7 @@ class ServeClearingTests(Subscription):
         # A one-shot `prepare` with the same evidence clears it.
         request = prepare('b3', observations=dict(obs, routes=[dict(r, account='acct-b3') for r in obs['routes']]),
                           constraints=dict(allowed_strategy_ids=['s-sub']))
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'prepare', '--test-inputs', '--settings',
+        done = subprocess.run([sys.executable, '-B', '-c', trusted_child(), 'prepare', '--test-inputs', '--settings',
                                str(self.settings), '--ledger', str(self.ledger)],
                               input=json.dumps(request).encode(), capture_output=True, timeout=60)
         self.assertEqual(json.loads(done.stdout)['state'], 'admitted', done.stdout)

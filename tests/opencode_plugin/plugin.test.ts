@@ -1588,6 +1588,11 @@ function realStores(admit: boolean) {
   writeFileSync(table, JSON.stringify({ schema: 2, version: "t1", rows: { "implementation|medium|medium": [
     { strategy_id: "s-sub", model: ADMITTED.model, effort: ADMITTED.effort, harness: ADMITTED.harness, evidence_refs: ["g1"] }] } }))
   chmodSync(table, 0o600)
+  // Task 3B: an admitting synthetic store runs EVERY child through the labelled test-only trusted-collection
+  // bootstrap (tests/test_routing_account_continuity.trusted_snapshots); realStores(false) keeps the plain boundary.
+  const child = admit
+    ? ["-B", "-c", `import sys; sys.path.insert(0, ${JSON.stringify(ROOT)}); from tests.test_routing_account_continuity import trusted_snapshots; [patch.start() for patch in trusted_snapshots()]; from scripts import routing as c; sys.exit(c.main(sys.argv[1:]))`]
+    : ["-I", "-B", join(ROOT, "scripts/routing.py")]
   if (admit) {
     const request = {
       v: 1, op: "prepare", assignment: { attempt_id: "real-a1", task: "task-real", role: "software-engineer", scope: "scope1" },
@@ -1599,16 +1604,16 @@ function realStores(admit: boolean) {
         capable: true, permitted: true, binding_enforceable: true }],
         pools: { sub: { windows: [{ id: "5h", limit: 1000, used: 100, length: 18000, reset_at: null, rolling: true, fresh: true }] } } },
     }
-    const done = spawnSync("python3", ["-I", "-B", join(ROOT, "scripts/routing.py"), "prepare", "--settings", settings, "--ledger", ledger],
+    const done = spawnSync("python3", [...child, "prepare", "--settings", settings, "--ledger", ledger],
       { input: JSON.stringify(request), encoding: "utf8", timeout: 30000 })
     assert.equal(JSON.parse(done.stdout).state, "admitted", done.stdout)
   }
   const command = (op: string, input: Record<string, unknown>) => {
-    const done = spawnSync("python3", ["-I", "-B", join(ROOT, "scripts/routing.py"), op, "--settings", settings, "--ledger", ledger],
+    const done = spawnSync("python3", [...child, op, "--settings", settings, "--ledger", ledger],
       { input: JSON.stringify({ v: 1, op, ...input }), encoding: "utf8", timeout: 30000 })
     return JSON.parse(done.stdout)
   }
-  const argv = ["python3", "-I", "-B", join(ROOT, "scripts/routing.py"), "--serve", "--settings", settings, "--ledger", ledger]
+  const argv = ["python3", ...child, "--serve", "--settings", settings, "--ledger", ledger]
   return { argv, command, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 

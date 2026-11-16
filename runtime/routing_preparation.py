@@ -24,7 +24,8 @@ def preview(service, body):
         return dict(state='blocked', reason='observations_unavailable')
     return dict(state='previewed', mode=selected['mode'], ranking=selected['ranking'], shortlist=cut['shortlist'],
                 routes=[route['route'] for route in cut['routes']], excluded=cut['excluded'],
-                routes_version=cut['routes_version'])
+                routes_version=cut['routes_version'],
+                unmeasured=[route['route'] for route in cut['routes'] if route.get('demand') is None])  # fallback only
 
 
 def acquire_billing(service, body):

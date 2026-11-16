@@ -383,8 +383,8 @@ def _covered_or_marked(service, admission, settled, settings_path):
         covered = set(settled(admission)) if settled is not None else set()
     except Exception:  # noqa: BLE001 - a reading that could not be stored covers nothing
         covered = set()
-    if claimed <= covered:
-        return True
+    if claimed <= covered and routing.FALLBACK not in (admission.get('reason_codes') or ()):
+        return True  # a fallback claims nothing, yet may have consumed an unknown amount: always marked
     try:
         routing_observations.mark_consumed(settings_path or service.settings_path, admission['pool'], int(time.time()),
                                            admission['attempt_id'])
@@ -481,7 +481,7 @@ def _self_check_in_child(workdir):
               window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
                                observed_at=at, unit=routing_observations.WINDOW_UNIT)],
-        billing=subscription_billing.double('self-check'))  # sandbox only: no production billing producer exists
+        billing=subscription_billing.double('self-check'))  # sandbox only: this path has no production billing producer
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source

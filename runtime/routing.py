@@ -17,7 +17,7 @@ import re
 import secrets
 
 from runtime import routing_allocator as allocator, routing_gates, routing_settings, task_profile
-from runtime import subscription_reconcile as sub_reconcile
+from runtime import subscription_fallback as fallback, subscription_reconcile as sub_reconcile
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
@@ -488,13 +488,13 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     ranked = routing_funding.is_ranked(assignment, ranking, settings)
     candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
     for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
-        item, why = _candidate(data, route, observations, assignment, settings, held, now)
+        item, why = fallback.fence(fallback.candidate(data, route, observations, assignment, settings, held, now), data)
         if item is not None:
             candidates.append(item)
         excluded += why
-    bucket, candidates = [assignment['work_kind'], assignment['complexity_band']], routing_funding.prefer_included(candidates)
-    reasons = list(ranking.get('reason_codes', [])) if ranked else []
-    u = e = None
+    entries = None if ranked else [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
+    bucket, candidates = [assignment['work_kind'], assignment['complexity_band']], routing_funding.prefer_included(candidates, entries)
+    reasons, u, e = list(ranking.get('reason_codes', [])) if ranked else [], None, None
     if ranked:
         pending, chosen, shares = routing_funding.ranked(data, candidates, excluded, ranking, settings, observations,
                                                          bucket)
@@ -502,7 +502,6 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
             return pending
         mode = 'ranked'
     else:
-        entries = [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
         chosen, shares, mode = None, None, 'worker_choice'
         for entry in entries:
             matching = [c for c in candidates if _choice_matches(entry, c)]
@@ -576,7 +575,7 @@ def _valid_route(route):
     for key in ('route', 'pool', 'account', 'strategy_id', 'billing_class', *ROUTE_IDENTITY):
         if key in route and not _text(route[key]):
             return False
-    if 'demand' in route and not _amounts(route['demand']):
+    if 'demand' in route and not (_amounts(route['demand']) or fallback.unmeasured(route)):
         return False
     if route.get('next_request_bound') is not None and not _amounts(route['next_request_bound'], allow_none=True):
         return False
@@ -596,7 +595,8 @@ def _valid_pool(pool):
     if type(pool) is not dict or not _optional(pool.get('billing_class'), _text):
         return False
     windows = pool.get('windows')
-    if type(windows) is not list or not 0 < len(windows) <= MAX_WINDOWS or not all(_valid_window(w) for w in windows):
+    if type(windows) is not list or not (windows or 'billing_class' not in pool) or len(windows) > MAX_WINDOWS \
+            or not all(_valid_window(w) for w in windows):  # a subscription pool with no reading: quota unknown
         return False
     grant = pool.get('grant')
     return grant is None or (type(grant) is dict and _finite(grant.get('remaining'))
@@ -1004,7 +1004,7 @@ def _fresh_gate(data, attempt_id, fresh, workflow):
             return 'binding_missing'
         if not routing_gates.valid_binding(stored):
             return 'gate_error'
-        if credential_marker(data, record) != stored['credential']:
+        if record.get('billing_class') != 'included_subscription' and credential_marker(data, record) != stored['credential']:
             return 'credential_changed'
         job = stored['job']
         if job is None:
@@ -1019,7 +1019,7 @@ def _fresh_gate(data, attempt_id, fresh, workflow):
         return 'gate_error'
 
 
-def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=None):
+def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=None, settings_path=None):
     """Issue the single-use authority for an admitted attempt, or return the existing decision.
 
     ``settings`` (resolved settings with ``revision``) and ``now`` may be callables; they are read INSIDE the
@@ -1059,7 +1059,7 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=Non
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
         admitted.update(route=record['route'], pool=record['pool'])
-        reason = _fresh_gate(data, attempt_id, fresh, workflow)
+        reason = _fresh_gate(data, attempt_id, fresh, workflow) or fallback.dispatch_problem(data, record, settings_path, moment)
         if reason is not None:
             return reason
         if gates:
@@ -1261,7 +1261,7 @@ def event_digest(event):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
-def record_event(ledger, event, now):
+def record_event(ledger, event, now, *, settings_path=None):
     """Apply one lifecycle event (already checked by ``event_error``) in one ledger transaction.
 
     S3.1/S3.4 transitions are unchanged: only established outcomes release a claim (``not_dispatched`` before
@@ -1272,7 +1272,7 @@ def record_event(ledger, event, now):
     under the same id is ``event_conflict``; ``complete`` settles (``Ledger._settle``). A closed attempt refuses
     every new event (``attempt_closed``)."""
     try:
-        return ledger.record_event(event, event_digest(event), now)
+        return ledger.record_event(event, event_digest(event), now, settings_path=settings_path)
     except BudgetError as error:
         return _blocked(str(error))
 

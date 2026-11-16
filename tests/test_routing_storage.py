@@ -96,7 +96,8 @@ class AdmissionSizeTests(Ledger):
     """Public `routing.admit`: the maximal caller and shipped shapes fit their byte bounds with >= 25% room."""
 
     def admit(self, request, ranked, snapshot, job):
-        return routing.admit(request, ranked, adm.settings(), snapshot, ledger=self.ledger, workflow=job)
+        from tests.test_routing_account_continuity import trusted  # Task 3B: code-built snapshots, marked as trusted
+        return routing.admit(request, ranked, adm.settings(), trusted(snapshot), ledger=self.ledger, workflow=job)
 
     def test_caller_maximum_records_holds_and_bindings_fit_in_every_text_class(self):
         for label, char in TEXTS.items():

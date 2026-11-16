@@ -108,20 +108,22 @@ def refuse(name):
     return call
 
 
-NATIVE_KEY = 'a' * 32  # an invented derived native Claude account key
+NATIVE_KEY, NATIVE_GENERATION = 'a' * 32, 'c' * 32  # an invented derived native Claude account key and generation
 
 
 def native_reading(settings, windows, at):
-    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record and
-    `claude-subscription` rows bound to it. A code-level fixture, never a qualified observation."""
+    """What a confirmed native Claude account read leaves (`runtime/claude_usage.py`): a current account record proved
+    by its key+generation identity and `claude-subscription` rows bound to both. A code-level fixture only."""
     from runtime import claude_usage
     current = claude_usage._state(settings).get('account') or {}
     first = min([item['observed_at'] for item in windows] + ([current['usage_at']] if current.get('usage_at') else []))
-    claude_usage._save(settings, account=dict(key=NATIVE_KEY, observed_at=at, client_version='invented-2',
-                                              overflow='unknown', usage_at=first))
+    account = dict(key=NATIVE_KEY, generation=NATIVE_GENERATION, observed_at=at, client_version='invented-2',
+                   overflow='unknown', usage_at=first)
+    claude_usage._save(settings, identity=dict(key=NATIVE_KEY, generation=NATIVE_GENERATION), account=account)
+    token = claude_usage.row_account(account)
     for item in windows:
-        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], NATIVE_KEY),
-                                                                 account=NATIVE_KEY))
+        collector.store_window(settings, claude_usage.POOL, dict(item, id=claude_usage.bound_id(item['id'], token),
+                                                                 account=token))
 
 
 class Stores(unittest.TestCase):
@@ -206,11 +208,12 @@ class CollectorTests(Stores):
         result = self.collect([sub_route('old'), sub_route('none', pool='other')],
                               dict(sub=[sub_window(self.now - collector.FRESH_SECONDS - 1)]))
         self.assertIs(result['observations']['pools']['sub']['windows'][0]['fresh'], False)
-        self.assertEqual(excluded(result), dict(none='window_unobserved'))  # enabled, but blocked with a reason
+        self.assertEqual((excluded(result), kept(result)['none']['demand']), ({}, None))  # enabled: fallback only
 
     def test_subscription_windows_must_carry_the_manifest_window_unit(self):
         """C3-1b: a route's `demand` is in its manifest's window unit, so a stored window in another unit, or in none,
-        would misadmit silently: the route is left out instead. A route that declares no unit fails closed."""
+        would misadmit silently: the route keeps only provider-managed fallback (unknown demand, never a claim)
+        instead (Task 2: unusable quota is not an account failure). A route that declares no unit fails closed."""
         self.assertEqual(collector.WINDOW_UNIT, 'utilization_thousandths')
         unitless = {key: value for key, value in sub_window(self.now).items() if key != 'unit'}
         cases = (('matching', sub_route(), sub_window(self.now), None),
@@ -221,16 +224,18 @@ class CollectorTests(Stores):
         for name, route, window, reason in cases:
             with self.subTest(name):
                 result = self.collect([route], dict(sub=[window]))
-                self.assertEqual(excluded(result), {} if reason is None else dict(sub=reason))
-                self.assertEqual(set(kept(result)), {'sub'} if reason is None else set())
+                fallback = reason == 'window_unit_mismatch'
+                self.assertEqual(excluded(result), {} if reason is None or fallback else dict(sub=reason))
+                self.assertEqual(set(kept(result)), {'sub'} if reason is None or fallback else set())
+                self.assertIs(fallback and kept(result)['sub']['demand'] is None, fallback)
                 if reason is None:  # the stored field passes through; the manifest declaration does not
                     self.assertEqual(result['observations']['pools']['sub']['windows'][0]['unit'], collector.WINDOW_UNIT)
                     self.assertNotIn('window_unit', kept(result)['sub'])
         self.assertIn('unit', collector.WINDOW_FIELDS)  # C3-3 detects the stored-window schema by this name
-        # One unitless window among the demanded ones is enough to leave the route out.
+        # One unitless window among the demanded ones is enough to leave the route only its fallback.
         result = self.collect([sub_route(demand={'5h': 10, '7d': 1})],
                               dict(sub=[sub_window(self.now), dict(unitless, id='7d')]))
-        self.assertEqual(excluded(result), dict(sub='window_unit_mismatch'))
+        self.assertEqual((excluded(result), kept(result)['sub']['demand']), ({}, None))
 
     def test_the_local_source_declares_the_shipped_window_unit_and_stores_it(self):
         from runtime import routing_paths
@@ -614,7 +619,7 @@ class LocalSourceTests(Stores):
         reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
         with mock.patch.object(codex_rate_limits, 'refresh', reader):
             early = self.collect(table=table, strategy_ids=claude[:2] + ['o1'] + claude[2:], refresh_windows=True)
-        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(reader.call_count, 0)  # Task 3B: the pool reader proves no OpenCode account
         self.assertEqual(early['observations']['shortlist'], claude[:2] + ['o1'] + claude[2:9])
 
     def test_subscription_candidate_beyond_position_64_is_not_lost(self):
@@ -655,9 +660,10 @@ class LocalSourceTests(Stores):
                 mock.patch.object(collector.LocalSource, 'windows', spy):
             result = self.collect(table=table, strategy_ids=order, refresh_windows=True)
         self.assertEqual(result['observations']['shortlist'], order[:10])
-        self.assertEqual(set(excluded(result).values()), {'codex_unavailable'})
-        self.assertEqual([route['strategy_id'] for route in result['observations']['routes']], order[5:10])
-        self.assertEqual((reader.call_count, sorted(read)), (1, ['chatgpt-subscription', 'claude-subscription']))
+        self.assertEqual(excluded(result), {})  # the failed ChatGPT read leaves their quota unknown: fallback only
+        self.assertEqual([(route['strategy_id'], route['demand'] is None) for route in result['observations']['routes']],
+                         [(sid, True) for sid in order[:10]])  # Task 3B: no unbound row is a claim; the cut stays
+        self.assertEqual((reader.call_count, sorted(read)), (0, ['chatgpt-subscription', 'claude-subscription']))
 
     def test_preview_collect_and_decision_keep_the_same_shortlist(self):
         """The actual producers: `Service.preview` (no binding, ledger, window, reader or write), the managed
@@ -699,9 +705,9 @@ class LocalSourceTests(Stores):
         with mock.patch.object(codex_rate_limits, 'refresh', reader), mock.patch.object(collector, 'collect', collect):
             decided = managed.handle(json.dumps(dict(body, v=1, op='prepare')).encode())
         self.assertEqual(collected[0]['observations']['shortlist'], preview['shortlist'])
-        self.assertEqual(reader.call_count, 1)  # the late refusal: the ChatGPT routes, no refill
+        self.assertEqual(reader.call_count, 0)  # Task 3B: no pool reader for an OpenCode alias, no refill
         self.assertEqual(decided['state'], 'admitted', decided)
-        self.assertIn(decided['admission']['route'].rsplit(':', 1)[1], preview['shortlist'][5:])
+        self.assertEqual(decided['admission']['route'].rsplit(':', 1)[1], preview['shortlist'][0])  # 3B: all fallback
         # A caller's own snapshot (no `shortlist`) with twelve eligible routes is cut the same way in admission.
         snapshot = collected[0]['observations']
         template = next(route for route in snapshot['routes'] if route['strategy_id'] == 'c0')
@@ -709,7 +715,9 @@ class LocalSourceTests(Stores):
                                         for sid in order[5:]])
         del caller['shortlist']
         shared = routing_funding.subscription_shortlist
-        with mock.patch.object(routing_funding, 'subscription_shortlist', wraps=shared) as cut:
+        from tests.test_routing_account_continuity import trusted_snapshots  # 3B: this synthetic caller decision only
+        with mock.patch.object(routing_funding, 'subscription_shortlist', wraps=shared) as cut, \
+                trusted_snapshots()[1]:
             again = self.call(dict(body, v=1, op='prepare', assignment=dict(body['assignment'], attempt_id='caller'),
                                    observations=caller))
         self.assertEqual(again['state'], 'admitted', again)
@@ -746,9 +754,9 @@ class LocalSourceTests(Stores):
         reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
         with mock.patch.object(codex_rate_limits, 'refresh', reader):
             both = self.collect(table=table, strategy_ids=['o1', 'c1'], refresh_windows=True)
-        self.assertEqual(reader.call_count, 1)  # once, for the kept ChatGPT route's pool only
-        self.assertEqual(reader.call_args.kwargs['need'], ('7d',))
-        self.assertEqual(excluded(both), {'opencode-chatgpt-subscription:o1': 'codex_unavailable'})
+        self.assertEqual(reader.call_count, 0)  # Task 3B: never started for the kept OpenCode ChatGPT route
+        self.assertIsNone(reader.call_args)
+        self.assertEqual((excluded(both), kept(both)['opencode-chatgpt-subscription:o1']['demand']), ({}, None))
 
     def test_choice_filter_keeps_static_source_ids(self):
         routes = [sub_route('fixed-a'), sub_route('fixed-b', model='other'),
@@ -778,7 +786,7 @@ class LocalSourceTests(Stores):
         self.assertEqual(cut['shortlist'], ['o1', 'c1'])
         self.assertEqual(cut['excluded'], [dict(route='opencode-claude-subscription:c2', reason='not_entitled')])
         self.assertEqual(result['observations']['excluded'][:1], cut['excluded'])  # the same static exclusions first
-        self.assertEqual(excluded(result)['opencode-chatgpt-subscription:o1'], 'window_unobserved')  # then windows
+        self.assertIs(kept(result)['opencode-chatgpt-subscription:o1']['demand'], None)  # no rows: fallback only
         self.assertEqual(result['observations']['routes_version'], cut['routes_version'])
 
     def test_shortlist_never_reads_windows_or_ledger_or_refreshes(self):
@@ -818,7 +826,7 @@ class LocalSourceTests(Stores):
         collector.mark_not_entitled(self.settings, 'opencode-chatgpt-subscription:o1', 'chatgpt-plan', self.now)
         result = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CLAUDE_HARNESS])
         self.assertNotIn('opencode-chatgpt-subscription:o1', json.dumps(result))  # not even its not_entitled mark
-        self.assertEqual(excluded(result), {'opencode-claude-subscription:c1': 'window_unobserved'})
+        self.assertEqual((excluded(result), kept(result)['opencode-claude-subscription:c1']['demand']), ({}, None))
         nothing = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=None)
         self.assertEqual((nothing['observations']['routes'], nothing['observations']['excluded']), ([], []))
 
@@ -853,14 +861,16 @@ class LocalSourceTests(Stores):
         reader = mock.Mock(return_value=dict(state='stored'))
         with mock.patch.object(codex_rate_limits, 'refresh', reader):
             result = self.collect(table=table, strategy_ids=['n1'], harnesses=[CODEX_HARNESS], refresh_windows=True)
-        self.assertEqual((kept(result), excluded(result)), ({}, {NATIVE_CODEX: 'window_unobserved'}))
+        self.assertEqual((kept(result)[NATIVE_CODEX]['demand'], excluded(result)), (None, {}))  # fallback only
+        self.assertEqual(result['observations']['pools']['chatgpt-subscription']['windows'], [])  # no unbound row
         self.assertEqual(reader.call_count, 0)
 
     def test_an_account_tagged_row_does_not_rescue_native_codex(self):
         table = self.codex_table()
         collector.store_window(self.settings, 'chatgpt-subscription', sub_window(self.now, id='7d', account='acct-1'))
         result = self.collect(table=table, strategy_ids=['n1'], harnesses=[CODEX_HARNESS])
-        self.assertEqual((kept(result), excluded(result)), ({}, {NATIVE_CODEX: 'window_unobserved'}))
+        self.assertEqual((kept(result)[NATIVE_CODEX]['demand'], excluded(result)), (None, {}))  # fallback only
+        self.assertEqual(result['observations']['pools']['chatgpt-subscription']['windows'], [])
 
     def test_native_codex_does_not_poison_opencode_chatgpt_in_either_shortlist_order(self):
         table = self.codex_table()
@@ -868,10 +878,11 @@ class LocalSourceTests(Stores):
         for order in (['n1', 'o1'], ['o1', 'n1']):
             with self.subTest(order=order):
                 result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS])
-                self.assertEqual(set(kept(result)), {OPENCODE_CHATGPT})
-                self.assertEqual(excluded(result), {NATIVE_CODEX: 'window_unobserved'})
+                self.assertEqual({key: route['demand'] is None for key, route in kept(result).items()},
+                                 {OPENCODE_CHATGPT: True, NATIVE_CODEX: True})  # Task 3B: no unbound row for either
+                self.assertEqual(excluded(result), {})
                 windows = result['observations']['pools']['chatgpt-subscription']['windows']
-                self.assertEqual([window['id'] for window in windows], ['7d'])
+                self.assertEqual([window['id'] for window in windows], [])  # Task 3B: no producer proves the row
 
     def test_the_legacy_reader_runs_once_for_opencode_only_in_either_shortlist_order(self):
         from runtime import codex_rate_limits
@@ -883,9 +894,9 @@ class LocalSourceTests(Stores):
                 with mock.patch.object(codex_rate_limits, 'refresh', reader):
                     result = self.collect(table=table, strategy_ids=order, harnesses=[CODEX_HARNESS, CHATGPT_HARNESS],
                                           refresh_windows=True)
-                self.assertEqual(reader.call_count, 1)  # OpenCode's pool read; the native route starts none
-                self.assertEqual(excluded(result), {OPENCODE_CHATGPT: 'codex_unavailable',
-                                                    NATIVE_CODEX: 'window_unobserved'})
+                self.assertEqual(reader.call_count, 0)  # Task 3B: neither route starts the pool-wide reader
+                self.assertEqual((excluded(result), {key: route['demand'] for key, route in kept(result).items()}),
+                                 ({}, {OPENCODE_CHATGPT: None, NATIVE_CODEX: None}))  # both fallback only
 
     def test_native_codex_uses_only_its_own_window_source(self):
         """A code-level double stands in for a future qualified native Codex window source (today
@@ -899,6 +910,15 @@ class LocalSourceTests(Stores):
         self.assertEqual(set(kept(result)), {NATIVE_CODEX})
         windows = result['observations']['pools']['chatgpt-subscription']['windows']
         self.assertEqual([window['used'] for window in windows], [40])
+
+    def test_a_consumed_mark_is_once_per_attempt_unless_a_terminal_retry_moves_it_forward(self):
+        self.assertTrue(collector.mark_consumed(self.settings, 'sub', 100, 'a1'))
+        self.assertFalse(collector.mark_consumed(self.settings, 'sub', 200, 'a1'))  # the default stays once only
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 100)
+        self.assertTrue(collector.mark_consumed(self.settings, 'sub', 300, 'a1', once=False))
+        collector.mark_consumed(self.settings, 'sub', 250, 'a1', once=False)  # never backwards
+        self.assertEqual(collector.consumed_at(self.settings, 'sub'), 300)
+        self.assertEqual(collector._read(collector.window_path(self.settings))['consumed_by']['sub'], ['a1'])
 
 
 class ManagedFixtureTests(unittest.TestCase):

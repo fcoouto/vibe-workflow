@@ -80,17 +80,28 @@ The commands for the live session that the [pre-canary requirements](superpowers
 [15 November account amendment](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#account-based-routing-simplification-approved-15-november-2026),
 a subscription route needs a current account fact for its path, not proof that
 paid overflow is disabled. The account's own Extra Usage setting is reported,
-never required. The wired producer is the native Claude account read
-(`runtime/claude_usage.py`) for `claude-native-subscription`. Other subscription
-paths have no wired producer and remain excluded/refused as `billing_unverified`;
-activation's `subscription_sources` check refuses those hosts.
+never required. Two native producers are wired: the native Claude account read
+(`runtime/claude_usage.py`) for `claude-native-subscription`, and the native Codex
+account read (`runtime/codex_account.py`) for `codex-chatgpt-subscription` (account and
+catalog only; its usable quota stays unknown). The three OpenCode subscription paths are
+verified only by the OpenCode selected-account read (`runtime/opencode_account.py`, added
+by Task 6 on 16 November). Without its current fact they are excluded/refused as
+`billing_unverified`, and activation's fact-based `subscription_sources` check refuses those
+hosts; with it an OpenCode host can pass, with quota unknown (fallback only). For an ordinary native
+bridge host, activation also needs the native catalog bound to the current account; a
+Codex host whose enrolment keeps runtime task state is checked for billing only (its own
+delegation path keeps its catalog and launch checks), and a Claude Code host with runtime
+task state is refused (`claude_code_native_bridge_unavailable`). Neither producer is live
+qualified in its current generation-bound format.
 The approved second native Claude read observed its account fact and bound
 catalog, but usage refused unrecognized fields and left no usable windows.
 Account observation alone does not qualify a routing path.
-Until a path's account source, complete applicable usage and measured demand have
+Until a path's account source (and, for a native client, its bound catalog) has
 supported-host evidence, activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only))
-and the canary (step 8) are not to be attempted for it. The amendment itself grants
-no live check. Scope authorized sessions to prerequisites they can complete
+is not to be attempted for it. The quota-denominated canary (step 8) also needs complete
+applicable usage and measured demand; provider-managed fallback sends with unknown quota
+never satisfy it ([validation Edit 15](smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback)).
+The amendment itself grants no live check. Scope authorized sessions to prerequisites they can complete
 (steps 1 to 7). Open no budget for the canary and spend nothing on it.
 
 ### Before the session

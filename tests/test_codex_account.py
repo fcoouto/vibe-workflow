@@ -3,14 +3,18 @@ import importlib
 import json
 import os
 import signal
+import sys
 import threading
 import time
 import unittest
 from unittest import mock
 
-from runtime import codex_rate_limits as lifecycle, routing_observations as observations, subscription_billing
+from runtime import codex_rate_limits as lifecycle, native_routing, routing_launch, \
+    routing_observations as observations, subscription_billing
 from runtime.adapters import native_catalog
-from tests.test_routing_codex_rate_limits import Sandbox, result, window
+from tests import test_native_routing as native_tests
+from tests.test_routing_codex_rate_limits import DOUBLE, Sandbox, result, window
+
 
 try:
     account = importlib.import_module('runtime.codex_account')
@@ -316,6 +320,118 @@ class AcquisitionTests(Sandbox):
         self.assertIsNone(account.billing_fact(self.settings, self.route, int(time.time())))
         self.assertEqual(self.acquire(), dict(state='backoff', reason='codex_timeout'))
         self.assertEqual(self.spawns(), 1)  # backoff, rather than busy, also proves the pool lock was released
+
+
+class CodexBridgeTest(native_tests.NativeBase):
+    """Task 3: the real one-shot `native_prepare` for Codex on LocalSource. The only process is the synthetic
+    app-server; there is no binding double, the legacy quota reader may not start and the window source is real."""
+
+    def setUp(self):
+        super().setUp()
+        self.guard.stop()
+        self.enterContext(mock.patch.object(native_catalog, 'current_binding', lambda client: None))
+        self.enterContext(mock.patch.object(account, 'usable_windows', native_tests.REAL_CODEX_WINDOWS))
+        native_catalog._path(self.settings).unlink()
+        home = self.root / 'home'
+        home.mkdir()
+        self.enterContext(mock.patch.dict(os.environ, PATH='/usr/bin:/bin', HOME=str(home)))
+        self.log, self.pages = self.root / 'codex-double.log', [dict(data=[
+            model('invented-codex-small'), model('invented-codex-large', ('high',))], nextCursor=None)]
+        self.value = payload(pages=self.pages)
+        self.enterContext(mock.patch.object(lifecycle, 'default_command', lambda environ: [
+            sys.executable, '-I', '-B', str(DOUBLE), str(self.log), 'account', json.dumps(self.value)]))
+        self.legacy = mock.Mock(side_effect=AssertionError('legacy quota reader started'))
+        self.enterContext(mock.patch.object(lifecycle, 'refresh', self.legacy))
+        self.enterContext(mock.patch.object(lifecycle, 'read_windows', self.legacy))
+
+    def spawns(self):
+        lines = self.log.read_text().splitlines() if self.log.exists() else []
+        return sum(1 for line in lines if json.loads(line).get('spawned'))
+
+    def disposition(self, attempt):
+        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
+                      if item['attempt_id'] == attempt)
+        return record['reserved'], record['reason_codes'][-2:]
+
+    def test_native_metadata_without_quota_reaches_fallback(self):
+        for name, value in (('identity', payload(accounts=[dict(account=None)])),
+                            ('catalog', payload(pages=[dict(data=[], nextCursor=None)]))):
+            with self.subTest(missing=name):
+                self.value = value
+                self.assertEqual(self.prepare('codex', 'm0-' + name),
+                                 dict(v=1, state='blocked', reason='native_binding_unverified'))
+                self.assertEqual(self.holds(), {})
+                self.offset += lifecycle.FAILURE_BACKOFF
+        self.value = payload(pages=self.pages)
+        tool = native_tests.NativeTool()
+        permit, done = self.run_native('codex', tool, attempt='m1')
+        self.assertEqual((permit['state'], tool.calls), ('dispatched', [dict(model='invented-codex-small',
+                                                                             effort='high')]), permit)
+        self.assertEqual(self.disposition('m1'), ({}, ['quota_unknown', 'provider_managed_fallback']))
+        self.assertEqual(done['served'], dict(model='unknown', effort='unknown'))
+        self.assertEqual(self.prepare('codex', 'm1')['reason'], 'already_prepared')
+        self.assertEqual(self.spawns(), 3)
+        self.legacy.assert_not_called()
+
+    def test_codex_metadata_does_not_start_legacy_quota_reader(self):
+        self.assertEqual(self.prepare('codex')['state'], 'dispatched')
+        route = dict(route=account.PATH + ':activation', account='chatgpt-plan', pool=account.POOL,
+                     billing_class='included_subscription')
+        self.assertIsNone(subscription_billing.problem(observations.LocalSource(self.settings).billing(
+            route, int(time.time())), route, int(time.time())))
+        observations.LocalSource(self.settings).acquire_billing([route], int(time.time()))
+        self.assertEqual(self.disposition('n1'), ({}, ['quota_unknown', 'provider_managed_fallback']))
+        self.assertEqual(account.usable_windows(self.settings, int(time.time())), [])
+        self.assertEqual(self.spawns(), 1)
+        self.legacy.assert_not_called()
+
+    def test_failed_quota_does_not_repeat_fresh_metadata_exchange(self):
+        self.assertEqual(self.prepare('codex', 'q1')['state'], 'dispatched')
+        self.offset += lifecycle.FAILURE_BACKOFF + 1
+        self.assertEqual(self.prepare('codex', 'q2')['state'], 'dispatched')
+        self.assertEqual(self.disposition('q2')[0], {})
+        self.assertEqual(self.spawns(), 1)
+        self.legacy.assert_not_called()
+
+    def test_changed_native_binding_refuses_prepared_send(self):
+        real = routing_launch.admitted_check
+
+        def switched(admission, **options):  # another native login, read by its own producer before the send
+            self.value = payload(accounts=[identity('other@example.test')] * 2, pages=self.pages)
+            self.assertEqual(account.refresh(self.settings, force=True)['state'], 'stored')
+            return real(admission, **options)
+        tool = native_tests.NativeTool()
+        with mock.patch.object(routing_launch, 'admitted_check', switched):
+            permit, done = self.run_native('codex', tool)
+        self.assertEqual((permit['state'], permit.get('reason'), tool.calls, done),
+                         ('blocked', 'native_binding_changed', [], None))
+        self.assertNotIn('dispatched', {hold['state'] for hold in self.holds().values()})
+        self.assertEqual(self.spawns(), 2)
+
+    def test_a_switch_after_admission_before_the_bridge_reads_it_refuses_the_send(self):
+        real, seen = native_routing._call, []
+
+        def admitted_then_switched(service, request):  # A is admitted; B is stored before the bridge sees the answer
+            answer = real(service, request)
+            if answer.get('state') == 'admitted' and not seen:
+                seen.append(native_catalog._binding(self.settings, 'codex'))
+                self.value = payload(accounts=[identity('other@example.test')] * 2, pages=self.pages)
+                self.assertEqual(account.refresh(self.settings, force=True)['state'], 'stored')
+                seen.append(native_catalog._binding(self.settings, 'codex'))
+            return answer
+        tool = native_tests.NativeTool()
+        with mock.patch.object(native_routing, '_call', admitted_then_switched):
+            permit, done = self.run_native('codex', tool)
+        first, second = seen
+        self.assertTrue(first['connection'].startswith('account:') and second['connection'].startswith('account:'),
+                        seen)
+        self.assertNotEqual(first['connection'], second['connection'], seen)
+        self.assertEqual((permit['state'], permit.get('reason'), tool.calls, done),
+                         ('blocked', 'native_binding_changed', [], None), seen)
+        self.assertNotIn('dispatched', {hold['state'] for hold in self.holds().values()})
+        self.assertEqual(self.prepare('codex')['reason'], 'already_prepared')  # no replacement permit
+        self.assertEqual(self.spawns(), 2)
+        self.legacy.assert_not_called()
 
 
 if __name__ == '__main__':

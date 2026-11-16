@@ -352,6 +352,8 @@ class Controller:
         """The exact-admission gate; the hold is saved before the driver may send."""
         if admission.get("mode") != "ranked":
             raise canary.Abort("non_ranked_admission", admission.get("mode"))
+        if routing.FALLBACK in (admission.get("reason_codes") or []):  # Edit 15: a fallback is never a canary send
+            raise canary.Abort("admission_not_approved")
         route = self.pins["routes"].get(admission.get("route"))
         if admission.get("billing_class") != routing_paths.SUBSCRIPTION or route is None \
                 or route["path"] not in self.pins["paths"] or admission.get("pool") != route["pool"] \

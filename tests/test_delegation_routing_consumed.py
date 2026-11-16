@@ -147,8 +147,10 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
         with self.reader():
             for name, answer in (('codex', self.codex_alias('alias-codex')),
                                  ('opencode', self.opencode_alias('alias-opencode'))):
-                with self.subTest(alias=name):
-                    self.assertNotEqual(answer['state'], 'admitted', answer)  # never the pre-turn headroom
+                with self.subTest(alias=name):  # never the pre-turn headroom: provider-managed fallback only
+                    record = self.find('alias-' + name)
+                    self.assertEqual((answer['state'], record['reserved'], record['reason_codes'][-2:]),
+                                     ('admitted', {}, ['quota_unknown', 'provider_managed_fallback']), answer)
         claude = self.direct('other-pool', 'opencode', routing_launch.shim_harness('claude-agent'),
                              provider='claude-agent', model='invented-claude-model', effort='high')
         self.assertEqual(claude['state'], 'admitted', claude)  # an unrelated pool stays usable
@@ -165,8 +167,10 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
         self.assertEqual(calls, [(CODEX_POOL, attempt, 'dispatched')])
         self.assertEqual(self.hold(attempt), 'released')
         self.assertGreater(collector.consumed_at(self.settings, CODEX_POOL), 0)
-        self.assertNotEqual(intent['routing']['state'], 'admitted', intent)  # the same pre-turn reading is stale
-        self.assertIsNone(self.find(attempt + '.c1'))
+        self.assertEqual(intent['routing'], dict(state='admitted', attempt_id=attempt + '.c1'), intent)
+        record = self.find(attempt + '.c1')  # the same pre-turn reading is stale: fallback only, no included claim
+        self.assertEqual((record['reserved'], record['reason_codes'][-2:]),
+                         ({}, ['quota_unknown', 'provider_managed_fallback']))
 
     def test_an_independently_newer_reading_restores_the_continuation_on_the_same_route(self):
         self.ready()
@@ -369,6 +373,27 @@ class ManagedCompletionMarks(flows.CodexDelegationFlowTests):
         self.assertEqual(settled['routing']['closed'], [dict(attempt_id=prepared['attempt_id'], kind='complete',
                                                              state='recorded')])
         self.assertEqual(collector.consumed_at(self.settings, CODEX_POOL), 0)
+
+    def test_a_provider_managed_fallback_marks_its_pool_before_release(self):
+        """Design 4.1: a fallback admission claims no included window but may have consumed an unknown amount, so
+        `_close` writes the pool's boundary while the hold still counts, exactly as for an included claim."""
+        from runtime import routing
+        self.ready()
+        prepared = self.prepare(dispatch_id='fallback')
+        attempt = prepared['attempt_id']
+        real = delegation_routing._holds
+
+        def holds(service):
+            data = real(service)
+            return dict(data, admissions=[dict(r, reserved={}, reason_codes=[*r['reason_codes'], routing.FALLBACK])
+                                          for r in data.get('admissions', [])])
+        calls, spy = self.spy()
+        with spy, mock.patch.object(delegation_routing, '_holds', holds):
+            settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
+                prepared, outcome='cancelled'))
+        self.assertEqual(settled['routing']['closed'], [dict(attempt_id=attempt, kind='complete', state='recorded')])
+        self.assertEqual(calls, [(CODEX_POOL, attempt, 'dispatched')])  # marked while the hold still counted
+        self.assertGreater(collector.consumed_at(self.settings, CODEX_POOL), 0)
 
     def test_unknown_funding_keeps_the_hold(self):
         self.ready()
