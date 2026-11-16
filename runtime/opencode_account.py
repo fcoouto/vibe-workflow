@@ -41,11 +41,15 @@ FAMILIES = tuple(PATHS)
 STORE_FILE = 'opencode-account.json'
 LOCK = 'opencode-account'
 CREDENTIAL = '/api/credential'
+USAGE = '/api/experimental/usage/limits'  # the Go workspace's meters (zero-token)
+GO_METERS = ('rolling', 'weekly', 'monthly')
+EXHAUSTED = 'quota_exhausted'
 PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
-ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL')
-# The managed launcher's server flags (`opencode_launcher.SERVER_FLAGS`), so the reader sees the launches' view.
+ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL', 'XDG_DATA_HOME')
+# The managed launcher's server flags (`opencode_launcher.SERVER_FLAGS`, a test keeps them equal): no project config,
+# auto-update or models fetch. User-global config is an unobserved residual, as for launches.
 LAUNCH_FLAGS = dict(OPENCODE_DISABLE_AUTOUPDATE='1', OPENCODE_DISABLE_MODELS_FETCH='1',
                     OPENCODE_DISABLE_PROJECT_CONFIG='1')
 REFUSED = ('opencode_claude_unsupported', 'opencode_chatgpt_unsupported', 'opencode_go_unsupported',
@@ -57,10 +61,9 @@ ReadError = lifecycle.ReadError
 
 
 def child_env(environ):
-    """The allowlisted environment (XDG_* included, nothing credential-like); relative PATH entries are dropped and
-    TMPDIR is kept only when it is a private absolute directory."""
-    env = {key: value for key, value in environ.items() if type(value) is str and value
-           and (key in ENV_ALLOWLIST or key.startswith('XDG_') and key[4:].replace('_', '').isalnum())}
+    """The allowlisted environment (of the XDG set only XDG_DATA_HOME, as the launcher passes; nothing
+    credential-like); relative PATH entries are dropped and TMPDIR is kept only when private and absolute."""
+    env = {key: value for key, value in environ.items() if type(value) is str and value and key in ENV_ALLOWLIST}
     env['PATH'] = lifecycle._absolute_path(env.get('PATH'))
     if 'TMPDIR' in env and not lifecycle._private_dir(env['TMPDIR']):
         del env['TMPDIR']
@@ -80,9 +83,10 @@ def default_command(environ):
 
 def _api(command, path, environ, deadline):
     """One `opencode api --standalone GET <path>`: a private server of this CLI version, never the background service
-    (plain `opencode api` uses whichever service runs, possibly another version), with the launcher's flags and an
-    empty private OPENCODE_CONFIG_DIR made for this call and removed after, so no user config, plugin or MCP server
-    boots. Stdout capped, stderr discarded, the group stopped after."""
+    (plain `opencode api` uses whichever service runs, possibly another version), with the launcher's flags (no
+    project config, auto-update or models fetch) and an empty private OPENCODE_CONFIG_DIR made for this call and
+    removed after. User-global config is an unobserved residual, as for launches. Stdout capped, stderr discarded,
+    the group stopped after."""
     folder = tempfile.mkdtemp(prefix='vibe-opencode-account-')  # 0700 and empty
     try:
         return _call(command, path, dict(child_env(environ), **LAUNCH_FLAGS, OPENCODE_CONFIG_DIR=folder), deadline)
@@ -184,10 +188,15 @@ def _console(rows):
     return key, metadata['accountID'], metadata['orgID']
 
 
-def _go(found, answer):
-    """The Go key: Go requests carry the Console org as `x-opencode-org-id` (the usage workspace is only the Console
-    login's, so it proves nothing about them). The key's own workspace is user-attested, not provable here."""
+def _go_key(found):
     key, account, org = found
+    return _digest('go', account, org, key['id'], hashlib.sha256(key['value']['key'].encode()).hexdigest())
+
+
+def _go(found, answer):
+    """Go requests carry the Console org as `x-opencode-org-id` (the usage workspace is only the Console login's, so
+    it proves nothing about them). The key's own workspace is user-attested, not provable here."""
+    _key, _account, org = found
     listed = answer.get('data') if type(answer) is dict else None
     entries = [item for item in listed if type(item) is dict and item.get('id') == 'opencode-go'] \
         if type(listed) is list else []
@@ -197,8 +206,31 @@ def _go(found, answer):
         raise ReadError('opencode_go_provider_unlisted')
     if attributed != org:
         raise ReadError('opencode_go_workspace_mismatch')
-    secret = hashlib.sha256(key['value']['key'].encode()).hexdigest()
-    return _digest('go', account, org, key['id'], secret)
+
+
+def _usage(org, command, environ, deadline):
+    """This acquisition's Go meters `{rolling, weekly, monthly: {percent, limited, reset_at}, observed_at}` for the
+    proved workspace, or None: unreadable, another workspace or any other shape is no reading and never a gate."""
+    observed_at = int(time.time())
+    try:
+        answer = _api(command, USAGE, environ, deadline)
+    except ReadError:
+        return None
+    data = answer.get('data') if type(answer) is dict else None
+    meters = data.get('go') if type(data) is dict else None
+    workspace = data.get('workspace') if type(data) is dict else None
+    if type(workspace) is not dict or workspace.get('id') != org or type(meters) is not dict \
+            or set(meters) != set(GO_METERS):
+        return None
+    found = dict(observed_at=observed_at)
+    for name in GO_METERS:
+        meter = meters[name]
+        if type(meter) is not dict or set(meter) != {'percent', 'limited', 'resetsAt'} \
+                or type(meter['percent']) is not int or not 0 <= meter['percent'] <= 100 \
+                or type(meter['limited']) is not bool or type(meter['resetsAt']) is not int or meter['resetsAt'] <= 0:
+            return None
+        found[name] = dict(percent=meter['percent'], limited=meter['limited'], reset_at=meter['resetsAt'] // 1000)
+    return found
 
 
 def _store(settings_path):
@@ -264,6 +296,26 @@ def billing_fact(settings_path, route, now):
                 valid_until=current['observed_at'] + observations.FRESH_SECONDS, paid_crossover='unknown')
 
 
+def native_current(settings_path, now):
+    """Whether the OpenCode Claude fact is current, so its stored native login is the current one (key, generation)."""
+    return _account(settings_path, 'claude', now) is not None
+
+
+def quota_problem(settings_path, route, now):
+    """`quota_exhausted` on positive evidence only, never headroom: Go, this acquisition's bound meters (one limited
+    or at 100% with its reset ahead); Claude, the native login's model-scoped limits while it is this fact's login.
+    ChatGPT has no reading (its link to Codex is deferred)."""
+    name = family(route)
+    if name == 'claude':
+        return claude_usage.quota_problem(settings_path, route, now, native=True) \
+            if native_current(settings_path, now) else None
+    usage = (_account(settings_path, name, now) or {}).get('usage') if name == 'go' else None
+    if type(usage) is not dict or route.get('pool') != POOLS['go']:
+        return None
+    return EXHAUSTED if any(usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100)
+                            for name in GO_METERS) else None
+
+
 def _native_account(settings_path, now):
     try:
         return claude_usage.account(settings_path, now)
@@ -271,18 +323,21 @@ def _native_account(settings_path, now):
         return None
 
 
-def _observe(rows, name, settings_path, command, environ, deadline):
-    """(key, extra record fields) for one family from the credential rows, or a fixed ReadError."""
+def _observe(rows, name, settings_path, command, environ, deadline, observed):
+    """(key, extra record fields) for one family from the credential rows, or a fixed ReadError. A Go key derived
+    from the rows is put in `observed` before the listing is read, so a listing problem still records it (pending)."""
     if name == 'claude':
         key, native = _claude(rows, claude_usage.account(settings_path, int(time.time())))
         return key, dict(native=native)
     if name == 'chatgpt':
         return _chatgpt(rows), {}
     found = _console(rows)
-    return _go(found, _api(command, PROVIDER, environ, deadline)), {}
+    observed.append(_go_key(found))
+    _go(found, _api(command, PROVIDER, environ, deadline))
+    return observed[0], dict(usage=_usage(found[2], command, environ, deadline))
 
 
-def refresh(settings_path, *, families=FAMILIES, force=False, command=None, environ=None, timeout=TIMEOUT):
+def refresh(settings_path, *, families=FAMILIES, force=False, command=None, environ=None, timeout=TIMEOUT, need=()):
     """At most one bounded credential read (and Go's provider read) for the wanted families that are not current.
 
     Returns `{state, reason, families}` with fixed reasons only. An observed refusal ends that family's continuity;
@@ -306,10 +361,11 @@ def refresh(settings_path, *, families=FAMILIES, force=False, command=None, envi
                     reason = failures[0].get('reason')
                     return dict(state='backoff', reason=reason if reason in REASONS else 'observation_store_invalid',
                                 families={})
-            if 'claude' in wanted and _native_account(settings_path, now) is None:
-                # The OpenCode Claude identity is the native login: the existing bounded native reader with no
-                # window demanded (account identity; quota unknown), never for ChatGPT or Go.
-                claude_usage.refresh(settings_path, need=(), environ=environ)
+            if 'claude' in wanted and (_native_account(settings_path, now) is None
+                                       or need and not claude_usage.usable(settings_path, now)):
+                # The OpenCode Claude identity is the native login: the existing bounded native reader, with the
+                # `5h`/`7d` windows only when the route demands them (`need`), never for ChatGPT or Go.
+                claude_usage.refresh(settings_path, need=tuple(need), environ=environ)
             held = {name: {} for name in wanted}
             for name in wanted:
                 _transition(settings_path, name, lambda part, name=name: continuity._fence(part, held[name]))
@@ -337,8 +393,9 @@ def refresh(settings_path, *, families=FAMILIES, force=False, command=None, envi
 
 def _record(settings_path, name, rows, held, command, environ, deadline):
     """Record one family's observation (its complete account) or its refusal; returns the fixed reason or None."""
+    observed = []
     try:
-        key, extra = _observe(rows, name, settings_path, command, environ, deadline)
+        key, extra = _observe(rows, name, settings_path, command, environ, deadline, observed)
         _transition(settings_path, name, continuity._observe(key, held))
         record = dict(key=key, generation=held['observed'], observed_at=int(time.time()), **extra)
 
@@ -351,7 +408,8 @@ def _record(settings_path, name, rows, held, command, environ, deadline):
     except (ReadError, OSError, ValueError) as error:
         reason = str(error) if str(error) in REASONS else 'observation_store_invalid'
         ended = dict(account=None, identity=None) if reason in REFUSED else None
+        kept = continuity._observe(observed[0], held) if observed and 'observed' not in held \
+            else lambda part: continuity._settle(part, held)
         _transition(settings_path, name, lambda part: dict(
-            ended if ended is not None else continuity._settle(part, held),
-            failure=dict(at=int(time.time()), reason=reason)))
+            ended if ended is not None else kept(part), failure=dict(at=int(time.time()), reason=reason)))
         return reason

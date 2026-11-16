@@ -414,8 +414,14 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
     token's `sub` (decoded locally, signature unchecked). Go is the Console account and organization, which must equal
     the Go provider's `x-opencode-org-id` request header (where Go requests are attributed); the key's workspace is
     user-attested.
-  - Quota stays unknown for all three: ChatGPT and Go replies carry none, and binding OpenCode Claude's reported rate
-    limits is a later phase. These routes are provider-managed fallback only, never an included claim.
+  - Quota (Task 11, verified shapes 16 November 2026): a refuse-before-send gate (`quota_exhausted`) acts only on a
+    fresh, account-bound reading with a limited or full window whose reset is ahead; it never creates headroom.
+    Go reads `/api/experimental/usage/limits` with its acquisition (gate only). Native Claude keeps its `5h`/`7d`
+    rows (CACHE_CEILING) and applies model-scoped limits per model (an unmatched scope makes every Claude route
+    quota-unknown); OpenCode Claude reuses those native readings only while its native login is current. Native Codex
+    gates on a reading fresh for 15 minutes (`QUOTA_FRESH_SECONDS`). Still not claimed: Go, Codex and OpenCode
+    ChatGPT included quota, Go weekly/monthly reset semantics, per-model demand, and the ChatGPT-to-Codex link
+    (deferred).
   - OpenCode Claude also needs a current native Claude account. When it is not current, the acquisition runs the
     native reader once with no window demanded (`need=()`, stale-and-needed: account identity, quota unknown). A0 is
     merged: the native parse accepts the real 2.1.311 answer shape and keeps the account fact through quota refusals.

@@ -306,9 +306,10 @@ def _repeats(item, meters):
 
 def parse_usage(use, started, now):
     """`(windows, overflow)`. Windows come only from a complete successful answer: both meters, the raw `limits`
-    array present (holding nothing but unscoped repeats of those meters) and no model-scoped meter. Null or
-    non-meter server keys are ignored; an unknown meter or anything else is a fixed reason, never a partial reading.
-    These are usage-level reasons only: the account read is recorded before this parse and stays current."""
+    array present (holding nothing but unscoped repeats of those meters and model-scoped weekly limits, which
+    `scopes` records per model and which are never windows). Null or non-meter server keys are ignored; an unknown
+    meter or anything else is a fixed reason, never a partial reading. These are usage-level reasons only: the
+    account read is recorded before this parse and stays current."""
     rate = use.get('rate_limits')
     if use.get('rate_limits_available') is not True or type(rate) is not dict:
         raise ReadError('claude_usage_unconfirmed')
@@ -316,8 +317,10 @@ def parse_usage(use, started, now):
             or any(rate.get(key) is not None for key in UNKNOWN_METERS):
         raise ReadError('claude_limits_unsupported')
     overflow = _overflow(rate)
-    if any(rate.get(key) is not None for key in SCOPED_METERS) or rate.get('model_scoped') not in (None, []):
-        raise ReadError('claude_limits_scoped')
+    if any(rate.get(key) is not None for key in SCOPED_METERS):
+        raise ReadError('claude_limits_scoped')  # the older per-model meters keep refusing (not seen on 2.1.311)
+    if rate.get('model_scoped') is not None and type(rate['model_scoped']) is not list:
+        raise ReadError('claude_usage_invalid')
     meters = {}
     for key, window in METERS.items():
         meter = rate.get(key)
@@ -334,6 +337,8 @@ def parse_usage(use, started, now):
             scope = item.get('scope') if type(item) is dict else None
             scoped = item.get('kind') == 'weekly_scoped' and type(scope) is dict and scope.get('model') is not None \
                 if type(item) is dict else False
+            if scoped and type(scope['model']) is dict:
+                continue  # a model-scoped weekly limit: recorded per model by `scopes`, never a window
             raise ReadError('claude_limits_scoped' if scoped else 'claude_limits_unsupported')
     elif limits is not None:
         raise ReadError('claude_usage_invalid')
@@ -351,6 +356,62 @@ def parse_usage(use, started, now):
                                                                         - 1e-9)),
                           unit=observations.WINDOW_UNIT, observed_at=observed))
     return found, overflow
+
+
+def _tokens(value):
+    return set(re.split('[^0-9a-z]+', value.casefold())) - {''} if type(value) is str else set()
+
+
+def scopes(use, models):
+    """The answer's model-scoped weekly limits `[{name, utilization, reset, matched}]` (`model_scoped` and the raw
+    `weekly_scoped` items) merged per casefolded name. `matched`: every word of the name is a word of one catalog
+    model's alias or resolved model. A malformed scope refuses the reading."""
+    rate = use['rate_limits']
+    entries = [(item.get('display_name'), item.get('utilization'), item.get('resets_at')) if type(item) is dict
+               else (None, None, None) for item in rate.get('model_scoped') or []]
+    for item in rate.get('limits') or []:
+        scope = item.get('scope') if type(item) is dict else None
+        if type(scope) is dict and item.get('kind') == 'weekly_scoped' and type(scope.get('model')) is dict:
+            entries.append((scope['model'].get('display_name'), item.get('percent'), item.get('resets_at')))
+    found = {}
+    for name, used, reset in entries:
+        if not routing._text(name) or not _tokens(name):
+            raise ReadError('claude_limits_scoped')
+        name, used, reset = ' '.join(sorted(_tokens(name))), _percent(used), _time(reset)
+        if name not in found or used > found[name]['utilization']:
+            found[name] = dict(name=name, utilization=used, reset=reset)
+    known = [_tokens(item.get('alias')) | _tokens(item.get('resolved')) for item in models if type(item) is dict]
+    return [dict(item, matched=any(set(item['name'].split()) <= words for words in known))
+            for _, item in sorted(found.items())]
+
+
+def scope_state(settings_path, route, now):
+    """How the current account's model-scoped limits bear on `route` (user decision 2026-11-16: scope by model):
+    None when none names its model (the account-wide windows hold), 'exhausted' when one names it at 100% with its
+    reset ahead, else 'scoped' (one names it, or one names no catalog model: quota unknown for every Claude route)."""
+    from runtime.adapters import native_catalog
+    scoped = (account(settings_path, now) or {}).get('scoped') or []
+    if not scoped:
+        return None
+    alias = route.get('model') if type(route.get('model')) is str else ''
+    entry = next((item for item in (native_catalog.stored(settings_path, CLIENT) or {}).get('models') or []
+                  if type(item) is dict and item.get('alias') == alias), {})
+    words, state = _tokens(alias) | _tokens(entry.get('resolved')), None
+    for item in scoped:
+        if item['matched'] and not set(item['name'].split()) <= words:
+            continue  # another model's limit
+        if item['matched'] and item['utilization'] >= 100 and item['reset'] > now:
+            return 'exhausted'
+        state = 'scoped'
+    return state
+
+
+def quota_problem(settings_path, route, now, native=False):
+    """`quota_exhausted` for a route a fresh model-scoped limit names at 100% with its reset ahead; the OpenCode
+    Claude producer passes `native=True` for its route on this same login. Never headroom, never a claim."""
+    if not (native or applies(route)) or route.get('pool') != POOL:
+        return None
+    return 'quota_exhausted' if scope_state(settings_path, route, now) == 'exhausted' else None
 
 
 # -- the private store -------------------------------------------------------------------------------------------
@@ -585,11 +646,12 @@ def _record(settings_path, init, use, started, held):
     now = int(time.time())
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
+        scoped = scopes(use, models)
     except ReadError as error:
-        windows, overflow, problem = [], 'unknown', error
+        windows, overflow, problem, scoped = [], 'unknown', error, None
     usage_at = windows[0]['observed_at'] if windows else None
     current = dict(key=key, generation=generation, observed_at=now, client_version=version, overflow=overflow,
-                   usage_at=None)
+                   usage_at=None, scoped=scoped)
     native_catalog.store_snapshot(settings_path, CLIENT, dict(binding=dict(
         client_version=version, connection=_connection(key, generation), controls=CONTROLS), models=models))
     _transition(settings_path, _expect(key, generation, dict(account=current)))

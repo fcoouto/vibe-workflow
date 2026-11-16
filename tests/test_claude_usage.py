@@ -235,19 +235,16 @@ class ExchangeTest(Reader):
 
     def test_raw_limits_without_source_evidenced_semantics_are_refused(self):
         """Installed-source evidence: the one raw kind with known meaning is `weekly_scoped` under `scope.model`
-        (model-scoped). A2 (real client 2.1.311): an unscoped raw item is only a summary when it repeats a stored meter
-        (tests below); any other scope, unscoped item or unknown meter-shaped value leaves quota unknown. Every one is
+        (model-scoped; since Task 11 recorded per model, never refused). A2 (real client 2.1.311): an unscoped raw
+        item is only a summary when it repeats a stored meter; any other scope, unscoped item or unknown meter-shaped
+        value leaves quota unknown. Every one is
         a usage-level refusal: the account fact stays (account-continuity design: identity is independent of quota)."""
         reset = iso(self.now + 86400)
-        cases = dict(
-            model=([dict(kind='weekly_scoped', group='weekly', percent=20, resets_at=reset,
-                         scope=dict(model=dict(display_name='invented')))], {}, 'claude_limits_scoped'),
+        cases = dict(  # Task 11: a model-scoped weekly limit is now recorded per model (tests/test_quota_gates.py)
             surface=([dict(kind='weekly', group='weekly', percent=20, resets_at=reset,
                            scope=dict(surface=dict(display_name='invented')))], {}, 'claude_limits_unsupported'),
             other_unscoped=([dict(kind='session', group='g', percent=40, resets_at=iso(self.now + 7200))], {},
                             'claude_limits_unsupported'),  # not a stored meter's reset: an unmodelled constraint
-            model_scoped=([], dict(model_scoped=[dict(display_name='x', utilization=1, resets_at=reset)]),
-                          'claude_limits_scoped'),
             unknown_meter=([], dict(cinder_cove=dict(utilization=1, resets_at=reset)), 'claude_limits_unsupported'),
             unknown_meter_like=([], dict(invented_meter=dict(utilization=1, resets_at=reset)),
                                 'claude_limits_unsupported'))

@@ -25,6 +25,7 @@ from runtime import routing, routing_funding, routing_paths, subscription_billin
 WINDOWS_FILE = 'window-observations.json'
 ENTITLEMENTS_FILE = 'entitlements.json'
 FRESH_SECONDS = usage_budget.FRESH_SECONDS  # the same 900 s freshness the ledger applies to balances
+QUOTA_EXHAUSTED = 'quota_exhausted'  # Task 11: a fresh bound reading with no capacity left (refuse-only)
 MAX_FILE = 1 << 20
 MAX_MARKS = 256
 CLOCK_MARGIN = routing.MAX_CLOCK_DRIFT  # seconds a stored observation may run ahead of this clock
@@ -186,6 +187,12 @@ class LocalSource:
         producer = next((item for item in (claude_usage, codex_account, opencode_account) if item.applies(route)), None)
         return producer.billing_fact(self.settings_path, route, now) if producer is not None else None
 
+    def quota(self, route, now):
+        """`quota_exhausted` from the route's own producer (by exact path) on positive evidence only, else None."""
+        from runtime import claude_usage, codex_account, opencode_account
+        producer = next((item for item in (claude_usage, codex_account, opencode_account) if item.applies(route)), None)
+        return producer.quota_problem(self.settings_path, route, now) if producer is not None else None
+
     def acquire_billing(self, routes, now):
         """One bounded native account read per applicable producer when its account is not current: Claude's also
         reads the demanded windows (none demanded: metadata only), Codex's and OpenCode's (only the needed families)
@@ -197,9 +204,11 @@ class LocalSource:
         if any(map(codex_account.applies, routes)) and self.settings_path is not None:
             codex_account.refresh(self.settings_path)
         families = {opencode_account.family(route) for route in routes}
+        need = {window for route in routes if opencode_account.family(route) == 'claude'
+                for window in route.get('demand') or () if window in ('5h', '7d')}  # D: windows only when demanded
         if families - {None} and self.settings_path is not None:
-            opencode_account.refresh(self.settings_path, families=tuple(sorted(families - {None},
-                                                                                key=opencode_account.FAMILIES.index)))
+            opencode_account.refresh(self.settings_path, need=tuple(sorted(need)), families=tuple(sorted(
+                families - {None}, key=opencode_account.FAMILIES.index)))
 
     def model_demand(self, route):
         """No per-model demand mapping is qualified (OpenCode Go's allowance is model-dependent): none."""
@@ -684,6 +693,17 @@ def acquire_billing(project, assignment, *, settings_path, table=None, strategy_
     subscription_billing.acquire(source, routes, int(time.time()))  # unknown demand never hides the account
 
 
+def _exhausted(source, spec, now):
+    """The source's refusal of an exhausted route (`quota_exhausted`), or None: any other answer or failure never
+    gates, and the gate never creates headroom or an included claim."""
+    answer = getattr(source, 'quota', None)
+    try:
+        found = answer(copy.deepcopy(spec), now) if callable(answer) else None
+    except Exception:  # noqa: BLE001 - only positive evidence refuses
+        return None
+    return QUOTA_EXHAUSTED if found == QUOTA_EXHAUSTED else None
+
+
 def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
               source=None):
     """The shared pre-window cut `collect` and the internal request preview both use: `{routes, excluded, shortlist,
@@ -713,6 +733,8 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
             marker = subscription_billing.marker(subscription_billing.fact(source, spec, now), spec, now)
             if marker is None:
                 reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
+            else:
+                reason = _exhausted(source, spec, now)  # a fresh bound reading with no capacity left: never sent
         if reason is not None:
             leave(spec, reason)
             continue
@@ -750,6 +772,14 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
                 routes_version=source.routes_version(table))
 
 
+def _scoped(settings_path, spec, now):
+    from runtime import claude_usage
+    try:
+        return claude_usage.scope_state(settings_path, spec, now) is not None
+    except (OSError, ValueError):
+        return True  # an unreadable record proves no headroom
+
+
 def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False, table=None,
             strategy_ids=None, choices=(), harnesses=None):
     """Build `{observations, seen}` for `prepare` from local records (C.3 design 3.3, collector return shape).
@@ -766,7 +796,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     relevant paths, before eligibility (the native Claude account read). It then lets a kept route's missing or stale
     Codex or Claude reading be read first (`refresh_needed`); these are the collector's only process uses, and a
     failed read leaves the route stale or unobserved."""
-    from runtime import claude_usage
+    from runtime import claude_usage, opencode_account
     source = source if source is not None else default_source(settings_path)
     if refresh_windows and type(source) is LocalSource:
         acquire_billing(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
@@ -798,6 +828,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         if billing == 'gateway':
             route['integration_enabled'] = True
         native = _native(spec)
+        if native is None and billing == 'included_subscription' and type(source) is LocalSource \
+                and opencode_account.family(spec) == 'claude' and opencode_account.native_current(settings_path, now):
+            native = 'claude'  # Task 11 (D): the same login's account-bound native readings, never reply rows
         key = (spec['pool'], native)
         if key not in pools:
             windows = []
@@ -851,6 +884,8 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             continue
         if binding.get(spec['pool'], native) != native:
             route['demand'] = None  # its own account, but no readings of its own: fallback only, never the owner's rows
+        if native == 'claude' and _scoped(settings_path, spec, now):
+            route['demand'] = None  # a model-scoped limit names this model (or no catalog model): quota unknown
         demand = route['demand'] or {}  # None: an eligible subscription account with unknown demand (fallback only)
         demanded = [window for window in pool['windows'] if window['id'] in demand]
         reason = None

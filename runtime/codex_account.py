@@ -29,6 +29,7 @@ REASONS = (*lifecycle.REASONS, 'codex_account_unsupported', 'codex_account_chang
            USAGE_UNCONFIRMED, 'codex_limits_unsupported')
 ReadError = lifecycle.ReadError
 INVALIDATING = ('codex_account_unsupported', 'codex_account_changed', 'codex_auth_changed')
+QUOTA_FRESH_SECONDS = 900  # user decision (2026-11-16): a Codex reading gates for 15 minutes; never a quota claim
 
 
 def parse_account(response):
@@ -116,8 +117,9 @@ def _read(session, init, observed=None):
         raise ReadError('codex_account_changed')
     # InitializeResponse has no stable, separate client-version field. Do not
     # guess a version from an opaque userAgent string or persist home/platform data.
-    return dict(key=key, observed_at=started, client_version='unknown', models=models,
-                usage_reason=_usage_problem(limits))
+    reason = _usage_problem(limits)
+    return dict(key=key, observed_at=started, client_version='unknown', models=models, usage_reason=reason,
+                quota=_quota(limits, started) if reason == USAGE_UNCONFIRMED else None)
 
 
 def _usage_problem(limits):
@@ -127,9 +129,36 @@ def _usage_problem(limits):
         return 'codex_limits_unsupported'
     snapshot = by_limit.get('codex') if type(by_limit) is dict else limits.get('rateLimits')
     if type(snapshot) is not dict or snapshot.get('individualLimit') is not None \
-            or snapshot.get('spendControlReached') is not None or snapshot.get('normalModelSlug') is not None:
-        return 'codex_limits_unsupported'
+            or snapshot.get('spendControlReached') not in (None, False) or snapshot.get('normalModelSlug') is not None:
+        return 'codex_limits_unsupported'  # `spendControlReached: false` (observed 2026-11-16) is ordinary
     return USAGE_UNCONFIRMED
+
+
+def _quota(limits, started):
+    """The gate reading `{used_percent, reset_at, ordinary_allowed, read_at}` of the primary window (read start as its
+    time), or None for any other shape. `rateLimitResetCredits` is a user action, never required here."""
+    by_limit = limits.get('rateLimitsByLimitId')
+    snapshot = by_limit.get('codex') if type(by_limit) is dict else limits.get('rateLimits')
+    primary = snapshot.get('primary') if type(snapshot) is dict else None
+    ordinary = limits.get('ordinaryUsageAllowed')
+    if type(primary) is not dict or type(primary.get('usedPercent')) not in (int, float) \
+            or not 0 <= primary['usedPercent'] <= 100 or type(primary.get('resetsAt')) is not int \
+            or ordinary not in (None, True, False):
+        return None
+    return dict(used_percent=primary['usedPercent'], reset_at=primary['resetsAt'], ordinary_allowed=ordinary,
+                read_at=started)
+
+
+def quota_problem(settings_path, route, now):
+    """`quota_exhausted` on a fresh (15 minutes) account-bound reading only: ordinary usage disallowed, or the window at
+    100% with its reset ahead. Never a claim: `usable_windows` stays empty."""
+    current = _account(settings_path, now) if applies(route) and route.get('pool') == POOL else None
+    quota = (current or {}).get('quota')
+    if type(quota) is not dict or not 0 <= now - quota['read_at'] <= QUOTA_FRESH_SECONDS:
+        return None
+    if quota['ordinary_allowed'] is False or quota['used_percent'] >= 100 and quota['reset_at'] > now:
+        return 'quota_exhausted'
+    return None
 
 
 def _store(settings_path):

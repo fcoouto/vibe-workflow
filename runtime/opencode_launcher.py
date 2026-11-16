@@ -41,6 +41,7 @@ LAUNCH_OPTIONS_UNEXPRESSIBLE = 'launch_options_unexpressible'
 LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
 AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
 HOST_TURN_FAILED = 'host_turn_failed'  # a sent turn the host ended without success: surfaced, settled as sent
+FAILED_OUTCOMES = ('failed', 'aborted', 'error', 'cancelled')  # Task 11 (N4): any other outcome is `unknown`
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -692,10 +693,10 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     if result.get('state') != 'recorded' or attempt.read is None:
         return result
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
-    if not isinstance(attempt.outcome, str):  # another OpenCode version may write none: unknown, never a failure
-        result['turn_outcome'] = 'unknown'
-    elif attempt.outcome != 'succeeded':  # sent and settled as sent, but the host ended the turn without success
+    if attempt.outcome in FAILED_OUTCOMES:  # sent and settled as sent, but the host ended the turn without success
         result.update(failed=True, reason=HOST_TURN_FAILED)
+    elif attempt.outcome != 'succeeded':  # none, or a word another OpenCode version may write: unknown, never failed
+        result['turn_outcome'] = 'unknown'
     admission = result.get('admission') or {}
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))

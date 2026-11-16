@@ -21,6 +21,29 @@ class TurnOutcomeTests(LauncherBase):
         self.assertNotIn('turn_outcome', result)
         self.assertIsNone(result.get('reason'))
 
+    def outcome(self, value):
+        """The host's idle records answer `outcome=value` (Task 11, N4)."""
+        original = self.host.request
+
+        def request(method, path, body=None, query=None):
+            status, answer = original(method, path, body=body, query=query)
+            if method == 'GET' and path.endswith('/message') and isinstance(answer, dict):
+                answer = dict(answer, data=[dict(item, outcome=value) if item.get('type') == 'idle' else item
+                                            for item in answer.get('data') or []])
+            return status, answer
+        self.host.request = request
+
+    def test_only_known_failure_outcomes_fail_a_turn(self):
+        for value, failed in (('aborted', True), ('error', True), ('cancelled', True), ('stopped-early', False)):
+            with self.subTest(value=value):
+                self.setUp()
+                self.outcome(value)
+                result = self.launch()
+                self.assertEqual((result['state'], result['event']), ('recorded', 'complete'), result)
+                self.assertEqual(result.get('failed', False), failed)
+                self.assertEqual(result.get('turn_outcome'), None if failed else 'unknown')
+                self.assertEqual(self.holds()['a1']['state'], 'released')  # settlement unchanged
+
     def test_a_missing_outcome_is_unknown_never_a_failed_turn(self):
         """Task 9 (G3): another OpenCode version may write no `outcome`; only an explicit non-success fails a turn."""
         original = self.host.request

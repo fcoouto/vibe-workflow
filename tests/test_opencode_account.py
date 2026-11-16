@@ -105,6 +105,16 @@ def provider(org=ORG, go=True):
     return dict(data=entries, location=dict(directory='/'))
 
 
+def go_usage(org=ORG, **meters):
+    """The observed `GET /api/experimental/usage/limits` shape (2.2.6 standalone): used percents, resets in ms."""
+    def window(percent=0, limited=False, ahead=3600):
+        return dict(percent=percent, limited=limited, resetsAt=(int(time.time()) + ahead) * 1000)
+    go = dict(rolling=window(), weekly=window(), monthly=window())
+    go.update({name: window(**value) for name, value in meters.items()})
+    return dict(data=dict(workspace=dict(id=org, name='Org', usageURL='https://example.invalid/usage'), go=go,
+                          budgets=[]), location=dict(directory='/'))
+
+
 def route_of(family):
     path, account, pool = ROUTES[family]
     return dict(route=path + ':choice:0123456789abcdef', account=account, pool=pool,
@@ -121,8 +131,9 @@ class FakeOpenCode:
         self.command = [sys.executable, '-I', '-B', str(self.script), str(self.config)]
         self.answer(credentials(), provider())
 
-    def answer(self, credential, go_provider, mode='ok'):
-        answers = {'/api/credential': credential, '/api/provider': go_provider}
+    def answer(self, credential, go_provider, mode='ok', usage=None):
+        answers = {'/api/credential': credential, '/api/provider': go_provider,
+                   '/api/experimental/usage/limits': go_usage() if usage is None else usage}
         self.config.write_text(json.dumps(dict(answers=answers, mode=mode, log=str(self.log))))
         os.chmod(self.config, 0o600)
 
@@ -171,7 +182,8 @@ class ReaderTest(Base):
     def test_one_bounded_read_proves_all_three_families(self):
         self.assertEqual(self.refresh()['state'], 'stored')
         self.assertEqual(self.fake.calls(), ['api --standalone GET /api/credential',
-                                             'api --standalone GET /api/provider'])
+                                             'api --standalone GET /api/provider',
+                                             'api --standalone GET /api/experimental/usage/limits'])
         now = int(time.time())
         for family in ROUTES:
             with self.subTest(family=family):
@@ -183,7 +195,7 @@ class ReaderTest(Base):
                 wrong = dict(route_of(family), pool='another-pool')
                 self.assertIsNone(opencode_account.billing_fact(self.settings, wrong, now))
         self.assertEqual(self.refresh()['state'], 'fresh')  # current: no second read
-        self.assertEqual(len(self.fake.calls()), 2)
+        self.assertEqual(len(self.fake.calls()), 3)
         self.assert_clean()
 
     def test_every_read_uses_a_private_standalone_server(self):
@@ -191,7 +203,7 @@ class ReaderTest(Base):
         service (which may be another OpenCode version, or one started under another HOME)."""
         self.assertEqual(self.refresh()['state'], 'stored')
         calls = self.fake.calls()
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)  # credentials, the Go provider listing and (Task 11) the Go usage limits
         self.assertTrue(all(call.startswith('api --standalone GET /api/') for call in calls), calls)
 
     def test_every_read_boots_an_empty_private_config_dir_that_is_removed_after(self):
@@ -199,8 +211,8 @@ class ReaderTest(Base):
         private OPENCODE_CONFIG_DIR per call), so no user config, plugin or MCP server boots in the reader."""
         self.assertEqual(self.refresh()['state'], 'stored')  # the double exits 6 on any missing piece
         folders = Path(str(self.fake.log) + '.dirs').read_text().splitlines()
-        self.assertEqual(len(folders), 2)
-        self.assertEqual(len(set(folders)), 2)  # one per call
+        self.assertEqual(len(folders), 3)
+        self.assertEqual(len(set(folders)), 3)  # one per call
         self.assertFalse(any(os.path.exists(folder) for folder in folders))  # removed afterwards
 
     def test_go_listing_problems_keep_continuity_and_a_mismatch_ends_it(self):
@@ -413,7 +425,7 @@ class LocalSourceTest(Base):
             return original(settings, **dict(options, command=self.fake.command))
         with mock.patch.object(opencode_account, 'refresh', side_effect=spy):
             subscription_billing.acquire(source, [route_of('go')], now)
-            self.assertEqual(calls, [dict(families=('go',))])
+            self.assertEqual(calls, [dict(families=('go',), need=())])  # Task 11: windows only for Claude demand
             now = int(time.time())  # the read took seconds: a stale `now` would date the fact in the future
             fact = subscription_billing.fact(source, route_of('go'), now)
             self.assertTrue(fact['producer'].startswith('opencode-go:'))
