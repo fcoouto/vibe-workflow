@@ -426,6 +426,8 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
     connection; real OpenCode Claude replies carry subscription telemetry (rate-limit windows, overage rejected).
     Provider options in the user-global OpenCode config remain an unobserved residual.
   - Go still lacks complete observation, reset, month and demand semantics for included optimization.
+  - Models that list no variants are refused before sending on OpenCode 2.2.6: OpenCode stores their session variant
+    as `default`, which never matches the admitted route (verified by a zero-send probe on 16 November 2026).
 - Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
   model call or new account framework.
 - API Usage is next-release scope (`API_FUNDING_QUALIFIED=False`, 20% direct API buffer). Production OpenRouter is

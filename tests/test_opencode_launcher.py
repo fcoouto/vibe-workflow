@@ -149,8 +149,8 @@ class FakeHost:
             return self.agent_status, dict(data=agents)
         if (method, path) == ('POST', '/api/session'):
             self.order.append('create')
-            self.created = dict(body)  # knob `stored_variant`: 2.2.6 stores an omitted variant as `default` (Task 8)
-            model = dict(body['model'], **({} if 'variant' in body['model'] else getattr(self, 'stored_variant', {})))
+            self.created, model = dict(body), dict(body['model'])  # 2.2.6 stores an omitted variant as `default`
+            model.update({} if 'variant' in model else getattr(self, 'stored_variant', dict(variant='default')))
             record = self._session(body.get('id') or self._id('ses'), model=model, title=body.get('title'))
             return 200, dict(data=record)
         if (method, path) == ('GET', '/api/session/active'):
@@ -397,7 +397,7 @@ class HostRuleTests(LauncherBase):
         """The admitted identity carries `none`; attach, the session, the shim's model check and accounting all see
         an omitted variant, never a literal `none`, and the hold settles."""
         self.host.models = [dict(providerID=PROVIDER, id=MODEL)]  # no variants: only omission is expressible
-        self.routes = [route(effort='none')]
+        self.routes, self.host.stored_variant = [route(effort='none')], {}  # a host keeping the omission (not 2.2.6)
         result = self.launch(assignment=self.assignment(effort='none'))
         self.assertEqual(result['state'], 'recorded', result)
         self.assertEqual(self.host.created['model'], dict(id=MODEL, providerID=PROVIDER))

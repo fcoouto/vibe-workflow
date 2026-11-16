@@ -33,6 +33,25 @@ class TurnOutcomeTests(LauncherBase):
                          ['create', 'prompt', 'record:complete'])  # one send, settled as sent
 
 
+class RealHostVariantTests(LauncherBase):
+    """The default host double stores like the parent's zero-send 2.2.6 probe (2026-11-16): a sent variant exactly,
+    an omitted one as `default`. So a model that lists no variants is refused before sending."""
+
+    def test_a_variant_less_model_is_refused_as_attach_failed_with_nothing_sent(self):
+        self.host.models = [dict(providerID=PROVIDER, id=MODEL)]  # lists no variants: the variant stays omitted
+        self.routes = [route(effort='none')]
+        result = self.launch(assignment=self.assignment(effort='none'))
+        self.assertEqual((result['state'], result.get('reason')), ('blocked', 'attach_failed'), result)
+        self.assertNotIn('prompt', self.order)  # no prompt, so no model request and no spend
+        self.assertEqual([item for session in self.host.sessions.values() for item in session['messages']], [])
+        self.assertNotIn(self.holds()['a1']['state'], ('admitted', 'dispatched'))
+
+    def test_a_model_with_variants_still_passes(self):
+        result = self.launch()  # the default model lists variants and the admitted one is sent and kept
+        self.assertEqual((result['state'], result['event']), ('recorded', 'complete'), result)
+        self.assertNotIn('failed', result)
+
+
 class VariantTests(LauncherBase):
     def test_an_admitted_none_effort_is_sent_as_the_listed_literal_variant(self):
         self.host.models = [dict(providerID=PROVIDER, id=MODEL, variants=['none', 'low'])]
