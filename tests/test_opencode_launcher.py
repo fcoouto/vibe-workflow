@@ -149,8 +149,9 @@ class FakeHost:
             return self.agent_status, dict(data=agents)
         if (method, path) == ('POST', '/api/session'):
             self.order.append('create')
-            self.created = dict(body)
-            record = self._session(body.get('id') or self._id('ses'), model=body['model'], title=body.get('title'))
+            self.created = dict(body)  # knob `stored_variant`: 2.2.6 stores an omitted variant as `default` (Task 8)
+            model = dict(body['model'], **({} if 'variant' in body['model'] else getattr(self, 'stored_variant', {})))
+            record = self._session(body.get('id') or self._id('ses'), model=model, title=body.get('title'))
             return 200, dict(data=record)
         if (method, path) == ('GET', '/api/session/active'):
             return 200, dict(data={})
@@ -179,7 +180,8 @@ class FakeHost:
                 '#' + requested['variant'] if requested.get('variant') is not None else '')
             allowed = held is not None and self._check(sid, held['attempt_id'], held['authority'], held['funding_pool'],
                                                        spoken)
-            if allowed:
+            fails = getattr(self, 'turn_fails', None)  # Task 8 knob: the idle record's `error`, no assistant message
+            if allowed and not fails:
                 self._assistant(sid, held, now)
                 if self.child:
                     child = self._session(self._id('ses'), parent=sid, model=session['record']['model'])
@@ -192,8 +194,8 @@ class FakeHost:
                             time=dict(created=now, completed=now + 1)))
                     self.sessions[child_id]['messages'].append(dict(id=self._id('msg'), type='idle', outcome='succeeded',
                                                                     time=dict(created=now + 1)))
-            session['messages'].append(dict(id=self._id('msg'), type='idle', outcome='succeeded' if allowed else 'failed',
-                                            time=dict(created=now + 2)))
+            session['messages'].append(dict(id=self._id('msg'), type='idle', outcome='failed' if fails or not allowed
+                                            else 'succeeded', time=dict(created=now + 2), **(fails or {})))
             return self.prompt_status, dict(data=session['messages'][0])
         raise AssertionError((method, path))
 

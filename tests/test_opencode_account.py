@@ -1,7 +1,7 @@
 """Task 6: OpenCode selected-account identity (`runtime/opencode_account.py`) for the three OpenCode subscription paths.
 
 Every OpenCode answer here comes from a labelled synthetic `opencode` double (a private script answering the observed
-`/api/credential` and `/api/provider/opencode-go` shapes with clearly fake, unsigned tokens). No real account, credential, client or
+`/api/credential` and `/api/provider` shapes with clearly fake, unsigned tokens). No real account, credential, client or
 network is touched. Secret hygiene is asserted with sentinel strings that must never leave the reader's memory.
 """
 import base64
@@ -34,6 +34,8 @@ config = json.load(open(sys.argv[1]))
 with open(config["log"], "a") as log:  # the requested path only: never a value
     log.write(" ".join(sys.argv[2:]) + "\\n")
 mode = config.get("mode", "ok")
+if sys.argv[2:4] != ["api", "--standalone"]:
+    sys.exit(5)  # plain `opencode api` would use whichever background service runs (another version, another HOME)
 if mode == "hang":
     time.sleep(30)
 if mode == "exit":
@@ -42,8 +44,8 @@ if mode == "oversize":
     sys.stdout.write("x" * (300 << 10))
 elif mode == "invalid":
     sys.stdout.write("{not json")
-elif sys.argv[4:] and sys.argv[4] in config["answers"]:
-    sys.stdout.write(json.dumps(config["answers"][sys.argv[4]]))
+elif sys.argv[5:] and sys.argv[4] == "GET" and sys.argv[5] in config["answers"]:
+    sys.stdout.write(json.dumps(config["answers"][sys.argv[5]]))
 else:
     sys.exit(4)  # an endpoint the double does not serve (the usage limits are never asked for)
 '''
@@ -84,12 +86,16 @@ def credentials(**changes):
     return dict(data=list(rows.values()))
 
 
-def provider(org=ORG):
-    """The observed secret-free `/api/provider/opencode-go` answer: its request header names the workspace Go
-    requests are attributed to (`org=None`: no header)."""
-    return dict(data=dict(id='opencode-go', integrationID='opencode', name='OpenCode Go', activation='enabled',
-                          package='invented-package', settings=dict(baseURL='https://opencode.ai/inference/go/openai/v1'),
-                          headers={} if org is None else {'x-opencode-org-id': org}))
+def provider(org=ORG, go=True):
+    """The observed `opencode api --standalone GET /api/provider` listing (OpenCode 2.2.6; its single-provider route
+    answers 404 there): the Go entry's request header names the workspace Go requests are attributed to."""
+    entries = [dict(id='openai', integrationID='openai', name='OpenAI', activation='enabled', package='invented')]
+    if go:
+        entries.append(dict(id='opencode-go', integrationID='opencode', name='OpenCode Go', activation='enabled',
+                            package='invented-package',
+                            settings=dict(baseURL='https://opencode.ai/inference/go/openai/v1'),
+                            headers={} if org is None else {'x-opencode-org-id': org}))
+    return dict(data=entries, location=dict(directory='/'))
 
 
 def route_of(family):
@@ -109,7 +115,7 @@ class FakeOpenCode:
         self.answer(credentials(), provider())
 
     def answer(self, credential, go_provider, mode='ok'):
-        answers = {'/api/credential': credential, '/api/provider/opencode-go': go_provider}
+        answers = {'/api/credential': credential, '/api/provider': go_provider}
         self.config.write_text(json.dumps(dict(answers=answers, mode=mode, log=str(self.log))))
         os.chmod(self.config, 0o600)
 
@@ -157,7 +163,8 @@ class Base(Stores):
 class ReaderTest(Base):
     def test_one_bounded_read_proves_all_three_families(self):
         self.assertEqual(self.refresh()['state'], 'stored')
-        self.assertEqual(self.fake.calls(), ['api GET /api/credential', 'api GET /api/provider/opencode-go'])
+        self.assertEqual(self.fake.calls(), ['api --standalone GET /api/credential',
+                                             'api --standalone GET /api/provider'])
         now = int(time.time())
         for family in ROUTES:
             with self.subTest(family=family):
@@ -171,6 +178,14 @@ class ReaderTest(Base):
         self.assertEqual(self.refresh()['state'], 'fresh')  # current: no second read
         self.assertEqual(len(self.fake.calls()), 2)
         self.assert_clean()
+
+    def test_every_read_uses_a_private_standalone_server(self):
+        """Task 8 (B): `--standalone` on both reads: a private server of the same CLI version, never the background
+        service (which may be another OpenCode version, or one started under another HOME)."""
+        self.assertEqual(self.refresh()['state'], 'stored')
+        calls = self.fake.calls()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call.startswith('api --standalone GET /api/') for call in calls), calls)
 
     def test_token_refresh_keeps_the_generation_and_a_changed_subject_never_restores_it(self):
         self.refresh()
@@ -221,6 +236,7 @@ class ReaderTest(Base):
             ('go', {}, provider(org='org_' + 'Y' * 26), 'opencode_go_workspace_mismatch'),
             ('go', {}, provider(org=None), 'opencode_go_workspace_mismatch'),  # no attribution header
             ('go', {}, dict(data=None), 'opencode_go_workspace_mismatch'),
+            ('go', {}, provider(go=False), 'opencode_go_workspace_mismatch'),  # no Go provider listed
             ('claude', dict(claude=dict(active=False)), provider(), 'opencode_claude_unsupported'),
             ('claude', dict(claude=dict(value=dict(type='oauth', methodID='claude-login'))), provider(),
              'opencode_claude_unsupported'),

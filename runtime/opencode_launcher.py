@@ -40,6 +40,7 @@ LAUNCH_UNCONFIRMED = 'launch_unconfirmed'
 LAUNCH_OPTIONS_UNEXPRESSIBLE = 'launch_options_unexpressible'
 LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
 AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
+HOST_TURN_FAILED = 'host_turn_failed'  # a sent turn the host ended without success: surfaced, settled as sent
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -465,16 +466,30 @@ def account(host, root, *, funding, attempt, authority, route=None):
     return dict(result=result, not_entitled=_not_entitled(raw, route), children=len(children))
 
 
+def _listed_variants(host, provider, model):
+    """The variant names the host lists for `provider/model` (empty when unlisted or unreadable)."""
+    try:
+        status, body = host.request('GET', '/api/model')
+    except Exception:  # noqa: BLE001 - unreadable: nothing listed, so the variant stays omitted
+        return set()
+    for entry in (_data(body) if status == 200 else None) or []:
+        if isinstance(entry, dict) and entry.get('providerID') == provider and entry.get('id') == model:
+            return {item if isinstance(item, str) else (item or {}).get('id') if isinstance(item, dict) else None
+                    for item in entry.get('variants') or []} - {None}
+    return set()
+
+
 def _wait_idle(host, root, after_ms, timeout):
-    """Until the root has an idle record created after the prompt and neither it nor a descendant is active."""
+    """Until the root has an idle record created after the prompt and neither it nor a descendant is active; answers
+    the latest such record's `outcome` (OpenCode 2.2.6 writes `succeeded` or `failed`)."""
     deadline = time.monotonic() + timeout
     while True:
         status, active = host.request('GET', '/api/session/active')
         listed = json.dumps(active) if status == 200 else None
-        idle = any(item.get('type') == 'idle' and ((item.get('time') or {}).get('created') or 0) >= after_ms
-                   for item in _messages(host, root) if isinstance(item, dict))
+        idle = [item for item in _messages(host, root) if isinstance(item, dict) and item.get('type') == 'idle'
+                and ((item.get('time') or {}).get('created') or 0) >= after_ms]
         if idle and listed is not None and not any(sid in listed for sid in [root, *_descendants(host, root)[0]]):
-            return
+            return max(idle, key=lambda item: (item.get('time') or {}).get('created') or 0).get('outcome')
         if time.monotonic() > deadline:
             raise Unconfirmed('idle_timeout')
         time.sleep(IDLE_POLL)
@@ -541,13 +556,18 @@ class _Attempt:
     def __init__(self, host, gate, prompt, idle_timeout):
         self.host, self.gate, self.prompt, self.idle_timeout = host, gate, prompt, idle_timeout
         self._token, self.session, self.attached, self.refusal, self.read = None, None, False, None, None
+        self.outcome = None  # the host's turn outcome once idle
 
     def __call__(self, route, *, authority, session_id, message_id):
         self._token, self.session = authority, session_id
         attempt = self.gate.attempt_id
         # An omitted effort (None) is sent as no variant, to the shim and the session alike; the routing check reads
-        # a missing variant as the admitted identity's `none` sentinel.
-        model = '%s/%s' % (route['provider'], route['model']) + ('' if route['variant'] is None else '#' + route['variant'])
+        # a missing variant as the admitted identity's `none` sentinel. A model that lists a literal `none` variant
+        # gets it sent: omitted, OpenCode 2.2.6 stores the session as `default`, which the model check then refuses.
+        variant = route['variant']
+        if variant is None and 'none' in _listed_variants(self.host, route['provider'], route['model']):
+            variant = 'none'
+        model = '%s/%s' % (route['provider'], route['model']) + ('' if variant is None else '#' + variant)
         try:
             status, body = self.host.rpc('attach', dict(session_id=session_id, attempt_id=attempt, authority=authority,
                                                         funding_pool=route['funding_pool'], model=model,
@@ -558,19 +578,26 @@ class _Attempt:
             self.refusal = ATTACH_FAILED
             return dict(kind='complete')  # no session was created and no prompt sent, so nothing was spent
         self.attached = True
+        requested = dict(id=route['model'], providerID=route['provider'], **({} if variant is None else dict(
+            variant=variant)))
         status, created = self.host.request('POST', '/api/session', dict(
             id=session_id, title=SESSION_TITLE, permissions=WORKER_RULES, location=dict(directory=self.host.directory),
-            model=dict(id=route['model'], providerID=route['provider'],
-                       **({} if route['variant'] is None else dict(variant=route['variant'])))))
+            model=requested))
         if status != 200 or (_data(created) or {}).get('id') != session_id:
             raise Unconfirmed('session_unconfirmed')
+        stored = (_data(created) or {}).get('model')
+        if not isinstance(stored, dict) or {key: stored.get(key) for key in ('id', 'providerID', 'variant')} \
+                != dict(id=route['model'], providerID=route['provider'], variant=variant):
+            self.refusal = ATTACH_FAILED  # the host would run another model than admitted (a substituted variant)
+            return dict(kind='complete')  # created but never prompted: nothing was sent or spent
         began = int(time.time() * 1000)
         status, _ = self.host.request('POST', '/api/session/%s/prompt' % session_id,
                                       dict(text=self.prompt, id=message_id))
         if status != 200:
             raise Unconfirmed('prompt_unconfirmed')
-        _wait_idle(self.host, session_id, began, self.idle_timeout)
+        self.outcome = _wait_idle(self.host, session_id, began, self.idle_timeout)
         funding = routing.FUNDING_OF.get((self.gate.admission or {}).get('billing_class'), 'api')
+        route = dict(route, variant=variant)  # the variant actually requested, for the entitlement check
         read = account(self.host, session_id, funding=funding, attempt=attempt, authority=authority, route=route)
         for _ in range(REREADS):  # a message still finishing: re-read, bounded; still unfinished settles unknown
             if 'message_in_progress' not in (read['result'].get('unknown') or []):
@@ -665,6 +692,8 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     if result.get('state') != 'recorded' or attempt.read is None:
         return result
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
+    if attempt.outcome != 'succeeded':  # sent and settled as sent, but the host ended the turn without success
+        result.update(failed=True, reason=HOST_TURN_FAILED)
     admission = result.get('admission') or {}
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
@@ -784,7 +813,7 @@ class _SelfCheckHost:
             if method == 'POST':
                 self.created += 1
                 self.sessions[body['id']] = []
-                return 200, dict(data=dict(id=body['id']))
+                return 200, dict(data=dict(id=body['id'], model=body.get('model')))  # 2.2.6 echoes the model
             return 200, dict(data=[dict(id=sid, parentID=None) for sid in self.sessions])
         if len(parts) == 3:
             return 200, dict(data=dict(id=parts[2], parentID=None, tokens=tokens, cost=0))

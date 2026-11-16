@@ -1,10 +1,11 @@
 """OpenCode selected-account identity for the three OpenCode subscription paths (Claude, ChatGPT, Go).
 
 LocalSource selects it by exact path only. One bounded `opencode api GET /api/credential` (plus, for Go only, the
-secret-free `GET /api/provider/opencode-go`) reads the selected connections; each call runs a transient private
-OpenCode server, so no running service is needed. The credential answer carries full tokens: it is parsed in
-memory and dropped; only domain-separated digests, a random generation per family (kept only across proved continuity
-of the same key, exactly as `codex_account`) and fixed reasons persist, in a private 0600 store.
+provider listing `GET /api/provider`) reads the selected connections, each with `--standalone`: a private
+server of this CLI version that never uses or starts the background service. The credential answer carries full
+tokens: it is parsed in memory and dropped; only domain-separated digests, a random generation per family (kept only
+across proved continuity of the same key, exactly as `codex_account`) and fixed reasons persist, in a private 0600
+store.
 
 - Claude: the active `claude-agent` credential must be `external`/`claude-login`, which is the native Claude Code
   login. Its identity is the native one (`claude_usage.account`, rechecked at every read); when it is not current,
@@ -38,7 +39,7 @@ FAMILIES = tuple(PATHS)
 STORE_FILE = 'opencode-account.json'
 LOCK = 'opencode-account'
 CREDENTIAL = '/api/credential'
-PROVIDER = '/api/provider/opencode-go'  # secret-free: the provider's request settings, no credential
+PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
 ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL')
@@ -73,10 +74,12 @@ def default_command(environ):
 
 
 def _api(command, path, environ, deadline):
-    """One `opencode api GET <path>` (no `--standalone`): stdout capped, stderr discarded, the group stopped after."""
+    """One `opencode api --standalone GET <path>`: a private server of this CLI version, never the background service
+    (plain `opencode api` uses whichever service runs, possibly another version). Stdout capped, stderr discarded,
+    the group stopped after."""
     try:
-        process = subprocess.Popen([*command, 'api', 'GET', path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
+        process = subprocess.Popen([*command, 'api', '--standalone', 'GET', path], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
                                    start_new_session=True, close_fds=True)
     except OSError:
         raise ReadError('opencode_unavailable') from None
@@ -171,8 +174,10 @@ def _go(found, answer):
     """The Go key: Go requests carry the Console org as `x-opencode-org-id` (the usage workspace is only the Console
     login's, so it proves nothing about them). The key's own workspace is user-attested, not provable here."""
     key, account, org = found
-    data = answer.get('data') if type(answer) is dict else None
-    headers = data.get('headers') if type(data) is dict else None
+    listed = answer.get('data') if type(answer) is dict else None
+    entries = [item for item in listed if type(item) is dict and item.get('id') == 'opencode-go'] \
+        if type(listed) is list else []
+    headers = entries[0].get('headers') if len(entries) == 1 else None
     if type(headers) is not dict or headers.get('x-opencode-org-id') != org:
         raise ReadError('opencode_go_workspace_mismatch')
     secret = hashlib.sha256(key['value']['key'].encode()).hexdigest()

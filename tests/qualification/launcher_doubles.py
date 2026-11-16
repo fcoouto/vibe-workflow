@@ -146,7 +146,7 @@ class FakeLauncherHost:
                 self.created += 1
                 sid = body.get("id") or "ses_fake%04d" % self.created
                 self.sessions[sid] = dict(messages=[], model=body.get("model"), parent=body.get("parentID"))
-                return 200, dict(data=dict(id=sid))
+                return 200, dict(data=dict(id=sid, model=body.get("model")))  # 2.2.6 echoes the stored model
             return 200, dict(data=[dict(id=sid, parentID=item["parent"]) for sid, item in self.sessions.items()])
         sid = parts[2]
         if len(parts) == 3:

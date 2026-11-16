@@ -419,11 +419,12 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
   - OpenCode Claude also needs a current native Claude account. When it is not current, the acquisition runs the
     native reader once with no window demanded (`need=()`, stale-and-needed: account identity, quota unknown). A0 is
     merged: the native parse accepts the real 2.1.311 answer shape and keeps the account fact through quota refusals.
-  - Verified on OpenCode 2.2.6 (16 November 2026): `opencode api` runs a transient private server per call (no
-    running service needed, no daemon left); managed launches pass an allowlisted environment, so ambient provider
-    API-key variables cannot override the stored connection; real OpenCode Claude replies carry subscription
-    telemetry (rate-limit windows, overage rejected). Provider options in the user-global OpenCode config remain an
-    unobserved residual.
+  - Verified on OpenCode 2.2.6 (16 November 2026): the producer reads with `opencode api --standalone`, a private
+    in-process server of the same CLI version that never uses or starts the background service (plain `opencode api`
+    would use whichever service runs, possibly another version, such as the Desktop app's 2.3.0 service); managed
+    launches pass an allowlisted environment, so ambient provider API-key variables cannot override the stored
+    connection; real OpenCode Claude replies carry subscription telemetry (rate-limit windows, overage rejected).
+    Provider options in the user-global OpenCode config remain an unobserved residual.
   - Go still lacks complete observation, reset, month and demand semantics for included optimization.
 - Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
   model call or new account framework.
