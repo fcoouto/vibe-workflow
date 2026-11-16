@@ -692,7 +692,9 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     if result.get('state') != 'recorded' or attempt.read is None:
         return result
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
-    if attempt.outcome != 'succeeded':  # sent and settled as sent, but the host ended the turn without success
+    if not isinstance(attempt.outcome, str):  # another OpenCode version may write none: unknown, never a failure
+        result['turn_outcome'] = 'unknown'
+    elif attempt.outcome != 'succeeded':  # sent and settled as sent, but the host ended the turn without success
         result.update(failed=True, reason=HOST_TURN_FAILED)
     admission = result.get('admission') or {}
     if attempt.read['not_entitled']:

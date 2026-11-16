@@ -26,7 +26,9 @@ import hashlib
 import json
 import os
 import selectors
+import shutil
 import subprocess
+import tempfile
 import time
 
 from runtime import claude_usage, codex_account as continuity, codex_rate_limits as lifecycle, routing, \
@@ -43,10 +45,13 @@ PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
 ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL')
+# The managed launcher's server flags (`opencode_launcher.SERVER_FLAGS`), so the reader sees the launches' view.
+LAUNCH_FLAGS = dict(OPENCODE_DISABLE_AUTOUPDATE='1', OPENCODE_DISABLE_MODELS_FETCH='1',
+                    OPENCODE_DISABLE_PROJECT_CONFIG='1')
 REFUSED = ('opencode_claude_unsupported', 'opencode_chatgpt_unsupported', 'opencode_go_unsupported',
            'opencode_go_workspace_mismatch')  # an observed refusal or change: continuity ends
 REASONS = ('reader_busy', 'opencode_unavailable', 'opencode_exited', 'opencode_timeout', 'opencode_output_invalid',
-           'opencode_credential_invalid', 'opencode_claude_unproved', *REFUSED,
+           'opencode_credential_invalid', 'opencode_claude_unproved', 'opencode_go_provider_unlisted', *REFUSED,
            'observation_store_unsafe', 'observation_store_invalid')
 ReadError = lifecycle.ReadError
 
@@ -75,11 +80,20 @@ def default_command(environ):
 
 def _api(command, path, environ, deadline):
     """One `opencode api --standalone GET <path>`: a private server of this CLI version, never the background service
-    (plain `opencode api` uses whichever service runs, possibly another version). Stdout capped, stderr discarded,
-    the group stopped after."""
+    (plain `opencode api` uses whichever service runs, possibly another version), with the launcher's flags and an
+    empty private OPENCODE_CONFIG_DIR made for this call and removed after, so no user config, plugin or MCP server
+    boots. Stdout capped, stderr discarded, the group stopped after."""
+    folder = tempfile.mkdtemp(prefix='vibe-opencode-account-')  # 0700 and empty
+    try:
+        return _call(command, path, dict(child_env(environ), **LAUNCH_FLAGS, OPENCODE_CONFIG_DIR=folder), deadline)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _call(command, path, env, deadline):
     try:
         process = subprocess.Popen([*command, 'api', '--standalone', 'GET', path], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd='/',
                                    start_new_session=True, close_fds=True)
     except OSError:
         raise ReadError('opencode_unavailable') from None
@@ -178,7 +192,10 @@ def _go(found, answer):
     entries = [item for item in listed if type(item) is dict and item.get('id') == 'opencode-go'] \
         if type(listed) is list else []
     headers = entries[0].get('headers') if len(entries) == 1 else None
-    if type(headers) is not dict or headers.get('x-opencode-org-id') != org:
+    attributed = headers.get('x-opencode-org-id') if type(headers) is dict else None
+    if not routing._text(attributed):  # no single listed Go provider with its header: a read problem, proving nothing
+        raise ReadError('opencode_go_provider_unlisted')
+    if attributed != org:
         raise ReadError('opencode_go_workspace_mismatch')
     secret = hashlib.sha256(key['value']['key'].encode()).hexdigest()
     return _digest('go', account, org, key['id'], secret)

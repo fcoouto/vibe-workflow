@@ -29,10 +29,17 @@ ROUTES = dict(  # family: (path, account, pool)
     claude=('opencode-claude-subscription', 'claude-plan', 'claude-subscription'),
     chatgpt=('opencode-chatgpt-subscription', 'chatgpt-plan', 'chatgpt-subscription'),
     go=('opencode-go-subscription', 'opencode-go-workspace', 'opencode-go-subscription'))
-FAKE = '''import json, sys, time
+FAKE = '''import json, os, stat, sys, time
 config = json.load(open(sys.argv[1]))
 with open(config["log"], "a") as log:  # the requested path only: never a value
     log.write(" ".join(sys.argv[2:]) + "\\n")
+folder = os.environ.get("OPENCODE_CONFIG_DIR", "")  # Task 9 (G1): the launcher's configuration view, booted empty
+with open(config["log"] + ".dirs", "a") as dirs:
+    dirs.write(folder + "\\n")
+if any(os.environ.get(name) != "1" for name in ("OPENCODE_DISABLE_AUTOUPDATE", "OPENCODE_DISABLE_MODELS_FETCH",
+                                               "OPENCODE_DISABLE_PROJECT_CONFIG")) \\
+        or not os.path.isdir(folder) or os.listdir(folder) or stat.S_IMODE(os.stat(folder).st_mode) != 0o700:
+    sys.exit(6)
 mode = config.get("mode", "ok")
 if sys.argv[2:4] != ["api", "--standalone"]:
     sys.exit(5)  # plain `opencode api` would use whichever background service runs (another version, another HOME)
@@ -187,6 +194,36 @@ class ReaderTest(Base):
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(call.startswith('api --standalone GET /api/') for call in calls), calls)
 
+    def test_every_read_boots_an_empty_private_config_dir_that_is_removed_after(self):
+        """Task 9 (G1): the launcher's configuration view (no auto-update, models fetch or project config; an empty
+        private OPENCODE_CONFIG_DIR per call), so no user config, plugin or MCP server boots in the reader."""
+        self.assertEqual(self.refresh()['state'], 'stored')  # the double exits 6 on any missing piece
+        folders = Path(str(self.fake.log) + '.dirs').read_text().splitlines()
+        self.assertEqual(len(folders), 2)
+        self.assertEqual(len(set(folders)), 2)  # one per call
+        self.assertFalse(any(os.path.exists(folder) for folder in folders))  # removed afterwards
+
+    def test_go_listing_problems_keep_continuity_and_a_mismatch_ends_it(self):
+        """Task 9 (G5): an unreadable or ambiguous listing is a read problem (continuity kept); a present header that
+        differs is a refusal (continuity ended)."""
+        self.refresh()
+        first = self.producer('go')
+        twin = provider()
+        twin['data'].append(dict(twin['data'][-1]))  # two `opencode-go` entries: ambiguous
+        for answer in (dict(data=None), provider(go=False), twin, provider(org=None)):
+            self.fake.answer(credentials(), answer)
+            self.assertEqual(self.refresh(force=True)['families']['go'], 'opencode_go_provider_unlisted')
+            self.assertIsNone(self.fact('go'))
+        self.fake.answer(credentials(), provider())
+        self.refresh(force=True)
+        self.assertEqual(self.producer('go'), first)  # the same key: continuity kept through the read problems
+        self.fake.answer(credentials(), provider(org='org_' + 'Y' * 26))
+        self.assertEqual(self.refresh(force=True)['families']['go'], 'opencode_go_workspace_mismatch')
+        self.fake.answer(credentials(), provider())
+        self.refresh(force=True)
+        self.assertNotIn(self.producer('go'), (None, first))  # ended: a new generation for the same key
+        self.assert_clean()
+
     def test_token_refresh_keeps_the_generation_and_a_changed_subject_never_restores_it(self):
         self.refresh()
         first = self.producer('chatgpt')
@@ -234,9 +271,9 @@ class ReaderTest(Base):
             ('go', dict(console=dict(value=dict(credentials()['data'][3]['value'], metadata=dict(orgID=ORG)))),
              provider(), 'opencode_go_unsupported'),  # no accountID
             ('go', {}, provider(org='org_' + 'Y' * 26), 'opencode_go_workspace_mismatch'),
-            ('go', {}, provider(org=None), 'opencode_go_workspace_mismatch'),  # no attribution header
-            ('go', {}, dict(data=None), 'opencode_go_workspace_mismatch'),
-            ('go', {}, provider(go=False), 'opencode_go_workspace_mismatch'),  # no Go provider listed
+            ('go', {}, provider(org=None), 'opencode_go_provider_unlisted'),  # no attribution header: unread
+            ('go', {}, dict(data=None), 'opencode_go_provider_unlisted'),
+            ('go', {}, provider(go=False), 'opencode_go_provider_unlisted'),  # no Go provider listed
             ('claude', dict(claude=dict(active=False)), provider(), 'opencode_claude_unsupported'),
             ('claude', dict(claude=dict(value=dict(type='oauth', methodID='claude-login'))), provider(),
              'opencode_claude_unsupported'),

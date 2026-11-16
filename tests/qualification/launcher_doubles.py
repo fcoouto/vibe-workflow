@@ -38,6 +38,7 @@ class FakeLauncherHost:
         self.utilizations, self.resets_at = [], int(time.time()) + 3000  # native.rateLimit per prompt, in order
         self.attached, self.unobserved = set(), set()
         self.hang, self.aborted, self.options = False, [], None  # hang: prompts never go idle until aborted
+        self.stored_variant = dict(variant="default")  # 2.2.6 stores an omitted variant as `default`; {} keeps it
         self.agents = ["build"]  # what GET /api/agent lists
         self.connections = {}
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -145,8 +146,10 @@ class FakeLauncherHost:
             if method == "POST":
                 self.created += 1
                 sid = body.get("id") or "ses_fake%04d" % self.created
-                self.sessions[sid] = dict(messages=[], model=body.get("model"), parent=body.get("parentID"))
-                return 200, dict(data=dict(id=sid, model=body.get("model")))  # 2.2.6 echoes the stored model
+                model = dict(body.get("model") or {})
+                model.update({} if "variant" in model else self.stored_variant)
+                self.sessions[sid] = dict(messages=[], model=model, parent=body.get("parentID"))
+                return 200, dict(data=dict(id=sid, model=model))  # and echoes the stored model
             return 200, dict(data=[dict(id=sid, parentID=item["parent"]) for sid, item in self.sessions.items()])
         sid = parts[2]
         if len(parts) == 3:

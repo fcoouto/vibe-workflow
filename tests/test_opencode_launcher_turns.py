@@ -18,7 +18,27 @@ class TurnOutcomeTests(LauncherBase):
         result = self.launch()
         self.assertEqual((result['state'], result['event']), ('recorded', 'complete'), result)
         self.assertNotIn('failed', result)
+        self.assertNotIn('turn_outcome', result)
         self.assertIsNone(result.get('reason'))
+
+    def test_a_missing_outcome_is_unknown_never_a_failed_turn(self):
+        """Task 9 (G3): another OpenCode version may write no `outcome`; only an explicit non-success fails a turn."""
+        original = self.host.request
+
+        def request(method, path, body=None, query=None):  # the idle records without their `outcome`
+            status, answer = original(method, path, body=body, query=query)
+            if method == 'GET' and path.endswith('/message') and isinstance(answer, dict):
+                answer = dict(answer, data=[{key: value for key, value in item.items()
+                                             if not (item.get('type') == 'idle' and key == 'outcome')}
+                                            for item in answer.get('data') or []])
+            return status, answer
+        self.host.request = request
+        result = self.launch()
+        self.assertEqual((result['state'], result['event']), ('recorded', 'complete'), result)
+        self.assertEqual(result.get('turn_outcome'), 'unknown')
+        self.assertNotIn('failed', result)
+        self.assertIsNone(result.get('reason'))
+        self.assertEqual(self.holds()['a1']['state'], 'released')  # settlement unchanged
 
     def test_a_failed_host_turn_is_surfaced_and_still_settled(self):
         """The prompt was sent, so settlement is unchanged (`record complete`, the hold released as sent), but the
