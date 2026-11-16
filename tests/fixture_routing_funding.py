@@ -44,7 +44,7 @@ def route(rid, pool, kind, account, demand, strategy=None):
     item = dict(route=rid, strategy_id=strategy or 's-' + rid, provider='p', model='m', effort='high', harness=rid,
                 account=account, billing_class=kind, pool=pool, demand=demand, capable=True, permitted=True)
     if kind == 'included_subscription':
-        item['binding_enforceable'] = True
+        item.update(binding_enforceable=True, account_marker='c0de' * 16)  # Task 3B: labelled synthetic trusted marker
     else:
         item.update(credential=dict(READY), funding_verified=True)
     if kind == 'gateway':

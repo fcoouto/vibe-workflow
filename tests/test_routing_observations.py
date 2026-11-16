@@ -715,7 +715,9 @@ class LocalSourceTests(Stores):
                                         for sid in order[5:]])
         del caller['shortlist']
         shared = routing_funding.subscription_shortlist
-        with mock.patch.object(routing_funding, 'subscription_shortlist', wraps=shared) as cut:
+        from tests.test_routing_account_continuity import trusted_snapshots  # 3B: this synthetic caller decision only
+        with mock.patch.object(routing_funding, 'subscription_shortlist', wraps=shared) as cut, \
+                trusted_snapshots()[1]:
             again = self.call(dict(body, v=1, op='prepare', assignment=dict(body['assignment'], attempt_id='caller'),
                                    observations=caller))
         self.assertEqual(again['state'], 'admitted', again)

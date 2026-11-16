@@ -339,11 +339,19 @@ class StrictReplayTests(Temp):
         ledger = state / "ledger.sqlite3"
         service = Routing(state / "settings.json", ledger)
         canary.initialize_state(service)
+        # Task 3B, synthetic setup only: admissions go through the harness's served child, bootstrapped with the
+        # labelled trusted-collection seam (`trusted_child`); `Routing.__call__`, canary and replay are unchanged.
+        from tests.test_routing_account_continuity import trusted_child
+        writer = Routing(state / "settings.json", ledger, child_argv=[
+            sys.executable, "-B", "-c", trusted_child(), "--serve", "--settings", str(state / "settings.json"),
+            "--ledger", str(ledger)])
+        self.addCleanup(writer.stop)
         for item in qual_plan(3, "real"):
-            answer, _ = service("prepare", **item["body"])
+            answer, _ = writer.served("prepare", **item["body"])
             self.assertEqual(answer.get("state"), "admitted", answer)
             attempt = item["body"]["assignment"]["attempt_id"]
-            closed, _ = service("record", event=dict(event_id=attempt + "-nd", attempt_id=attempt, kind="not_dispatched"))
+            closed, _ = writer.served("record", event=dict(event_id=attempt + "-nd", attempt_id=attempt,
+                                                           kind="not_dispatched"))
             self.assertEqual(closed.get("state"), "recorded", closed)
         replay_export.export(ledger, self.export, now=NOW)
         report = replay_strict.run(self.export)

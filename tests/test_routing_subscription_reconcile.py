@@ -565,7 +565,8 @@ class ServeClearingTests(Subscription):
         self.service.close()
         request = prepare('b2', observations=dict(obs, routes=[dict(r, account='acct-b2') for r in obs['routes']]),
                           constraints=dict(allowed_strategy_ids=['s-sub']))
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--test-inputs', '--settings',
+        from tests.test_routing_account_continuity import trusted_child  # Task 3B: the seam in the child too
+        done = subprocess.run([sys.executable, '-B', '-c', trusted_child(), '--serve', '--test-inputs', '--settings',
                                str(self.settings), '--ledger', str(self.ledger)],
                               input=json.dumps(request).encode() + b'\n', capture_output=True, timeout=60)
         self.assertEqual((done.returncode, done.stderr), (0, b''))
@@ -574,7 +575,7 @@ class ServeClearingTests(Subscription):
         # A one-shot `prepare` with the same evidence clears it.
         request = prepare('b3', observations=dict(obs, routes=[dict(r, account='acct-b3') for r in obs['routes']]),
                           constraints=dict(allowed_strategy_ids=['s-sub']))
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'prepare', '--test-inputs', '--settings',
+        done = subprocess.run([sys.executable, '-B', '-c', trusted_child(), 'prepare', '--test-inputs', '--settings',
                                str(self.settings), '--ledger', str(self.ledger)],
                               input=json.dumps(request).encode(), capture_output=True, timeout=60)
         self.assertEqual(json.loads(done.stdout)['state'], 'admitted', done.stdout)

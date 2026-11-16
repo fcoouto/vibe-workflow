@@ -7,6 +7,7 @@ included admission of it dispatches. Each supported terminal disposition writes 
 than that boundary never dispatches. Exposure comes from the ledger's own open holds and admission records (records
 of open holds are never pruned): no second registry, send-time mark or timestamp field. Reads only; no process.
 """
+import re
 from runtime.usage_budget import Ledger
 
 EXPOSED_STATES = ('dispatched', 'uncertain')
@@ -35,12 +36,20 @@ def _unknown(route, pool, now):
                for window in map(windows.get, route['demand']))
 
 
+def _trusted(route):
+    """Whether a route carries a correctly shaped account marker, which only code-selected collection supplies."""
+    marker = route.get('account_marker')
+    return type(marker) is str and re.fullmatch('[0-9a-f]{64}', marker) is not None
+
+
 def candidate(data, route, observations, assignment, settings, held, now):
     """`routing._candidate` with unknown quota classified after every non-quota check: an eligible subscription route
     (`provider_fallback`) whose quota/demand is unknown becomes its provider-managed fallback (no included claim,
     `QUOTA_UNKNOWN`); identity, binding, capability, permission and observation-integrity refusals stand. An empty
     demand never becomes an included claim."""
     from runtime import routing  # routing imports this module
+    if isinstance(route, dict) and route.get('billing_class') == SUBSCRIPTION and not _trusted(route):
+        return None, ['billing_unverified']  # every new subscription admission keeps identity evidence (Task 3B)
     pool = observations.get('pools', {}).get(route.get('pool')) if isinstance(route, dict) else None
     if not _unknown(route, pool, now):
         if isinstance(route, dict) and route.get('billing_class') == SUBSCRIPTION and route.get('demand') == {}:

@@ -6,6 +6,7 @@ The contract is the C.3 design (docs/superpowers/specs/2026-11-10-smart-routing-
 """
 from contextlib import contextmanager
 import io
+import importlib
 import json
 import os
 from pathlib import Path
@@ -36,9 +37,13 @@ def collector(result=None, error=None):
                           ledger_path=ledger_path, refresh_windows=refresh_windows, **request))
         if error is not None:
             raise error
+        if type(result) is dict and type(result.get('observations')) is dict:  # a trusted collector double
+            from tests.test_routing_account_continuity import trusted
+            return dict(result, observations=trusted(result['observations']))
         return result
     module = types.ModuleType(COLLECTOR)
     module.collect = collect
+    module.caller_snapshot = importlib.import_module(COLLECTOR).caller_snapshot  # the boundary's real pure scrub
     with mock.patch.dict(sys.modules, {COLLECTOR: module}):
         yield calls
 
@@ -576,6 +581,7 @@ CODEX_STRATEGY = dict(strategy_id='s1', model='invented-model', effort='high', h
 
 
 class SourceReadinessTests(Base):
+    trusted_collection = False  # Task 3B: the real sources, unpatched
     """F4R-03: a project joins only when each of its managed hosts has at least one usable subscription path with
     locally verifiable current sources (billing; for the ordinary native bridge also a bound native catalog). It reads
     the projects' enrolment and local source state in process: no quota read, reader, client process or provider."""

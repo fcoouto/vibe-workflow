@@ -34,11 +34,15 @@ def api_pool(limit=30 * M, expires=NOW + 86400, remaining=None, kind='api_grant'
     return pool
 
 
+CODE_BUILT_MARKER = 'c0de' * 16  # Task 3B: the shape trusted collection supplies; synthetic, never a real identity
+
+
 def sub_route(rid, provider='anthropic', pool='sub', account=None, strategy='s-sub', demand=None, **extra):
     route = dict(route=rid, strategy_id=strategy, provider=provider, model='m', effort='high', harness='h',
                  account=account or provider + ':acct', billing_class='included_subscription', pool=pool,
                  demand={'5h': 10} if demand is None else demand, capable=True, permitted=True,
                  binding_enforceable=True)
+    route['account_marker'] = CODE_BUILT_MARKER  # Task 3B: a labelled synthetic trusted marker; `extra` overrides it
     return dict(route, **extra)
 
 
@@ -627,7 +631,8 @@ def go_route(index, sid=None, model=None, effort='high', demand=None):
     return dict(route='%s:%s' % (GO_PATH, sid), strategy_id=sid, provider='opencode-go', model=model or 'go-%d' % index,
                 effort=effort, harness=GO_HARNESS, account='opencode-go:' + '0' * 16,
                 billing_class='included_subscription', pool=GO_POOL, demand=demand or {w: 3 for w in GO_WINDOWS},
-                capable=True, permitted=True, binding_enforceable=True)
+                capable=True, permitted=True, binding_enforceable=True,
+                account_marker=CODE_BUILT_MARKER)  # Task 3B: labelled synthetic trusted marker
 
 
 def go_pool(used=100):

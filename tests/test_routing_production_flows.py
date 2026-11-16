@@ -178,7 +178,8 @@ class SubscriptionFlowTests(Flow):
                      permitted=True, binding_enforceable=True)
         snapshot = dict(now=now(), routes=[route], pools={'caller-pool': dict(windows=[dict(
             id='7d', limit=1000, used=100, length=604800, reset_at=now() + 3600, rolling=False, fresh=True)])})
-        answer = unmanaged.handle(json.dumps(dict(self.body('u1'), observations=snapshot)).encode())
+        with __import__('tests.test_routing_account_continuity', fromlist=['x']).trusted_snapshots()[1]:  # 3B seam
+            answer = unmanaged.handle(json.dumps(dict(self.body('u1'), observations=snapshot)).encode())
         self.assertEqual(answer['state'], 'admitted', answer)
         record = unmanaged._ledger(False).snapshot()['admissions'][-1]
         self.assertIsNone(record['ranking']['routes_version'])

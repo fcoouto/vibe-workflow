@@ -17,7 +17,8 @@ from unittest import mock
 
 from runtime import codex_rate_limits, native_routing, routing, routing_gates, routing_observations as collector, \
     routing_paths, subscription_billing
-from tests import test_native_routing as native_tests, test_routing_command as command_tests
+from tests import test_native_routing as native_tests, test_routing_command as command_tests, \
+    test_routing_production_flows as flows
 
 ROUTE = dict(route='claude-native-subscription:s1', account='claude-plan', pool='claude-subscription',
              billing_class='included_subscription')
@@ -44,6 +45,29 @@ def trusted_snapshots():
                                    else route for route in found['routes']])
     return [mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now: SNAPSHOT_FACT(route, now)),
             mock.patch.object(command.Service, '_observations', observations)]
+
+
+def trusted_child():
+    """`python -c` code for a test child process: start `trusted_snapshots` (labelled, test-only), then run the
+    unchanged routing command's `main` on the child's own arguments."""
+    return ('import sys; sys.path.insert(0, %r); from tests.test_routing_account_continuity import trusted_snapshots; '
+            '[patch.start() for patch in trusted_snapshots()]; from scripts import routing as c; '
+            'sys.exit(c.main(sys.argv[1:]))' % str(command_tests.ROOT))
+
+
+def install_trusted_snapshots(case):
+    """Start `trusted_snapshots` for one test case (stopped with it): the shared install for fixture classes."""
+    for patch in trusted_snapshots():
+        patch.start()
+        case.addCleanup(patch.stop)
+
+
+def trusted(observations):
+    """A trusted collector double's snapshot: each subscription route marked with the labelled fact's marker."""
+    at = int(time.time())
+    return dict(observations, routes=[dict(route, account_marker=subscription_billing.marker(
+        SNAPSHOT_FACT(route, at), route, at)) if route.get('billing_class') == 'included_subscription' else route
+        for route in observations['routes']])
 
 
 class MarkerTest(unittest.TestCase):
@@ -181,6 +205,27 @@ class DispatchContinuityTest(native_tests.NativeBase):
         self.assertEqual([item['reason'] for item in found['observations']['excluded']], ['account_changed'])
 
 
+    def unbound(self, attempt):
+        """The native helper with `bound=False` (no producer-bound catalog fence) on a real one-shot service."""
+        from runtime.adapters import native_catalog
+        from scripts import routing as command
+        service = command.Service(self.settings, self.ledger_path, project=self.checkout, one_shot=True)
+        self.addCleanup(service.close)
+        assignment = dict(attempt_id=attempt, task='task-' + attempt,
+                          scope=native_tests.routing_launch.assignment_scope(self.checkout))
+        return native_routing.prepare(service, client='claude-code', assignment=assignment, job=self.job(),
+                                      catalog=native_catalog.catalog(self.settings, 'claude-code')[0], bound=False)
+
+    def test_the_unbound_native_helper_gets_one_permit_and_refuses_a_b_and_a_b_a(self):
+        self.assertEqual(self.unbound('u0')['state'], 'dispatched')  # the same marked account: one permit
+        for attempt, producer in (('u1', B1), ('u2', A2)):  # A->B, and A->(B->)A2: another generation
+            self.producer = A1
+            with self.switched(producer):
+                permit = self.unbound(attempt)
+            self.assertEqual((permit['state'], permit.get('reason')), ('blocked', 'account_changed'), permit)
+            self.assertNotEqual(self.holds()[attempt]['state'], 'dispatched')  # closed provably unsent
+        self.assertEqual(self.holds()['u0']['state'], 'dispatched')  # the issued exposure is untouched
+
     def test_a_codex_route_without_windows_is_still_rechecked(self):
         from runtime import codex_account
         self.enterContext(mock.patch.object(codex_account, 'usable_windows', native_tests.REAL_CODEX_WINDOWS))
@@ -225,6 +270,7 @@ class CallerBoundaryTest(native_tests.NativeBase):
 
 class SmuggledMarkerTest(command_tests.Base):
     """A raw caller request carrying the exact marker of the current labelled fact still gets no trusted binding."""
+    trusted_collection = False  # the unpatched request boundary is what this negative proves
 
     def test_a_smuggled_matching_marker_gets_no_binding_and_no_permit(self):
         from tests.test_routing_dispatch import dispatch
@@ -233,14 +279,44 @@ class SmuggledMarkerTest(command_tests.Base):
         obs = command_tests.observations()
         route = obs['routes'][0]
         route['account_marker'] = subscription_billing.marker(SNAPSHOT_FACT(route, obs['now']), route, obs['now'])
-        admitted = self.call(command_tests.prepare('smuggled', observations=obs,
-                                                   constraints=dict(allowed_strategy_ids=['s-sub'])))
-        self.assertEqual(admitted['state'], 'admitted', admitted)
-        record = next(item for item in self.service._ledger(False).snapshot()['admissions']
-                      if item['attempt_id'] == 'smuggled')
-        self.assertIsNone(record['binding']['credential'])  # never a trusted account binding
+        refused = self.call(command_tests.prepare('smuggled', observations=obs,
+                                                  constraints=dict(allowed_strategy_ids=['s-sub'])))
+        self.assertNotEqual(refused['state'], 'admitted', refused)  # the stripped route is not a candidate
+        ledger = self.service._ledger(False)
+        snapshot = ledger.snapshot() if ledger is not None else {}
+        self.assertEqual(([item for item in snapshot.get('admissions', []) if item['attempt_id'] == 'smuggled'],
+                          snapshot.get('holds', {}).get('smuggled')), ([], None))  # no hold or reservation
         sent = self.call(dispatch('smuggled', request=command_tests.facts()))
-        self.assertEqual((sent['state'], sent.get('reason')), ('blocked', 'account_binding_missing'), sent)
+        self.assertNotEqual(sent['state'], 'dispatched', sent)
+
+
+class AdmissionEvidenceTest(unittest.TestCase):
+    """Coordinator ruling: a new included or fallback subscription candidate without a correctly shaped trusted
+    marker never becomes a candidate (so no hold, debit or reservation), even when it would fit; only code-selected
+    collection supplies the marker. Stored legacy records are refused at dispatch instead (`MarkerTest`)."""
+    ABSENT = object()
+
+    def candidate(self, marker, used):
+        from runtime import subscription_fallback
+        now = int(time.time())
+        route = dict(route='sub', pool='sub', account='a', billing_class='included_subscription', capable=True,
+                     permitted=True, binding_enforceable=True, demand={'5h': 50}, provider_fallback=True,
+                     provider='anthropic', model='m', effort='high', harness='h')
+        if marker is not self.ABSENT:
+            route['account_marker'] = marker
+        pool = dict(windows=[dict(id='5h', limit=1000, used=used, fresh=True, reset_at=now + 3600)])
+        return subscription_fallback.candidate(dict(organizations={}), route, dict(now=now, routes=[route],
+                                                                                   pools=dict(sub=pool)),
+                                               dict(scope='s'), dict(api_usage_enabled=False, margin_bp=0), {}, now)
+
+    def test_only_a_trusted_shape_marker_reaches_an_included_or_fallback_candidate(self):
+        for marker in (self.ABSENT, None, '', 'x', 'A' * 64, '0' * 63, 7):
+            for used in (100, 1000):  # an included fit and a provider-managed fallback
+                with self.subTest(marker=marker, used=used):
+                    self.assertEqual(self.candidate(marker, used), (None, ['billing_unverified']))
+        for used, fallback in ((100, False), (1000, True)):
+            item, reasons = self.candidate('0' * 64, used)
+            self.assertEqual((reasons, item['fallback']), ([], fallback))
 
 
 class GoConstraintAllocatorTest(unittest.TestCase):
@@ -312,6 +388,64 @@ class ProvenanceTest(native_tests.NativeBase):
             {'5h': 5, '7d': 5})
         self.assertEqual([route['demand'] for route in found['routes']], [None])  # eligible, fallback only
         self.assertTrue(all('account_marker' in route for route in found['routes']))
+
+
+
+class CoveringSource(collector.LocalSource):
+    """TEST-ONLY code-selected source: the same private window store, but its readings are vouched for as the labelled
+    synthetic account's own. It is not `LocalSource` (whose unbound rows stay refused: `ProvenanceTest`), and it grants
+    no production Go/Claude/ChatGPT account completeness."""
+
+
+class CoveringReadingCodeSourceTest(flows.OpenCodeLaunchFlowTests):
+    """Preserved whole-launch covering-reading proof through the real OpenCode launcher on `CoveringSource`: an included
+    claim, its matching covering settled reading (no consumed mark), legitimate later included eligibility, and the
+    collection/admission recheck when another completed launch changes the pool's readings. Synthetic proof only."""
+    OWN = ('test_a_covering_settled_reading_keeps_the_code_source_pool_included',
+           'test_a_covering_completion_between_collection_and_admission_is_seen_on_the_code_source')
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(collector, 'default_source',
+                                            lambda settings_path=None: CoveringSource(settings_path)))
+
+    def test_a_covering_settled_reading_keeps_the_code_source_pool_included(self):
+        self.claude_only()
+        self.covering(0.25, 0.1)
+        first = self.launch('cover-1')
+        self.assertEqual(first['state'], 'recorded', first)
+        self.assertTrue(first['admission']['reserved'], first)  # an included claim on the vouched reading
+        self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)  # covered: no mark
+        second = self.launch('cover-2')
+        self.assertEqual(second['state'], 'recorded', second)
+        self.assertTrue(second['admission']['reserved'], second)  # legitimately included again
+
+    def test_a_covering_completion_between_collection_and_admission_is_seen_on_the_code_source(self):
+        self.claude_only()
+        self.covering(0.999, 0.999)
+        real, order = routing.admit, []
+
+        def interleave(assignment, *args, **kwargs):
+            if assignment['attempt_id'] == 'late' and not order:
+                order.append('early')
+                early = self.launch('early')  # after `late` collected: an included launch with a covering reading
+                self.assertTrue(early['admission']['reserved'], early)
+                self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+            return real(assignment, *args, **kwargs)
+        with mock.patch.object(routing, 'admit', interleave):
+            late = self.launch('late')
+        self.assertEqual(order, ['early'])
+        self.assertEqual((late['state'], late['admission']['reserved'], late['admission']['reason_codes'][-2:]),
+                         ('recorded', {}, ['quota_unknown', routing.FALLBACK]), late)  # never the stale headroom
+
+
+def load_tests(loader, tests, pattern):
+    """Only this module's own tests: `CoveringReadingCodeSourceTest` inherits the launcher helpers, not their tests."""
+    def cases(suite):
+        for item in suite:
+            yield from cases(item) if isinstance(item, unittest.TestSuite) else [item]
+    return unittest.TestSuite(case for case in cases(tests) if not isinstance(case, CoveringReadingCodeSourceTest)
+                              or case._testMethodName in CoveringReadingCodeSourceTest.OWN)
 
 
 if __name__ == '__main__':

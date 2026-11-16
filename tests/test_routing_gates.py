@@ -176,7 +176,8 @@ class BindingTests(GateBase):
     def test_explicit_delegation_without_a_job_binds_null_and_keeps_funding_gates(self):
         self.assertEqual(self.call(prepare('x1'))['state'], 'admitted')
         binding = budget.Ledger.admission(self.snapshot(), 'x1')['binding']
-        self.assertEqual((binding['job'], binding['credential']), (None, None))
+        self.assertEqual(binding['job'], None)  # Task 3B: a subscription admission keeps its account marker
+        self.assertRegex(binding['credential'], '^[0-9a-f]{64}$')
         self.assertEqual(self.workflow.views, 0)  # no workflow read for an unbound assignment
         self.assertEqual(self.call(dispatch('x1'))['state'], 'dispatched')
         self.assertEqual(self.workflow.views, 0)
@@ -518,6 +519,8 @@ class ConcurrencyTests(GateBase):
 class CanonicalWorkflowTests(unittest.TestCase):
     """The production reader over the canonical delegation state (runtime/delegation.py); slower fixture."""
     def setUp(self):
+        from tests.test_routing_account_continuity import install_trusted_snapshots
+        install_trusted_snapshots(self)  # Task 3B: trusted collection stand-in after the boundary
         import tempfile
         from tests import test_delegation
         self.f = test_delegation.AdmissionTests(methodName='runTest')
