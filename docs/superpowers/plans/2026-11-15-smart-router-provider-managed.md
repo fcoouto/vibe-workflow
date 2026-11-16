@@ -453,13 +453,30 @@ needed no runtime change. New real-source regressions and current guidance
 separate account/catalog readiness, included optimization and live authority.
 The new tests passed initially and are regression proof, not earlier TDD.
 Validation Edit 15 retains historical limits and proposes, but does not authorize
-or execute, a separate finite fallback packet. Final gates on `4ceb0c33`: full
-suite 5,073 tests (4 skipped) OK; Python 3.11 29 modules/740 tests OK; partial
-offline Linux 173 tests plus 18 pilot-guard tests, with two errors that are only the
-missing `git` binary in the cached image. A live run with the real launcher on this
-user's three OpenCode accounts completed one tiny request each as provider-managed
-fallback (reserved `{}`, one permit, hold released, no open holds) and refused a
-no-connection control with nothing sent.
+or execute, a separate finite fallback packet.
+
+**Quota (Tasks 10-14, 2026-11-16):** a zero-token investigation found quota on four
+of five paths. Delivered: a refuse-before-send gate (`quota_exhausted`, positive
+evidence only: a fresh account-bound reading at 100%/`limited` with its reset ahead;
+never headroom or an included claim); Go's strict usage-limits read; native Claude
+scoped by model (account-wide `5h`/`7d` kept, a model-scoped weekly limit gates only
+matching routes, an unmatched scope makes quota unknown); OpenCode Claude claims from
+the same login's native bound rows, tagged `native_rows` at admission so its
+completion marks the pool consumed (independent review F1, narrowed after the canary
+tests showed the test-only stored-row source must keep covering); a Codex gate with
+15-minute freshness (no claims). Deferred by decision: the OpenCode ChatGPT link to
+Codex.
+
+Final gates on `7821a003`: full suite 5,100 tests (4 skipped) OK; Python 3.11 31
+modules/807 tests (1 skipped) OK; partial offline Linux 12 of 14 modules pass, the
+failures being the missing `git` in the cached image and two timing tests in
+`test_codex_account` that also fail on the previous candidate under the emulated
+amd64 image. Seven independent reviews; the last two answered READY: YES. Live runs
+with the real launcher on this user's three OpenCode accounts completed one tiny
+request each (ChatGPT and Go as provider-managed fallback; Claude, once native
+readings were usable, as an included claim tagged `native_rows`, one permit, hold
+released, no open holds) and refused a no-connection control with nothing sent. The
+pool's consumed boundary after the Claude claim is proven by tests, not observed live.
 
 **Files:** `runtime/native_routing.py:activation_readiness`,
 `runtime/routing_launch.py:readiness`, `tests/qualification/replay_strict.py`,
