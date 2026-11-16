@@ -11,10 +11,11 @@ from unittest import mock
 from runtime import routing_settings, startup, startup_routing, state
 from tests import test_minimal_default, test_startup as startup_fixtures
 
-PREFIX = '\nSmart Routing: managed project. Delegate every worker or reviewer only through '
-CLAUDE = PREFIX + 'the native bridge (clients/claude-code.md#native-routing-bridge).'
-CODEX = PREFIX + '`workflow.py delegation prepare`, or the native bridge without runtime state (clients/codex.md).'
-LAUNCHER = PREFIX + 'the managed launcher (clients/opencode.md#managed-launcher).'
+ROUTING = '; routing commands: python3 -I -B %s' % (state.PACKAGE / 'scripts' / 'routing.py')
+PREFIX = '\nSmart Routing: managed project; delegate only via '
+CLAUDE = PREFIX + 'the native bridge (clients/claude-code.md#native-routing-bridge)' + ROUTING
+CODEX = PREFIX + '`workflow.py delegation prepare` (runtime state) or native bridge (clients/codex.md)' + ROUTING
+LAUNCHER = PREFIX + 'the managed launcher (clients/opencode.md#managed-launcher)' + ROUTING
 
 
 class StartupRoutingLineTests(unittest.TestCase):
@@ -38,6 +39,24 @@ class StartupRoutingLineTests(unittest.TestCase):
             with self.subTest(client):
                 self.assertEqual(startup_routing.line(client, self.checkout), text)
                 self.assertEqual(startup_routing.line(client, self.checkout / 'nested'), text)
+
+    def test_the_hook_output_gets_the_line_whatever_the_enrolment_outcome(self):
+        from runtime.adapters import session_start  # Wave F1 B2: a linked worktree's 'Enrollment record is missing'
+        diagnostic = session_start.diagnostic('Enrollment record is missing')
+        payload = dict(cwd=str(self.checkout))
+        self.assertIs(startup_routing.with_line(diagnostic, 'codex', payload), diagnostic)  # unmanaged: unchanged
+        self.assertIsNone(startup_routing.with_line(None, 'codex', payload))
+        self.manage(self.checkout)
+        added = startup_routing.with_line(diagnostic, 'codex', payload)
+        self.assertEqual(added['systemMessage'], diagnostic['systemMessage'])
+        self.assertEqual(added['hookSpecificOutput']['additionalContext'],
+                         diagnostic['hookSpecificOutput']['additionalContext'] + CODEX)
+        self.assertEqual(startup_routing.with_line(added, 'codex', payload), added)  # never twice
+        alone = startup_routing.with_line(None, 'claude-code', payload)
+        self.assertEqual(alone, dict(hookSpecificOutput=dict(hookEventName='SessionStart',
+                                                             additionalContext=CLAUDE.lstrip('\n'))))
+        for broken in (None, {}, dict(cwd=7)):
+            self.assertIsNone(startup_routing.with_line(None, 'codex', broken))
 
     def test_an_unmanaged_or_unconfigured_checkout_adds_nothing(self):
         self.assertEqual(startup_routing.line('codex', self.checkout), '')  # no settings file at all
@@ -83,7 +102,7 @@ class OrientTests(unittest.TestCase):
 class StartupBudgetTests(unittest.TestCase):
     """F9: the line is appended after orient's 150-word check, so each client's managed total is pinned here: the
     line adds exactly these words and the whole orientation stays within the 150-word budget."""
-    LINE_WORDS = {'codex': 22, 'claude-code': 15}
+    LINE_WORDS = {'codex': 22, 'claude-code': 17}
 
     def orientation(self, fixture_class):
         fixture = fixture_class('test_unenrolled_is_silent_and_read_only')
@@ -100,13 +119,13 @@ class StartupBudgetTests(unittest.TestCase):
         return fixture.client, plain, managed
 
     def test_each_clients_managed_total_is_pinned_within_150_words(self):
-        self.assertEqual({client: len((startup_routing.LINE + startup_routing.HOST_PATHS[client]).split())
-                          for client in self.LINE_WORDS}, self.LINE_WORDS)
-        self.assertEqual(len((startup_routing.LINE + startup_routing.OTHER_HOSTS).split()), 15)
+        self.assertEqual({client: len(startup_routing.text(client).split()) for client in self.LINE_WORDS},
+                         self.LINE_WORDS)
+        self.assertEqual(len(startup_routing.text('another-client').split()), 17)
         for fixture_class in (startup_fixtures.StartupTests, startup_fixtures.ClaudeStartupTests):
             client, plain, managed = self.orientation(fixture_class)
             with self.subTest(client):
-                self.assertEqual(managed, plain + startup_routing.LINE + startup_routing.HOST_PATHS[client])
+                self.assertEqual(managed, plain + startup_routing.text(client))
                 self.assertEqual(len(managed.split()) - len(plain.split()), self.LINE_WORDS[client])
                 self.assertLessEqual(len(managed.split()), 150)
 

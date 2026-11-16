@@ -152,18 +152,48 @@ def _quota(limits, started):
     return dict(windows=windows, ordinary_allowed=ordinary, read_at=started)
 
 
-def quota_problem(settings_path, route, now):
-    """`quota_exhausted` on a fresh (15 minutes) account-bound reading only: ordinary usage disallowed, or the window at
-    100% with its reset ahead. Never a claim: `usable_windows` stays empty."""
+def _quota_gate(settings_path, route, now):
+    """(`quota_exhausted`, seconds it may still last) on an account-bound reading: ordinary usage disallowed, or the
+    window at 100% with its reset ahead, and the reading at most EXHAUSTED_RECHECK_SECONDS old (a provider may reset
+    early: user, 16 November 2026); else (None, None). Never a claim: `usable_windows` stays empty."""
     current = _account(settings_path, now) if applies(route) and route.get('pool') == POOL else None
     quota = (current or {}).get('quota')
     if type(quota) is not dict or type(quota.get('windows')) is not list \
             or not 0 <= now - quota['read_at'] <= QUOTA_FRESH_SECONDS:
-        return None  # an older flat reading (no `windows`) is no reading
+        return None, None  # an older flat reading (no `windows`) is no reading
     if quota['ordinary_allowed'] is False or any(item['used_percent'] >= 100 and item['reset_at'] > now
                                                   for item in quota['windows']):
-        return 'quota_exhausted'
-    return None
+        left = observations.trust_left(quota['read_at'], now)
+        return ('quota_exhausted', left) if left is not None else (None, None)
+    return None, None
+
+
+def quota_problem(settings_path, route, now):
+    return _quota_gate(settings_path, route, now)[0]
+
+
+def exhausted_stale(settings_path, route, now):
+    """E1: whether the stored reading still shows exhaustion but is too old to refuse, so one re-read is due."""
+    current = _account(settings_path, now) if applies(route) and route.get('pool') == POOL else None
+    quota = (current or {}).get('quota')
+    if type(quota) is not dict or type(quota.get('windows')) is not list or not routing._amount(quota.get('read_at')):
+        return False
+    return now - quota['read_at'] > observations.EXHAUSTED_RECHECK_SECONDS and (quota['ordinary_allowed'] is False or any(
+        item['used_percent'] >= 100 and item['reset_at'] > now for item in quota['windows']))
+
+
+def capacity_since(settings_path, at, now):
+    """E2 cross-check (clear-only): whether a Codex reading newer than `at` shows capacity on its pool."""
+    quota = (_account(settings_path, now) or {}).get('quota')
+    if type(quota) is not dict or type(quota.get('windows')) is not list or not routing._amount(quota.get('read_at')) \
+            or not quota['read_at'] > at:
+        return False
+    return quota['ordinary_allowed'] is not False and not any(
+        item['used_percent'] >= 100 and item['reset_at'] > now for item in quota['windows'])
+
+
+def quota_retry_after(settings_path, route, now):
+    return _quota_gate(settings_path, route, now)[1]
 
 
 def _store(settings_path):

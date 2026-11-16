@@ -227,6 +227,16 @@ class ExclusionReasonTests(ManagedBase):
         self.assertLessEqual(len(response['reasons']), 1 + command.MAX_EXCLUSION_REASONS)
         self.assertTrue(all(command.EXCLUSION_CODE.fullmatch(code) for code in response['reasons']))
 
+    def test_a_short_trust_refusal_names_retry_after_seconds(self):
+        response = self.pending('no_feasible_route', [  # Wave F1 E3: the remaining trust window, never the schedule
+            dict(route='r1', reason='quota_exhausted', retry_after=45), dict(route='r2', reason='quota_exhausted',
+                                                                           retry_after=500),
+            dict(route='r3', reason='billing_unverified'), dict(route='r4', reason='quota_exhausted', retry_after='x')])
+        self.assertEqual(response['retry_after_seconds'], 45)
+        capped = self.pending('no_feasible_route', [dict(route='r1', reason='quota_exhausted', retry_after=500)])
+        self.assertEqual(capped['retry_after_seconds'], 120)
+        self.assertNotIn('retry_after_seconds', self.pending('no_feasible_route', [dict(route='r1', reason='quota_exhausted')]))
+
     def test_other_pending_reasons_are_unchanged(self):
         response = self.pending('no_funded_organization', [dict(route='r1', reason='quota_exhausted')])
         self.assertEqual(response['reasons'], ['no_funded_organization'])
@@ -242,6 +252,19 @@ class StatusManagedTests(ManagedBase):
         self.assertIs(self.status()['managed'], True)
         routing_settings.update(self.settings, dict(managed_projects=[]), 1)
         self.assertIs(self.status()['managed'], False)
+
+    def test_status_summarizes_the_strategy_table(self):
+        target = self.settings.parent / 'strategy-table.json'
+        target.unlink(missing_ok=True)  # the base fixture ships one
+        self.assertEqual(self.status()['table'], dict(state='absent', version=None, rows=0, generated_routes_per_path={}))
+        write_table(self.settings, CODEX_STRATEGY)
+        table = self.status()['table']
+        self.assertEqual((table['state'], table['version'], table['rows']), ('ok', 't1', 1))
+        self.assertEqual(table['generated_routes_per_path'], {'codex-chatgpt-subscription': 1})
+        target.write_text(json.dumps(dict(schema=1, version='old', rows={})))
+        self.assertEqual(self.status()['table']['state'], 'outdated')
+        target.write_text('{broken')
+        self.assertEqual(self.status()['table'], dict(state='invalid', version=None, rows=0, generated_routes_per_path={}))
 
     def test_an_unpinned_status_has_no_managed_field(self):
         plain = command.Service(self.settings, self.ledger)

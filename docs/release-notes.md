@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.43
+
+- **Routed workers now work in task worktrees.** The native bridge reads a linked worktree's enrolment from its primary checkout (it was refused with `enrolment_unavailable` although `status` said managed), and startup adds the Smart Routing managed line in worktrees too, naming the installed package's absolute `scripts/routing.py`.
+- **OpenCode launcher.** The documented request now launches: `job.scope_ref` is filled from `assignment.scope` (a missing scope is `scope_required`). A succeeded turn returns the worker's bounded `answer` (untrusted data) and `session_id`; a failed turn returns a fixed `provider_error` token when the provider gave an error type. A ChatGPT quota error (`provider.chatgpt-limit`) reports `provider_quota_limit`; other providers' limits still report `host_turn_failed`. The launch procedure moved to a short `clients/opencode-launch.md`.
+- **Early provider resets are recognized without polling.** An exhausted reading refuses only while it is at most 60 seconds old, and a stale exhausted reading gets one bounded zero-token re-read per minute per producer on a routing request. A provider quota error refuses that OpenCode pool for at most 120 seconds, cleared early by a fresh native Codex reading that shows capacity (clear-only: it never creates a refusal or links identities). Refusals carry `reasons: [quota_exhausted]` and `retry_after_seconds`, never the scheduled reset.
+- **Choices and ids.** A model-only explicit choice is valid on the native bridge (routing picks the lowest admissible effort and names it); Codex delegation and the OpenCode launcher answer `effort_required` instead of a misleading reason. The bridge generates `attempt_id` when omitted. `status` reports the strategy table (state, version, rows, routes per path).
+- **Validation and instructions.** A strategy table that contains the `opus` alias no longer breaks package validation. Coordinator guidance adds the managed check first (a missing startup line means unknown), absolute package paths, the silent-bypass rule (tell the user once, proceed only on their explicit confirmation), the complete reply tables, the pay-as-you-go warning for `opencode/*` models and a first-time strategy-table section.
+- Claude Code and Codex stay advisory and an OpenCode coordinator's own `task` calls are still not routed; the model-only choice is expanded on the native bridge only. Live qualification and the quota-denominated canary remain separately scoped. Package and suite checks do not establish installed-client behavior.
+
 ## 0.1.42
 
 - **Smart Router provider-managed fallback.** Every subscription path (native Claude and Codex; OpenCode Claude, ChatGPT and Go) now has an account source. An account whose included quota is unknown launches only on the provider's own overflow (`provider_managed_fallback`), which the provider may charge; the marker is recorded and never counted as included usage. OpenCode account identity comes from a bounded, secret-free `opencode api --standalone` read of the selected connections; only digests, generations and fixed reasons persist.

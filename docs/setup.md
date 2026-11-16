@@ -15,6 +15,7 @@ Vibe Coding Toolkit `soumatheusgomes/vibe-coding-toolkit` at `21b71b68679c11184f
 | Post-merge cleanup | Enabled in `.vibe-workflow/settings.json`. Standing permission for eligible task worktrees and local and remote branches in this repository, under [post-merge cleanup](../clients/delivery.md#post-merge-cleanup); `delete_remote_branch` retains its `true` default. | User, 2026-11-13: "Enable cleanup in this project." |
 | Workstreams | Enabled, in `.vibe-workflow/settings.json` | User, 2026-11-09 |
 | Checkout stability | Primary worktree of this repository stays on designated branch `main`; task work uses separate worktrees under the shared contract | User, 2026-11-12, every onboarded repository; `main` from this repository's development guide |
+| Smart Router | Enabled for this primary checkout; details in [Smart Routing](#smart-routing-16-november-2026) | User, 2026-11-16, explicit request in the conversation (not onboarding question 7) |
 | `.vibe-workflow/project.json` in Git | Not committed; `.gitignore` lists `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`, and `.vibe-workflow/settings.json` is committed | User, 2026-11-09 |
 
 The repository has no CI or branch protection, so the merge permission relies on the local checks and independent review.
@@ -70,6 +71,22 @@ Harness improvement: native method adaptation, the default because no other mode
 - Not copied: `machine.json`, which records the old directory chain, and the old review storage under `~/.local/share/vibe-coding-workflow`.
 - Kept for now, pending a decision: old onboarding, update and proposal records under `~/.local/state/vibe-coding-workflow/`, including rollback journals for earlier enrollments.
 - Not changed: `/Users/fcouto/dev/git/opus/AGENTS.md` still has a `vibe-coding-workflow:` Workstreams marker and a link into an old plugin cache, so its Workstreams choice reads as not configured.
+
+## Smart Routing (16 November 2026)
+
+Enabled for this primary checkout on 2026-11-16 at the user's explicit request in the conversation, not through onboarding question 7. The routing list, qualifications and switch are machine state under `~/.local/state/vibe-workflow/`, following the [Smart Routing procedure](../skills/manage-usage-routing/references/smart-routing.md).
+
+- Scope id: `134b55a8c1b79498` (a digest, not names).
+- Paths qualified with `qualify_path`, evidence id `onboarding-20261116`, all with `demand: null`: `claude-native-subscription`, `codex-chatgpt-subscription`, `opencode-claude-subscription`, `opencode-chatgpt-subscription` and `opencode-go-subscription`. With unknown demand, every admission on them is provider-managed fallback.
+- The one-way `authority_required` switch is on.
+- Routing settings revision before the change: 0; added this project's primary checkout.
+- Readback: `managed: true` and `effective: true`.
+- Strategy table: bootstrapped from the live catalogs of this machine's clients (table-bootstrap run, 16 November 2026). Decisions:
+  - Opus was left out, because the model-name check in `validate.py` failed on this package's own wording until the 0.1.43 reword. The table with Opus is kept as the previous table; `python3 -I -B <package>/scripts/routing_table.py rollback` (the installed package's script) restores it.
+  - Haiku comes first in the light Claude rows.
+  - OpenCode Go appears in the light rows only.
+  - Fable, GPT-6 Astra and the `max` and `ultra` efforts are excluded.
+- Undo: read `status`, then remove this checkout from the current `managed_projects` list as the procedure's "Disable or undo" says; never resend an older list. `authority_required` stays on, and the qualifications stay until `unqualify_path`.
 
 ## Maintenance and undo
 

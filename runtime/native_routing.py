@@ -18,6 +18,7 @@ Codex delegation, D5/D6) keeps its own stronger path (`managed_delegation_requir
 """
 import json
 from pathlib import Path
+import secrets
 import time
 
 from runtime import claude_usage, codex_account, routing, routing_launch, routing_observations as collector, \
@@ -67,6 +68,11 @@ def prepare(service, *, client, assignment, job, catalog, profile=None, bound=Fa
     if not catalog or any(type(item) is not dict or item.get('harness') != harness for item in catalog):
         return _blocked('foreign_catalog')
     choice = assignment.get('choice') if type(assignment) is dict else None
+    if choice is not None and not (type(choice) is dict and all(routing._text(choice.get(key)) for key in (
+            'provider', 'model', 'harness', 'funding')) and routing._optional(choice.get('effort'), routing._text)):
+        return _blocked('invalid_choice')
+    if choice is not None and choice.get('effort') is None:
+        return _model_only(service, client, assignment, job, catalog, profile, bound)
     if type(choice) is dict and not any(all(item.get(key) == choice.get(key) for key in routing.ROUTE_IDENTITY)
                                         for item in catalog):
         return dict(state='pending', reason='explicit_choice_unavailable')  # exact: never substituted, nothing held
@@ -81,7 +87,7 @@ def prepare(service, *, client, assignment, job, catalog, profile=None, bound=Fa
     before = native_catalog._binding(service.settings_path, client) if bound else None  # cached just before admission
     answer = _call(service, request)
     if answer.get('state') != 'admitted':
-        return {key: answer[key] for key in ('state', 'reason', 'reasons') if key in answer}
+        return {key: answer[key] for key in RELAYED if key in answer}
     admission = answer['admission']
     attempt = admission['attempt_id']
     if answer.get('duplicate'):
@@ -202,6 +208,28 @@ def _runtime_delegation(project, client):
     return 'managed_delegation_required' if runtime else None
 
 
+EFFORT_ORDER = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
+RELAYED = ('state', 'reason', 'reasons', 'retry_after_seconds')  # what a refusal of `prepare` passes on (E3)
+
+
+def _model_only(service, client, assignment, job, catalog, profile, bound):
+    """B3: a choice that names a model without an effort leaves the effort unconstrained. That exact model's catalog
+    efforts are tried lowest first and the first admitted one answers (its `effort` names the choice made); a model
+    the catalog does not list, or no admission, is `explicit_choice_unavailable` with every attempt's `reasons`."""
+    choice = assignment['choice']
+    efforts = sorted({item.get('effort') for item in catalog if all(item.get(key) == choice.get(key) for key in (
+        'provider', 'model', 'harness'))}, key=lambda effort: (EFFORT_ORDER.index(effort) if effort in EFFORT_ORDER
+                                                               else len(EFFORT_ORDER), str(effort)))
+    reasons = []
+    for effort in efforts:
+        answer = prepare(service, client=client, assignment=dict(assignment, choice=dict(choice, effort=effort)),
+                         job=job, catalog=catalog, profile=profile, bound=bound)
+        if answer.get('state') != 'pending' or answer.get('reason') != 'explicit_choice_unavailable':
+            return answer
+        reasons += [item for item in answer.get('reasons') or () if item not in reasons]
+    return dict(state='pending', reason='explicit_choice_unavailable', **(dict(reasons=reasons) if reasons else {}))
+
+
 def command_prepare(service, body):
     """`native_prepare` (one-shot only): the request names no catalog or quota; the adapter supplies the catalog.
     The assignment `scope` (and a job without `scope_ref`) is the pinned `--project`'s; a supplied assignment scope
@@ -217,6 +245,9 @@ def command_prepare(service, body):
     if body['assignment'].get('scope', scope) != scope:
         return _blocked('scope_mismatch')
     assignment, job = dict(body['assignment'], scope=scope), dict(body['job'])
+    generated = 'attempt_id' not in assignment
+    if generated:  # B4': an omitted id is generated (never a look-alike guess); an explicit id keeps today's answer
+        assignment['attempt_id'] = 'n' + secrets.token_hex(12)
     job.setdefault('scope_ref', scope)
     if not routing_launch.managed(service.project, service.settings_path):
         return dict(state='unmanaged', reason=routing_launch.PROJECT_NOT_MANAGED)
@@ -230,8 +261,9 @@ def command_prepare(service, body):
     entries, reason = native_catalog.catalog(service.settings_path, client)
     if reason is not None:
         return _blocked(reason)
-    return prepare(service, client=client, assignment=assignment, job=job, catalog=entries, profile=body.get('profile'),
-                   bound=True)
+    answer = prepare(service, client=client, assignment=assignment, job=job, catalog=entries,
+                     profile=body.get('profile'), bound=True)
+    return dict(answer, attempt_id=assignment['attempt_id']) if generated and 'attempt_id' not in answer else answer
 
 
 def command_complete(service, body):

@@ -42,6 +42,14 @@ LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
 AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
 HOST_TURN_FAILED = 'host_turn_failed'  # a sent turn the host ended without success: surfaced, settled as sent
 FAILED_OUTCOMES = ('failed', 'aborted', 'error', 'cancelled')  # Task 11 (N4): any other outcome is `unknown`
+SCOPE_REQUIRED = 'scope_required'
+# B9/B10: the worker's final answer (untrusted data, bounded) and the provider's error type, a fixed token only.
+MAX_ANSWER = 4096
+ERROR_TYPE = re.compile(r'[A-Za-z0-9_.-]{1,64}')
+# A provider refusal for its own quota (R2: the OpenCode ChatGPT sign-in shares the Codex pool's limit): still settled
+# as sent, but named so a coordinator holds until the reset instead of retrying.
+QUOTA_LIMIT_ERRORS = ('provider.chatgpt-limit',)
+PROVIDER_QUOTA_LIMIT = 'provider_quota_limit'
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -464,7 +472,26 @@ def account(host, root, *, funding, attempt, authority, route=None):
     result = opencode_accounting.usage_from_messages(
         [adapter.normalize_message(item) for item in raw], total['tokens'], session_id=root, funding=funding,
         complete=True, session_cost=total['cost'], children=children, lineage=lineage, shim_descendants=shim)
-    return dict(result=result, not_entitled=_not_entitled(raw, route), children=len(children))
+    return dict(result=result, not_entitled=_not_entitled(raw, route), children=len(children), answer=_answer(raw),
+                error_type=_error_type(raw))
+
+
+def _answer(messages):
+    """The final assistant message's text parts, or None. Untrusted worker output, bounded by the caller."""
+    last = next((m for m in reversed(messages) if isinstance(m, dict) and m.get('type') == 'assistant'), None)
+    parts = (last or {}).get('content')
+    texts = [part['text'] for part in parts if isinstance(part, dict) and part.get('type') == 'text'
+             and isinstance(part.get('text'), str)] if isinstance(parts, list) else []
+    return '\n'.join(texts) if texts else None
+
+
+def _error_type(messages):
+    """The last idle or assistant record's `error.type` when it is a fixed token; never its free text."""
+    for message in reversed(messages):
+        error = message.get('error') if isinstance(message, dict) else None
+        if isinstance(error, dict) and isinstance(error.get('type'), str):
+            return error['type'] if ERROR_TYPE.fullmatch(error['type']) else None
+    return None
 
 
 def _listed_variants(host, provider, model):
@@ -698,11 +725,25 @@ def _finish(result, gate, attempt, detached, settings_path, source):
                     closed=result.get('state') == 'recorded')
     if result.get('state') != 'recorded' or attempt.read is None:
         return result
-    result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
+    result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'], session_id=attempt.session)
+    error = attempt.read.get('error_type')
     if attempt.outcome in FAILED_OUTCOMES:  # sent and settled as sent, but the host ended the turn without success
-        result.update(failed=True, reason=HOST_TURN_FAILED)
+        result.update(failed=True, reason=PROVIDER_QUOTA_LIMIT if error in QUOTA_LIMIT_ERRORS else HOST_TURN_FAILED)
+        if error is not None:
+            result['provider_error'] = error
+        if error in QUOTA_LIMIT_ERRORS:  # E2: its pool is refused briefly, never until the scheduled reset
+            admitted = result.get('admission') or {}
+            try:
+                from runtime import opencode_account
+                opencode_account.mark_provider_limit(settings_path, dict(route=admitted.get('route'), pool=admitted.get(
+                    'pool'), billing_class=admitted.get('billing_class')), int(time.time()))
+            except (OSError, ValueError):
+                pass
     elif attempt.outcome != 'succeeded':  # none, or a word another OpenCode version may write: unknown, never failed
         result['turn_outcome'] = 'unknown'
+    elif attempt.read.get('answer') is not None:
+        raw = attempt.read['answer'].encode('utf-8')
+        result.update(answer=raw[:MAX_ANSWER].decode('utf-8', 'ignore'), answer_truncated=len(raw) > MAX_ANSWER)
     admission = result.get('admission') or {}
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
@@ -737,6 +778,11 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
             return dict(state='blocked', reason=routing_launch.PROJECT_REQUIRED)
         if not routing_launch.managed(service.project, service.settings_path):
             return dict(state='unmanaged', reason=routing_launch.PROJECT_NOT_MANAGED)
+        scope = assignment.get('scope') if isinstance(assignment, dict) else None
+        if not isinstance(scope, str) or not scope:
+            return dict(state='blocked', reason=SCOPE_REQUIRED)  # B8: named, never `profile_unavailable`
+        if isinstance(job, dict) and 'scope_ref' not in job:
+            job = dict(job, scope_ref=scope)  # B8: as the native bridge does; a supplied `scope_ref` is kept
         if options is not None:
             try:
                 options = launch_options(**options)

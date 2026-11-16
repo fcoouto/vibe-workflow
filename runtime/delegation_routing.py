@@ -163,6 +163,8 @@ def _refusal(answer):
     reasons = answer.get('reasons')
     if type(reasons) is list and any(item != routing['reason'] for item in reasons):
         routing['reasons'] = list(reasons)
+    if type(answer.get('retry_after_seconds')) is int:  # E3: re-prepare after this, never the scheduled reset
+        routing['retry_after_seconds'] = answer['retry_after_seconds']
     return routing
 
 
@@ -384,8 +386,12 @@ def settled(scope, record, reply):
 
 def _enrolment(cwd):
     """The canonical record's client entries for this checkout, or None when no canonical record covers it (the
-    legacy entry path). An unreadable or conflicting record, or one without the observed checkout, raises."""
-    from runtime import startup
+    legacy entry path). An unreadable or conflicting record, or one without the observed checkout, raises. A linked
+    worktree reads its primary checkout's enrolment, where the record lives (R1 B1; `routing_settings._linked_primary`,
+    Git-free and forged-chain-safe); its own scope stays the worktree's."""
+    from runtime import routing_settings, startup
+    primary = routing_settings._linked_primary(Path(cwd).resolve())
+    cwd = cwd if primary is None else primary
     budget = dict(paths=0, bytes=0, deadline=time.monotonic() + startup.OBSERVATION_SECONDS)
     acquired = startup._acquire_canonical_membership(cwd, authority_path=None, budget=budget)
     if acquired.status == 'outside':
