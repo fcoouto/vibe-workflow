@@ -51,6 +51,14 @@ tool. A Git-backed identical control resolves the feature and registers the tool
 No failed fixture or production source was repaired, and native qualification
 remains incomplete; see
 [the diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#offline-gate-readiness-diagnosis--15-november).
+A Git-backed fixture with a feature preflight and bounded readiness wait then
+passed the status check, and the single approved race failed at round 1 on a
+sandbox DNS error (`getaddrinfo ENOTFOUND`) after one model request, before any
+race step. A model-free check showed the restricted profile blocks name resolution
+and one added resolver-socket allowance restores it; it is unapplied. Native race
+qualification remains incomplete; see
+[the attempt](../docs/qualification/2026-11-14-unconditional-stop.md#git-backed-race-attempt--16-november) and
+[the DNS diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#sandbox-dns-diagnosis--16-november).
 
 ## What it does
 

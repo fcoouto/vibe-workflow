@@ -17,6 +17,9 @@ and release remain held under the user's explicit Preserve-login decision.
 A later fresh race-only attempt stopped at its initial gate-status snapshot,
 before inference; see [the latest attempt](#fresh-race-only-attempt--15-november).
 Native race qualification remains incomplete.
+A Git-backed rerun then passed that snapshot and failed at round 1 on a sandbox
+DNS error; see [the Git-backed attempt](#git-backed-race-attempt--16-november).
+Native race qualification remains incomplete.
 
 ## Original 14 November outcome
 
@@ -621,3 +624,106 @@ Private offline adapter-result SHA-256:
 Source, fixture and prior-evidence hashes matched after the checks. This
 diagnosis does not reopen the closed native allocation or authorize repair,
 another probe, inference, UI, Claude testing or release.
+
+## Git-backed race attempt — 16 November
+
+The user authorized a preparation-only fix, then pre-approved one fresh race
+conditional on independent acceptance of the fix and an exact-spec readiness YES.
+Both held. Earlier allocations stayed closed and unchanged. Production source did
+not change.
+
+### Preparation-only fix
+
+The failed 15 November fixture was not a Git checkout, so feature resolution failed
+before the adapter registered its status tool (see the
+[offline diagnosis](#offline-gate-readiness-diagnosis--15-november)). In a fresh
+private harness copy only `race.mjs` and `controls.mjs` changed:
+
+- A feature preflight runs the real `workflow.py features status` on the fixture
+  before the attempt record is written or any native process starts. It requires
+  `effective: true` and a checkout equal to the fixture. A defective fixture fails
+  with no native effect and consumes no attempt.
+- A bounded readiness wait (eight snapshot polls, 750 ms apart) precedes the first
+  checkpoint, because the adapter registers the tool after setup returns. A failing
+  probe is not retried and no model request is involved.
+
+The new tests failed first as a module-load error, then 45 offline checks passed
+(37 earlier, 8 new), with no failures or skips. Astra accepted the fix at
+code/offline level with no Critical or Important findings. Limits she recorded: the
+wait is 5.25 s of sleeps plus RPC time and is separate from the adapter's 5 s
+feature timeout (a timed-out lookup fails closed); the generated configuration is
+written before preflight; the ordering test checks source positions, not a full
+launch. The fresh fixture needs `git init`, which the allocation's preparation did.
+
+### Attempt
+
+One attempt, previously reviewed limits (80 model requests, 120 controller actions,
+20 native minutes, 60-minute aggregate), anonymous zero-cost
+`opencode/deepseek-v4.1-flash-free#max`, native OpenCode 2.2.6. Astra's exact-spec
+readiness review returned YES (spec
+`8c7b2711eb01f7f21316e52eda9c19499d011a6ba39bcfffe46604911114e5d8`). Candidate
+`8c5d8306dfe50bd78601835a2aee599337d6a3bc`; production hashes unchanged.
+
+**The attempt failed in round 1, before any race step.** The preflight and wait
+worked: the initial snapshot reported `hasStatus` and `hasExecutor` true, no held
+files and `lastError: null`, so the status-absence failure did not recur. The first
+round prompt was sent and one primary model request failed:
+
+```text
+provider.transport: Can't reach opencode.ai. Check the network connection. (getaddrinfo ENOTFOUND opencode.ai)
+```
+
+The observer vetoed retry attempt 2 as designed; that is why the controller records
+`failed_observer_evidence`. Use: **1 model request**, **15 controller actions**,
+**1,075 ms**. No edit, tool, child session, timing arm/wait/release or race step ran.
+Controller exit zero reflects completed reporting, not qualification success.
+
+Cleanup and preservation: the server exited zero unforced; coordinator inspection
+found the server, its group and the controller absent. Fixture bytes, source,
+protected and prior-evidence pins, and six selected shared-file hashes matched
+(a bounded window check, not global preservation). Immutable private database
+inspection: zero accounts and credentials, one session, three messages, zero
+events; inspection left its hash unchanged.
+
+Astra independently accepted the failed-run classification and bounded evidence
+integrity, with no Critical or Important gap. This is not race qualification. The
+first readiness probe succeeded, so delayed tool registration was not exercised.
+
+Private SHA-256 bindings: result
+`4942e144c51a282c310c99bceeee607d68cf1755760f5d24ffe4fcf6423f1dc5`; post-run
+inspection `e40c4ee40ed02585e87db87ce8e7146b0d24420bdea5bcfd9f87cc429c339a81`.
+The allocation is closed; unused capacity renews nothing.
+
+## Sandbox DNS diagnosis — 16 November
+
+The race sandbox profiles add `(deny network*)` and allow only loopback, TCP 443
+and ports 53; every earlier run that reached a model used a profile without
+network restrictions. The user approved a bounded model-free check: three
+single-shot Node `dns.lookup("opencode.ai")` calls (the same `getaddrinfo` path and
+error text as the failed run), no connection, no OpenCode binary, no model request,
+a 10-minute cap.
+
+| Case | Result |
+| --- | --- |
+| No sandbox | Resolved (4 addresses). |
+| Exact race profile | `ENOTFOUND`, `getaddrinfo ENOTFOUND opencode.ai`. |
+| Race profile plus `(allow network-outbound (literal "/private/var/run/mDNSResponder"))` | Resolved (4 addresses). |
+
+The last two differ by that single allowance, so under this profile access to the
+macOS resolver socket is sufficient to restore resolution and its absence causes
+this failure. Limits: one lookup per case, no repeats; the resolver is Node's
+`getaddrinfo`, not the OpenCode binary's provider path; the no-sandbox control
+differs from the race profile in more than the network clause (filesystem, `securityd`
+and process-exec rules); no profile with only the network clauses removed was run.
+The candidate profile is a diagnostic, unapplied. Adding it would widen the
+isolation: outbound access to the system resolver, which resolves any host.
+Hostname enforcement is still not provided. A changed profile needs preparation,
+independent review and a fresh allocation.
+
+Private result SHA-256:
+`0fda177ced36fe940f46586a3628853156826b3ce8c3c68e1471f8dab3f278bf`.
+
+No repair, native server, race rerun or authentication change followed. Native race,
+original-TUI evidence, Claude qualification, final candidate review, the exact
+release-candidate full suite and release remain incomplete. PR #294 remains deferred;
+PR #310 remains draft/BLOCKED, unmerged and unreleased.

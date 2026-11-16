@@ -239,6 +239,18 @@ subprocess output was not retained; additional native issues remain unexcluded.
 No product/fixture/harness repair or native rerun occurred. See
 [the offline diagnosis](../../qualification/2026-11-14-unconditional-stop.md#offline-gate-readiness-diagnosis--15-november).
 
+The user then authorized a preparation-only fix (Git-backed fixture, feature
+preflight, bounded readiness wait; accepted at code/offline level) and
+pre-approved one conditional fresh race. After readiness YES, the single attempt
+passed the status check and failed at round 1 with a sandbox DNS error after one
+model request; no race step ran, cleanup passed, and the allocation is closed. A
+model-free check showed the restricted profile blocks resolution and one added
+resolver-socket allowance restores it (unapplied; it widens isolation). Astra
+accepted the failed-run record, not race qualification. A changed profile needs
+preparation, independent review and a fresh allocation and approval. See
+[the attempt](../../qualification/2026-11-14-unconditional-stop.md#git-backed-race-attempt--16-november) and
+[the DNS diagnosis](../../qualification/2026-11-14-unconditional-stop.md#sandbox-dns-diagnosis--16-november).
+
 ## Acceptance and stopping
 
 Each case passes only with every assigned behavioral assertion, valid identities,
