@@ -1,12 +1,11 @@
-"""Task 4: no OpenCode selected-account identity is invented (all three families, real `LocalSource`).
+"""Task 4, updated by Task 6: no OpenCode selected-account identity is invented (all three families, real `LocalSource`).
 
-The accepted source notes found no supported selected-account source for any OpenCode family: no secret-free
-selected Claude subscriber/account projection (OpenCode 2.2.6), no projection binding the selected OpenCode `openai`
-connection to a subscriber, and for Go no proven member/sign-in identity or provider-to-meter-connection linkage. So
-the production `LocalSource` must refuse every OpenCode subscription route, even when the provider, account and pool
-labels match a native login seeded on the same pool, the environment matches and stored rows exist. No fact, no
-marker, no admission candidate, and no acquisition, process, model or network operation may turn those equalities
-into account proof.
+Task 6 added the only OpenCode source, `runtime/opencode_account.py`, which proves a selected connection from its own
+bounded `opencode api GET /api/credential` read (positive and negative matrix: tests/test_opencode_account.py). Without
+that read (here: no `opencode` executable under the test home), the production `LocalSource` must still refuse every
+OpenCode subscription route, even when the provider, account and pool labels match a native login seeded on the same
+pool, the environment matches and stored rows exist. No fact, no marker, no admission candidate, and no native reader,
+process, model or network operation may turn those equalities into account proof.
 
 Real private stores and the real `LocalSource`; the native logins are labelled synthetic producer states. The separate
 consumer proof at the end uses a labelled code-level fact, which is never a production producer.
@@ -17,8 +16,8 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import claude_usage, codex_account, codex_rate_limits, routing_observations as collector, routing_paths, \
-    subscription_billing
+from runtime import claude_usage, codex_account, codex_rate_limits, opencode_account, routing_observations as collector, \
+    routing_paths, subscription_billing
 from tests import test_native_routing as native_tests
 from tests.test_routing_observations import Stores, native_reading
 
@@ -61,6 +60,9 @@ class RealSourceRefusalTest(Stores):
         self.enterContext(mock.patch.object(codex_rate_limits, 'refresh', self.readers[2]))
         self.enterContext(mock.patch.object(codex_rate_limits, 'read_windows', self.readers[3]))
         self.enterContext(mock.patch('subprocess.Popen', side_effect=AssertionError('process started')))
+        self.opencode, original = [], opencode_account.refresh  # the OpenCode reader runs, finds no executable
+        self.enterContext(mock.patch.object(opencode_account, 'refresh', side_effect=lambda *args, **options: (
+            self.opencode.append(original(*args, **options)) or self.opencode[-1])))
 
     def test_matching_labels_native_logins_and_environment_never_prove_an_opencode_account(self):
         source, now = collector.LocalSource(self.settings), int(time.time())
@@ -87,6 +89,10 @@ class RealSourceRefusalTest(Stores):
                 self.assertEqual([item['reason'] for item in found['excluded']], ['billing_unverified'])
         for reader in self.readers:
             reader.assert_not_called()
+        self.assertEqual(self.opencode[0], dict(state='failed', reason='opencode_unavailable', families=dict(
+            claude='opencode_unavailable')))  # no process: the guard above never fired
+        self.assertEqual({(result['state'], result['reason']) for result in self.opencode[1:]},
+                         {('failed', 'opencode_unavailable'), ('backoff', 'opencode_unavailable')})  # bounded retries
 
 
 class SyntheticConsumerTest(native_tests.NativeBase):

@@ -407,11 +407,17 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
   qualification; older native account observations remain dated historical evidence.
 - Window rows keep their history up to the existing 1 MiB fail-closed store bound (an availability risk).
   Crash and power-loss durability, and login changes no read has observed, are unproved.
-- All three OpenCode positive sources stay blocked:
-  - Claude (OpenCode 2.2.6) has no secret-free selected subscriber/account projection.
-  - ChatGPT has no binding from the selected OpenCode `openai` connection to a subscriber.
-  - Go lacks member/sign-in identity and provider-to-meter linkage, and complete observation, reset, month and
-    demand semantics for included optimization.
+- When this edit was registered, all three OpenCode positive sources were blocked. Task 6 added
+  `runtime/opencode_account.py`, tested with a synthetic `opencode` double only; real-account verification is pending.
+  - Identity now comes from the OpenCode connection, read through `opencode api GET /api/credential` in memory, keeping
+    only digests. Claude is the native Claude login (`claude-agent`, external `claude-login`). ChatGPT is the access
+    token's `sub` (decoded locally, signature unchecked). Go is the Console account and organization, which must be
+    the usage workspace.
+  - Quota stays unknown for all three: ChatGPT and Go replies carry none, and binding OpenCode Claude's reported rate
+    limits is a later phase. These routes are provider-managed fallback only, never an included claim.
+  - OpenCode Claude also needs a current native Claude account. Its acquisition does not start the native reader, and
+    the native fact stays unavailable for the current real client until the separate follow-up (A0).
+  - Go still lacks complete observation, reset, month and demand semantics for included optimization.
 - Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
   model call or new account framework.
 - API Usage is next-release scope (`API_FUNDING_QUALIFIED=False`, 20% direct API buffer). Production OpenRouter is
