@@ -24,7 +24,7 @@ Load only this file when an OpenCode coordinator starts a worker or reviewer in 
    - Optional: `workflow` (a planned job's locator; `"planned": true` requires it, else `workflow_required`), `constraints` and `profile`.
 
    Never add observations, a catalog or a route. The command takes no arguments: any argument is `usage_error` (exit 2).
-3. Act on the one JSON result. The worker's edits are in the checkout; the result never carries the token, the server password or the prompt. Pass an operator command a result names to the user; never run it yourself.
+3. Act on the one JSON result. The worker's edits are in the checkout; the result never carries the token, the server password or the prompt. Show an operator command a result names to the user; it runs only on the user's explicit request.
 
 | Result | Meaning | Next action |
 | --- | --- | --- |

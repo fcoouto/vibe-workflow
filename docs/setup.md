@@ -82,7 +82,7 @@ Enabled for this primary checkout on 2026-11-16 at the user's explicit request i
 - Routing settings revision before the change: 0; added this project's primary checkout.
 - Readback: `managed: true` and `effective: true`.
 - Strategy table: bootstrapped from the live catalogs of this machine's clients (table-bootstrap run, 16 November 2026). Decisions:
-  - Opus was left out, because the model-name check in `validate.py` failed on this package's own wording until the 0.1.43 reword. The table with Opus is kept as the previous table; `python3 -B scripts/routing_table.py rollback` restores it.
+  - Opus was left out, because the model-name check in `validate.py` failed on this package's own wording until the 0.1.43 reword. The table with Opus is kept as the previous table; `python3 -I -B <package>/scripts/routing_table.py rollback` (the installed package's script) restores it.
   - Haiku comes first in the light Claude rows.
   - OpenCode Go appears in the light rows only.
   - Fable, GPT-6 Astra and the `max` and `ultra` efforts are excluded.

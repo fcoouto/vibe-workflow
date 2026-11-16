@@ -149,14 +149,15 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 
 - Native bridge: omit `attempt_id` on the first prepare. The bridge generates one (`n` and 24 hex digits) and returns it as the answer's `attempt_id`; an answer without one held nothing.
 - OpenCode launcher: send a new unique `attempt_id` for each launch.
+- If a prepare's output is lost (you never saw its `attempt_id`), never prepare again for that launch: report it, because a second prepare is a new attempt and could launch twice.
 - Send the same id again only to retry that same launch, so a retry can never obtain a second permit. Start a new attempt (on the bridge, omit the id again) only where the reply table says so. Never invent an id that imitates an earlier one: every session on this machine shares the ids, and a reused one answers `already_prepared`.
 
 ## A user's explicit model choice
 
 A `choice` names `provider`, `model`, `harness` and `funding`, plus `effort` when the user chose one. When the user named only a model:
 
-- the native bridge tries that model's efforts from the lowest and admits the first that fits; the answer's `effort` names it;
-- Codex delegation preparation and the OpenCode launcher answer `blocked` `effort_required`: ask the user for the effort, or prepare routed.
+- the native bridge tries that model's efforts from the lowest and admits the first that fits (the lowest effort may be too light for a critical task: tell the user which effort it chose); the answer's `effort` names it;
+- Codex delegation preparation and the OpenCode launcher answer `blocked` `effort_required`: ask the user for the effort. Prepare routed only if the user says any model will do; never take that option on your own, because routing would pick a different model than the one the user chose.
 
 Never invent an effort.
 
@@ -166,13 +167,13 @@ These replies launch nothing. Report them with their `state` and `reason`, conti
 
 | Reply | Meaning | The one next action |
 | --- | --- | --- |
-| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account looked full in a reading at most 60 s old, or its provider refused for quota within the last 120 s. | Hold the dependent delegation. If it is still needed, prepare once more after `retry_after_seconds` (at most 120), not at the scheduled reset: each prepare rechecks the account, so an early provider reset is recognized. Routing never polls; nothing prepares again on its own. |
+| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account looked full in a reading at most 60 s old, or its provider refused for quota within the last 120 s. | Hold the dependent delegation. Prepare once more after `retry_after_seconds` (at most 120), not at the scheduled reset: each prepare rechecks the account, so an early provider reset is recognized. If that prepare is refused for quota again, hold and report; prepare again only when the user asks or for a new launch. Routing never polls, and neither do you. |
 | ... with `billing_unverified` in `reasons` | No current account fact for the route. | Ask the user to sign in to that account; prepare again afterwards. |
 | `explicit_choice_unavailable` | The exact model and effort chosen by the user are not admissible now; routing never substitutes. | Report it; ask the user before choosing anything else. |
 | `account_changed`, `native_binding_changed` | The account or its catalog changed after admission; the attempt is closed. | Prepare again with a new attempt id. |
 | `account_binding_missing`, `native_catalog_unavailable` | No account binding or catalog snapshot for the route. | Ask the user to sign in to the host's account; prepare again afterwards (its account read binds them). |
 | `catalog_mismatch` | The host does not list the admitted model, for an explicit choice the user's own model. Nothing was sent. | Report it; never substitute another model. |
-| `effort_required` | A `choice` without `effort` on a path that needs one. | Ask the user for the effort, or prepare routed. |
+| `effort_required` | A `choice` without `effort` on a path that needs one. | Ask the user for the effort. Prepare routed only if the user says any model will do. |
 | `invalid_choice` | The `choice` is malformed ([explicit model choice](#a-users-explicit-model-choice)). | Fix it; never resend it unchanged. |
 | `scope_required`, `profile_unavailable` | The launcher request has no `assignment.scope`, or the `job` is not a usable task profile. | Fix the request; never resend it unchanged. |
 | `invalid_json` | The command got no JSON request on stdin, or an invalid one. It says nothing about the settings. | Fix the call and run it again. |
