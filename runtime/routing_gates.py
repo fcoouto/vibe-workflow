@@ -2,8 +2,8 @@
 
 `prepare` reads the canonical workflow job once and stores a minimal binding in the admission record; `dispatch`
 re-reads current workflow state and refuses when the binding no longer holds. The contract (binding fields, reason
-codes, the snapshot/etag rule and the `job: null` path) is defined once in the plan, Task S3.5
-(docs/superpowers/plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3).
+codes, the snapshot/etag rule and the `job: null` path) is defined by this module; its original text is Task S3.5
+of the plan deleted in 11a8927c (docs/superpowers/plans/2026-11-08-smart-routing.md; see Git history).
 
 A reader is any object with `view(locator) -> view` and `etag(locator) -> str | None`, both read-only. `view` may
 be slow and always runs before the ledger's write transaction; `etag` must be cheap, because it is the only

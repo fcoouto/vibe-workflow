@@ -1,5 +1,7 @@
 # Smart Routing Redesign Implementation Plan
 
+> Historical. Current behaviour: validation [Edit 15](../../smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback) and [policy 03](../../../policies/03-agent-delegation.md#managed-projects).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Smart Routing automatically select and launch the most cost-effective capable model through qualified subscription connections, using one specialist roster and model-free path rules, with an exact replay, and prepare the per-project learning loop.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Python 3 standard library only, `unittest` through `scripts/test_sharded.py`, the existing SQLite ledger, JSON files in user state.
 
-**Spec:** [Smart Routing redesign](../specs/2026-11-10-smart-routing-redesign-design.md), approved by the user on 10 November 2026. It amends the [8 November design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) and the [C.3 wiring design](../specs/2026-11-10-smart-routing-c3-wiring-design.md). The [8 November plan](2026-11-08-smart-routing.md) stays the record of the merged slices, the pre-canary requirements and the cutover tasks; this plan owns slices F1 to F8 and L1 to L4.
+**Spec:** [Smart Routing redesign](../specs/2026-11-10-smart-routing-redesign-design.md), approved by the user on 10 November 2026. It amends the [8 November design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) (deleted in `11a8927c`; see Git history) and the [C.3 wiring design](../specs/2026-11-10-smart-routing-c3-wiring-design.md). The [8 November plan](2026-11-08-smart-routing.md) (deleted in `11a8927c`; see Git history) stays the record of the merged slices, the pre-canary requirements and the cutover tasks; this plan owns slices F1 to F8 and L1 to L4.
 
 **Delivery checkpoint, 15 November 2026:** F1–F7 and PR #309's native Claude
 account flow are merged source delivery, not installed-client qualification.
@@ -1285,7 +1287,7 @@ The run itself happens after a path is qualified live, as Edit 6 orders.
 
 ## Before the live session
 
-These join the [pre-canary requirements](2026-11-08-smart-routing.md#pre-canary-requirements) of the 8 November plan:
+These join the [pre-canary requirements](2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history) of the 8 November plan:
 
 1. F1 to F7 are merged. F8 is retired and is not a prerequisite (Edit 14).
 2. **The guidance is published again in the new row shape.** The coordinator runs the existing guidance publication procedure once: each vendor guide page is read by a model once and turned into rows of `work_kind`, complexity and risk; the catalog input gains `provider`, `list_price` and `display_name`; `scripts/routing_table.py refresh` compiles the production table. Until the due jobs of L2 exist, the catalog and guides are refreshed by hand.
@@ -1325,7 +1327,7 @@ These are outlines with the decisions already fixed. Each is expanded into tasks
 
 ## Required next release: API Usage
 
-This is a user requirement, not an optional backlog item. It carries forward the older plan's [managed API Usage send path](2026-11-08-smart-routing.md#follow-ups-from-merged-work).
+This is a user requirement, not an optional backlog item. It carries forward the older plan's [managed API Usage send path](2026-11-08-smart-routing.md#follow-ups-from-merged-work) (deleted in `11a8927c`; see Git history).
 
 - [ ] Add direct subscription-linked API allowance discovery, fresh balance/expiry observations and secure credential binding for the supported providers. Reuse the existing allowance ledger and readers; do not let OpenRouter consume a direct grant.
 - [ ] Wire the existing API Usage execution entry points through `prepare`, `dispatch`, per-request `check` and completion/uncertain settlement. Keep activation, allowance ceiling (98% by default), protected balance, reservations and uncertainty rules.

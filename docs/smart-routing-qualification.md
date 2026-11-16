@@ -4,6 +4,14 @@
 
 **Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
+## Live launches, 16 November 2026 (not a governed qualification)
+
+Recorded after validation [Edit 15](smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback); these runs count toward no criterion.
+
+- **Launches.** The real managed launcher completed one tiny request on each of this user's three OpenCode accounts: ChatGPT and Go as provider-managed fallback, and Claude, once native readings were usable, as an included claim tagged `native_rows` (one permit, hold released). No hold stayed open, and a no-connection control was refused with nothing sent. Source: the provider-managed plan's final gates (`docs/superpowers/plans/2026-11-15-smart-router-provider-managed.md`, Task 5).
+- **Not observed live.** The pool's consumed boundary after the Claude claim is proven by tests only.
+- **Quota refusals the same day**, as reported by the coordinating session (no packaged evidence record): a Fable model-scoped limit at 100% was refused before sending (`quota_exhausted`), and so was the Codex weekly window at 100%.
+
 ## Native Claude reader attempt, 15 November 2026
 
 **Outcome: failed qualification, no retry.** The first production-reader attempt
@@ -72,7 +80,7 @@ dependency. Another generic usage read alone would not establish membership.
 
 ## Live session runbook
 
-The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) need. The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.
+The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history) need; the conditions for any later governed run are in validation [Edit 15](smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback). The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.
 
 **What this session qualifies (F4).** There is no route manifest any more. The package ships model-free path rules (`runtime/routing_routes.json`); each `prepare` generates routes in memory from the qualified paths and the strategy table, and no file holds a route. This scheduled session qualifies only the OpenCode subscription paths it measures. The operator works in stages, each with its own prerequisite: `measure-demand` ([step 6](#6-measure-demand-no-calls)), then `qualify_path` for each proposed request, then `seed_window` for each demanded window ([step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)), then activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)). The gateway check (step 5) and the Codex path qualify nothing in this canary (decisions A and C of the [redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#coordinator-calls-for-the-users-review)). A new model on a qualified path needs no new session unless its allowance or demand semantics differ ([F4.5](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f45-opencode-subscription-connection-and-allowance-binding)). The separate evidence the release matrix still needs (OpenCode Go connections, native Codex and Claude Code launches, a qualified Claude usage reader and an account-scoped subscription-only billing boundary) is named in F4.5 and [F4.6](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f46-native-only-selection-and-launch-for-codex-and-claude-code); this session does not supply it.
 
@@ -217,9 +225,9 @@ python3 -B scripts/routing.py seed_window <<'EOF'
 EOF
 ```
 
-1. **`qualify_path`**, once per proposed request. It needs a path from the shipped rules that is not `test_only`, demand keys equal to that path's windows (thousandths, 1 to 1000), and the run ids as `evidence`. It writes `path-qualifications.json` beside the routing settings, owner-only. `unqualify_path {path}` removes a qualification; a held admission on that path is then refused at dispatch.
+1. **`qualify_path`**, once per proposed request. It needs a path from the shipped rules that is not `test_only`, demand keys equal to that path's windows (thousandths, 1 to 1000), or, for account-and-launch qualification with unknown included quota, an explicit `"demand": null`, and the run ids as `evidence`. A `null`-demand path is admitted only as provider-managed fallback (`provider_managed_fallback`), which the provider may charge; it never satisfies the quota-denominated canary. It writes `path-qualifications.json` beside the routing settings, owner-only. `unqualify_path {path}` removes a qualification; a held admission on that path is then refused at dispatch.
 2. **`seed_window`**, once for each window a qualified path demands, from the host's current reading of that window. It needs a qualified path on the pool, not a table, and follows the [seed rules](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#seed-window): `limit` 1000, the host's `length`, refused while a fresh host reading exists, fresh for 900 s, replaced by the first host reading. Seed again after a stale gap where no eligible pool is fresh. A seed is recovery input, never billing or entitlement proof.
-3. **Activation** is [step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only). Its `route_manifest` check passes only when a qualified, non-test path has a table strategy with that path's harness and provider (`no_qualified_path` or `no_generated_route` otherwise). It reads the shipped rules and the qualification and table files beside the settings path the command uses, and nothing else. Its `subscription_sources` check then needs, for each managed host of the project being added, a qualified subscription path with a current account fact (and, for a native host, a catalog bound to the current account read). Preactivation may run one bounded native Claude account read for that path; every other host has no producer and refuses (`<host>_billing_unverified`).
+3. **Activation** is [step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only). Its `route_manifest` check passes only when a qualified, non-test path has a table strategy with that path's harness and provider (`no_qualified_path` or `no_generated_route` otherwise). It reads the shipped rules and the qualification and table files beside the settings path the command uses, and nothing else. Its `subscription_sources` check then needs, for each managed host of the project being added, a qualified subscription path with a current account fact (and, for a native host, a catalog bound to the current account read). Preactivation may run one bounded read per applicable producer: native Claude (`claude_usage`), native Codex (`codex_account`) or the OpenCode selected-account producer (`opencode_account`). A host still refuses (`<host>_billing_unverified`) while its qualified path has no current account fact.
 
 - **Expect:** 0 calls, one short process per operation.
 - **Pass:** each `qualify_path` answers `qualified`, each `seed_window` answers `recorded`, and `status` lists the seeded windows with `source: operator`. **Fail:** any `blocked` reason; fix its input and repeat that operation only.
@@ -250,13 +258,14 @@ python3 -B -m tests.qualification.replay_strict --dir <export dir>
 
 ### 8. Canary on the production routing ledger (user approval, canary only)
 
-**Blocked today:** native Claude account/catalog observation exists, but complete
-usage and path-specific demand remain unqualified; other paths lack wired account
-sources. Activation (8.1) and the canary remain unscheduled. Paths without an account
+**Blocked today:** every subscription path has an account producer, but complete
+usage and path-specific demand remain unqualified, so the quota-denominated canary
+cannot run. Provider-managed fallback sends never count toward it (validation
+[Edit 15](smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback)). Activation (8.1) and the canary remain unscheduled. Paths without an account
 fact admit nothing (`billing_unverified`); account observation alone does not
 replace the usage/demand gates. See the [runbook entry](#live-session-runbook).
 
-The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
+The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
 
 1. **The user activates the project.** Only the user adds the checkout to the production `managed_projects`, with the one-shot `scripts/routing.py set` (it passes only once the activation gate passes, including the path check of [step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)). The harness never changes `managed_projects` and refuses a project that is not on it.
 2. **The production ledger must exist and be clean.** The harness never creates, initializes or resets it. An unclean state (open attempts or holds, Smart Routing off, API Usage on, an enabled organization, raised caps) is refused before any write, with the condition named; fix it through `scripts/routing.py`, for example settle open holds with the one-shot operator ops.
@@ -338,7 +347,7 @@ The production-ledger form of step 8 runs only ranked: without `--ranked` it is 
 | Kill switch | `CanaryEnv.kill_switch` on every abort | `abort.kill_switch` |
 
 - **Stale holds:** a hold saved for an attempt that later aborts or crashes stays in the record. It reduces the remaining allowance and never replenishes it; there is no automatic release. An `allowance_exhausted` stop and driver aborts are not stored as stops; a resumed run relies on the existing start refusals and the kill switch.
-- **Limit:** a live ranked run still needs formal registration and an approved `ranked-canary` cap. Neither exists, so the run is refused. `admitted_check` still refuses with `billing_unverified` on any path without a current account fact; only the native Claude path has a producer, unobserved on the real host.
+- **Limit:** a live ranked run still needs formal registration and an approved `ranked-canary` cap. Neither exists, so the run is refused. `admitted_check` still refuses with `billing_unverified` on any path without a current account fact; every subscription path has an account producer, none of them a governed qualification.
 
 ### After the session
 

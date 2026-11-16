@@ -1,11 +1,13 @@
 # Smart Routing C.3 — caller wiring and selector retirement design
 
+> Partly superseded by the [provider-managed design](2026-11-15-smart-router-provider-managed-design.md) and the [account-continuity design](2026-11-15-smart-router-account-continuity-design.md); read those first. The current command contract is [docs/smart-routing-contract.md](../../smart-routing-contract.md).
+
 - **Version:** 1.8.1 draft (phase W code complete, pre-live slices merged, decision 5 replaced by F4; see [revision history](#8-revision-history))
 - **Date:** 2026-11-10
 - **Status:** Phase W's code is complete: C3-0b (#212), C3-1 (#213) with C3-1b (#220), C3-5 (#214), C3-0a (#215), C3-4a (#216), C3-2 (#217), C3-3 (#218), C3-6 (#221) and C3-4b (#225), plus the table rollback (#211) and the review follow-ups (#222, #224). The pre-live slices are merged too: `seed_window` (#228), the pre-decision-4 fixes (#229), the Codex rate-limit reader (#231), the live-session harness modes (#234) and steps on every agent (#239). The production route manifest (#227) stays open until live demand is measured. All of it is package-tested only: no model call, OpenCode server or live run was used. C3-7 is not built. Where a merged slice deviated from earlier text by a coordinator decision, the section that defines the rule now states the merged behaviour and names the PR. Since v1.4, the risky steps are validated by running throwaway prototypes in a scratch worktree ([Appendix B.0](#b0-prototype-runs-validated-by-running)).
 - **Line numbers:** all at `origin/main` `bd5cde6` ([Appendix A](#appendix-a--inventory-at-the-pinned-base)), the base the slices were planned on. Merged code added since is cited as `file:function`. Open user decisions are in [section 7](#7-open-decisions).
-- **Plan task:** [C.3 Replace callers and retire selectors](../plans/2026-11-08-smart-routing.md#task-c3-replace-callers-and-retire-selectors). The plan owns task status; this document owns how C.3 is built.
-- **Parent design:** [Smart Routing spec v1.5](2026-11-08-usage-routing-opencode-subscriptions-design.md) §3, §4, §8, §10.4 and Appendix A.
+- **Plan task:** [C.3 Replace callers and retire selectors](../plans/2026-11-08-smart-routing.md#task-c3-replace-callers-and-retire-selectors) (deleted in `11a8927c`; see Git history). The plan owns task status; this document owns how C.3 is built.
+- **Parent design:** [Smart Routing spec v1.5](2026-11-08-usage-routing-opencode-subscriptions-design.md) (deleted in `11a8927c`; see Git history) §3, §4, §8, §10.4 and Appendix A.
 
 This document covers:
 
@@ -16,9 +18,9 @@ This document covers:
 
 It links to existing contracts rather than restating them:
 
-- the [routing command](../plans/2026-11-08-smart-routing.md#task-s31-single-routing-command) (S3.1/S3.4);
-- [fresh gates](../plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3) (S3.5);
-- [settlement](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention) (S3.6);
+- the [routing command](../../smart-routing-contract.md) (S3.1/S3.4);
+- [fresh gates](../plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3) (deleted in `11a8927c`; see Git history) (S3.5);
+- [settlement](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention) (deleted in `11a8927c`; see Git history) (S3.6);
 - the [OpenCode handshake, plugin RPC and accounting](../../../clients/opencode.md#handshake);
 - PR #192's `reconcile_subscription` op (S3.6c, `clients/opencode.md#uncertain-subscription-holds-s36c` once merged);
 - PR #197's C.2 feature contracts (`tests/test_smart_routing_features.py`).
@@ -227,7 +229,7 @@ This is plan follow-up #182.
 
 ### 3.5 Operator recovery
 
-Operator ops are one-shot only and can never be reached from `--serve` or `record` ([S3.6b-2 rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention)). Since C3-0a (#215) this covers every `scripts/routing.py:OPERATOR_OPS` entry (eight since `seed_window`, #228) and every in-process service as well: only `main()` sets the `Service` capability `one_shot`, and `--serve`, `managed_service` and any other in-process service answer `operator_op_not_served` before reading anything. The launcher prints which one applies and never runs one itself.
+Operator ops are one-shot only and can never be reached from `--serve` or `record` ([S3.6b-2 rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention) (deleted in `11a8927c`; see Git history)). Since C3-0a (#215) this covers every `scripts/routing.py:OPERATOR_OPS` entry (eight since `seed_window`, #228) and every in-process service as well: only `main()` sets the `Service` capability `one_shot`, and `--serve`, `managed_service` and any other in-process service answer `operator_op_not_served` before reading anything. The launcher prints which one applies and never runs one itself.
 
 | Situation | Op |
 |---|---|
@@ -369,7 +371,7 @@ Before C3-7 merges, `status.ledger.legacy_outstanding` (added by C3-0a) must be 
 
 It also lists `ready` handoffs for information. They hold no exposure and do not block.
 
-Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835, the state check), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0a) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention):
+Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835, the state check), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0a) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention) (deleted in `11a8927c`; see Git history):
 
 | Call state | Accepted evidence | Effect |
 |---|---|---|
@@ -640,7 +642,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - **handles interrupts** so no hold is left plainly open: the command turns SIGTERM and SIGHUP into an exception, and the first signal switches SIGTERM, SIGHUP and Ctrl-C off so nothing interrupts the cleanup. After a confirmed `dispatch` it records `uncertain`; before that it records `not_dispatched`, and if the ledger answers `hold_state_forbidden` the dispatch committed, so it records `uncertain`. It always detaches, stops its server and answers `interrupted` (exit 1);
   - writes rate-limit observations with their [unit](#route-manifest-shape) and `not_entitled` marks ([3.4](#34-listed-is-not-entitled)).
 
-  The step order, the worker profile and the server are defined once in [clients/opencode.md](../../../clients/opencode.md#managed-launcher). Its pre-canary requirement and the live probes this slice could not run are listed on the plan's [pre-canary requirements](../plans/2026-11-08-smart-routing.md#pre-canary-requirements).
+  The step order, the worker profile and the server are defined once in [clients/opencode.md](../../../clients/opencode.md#managed-launcher). Its pre-canary requirement and the live probes this slice could not run are listed on the plan's [pre-canary requirements](../plans/2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history).
 - **Tests:**
   - each refusal happens before any session is created;
   - the token never appears in output or files (scan);
@@ -689,7 +691,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - **(round 5)** `prepare` runs before `settings.admission`, and a stale revision fails closed with `openrouter_preparation_stale`.
 - **Order (round 5).** As in C3-4a: routing `prepare` before `settings.admission` (`scripts/openrouter_workers.py:126`), with `revision=seen.openrouter_revision`.
 - **As merged (#225).** Every local refusal runs before `prepare`, and a write-ahead attempt entry is written before it. Without a verified receipt the hold is charged its full reservation (C3-4a's money rule), and a missing cost stays `cost_unknown`. The dollar preflight runs at `prepare` and again at dispatch. Every exit before dispatch closes the hold and returns no packet. The next managed `prepare` or `execute` recovers unlocked write-ahead entries and started runs whose hold is still open. The V1 path's first statement refuses a managed project.
-- **Known gaps (#225).** All fail closed today, because the launcher refuses API-funded OpenCode routes (`api_funding_unqualified`) until [user decision 4](#71-for-the-user). The two package gaps are fixed (#229, #239), package only; the live checks they leave are on the plan's [pre-canary list](../plans/2026-11-08-smart-routing.md#pre-canary-requirements):
+- **Known gaps (#225).** All fail closed today, because the launcher refuses API-funded OpenCode routes (`api_funding_unqualified`) until [user decision 4](#71-for-the-user). The two package gaps are fixed (#229, #239), package only; the live checks they leave are on the plan's [pre-canary list](../plans/2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history):
   - fixed (#229): the OpenCode adapter's accounting rejected OpenRouter `vendor/model` ids, so such a send ended uncertain. The Python adapter, `runtime/opencode_accounting.py` and the TypeScript shim now share one `MODEL_ID` rule: one `NAME`, or `vendor/model` with exactly one `/` and both parts in the `NAME` charset, at most 128 characters; provider and variant stay single names;
   - fixed (#229, #239): the launcher's server config had no per-launch endpoint pin, output cap or step count. `launch_options` validates them and `start_server(options=…)` writes them into that server's inline config in OpenCode's V2 keys; a host without exactly those options is refused before `prepare`, and a dispatch for another admitted model is refused (`launch_options_mismatch`) and closes the hold. Since #239 the step count is set on every V2 built-in agent, and a launch with options reads `GET /api/agent` once before `prepare` and refuses with `agent_steps_uncapped` unless the one shared rule `opencode_launcher.uncapped_agents(listing, config_agents, steps)` finds every listed agent capped; the gateway qualification harness uses the same rule. A launch without options reads no listing. The keys, the listing rule and the cost (one loopback GET per launch with options) are defined in [clients/opencode.md](../../../clients/opencode.md#per-launch-options);
   - open (live): the reply's text format (`content[].type == 'text'`);
@@ -832,7 +834,7 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 2. **Default ON scope (C.4).** Whether default ON at cutover covers advisory hosts (Codex and Claude Code native) for automatic subscription selection, or whether those hosts use only `worker_choices` until a pre-transmission hook exists. Recommendation: allow automatic subscription selection there, labelled `advisory`, because their funding is window-only. Since C3-6 (#221) this decision also decides **Claude Code projects** in phase W: a project whose coordinator delegates through a host with no managed launcher, today Claude Code native subagents, is not activated until this decision ([4.2](#42-activation-gate)).
 3. **OpenRouter workers gap.** Accept that OpenRouter workers in managed projects are unavailable until C3-4b merges and the `gateway` route on OpenCode is qualified live. C3-4b is merged (#225), and its self-check passes; managed workers still answer `api_funding_unqualified` until decision 4.
 4. **API-funded OpenCode qualification.** Run the S3.6 positive and negative descendants runs with real API costs; this lifts `api_funding_unqualified`.
-5. **Route manifest.** Accept the route manifest's classifications, taken from the capability matrix, as the collector's source while observed billing for several routes still waits on you. Until then the manifest lists no qualified route, and no project can be activated. **Decided 2026-11-10:** "Use matrix, subscription only." The manifest PR (#227) lists subscription-window routes only, none qualified, and stays open until each route's demand is measured live (plan [pre-canary requirements](../plans/2026-11-08-smart-routing.md#pre-canary-requirements)).
+5. **Route manifest.** Accept the route manifest's classifications, taken from the capability matrix, as the collector's source while observed billing for several routes still waits on you. Until then the manifest lists no qualified route, and no project can be activated. **Decided 2026-11-10:** "Use matrix, subscription only." The manifest PR (#227) lists subscription-window routes only, none qualified, and stays open until each route's demand is measured live (plan [pre-canary requirements](../plans/2026-11-08-smart-routing.md#pre-canary-requirements) (deleted in `11a8927c`; see Git history)).
 
    **Replaced by F4 ([redesign plan, slice F4](../plans/2026-11-10-smart-routing-redesign.md#slice-f4-path-rules-and-generated-routes)).** The per-model route manifest is gone. The package ships model-free path rules (`runtime/routing_routes.json`: harness, provider, pool, account, windows; no model, effort, endpoint or demand). The operator's one-shot `qualify_path` records a path's measured demand beside the routing settings, and each `prepare` generates routes in memory from the qualified paths and the table's strategies. The activation gate's `route_manifest` capability now runs `runtime.routing_paths:gate` on the service's settings path. #227 is superseded when F4 merges. The decision text above is kept as history; where this document still says "manifest route", read "generated route on a qualified path".
 6. **First window telemetry.** **Decided 2026-11-10 and built (#228):** the recommended `seed_window`, with the merged rules in [3.3](#seed-window). The recommendation as written: The collector learns a subscription window only from an attempt that has already settled, so the first managed launch on a route has no stored window (`window_unobserved`), and `prepare` stays `pending`. Something has to seed it; this is your decision. Recommendation: a one-shot operator op `seed_window{pool, window, used, limit, reset_at, length, event_id}`, with these limits:

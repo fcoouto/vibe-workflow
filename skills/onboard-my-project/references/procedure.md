@@ -210,7 +210,7 @@ affected choice as inapplicable or pending, respectively.
    or write anything. No writes nothing to routing. Yes applies the procedure's
    [enable steps](../../manage-usage-routing/references/smart-routing.md#enable-in-this-order)
    for the primary checkout, reports each unmet prerequisite as pending with its
-   concrete blocker (never as done), and reports Smart Router on only after the
+   concrete blocker (never as done), and reports Smart Routing on only after the
    readback. Record the answer, scope and provenance in the setup record and, on
    Yes, the pre-change routing revision and list as the undo.
 

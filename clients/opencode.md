@@ -285,7 +285,45 @@ When the launcher cannot confirm a launch it records `uncertain`. The hold then 
 
 ## Managed launcher
 
-[`runtime/opencode_launcher.py`](../runtime/opencode_launcher.py) runs one managed attempt on OpenCode (C.3 slice C3-3), and [`scripts/opencode_launch.py`](../scripts/opencode_launch.py) is its JSON command. It uses the host-neutral launcher core (`runtime/routing_launch.py`) and the routing service from `scripts.routing.managed_service`, so the project pin, the observations (built by the service's collector, never sent by the launcher) and the `seen` revisions passed through in the result all come from there. Package-tested only, with a fake server and the real routing command on temporary stores; it has not run on OpenCode.
+[`runtime/opencode_launcher.py`](../runtime/opencode_launcher.py) runs one managed attempt on OpenCode (C.3 slice C3-3), and [`scripts/opencode_launch.py`](../scripts/opencode_launch.py) is its JSON command. It uses the host-neutral launcher core (`runtime/routing_launch.py`) and the routing service from `scripts.routing.managed_service`, so the project pin, the observations (built by the service's collector, never sent by the launcher) and the `seen` revisions passed through in the result all come from there. It is package-tested with a fake server and the real routing command on temporary stores. On 16 November 2026 the real launcher completed one tiny request on each of this user's three OpenCode accounts: ChatGPT and Go as provider-managed fallback, and Claude as an included claim tagged `native_rows`. It refused a no-connection control with nothing sent. Production isolation and the canary remain unqualified.
+
+### Launch a managed worker
+
+Load in a [managed project](../policies/03-agent-delegation.md#managed-projects) before an OpenCode coordinator starts a worker or reviewer. Routing chooses the model and effort; the launcher starts the worker, waits for it and settles the attempt.
+
+1. From the package root, print the checkout's routing scope once:
+
+   ```sh
+   python3 -I -B -c 'import sys; sys.path.insert(0, "."); from runtime import routing_observations as r; print(r.assignment_scope(sys.argv[1]))' /absolute/checkout
+   ```
+
+2. Launch with one JSON request on stdin:
+
+   ```sh
+   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"attempt_id":"<new id>","task":"<task id>","scope":"<scope>"},"job":{"role":"<specialist id>","profile":<task profile>},"prompt":"<worker brief>"}' \
+     | python3 -I -B scripts/opencode_launch.py
+   ```
+
+   - `checkout`: the managed checkout's absolute path. `prompt`: the worker brief, non-empty.
+   - `assignment`: a fresh `attempt_id` for this one launch, the `task` it serves and the `scope` from step 1. For a model and effort the user explicitly chose, add `choice` (`provider`, `model`, `effort`, `harness`, `funding`); routing admits exactly that or answers `explicit_choice_unavailable`.
+   - `job`: the role and task profile, filled in as for the [native bridge](claude-code.md#native-routing-bridge).
+   - Optional: `workflow` (a planned job's locator; `"planned": true` requires it, else `workflow_required`), `constraints` and `profile`.
+
+   Never add observations, a catalog or a route. The command takes no arguments: any argument is `usage_error` (exit 2).
+3. Act on the one JSON result. The worker's work is in the checkout; the result never carries the token, the server password or the prompt.
+
+| Result | Meaning | Next action |
+| --- | --- | --- |
+| `unmanaged` (`project_not_managed`) | Not a managed project; nothing was started. | Keep the unmanaged path. |
+| `pending` (`reasons` may say why) or `blocked` before dispatch, such as `authority_not_required`, `host_unhealthy`, `profile_not_enforced`, `catalog_mismatch` or `route_not_entitled` | Nothing was sent; an admitted hold is closed. | Act once as the [Smart Routing reply table](../skills/manage-usage-routing/references/smart-routing.md#what-the-coordinator-does-with-each-reply) says; otherwise report and hold. |
+| `recorded` | Sent and settled. | Review the worker's output. |
+| `recorded` with `failed: true` (`host_turn_failed`) | Sent and settled as sent, but the turn ended without success; it may be charged. | Do not relaunch the same attempt; report it. |
+| `recorded` with `turn_outcome: unknown` | The host recorded no outcome. | Check the output before relying on it. |
+| `recorded` with `not_entitled: true` | The account is not entitled to that model; `entitlement_mark` says whether the route is now left out. | Report it; nothing is retried on another route. |
+| `uncertain` (`launch_unconfirmed`) | The launch could not be confirmed; its capacity stays held. | Never relaunch it. Report `command`, the operator op only the user runs. |
+| `blocked` `interrupted` (exit 1) | The command was stopped; the server is stopped and the hold recorded. | Report it. |
+
+### How a launch runs
 
 The launch, in order. A refusal before `dispatch` sends nothing and closes any admitted hold with `not_dispatched`:
 
@@ -366,7 +404,7 @@ The shipped rules include the model-free path `opencode-go-subscription`: provid
 
 - **Account fact.** Every subscription route, on every client, needs a current account fact for that path, account and pool, at eligibility and again just before dispatch (`runtime/subscription_billing.py`). Since the 15 November account amendment it reports the account's own paid-overflow setting rather than requiring it to be disabled. OpenCode paths use their selected-account producer (above); without its current fact a route is `billing_unverified`. A zero budget, absent credit or a post-send cost is not that fact. The shared `claude-subscription` pool's readings from the native Claude reader are bound to that native account and are never used for an OpenCode route; OpenCode's own unbound readings never count for the native route.
 - **Demand.** The path is `demand_scope: per_model`: Go's allowance depends on the model, so its measured demand applies to a model only once a per-model mapping is verified. None is, so its included demand is unverified (`demand_unverified`): an account-verified route could only be provider-managed fallback, and without the producer's current account fact the Go route is refused earlier (`billing_unverified`).
-- **Readings.** The launcher reads `GET /api/experimental/usage/limits` through its own host only for a kept Go route whose readings are missing or stale, outside `--serve`, and only when a qualified meter binding (rolling or fixed semantics, lengths, original observation time) exists. None does, so nothing is read or stored and the route's included quota stays unknown (`window_unobserved`; fallback only for a verified account, and refused earlier as `billing_unverified` without the producer's current account fact). A recovery `seed_window` cannot seed these constraints: they have no host length.
+- **Readings.** The launcher's own included-quota read of `GET /api/experimental/usage/limits` (for a kept Go route whose readings are missing or stale, outside `--serve`) needs a qualified meter binding (rolling or fixed semantics, lengths, original observation time). None exists, so the launcher reads nothing and Go's included quota stays unknown (`window_unobserved`; fallback only for a verified account, and refused earlier as `billing_unverified` without the producer's current account fact). Separately, the OpenCode account producer reads the same endpoint during Go acquisition, only for the refuse-before-send `quota_exhausted` gate ("Quota" above); that reading never creates headroom or an included claim. A recovery `seed_window` cannot seed these constraints: they have no host length.
 - **Connection.** Listing an `opencode-go` model only puts the harness on the host's set; it proves no connection, entitlement or billing boundary. A reading is accepted only for the path's qualified account (a digest of the workspace id).
 
 The synthetic launch tests supply these producers with labelled code-level doubles; that proves the package flow, not a Go binding. The evidence and gaps are in the [capability matrix](../docs/smart-routing-capability-matrix.md#opencode-go-binding-assessment-f45-step-1-11-november-2026).

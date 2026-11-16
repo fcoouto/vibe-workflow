@@ -1,6 +1,8 @@
 # Smart Routing — baseline and feasibility (Task 0.1)
 
-Plan: [Smart Routing implementation plan](superpowers/plans/2026-11-08-smart-routing.md) v1.7. Design: [Smart Routing design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) v1.5. Recorded 2026-11-08.
+> Historical. Current behaviour: validation [Edit 15](smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback) and [policy 03](../policies/03-agent-delegation.md#managed-projects).
+
+Plan: [Smart Routing implementation plan](superpowers/plans/2026-11-08-smart-routing.md) (deleted in `11a8927c`; see Git history) v1.7. Design: [Smart Routing design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) (deleted in `11a8927c`; see Git history) v1.5. Recorded 2026-11-08.
 
 ## Implementation baseline
 
