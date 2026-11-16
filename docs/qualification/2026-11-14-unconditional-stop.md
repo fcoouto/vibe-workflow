@@ -19,7 +19,10 @@ before inference; see [the latest attempt](#fresh-race-only-attempt--15-november
 Native race qualification remains incomplete.
 A Git-backed rerun then passed that snapshot and failed at round 1 on a sandbox
 DNS error; see [the Git-backed attempt](#git-backed-race-attempt--16-november).
-Native race qualification remains incomplete.
+After a reviewed profile change, a counted retry allowance and non-primary request
+rejection, **the native late-completion race passed as mechanical evidence for an
+instrumented run**; see [the passed race](#native-race-passed--16-november). Original
+TUI, Claude and release qualification remain incomplete.
 
 ## Original 14 November outcome
 
@@ -726,4 +729,95 @@ Private result SHA-256:
 No repair, native server, race rerun or authentication change followed. Native race,
 original-TUI evidence, Claude qualification, final candidate review, the exact
 release-candidate full suite and release remain incomplete. PR #294 remains deferred;
+PR #310 remains draft/BLOCKED, unmerged and unreleased.
+
+## Native race passed — 16 November
+
+The user then approved whatever was necessary to deliver the gate, preserving the
+Preserve-login decision. Three more preparation-only changes were made in fresh
+private harness copies (production source unchanged), each with independent review.
+
+- **Resolver access:** the sandbox profile gained exactly one rule,
+  `(allow network-outbound (literal "/private/var/run/mDNSResponder"))`, per the DNS
+  diagnosis. Astra judged it acceptable for one anonymous public-route attempt: it
+  leaves outside-write, Claude-exec and `securityd` denials unchanged, lets the
+  sandbox resolve any hostname, and egress remains TCP 443 and port 53 by port, not
+  hostname-enforced.
+- **First attempt with it** reached the stop state and the held race-child callback,
+  then failed on the final request: `provider.transport: EPROTO: The TLS handshake
+  failed` (32 requests, 29 actions; result
+  `c4ef51ff14bc1cff0115159e9c97a7ce699f2262684e9d57fe9200cbec19a621`). The observer
+  vetoed the retry as designed, so the release was never sent. The same error class
+  occurred on 14 November under a profile with no network restriction.
+- **Bounded retry allowance:** pinned OpenCode 2.2.6's primary runner treats this
+  transport error as retryable. The observer now permits at most two native-approved
+  retries per run, only for transport errors on the exact route, debiting the shared
+  budget before permission and restoring the native decision only after the record is
+  written; anything else keeps the veto. Astra's first review rejected a version that
+  limited retries to primary requests, because compaction and overflow recovery can
+  retransmit a prepared request without re-entering either hook. The fix rejects any
+  non-primary request kind before transmission, so those paths are never admitted
+  (all 141 requests in every recorded run were primary). A combined retry-plus-
+  request ceiling of 80 is enforced at its exact boundary (79+1 passes, 80+1 fails).
+  58 offline checks passed, with no skips; the kind and ceiling tests were red first.
+  A prepared fixture copied from a used run's mutated files was caught by an
+  initial-bytes assertion and corrected before pinning.
+
+### Result
+
+One attempt, previously reviewed limits, anonymous zero-cost
+`opencode/deepseek-v4.1-flash-free#max`, spec
+`eb4268cc397a8542d942c845fcb1ff49107d803ca37dcc5f6ce2de3e34b56d46`, candidate
+`86be61fa9306853f018da1ccecd57081321efd80`, native OpenCode 2.2.6. Astra's exact-spec
+readiness review returned YES. The controller recorded
+`native_race_behavior_passed`: **49 model requests** (all primary, no retry used),
+**37 controller actions**, **117,535 ms**, arrival 2,799 ms, hold 12,140 ms.
+
+| Step | Verified result |
+| --- | --- |
+| Rounds 1–3 | Both files held at `reevaluation`, rounds 2. |
+| Architecture child | Original read-only subagent, three reads; both files released once (`held: []`). |
+| Round 4 | Fourth repair and check; no files held. |
+| Race child | Genuine root-parented native child. Its successful original edit `RACE = 0` to `RACE = 1` was physically written and its callback **held** before the subject saw it. |
+| Round 5 | Root edited both files to `VALUE = 5`, the check failed, and the root observed both at `stage: stop`, rounds 2, about 10.2 s after the hold. |
+| Release | The same key was released once, 1,968 ms after the root's stop observation, with identical held and released data; the successful completion record arrived in the release millisecond. |
+| After release | Stop state and held-file bytes identical to the stopped snapshot. |
+| Fresh child | Original subagent edit of `canary.py` denied (`stage: stop`), tool error id equal to the permission source id, no `permission.asked` event. |
+| Unrelated edit | `unrelated.py` edit allowed and completed (`VALUE = 0` to `1`); both stops unchanged. |
+
+Final bytes: `canary.py` `VALUE = 5` and `RACE = 1`; `sibling.py` `VALUE = 5`;
+`unrelated.py` `VALUE = 1`. Every status snapshot reported `lastError: null`. The root
+read `RACE = 1` before stopping, so the physical write preceded the stop; the
+successful completion was delivered after it. Release and the late tool record share
+one millisecond, so their order follows the awaited barrier, not timestamps.
+
+Cleanup: server exited zero unforced; the coordinator found the server, group and
+controller absent. Private database counts: zero accounts and credentials, four
+sessions, 71 messages, zero events. Source, protected and prior-evidence pins and six
+selected shared-file hashes matched during the run window.
+
+The coordinator re-derived the order, identities, denial and bytes from the raw logs
+before Astra independently accepted the claim as **mechanical native race evidence for
+this exact spec and instrumented run**, with no Critical or Important gap. Private
+SHA-256 bindings: result
+`793d7db9b27ca4321e2f7e6f5060ece6a6046e9d74ba6094afc4c910abf1a3ad`; post-run
+inspection `16388811f68d60ad5e5038648152feeb636a21a59fd5b7ce6361aa5cdb036ac1`.
+
+### Limits and corrections
+
+- A private inspection field said bytes were unchanged across the last three
+  checkpoints; only the stop state and the held files' bytes were. `unrelated.py`
+  changed on purpose.
+- After the run window, `~/.claude.json` differed from its recorded hash (modified
+  after the run ended). The cause is unestablished; no continuous-preservation claim
+  is made.
+- Not established: uninstrumented scheduling or every interleaving; cancellation of
+  writes admitted before the stop; native retry recovery, overflow or exhaustion
+  behavior (not exercised); exact wire-transmission counts; preservation beyond the
+  selected files and sampled boundaries; the original TUI, Desktop, Claude, an
+  alternate ladder, and the full-suite and release gates.
+- A sandbox with the resolver rule can resolve any hostname; the allowance is specific
+  to this disposable run.
+
+The allocation is closed; unused capacity renews nothing. PR #294 remains deferred;
 PR #310 remains draft/BLOCKED, unmerged and unreleased.

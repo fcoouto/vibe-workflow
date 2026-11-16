@@ -89,12 +89,12 @@ against old state. Keep failed receipts and the ignored task ledger intact.
 
 - [x] Implement only the minimal disposable scheduling barrier after source-backed hook-order inspection.
 - [x] Self-test its matching, one-shot release, timeout and no-field-mutation behavior.
-- [ ] In a fresh private fixture, reach genuine re-evaluation, complete the required original read-only architecture child and perform the fourth repair/check. Never seed or restore gate state.
-- [ ] Admit a genuine child edit, verify its physical marker write and hold that same successful callback before the unchanged subject sees it. Correlate root/child, permission source, tool call and callback identity.
-- [ ] While held, reach final stop on both files through the fifth real repair/check. Save complete held state and file bytes, then release the original callback once with every field unchanged.
-- [ ] Require real child completion, identical stopped state/bytes and a fresh native child edit denial afterward, without a matching approval request. Require an unrelated edit to succeed with matching allowed permission, completed tool identity and exact intended byte change; both stopped files must remain unchanged.
-- [ ] Verify protected/prior/shared fingerprints, no internal adapter error, inactive actors and clean owned-server exit/reaping/group absence. Retain separately any preservation uncertainty or forced cleanup.
-- [ ] Obtain independent read-only acceptance of correlated raw evidence. A passed race case does not qualify the UI or authorize release.
+- [x] In a fresh private fixture, reach genuine re-evaluation, complete the required original read-only architecture child and perform the fourth repair/check. Never seed or restore gate state.
+- [x] Admit a genuine child edit, verify its physical marker write and hold that same successful callback before the unchanged subject sees it. Correlate root/child, permission source, tool call and callback identity.
+- [x] While held, reach final stop on both files through the fifth real repair/check. Save complete held state and file bytes, then release the original callback once with every field unchanged.
+- [x] Require real child completion, identical stopped state/bytes and a fresh native child edit denial afterward, without a matching approval request. Require an unrelated edit to succeed with matching allowed permission, completed tool identity and exact intended byte change; both stopped files must remain unchanged.
+- [x] Verify protected/prior/shared fingerprints, no internal adapter error, inactive actors and clean owned-server exit/reaping/group absence. Retain separately any preservation uncertainty or forced cleanup.
+- [x] Obtain independent read-only acceptance of correlated raw evidence. A passed race case does not qualify the UI or authorize release.
 - [x] Independently assess the failed attempt's raw identities, bytes and preservation; retain unexecuted race/UI limits.
 
 This proves a physical write **before** stop with completion notification **after**
@@ -129,7 +129,7 @@ stop. It does not prove prevention of physical writes already admitted.
 
 ## Current State
 
-**Latest fresh race failed before inference; its allocation is closed.**
+**Native race passed (instrumented); original TUI, Claude, final review, full suite and release remain.**
 Astra's strategy review
 supports separating the required layers, not changing the gate to accommodate
 its harness. Existing source/tests and the sequential native flow provide
@@ -250,6 +250,17 @@ accepted the failed-run record, not race qualification. A changed profile needs
 preparation, independent review and a fresh allocation and approval. See
 [the attempt](../../qualification/2026-11-14-unconditional-stop.md#git-backed-race-attempt--16-november) and
 [the DNS diagnosis](../../qualification/2026-11-14-unconditional-stop.md#sandbox-dns-diagnosis--16-november).
+
+Task 3 then completed under the user's broad delivery authority: a reviewed
+resolver-socket profile rule, a counted two-retry allowance for transport errors, and
+fail-closed rejection of non-primary request kinds (after Astra found compaction can
+retransmit a prepared request without re-entering any hook). The single attempt passed
+(49 requests, 117 s): physical write before the stop, held successful callback
+delivered after it, stop state and bytes preserved, fresh child edit denied without
+approval, unrelated edit allowed. The coordinator re-derived the evidence from raw
+logs and Astra accepted it as mechanical evidence for this instrumented run. It does
+not cover uninstrumented scheduling, the TUI, Claude, retry recovery or release. See
+[the passed race](../../qualification/2026-11-14-unconditional-stop.md#native-race-passed--16-november).
 
 ## Acceptance and stopping
 

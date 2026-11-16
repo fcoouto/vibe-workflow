@@ -59,6 +59,14 @@ and one added resolver-socket allowance restores it; it is unapplied. Native rac
 qualification remains incomplete; see
 [the attempt](../docs/qualification/2026-11-14-unconditional-stop.md#git-backed-race-attempt--16-november) and
 [the DNS diagnosis](../docs/qualification/2026-11-14-unconditional-stop.md#sandbox-dns-diagnosis--16-november).
+After a reviewed resolver-socket profile rule, a counted retry allowance (two,
+transport only) and rejection of non-primary request kinds, the native
+late-completion race **passed** as mechanical evidence for an instrumented run
+(49 requests, 117 s): the held successful callback was delivered after the stop,
+the stop and bytes were preserved, a fresh child edit was denied without an
+approval prompt, and an unrelated edit succeeded. Original TUI, Desktop and Claude
+behavior, uninstrumented scheduling and release remain unqualified; see
+[the passed race](../docs/qualification/2026-11-14-unconditional-stop.md#native-race-passed--16-november).
 
 ## What it does
 
