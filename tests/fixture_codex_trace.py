@@ -49,7 +49,7 @@ def write_bundle(home, root, rollout, *, thread='native-thread', turn='native-tu
     rows = []
     for seq, payload in enumerate(events, 1):
         rows.append(dict(schema_version=1, seq=seq, wall_time_unix_ms=1000+seq, rollout_id=thread,
-            thread_id=None if seq == 1 else thread, codex_turn_id=turn if seq >= 3 else None, payload=payload))
+            thread_id=None if seq <= 2 else thread, codex_turn_id=turn if seq >= 3 else None, payload=payload))
     write_json(bundle/'manifest.json', manifest)
     write_events(bundle, rows)
     for ordinal, value in enumerate(payloads, 1):

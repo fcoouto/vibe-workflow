@@ -59,6 +59,27 @@ class CodexTraceTests(unittest.TestCase):
         for source in fact['sources'][2:]:
             self.assertEqual(source['sha256'], hashlib.sha256(Path(source['reference'].split('#')[0]).read_bytes()).hexdigest())
 
+    def test_official_thread_started_default_context_keeps_payload_identity(self):
+        self.assertIsNone(self.events[1]['thread_id'])
+        self.assertIsNone(self.events[1]['codex_turn_id'])
+        self.assertEqual(self.fact()['call_id'], 'exec-inner')
+        for field, value in (('thread_id', 'native-thread'), ('thread_id', 'foreign'),
+                             ('codex_turn_id', 'native-turn'), ('codex_turn_id', 'foreign')):
+            rows = deepcopy(self.events); rows[1][field] = value
+            write_events(self.bundle, rows)
+            with self.subTest(field=field, value=value), self.assertRaises(codex.ObservationError):
+                self.fact()
+        rows = deepcopy(self.events); rows[1]['payload']['thread_id'] = 'foreign'
+        write_events(self.bundle, rows)
+        with self.assertRaises(codex.ObservationError):
+            self.fact()
+        write_events(self.bundle, self.events)
+        path = self.bundle/'payloads/1.json'
+        metadata = json.loads(path.read_bytes()); metadata['thread_id'] = 'foreign'
+        write_json(path, metadata)
+        with self.assertRaises(codex.ObservationError):
+            self.fact()
+
     def test_wrong_duplicate_conflicting_and_partial_relations_fail_closed(self):
         variants = []
         for index, key, value in (
