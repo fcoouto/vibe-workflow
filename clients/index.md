@@ -12,6 +12,7 @@ For workspace preparation or a checkout-affecting operation, including review-on
 | [Claude Code](claude-code.md) | Claude Code startup activates the workflow, or you implement, validate or diagnose its adapter. |
 | [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch. Not a startup or onboarding client. |
 | [OpenCode escalation gate](opencode-escalation-gate.md) | You install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. |
+| [OpenCode context reminders](opencode-context-reminders.md) | You test or diagnose the experimental OpenCode task-record context reminder. |
 
 The [workspace requirements](workspace-requirements.md) list what every installed client needs; `prepare-my-workspace` and `onboard-my-project` read it through `workflow.py workspace status`.
 

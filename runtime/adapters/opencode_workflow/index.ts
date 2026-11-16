@@ -9,6 +9,8 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DEFAULT_SETTINGS, Gate, derivedSession, isCheck, parseSettings, resetRequest } from "./gate.ts"
 import type { GateSettings, Route } from "./gate.ts"
+import { createContextReminder, parseBinding } from "./context.ts"
+import type { Reminder } from "./context.ts"
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const FEATURE = "escalation_gate"
@@ -23,7 +25,7 @@ const FINISHED = "session.execution.succeeded"
 const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+\/-]{0,127}$/
 
-type Config = { featureStatus?: (directory: string) => Promise<unknown> }
+type Config = { featureStatus?: (directory: string) => Promise<unknown>; contextReminder?: unknown }
 
 /** The route a `model.request` names, or null when it is not one. */
 export function routeOf(model: unknown): Route | null {
@@ -245,6 +247,22 @@ export function createWorkflowPlugin(config: Config = {}) {
         }
       }))
 
+      // Test-only pointer reminder for one explicitly bound root; inactive without a valid binding, independent of the gate.
+      let reminder: Reminder | null = null
+      let contextHook: { dispose(): Promise<void> } | null = null
+      const binding = parseBinding(config.contextReminder ?? ctx?.options?.contextReminderTestBinding)
+      if (binding) {
+        const bound = createContextReminder(binding,
+          (sessionID) => within(Promise.resolve().then(() => ctx.session.get({ sessionID })), LOOKUP_TIMEOUT_MS),
+          (code) => { lastError = code })
+        try {
+          contextHook = await ctx.session.hook("context", async (event: any) => {
+            try { await bound.apply(event) } catch { lastError = "context_reminder_failed" }
+          })
+          reminder = bound
+        } catch { lastError = "context_hook_unavailable" }
+      }
+
       // The feature is read in the background; until it resolves as effective, every hook returns at once.
       void Promise.resolve().then(() => featureStatus(directory)).then(async (report) => {
         settings = activeSettings(report)
@@ -269,6 +287,8 @@ export function createWorkflowPlugin(config: Config = {}) {
         eventChannelAvailable = false
         gate = null
         events.abort()
+        reminder?.dispose()
+        void Promise.resolve(contextHook?.dispose()).catch(() => {})
       }
     },
   }
