@@ -320,7 +320,7 @@ Load in a [managed project](../policies/03-agent-delegation.md#managed-projects)
 | `recorded` with `failed: true` (`host_turn_failed`) | Sent and settled as sent, but the turn ended without success; it may be charged. | Do not relaunch the same attempt; report it. |
 | `recorded` with `turn_outcome: unknown` | The host recorded no outcome. | Check the output before relying on it. |
 | `recorded` with `not_entitled: true` | The account is not entitled to that model; `entitlement_mark` says whether the route is now left out. | Report it; nothing is retried on another route. |
-| `uncertain` (`launch_unconfirmed`) | The launch could not be confirmed; its capacity stays held. | Never relaunch it. Report `command`, the operator op only the user runs. |
+| `uncertain` (`launch_unconfirmed`) | The launch could not be confirmed; its capacity stays held. | Never relaunch it. Report `command`, the operator op, which runs only on the user's explicit request. |
 | `blocked` `interrupted` (exit 1) | The command was stopped; the server is stopped and the hold recorded. | Report it. |
 
 ### How a launch runs

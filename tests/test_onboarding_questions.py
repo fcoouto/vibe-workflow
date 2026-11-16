@@ -44,8 +44,10 @@ class OnboardingQuestionTests(unittest.TestCase):
         self.assertIn("- Yes. Route this project's workers through Smart Router.", text)
         for required in ("pending", "charge", "advisory", "managed launcher", "machine", "readback",
                          "one-way `authority_required`", "cannot be undone",
-                         "enrolment integrated in the primary checkout", "never copy the routing list"):
-            self.assertIn(required, text.lower())
+                         "enrolment integrated in the primary checkout", "never copy the routing list",
+                         "only on the machine and for the user that gave it", "is not consent here",
+                         "its own refusal code and resume condition", "`managed: true`"):
+            self.assertIn(required, ' '.join(text.lower().split()))  # wrapped prose reads as one line
 
     def test_the_smart_router_question_links_resolve(self):
         links = re.findall(r"\]\(([^)#\s]+)(?:#([^)\s]+))?\)", self.question(7))
@@ -61,6 +63,7 @@ class OnboardingQuestionTests(unittest.TestCase):
         cases = (PACKAGE / "assets/harness-evaluation/cases.md").read_text(encoding="utf-8")
         self.assertIn("| Smart Router onboarding |", cases)
         self.assertIn("after the merge-permission question", cases)  # the cleanup case's wording still holds
+        self.assertIn("a Yes recorded on another machine or by another user is asked again", cases)
 
 
 if __name__ == "__main__":

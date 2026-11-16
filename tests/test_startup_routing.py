@@ -13,8 +13,7 @@ from tests import test_minimal_default, test_startup as startup_fixtures
 
 PREFIX = '\nSmart Routing: managed project. Delegate every worker or reviewer only through '
 CLAUDE = PREFIX + 'the native bridge (clients/claude-code.md#native-routing-bridge).'
-CODEX = PREFIX + ('`workflow.py delegation prepare`, or the native bridge for a startup-only checkout '
-                  '(clients/codex.md).')
+CODEX = PREFIX + '`workflow.py delegation prepare`, or the native bridge without runtime state (clients/codex.md).'
 LAUNCHER = PREFIX + 'the managed launcher (clients/opencode.md#managed-launcher).'
 
 
@@ -84,7 +83,7 @@ class OrientTests(unittest.TestCase):
 class StartupBudgetTests(unittest.TestCase):
     """F9: the line is appended after orient's 150-word check, so each client's managed total is pinned here: the
     line adds exactly these words and the whole orientation stays within the 150-word budget."""
-    LINE_WORDS = {'codex': 23, 'claude-code': 15}
+    LINE_WORDS = {'codex': 22, 'claude-code': 15}
 
     def orientation(self, fixture_class):
         fixture = fixture_class('test_unenrolled_is_silent_and_read_only')
@@ -110,3 +109,23 @@ class StartupBudgetTests(unittest.TestCase):
                 self.assertEqual(managed, plain + startup_routing.LINE + startup_routing.HOST_PATHS[client])
                 self.assertEqual(len(managed.split()) - len(plain.split()), self.LINE_WORDS[client])
                 self.assertLessEqual(len(managed.split()), 150)
+
+    def test_the_codex_runtime_orientation_with_the_line_stays_within_150_words(self):
+        from runtime.adapters import codex
+        from tests import test_runtime
+        from tests.fixture_canonical_birth import test_acquisition
+        fixture = test_runtime.RuntimeTests('runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.canonical()
+        event = codex.normalize({'hook_event_name': 'SessionStart', 'source': 'startup', 'cwd': str(fixture.repo),
+                                 'session_id': 'session-1'})
+        settings = Path(tempfile.mkdtemp()).resolve() / 'routing' / 'settings.json'
+        self.addCleanup(__import__('shutil').rmtree, settings.parent.parent)
+        with mock.patch.object(startup_routing, 'settings_path', lambda: settings):
+            plain = startup.orient(event, state.PACKAGE, acquisition=test_acquisition(fixture.scope))
+            routing_settings.update(settings, dict(managed_projects=[str(Path(fixture.repo).resolve())]), 0)
+            managed = startup.orient(event, state.PACKAGE, acquisition=test_acquisition(fixture.scope))
+        self.assertIn('Runtime state:', plain)
+        self.assertEqual(len(managed.split()) - len(plain.split()), self.LINE_WORDS['codex'])
+        self.assertLessEqual(len(managed.split()), 150, (len(plain.split()), len(managed.split())))

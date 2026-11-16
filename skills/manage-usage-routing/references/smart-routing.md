@@ -2,7 +2,7 @@
 
 Smart Routing picks the model and effort of every worker and reviewer an agent starts in a *managed project*, on the user's subscriptions, and accounts for each launch. A project is managed when its checkout is on this machine's routing list (`managed_projects`). That list, the path qualifications and the one-way `authority_required` switch are machine state under `~/.local/state/vibe-workflow/`: nothing is committed to the project. The feature `smart_router` only reports it (`workflow.py features status smart_router`); it cannot be switched on or off through `features`.
 
-Only the user turns Smart Routing on or off for a project. Coordinators and workers never change the list, qualify a path or call a routing operator op on their own: an agent runs this procedure's `qualify_path`, `authority_required` and `set managed_projects` only on the user's explicit request in the conversation or an explicit Yes to onboarding question 7, and `reconcile_subscription` only on the user's explicit request. Coordinators and workers follow [Managed projects](../../../policies/03-agent-delegation.md#managed-projects).
+Only the user turns Smart Routing on or off for a project. Coordinators and workers never change the list, qualify a path or call a routing operator op on their own: an agent runs this procedure's `qualify_path`, `authority_required` and `set managed_projects` only on the user's explicit request in the conversation or an explicit Yes to onboarding question 7 given on this machine by this user (a Yes recorded elsewhere is not consent here), and `reconcile_subscription` only on the user's explicit request. Coordinators and workers follow [Managed projects](../../../policies/03-agent-delegation.md#managed-projects).
 
 ## What it does, per host
 
@@ -83,7 +83,7 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
    python3 -I -B scripts/workflow.py features status smart_router --cwd /absolute/checkout
    ```
 
-   shows `effective: true`. Report Smart Routing as on only after both.
+   shows `effective: true`. Report Smart Routing as on only after both. In the setup record, record the readback as `managed: true` and `effective: true` and any blocker by its refusal code only: never paste `status` or a refusal, which carry `settings.managed_projects` or `projects` paths.
 
 ## Refusals when adding
 

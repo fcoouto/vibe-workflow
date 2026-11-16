@@ -11,14 +11,13 @@ Smart Routing: [projects](references/smart-routing.md),
 and [managed projects](references/procedure.md#managed-projects);
 [Keychain setup](references/keychain-setup.md) for new connections;
 [delegation](references/delegation.md) for eligible proposals or native
-handoff; [foreground canary](references/first-canary.md) only when expressly
-selected.
+handoff; [foreground canary](references/first-canary.md) if expressly selected.
 
-Default Off. Reuse compatible setup or connect Keychain, then activate this
-checkout. Activation is the only approval: the agent then routes eligible tasks
-itself within the saved scope, funding and caps. Trusted admission checks
-scope, funding, price and independent review before transmission.
+Default Off. API Usage: reuse compatible setup or connect Keychain, then
+activate this checkout. Activation is the only approval: the agent then routes
+eligible tasks itself within the saved scope, funding and caps. Trusted
+admission checks scope, funding, price and independent review before transmission.
 
 Keep the coordinator and existing provider choices. Use approved existing
-credits, retain uncertain costs, warn about possible provider-side funding
+credits, retain uncertain costs, warn about provider-side funding
 spill. Never purchase credits, change billing or switch to a paid fallback.
