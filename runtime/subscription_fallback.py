@@ -66,14 +66,17 @@ def is_fallback(record):
     return isinstance(record, dict) and routing.FALLBACK in (record.get('reason_codes') or ())
 
 
+NATIVE_ROWS = 'native_rows'  # an included claim the collector drew on the native login's bound rows (Task 14)
+
+
 def terminal(record):
     """Whether closing this subscription record must write its pool's terminal boundary: a provider-managed fallback
-    (unknown consumption), or an included claim on the OpenCode Claude path, which draws on the native login's bound
-    rows that its own reply readings can never cover (Task 12, F1). Native completions mark through
-    `native_complete`."""
-    from runtime import opencode_account, routing_paths
+    (unknown consumption), or an included claim the collector recorded as drawn on the native login's bound rows
+    (`native_rows`, the OpenCode Claude claim of Task 11 D), which its own reply readings can never cover (Task 12,
+    F1). The basis is the admission's, never the current native state. A claim on the pool's stored rows keeps its
+    covering readings. Native completions mark through `native_complete`."""
     return is_fallback(record) or isinstance(record, dict) and record.get('billing_class') == 'included_subscription' \
-        and routing_paths.path_of(record.get('route')) == opencode_account.PATHS['claude']
+        and NATIVE_ROWS in (record.get('reason_codes') or ())
 
 
 def active_pools(data):

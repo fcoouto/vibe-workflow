@@ -300,7 +300,8 @@ class CollectorTest(Stores):
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=now)
         double, record = subscription_billing.double('oc'), dict(
-            route='opencode-claude-subscription:s', billing_class='included_subscription', pool='claude-subscription')
+            route='opencode-claude-subscription:s', billing_class='included_subscription', pool='claude-subscription',
+            reason_codes=['native_rows'])  # Task 14: the basis the collector records for this claim
         fresh = []
         with mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now: double(route, now)), \
                 mock.patch.object(opencode_account, 'native_current', lambda settings, now: True):
@@ -313,6 +314,42 @@ class CollectorTest(Stores):
                 found = self.collect('claude-agent', 'invented-claude-small', 'claude-agent-sdk via opencode')
                 fresh.append([window['fresh'] for window in found['pools']['claude-subscription']['windows']])
         self.assertEqual(fresh, [[True, True], [False, False], [True, True]])
+
+    def test_only_the_production_source_with_a_current_native_login_records_the_native_basis(self):
+        """Task 14: the claim's basis is decided at collection, never at completion: `native_rows` only on the exact
+        LocalSource with a current native login; a LocalSource subclass (a code-selected source) never sets it."""
+        now = int(time.time())
+        native_reading(self.settings, [dict(id=window, limit=1000, used=100, length=length, reset_at=now + 3600,
+                                            rolling=False, observed_at=now - 5, unit=collector.WINDOW_UNIT)
+                                       for window, length in (('5h', 18000), ('7d', 604800))], now)
+        routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
+                              evidence='synthetic-1', now=now)
+        double, subclass = subscription_billing.double('oc'), type('Covering', (collector.LocalSource,), {})
+        with mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now: double(route, now)):
+            for current, source, basis in ((True, collector.LocalSource, True), (False, collector.LocalSource, None),
+                                           (True, subclass, None)):
+                with self.subTest(current=current, source=source.__name__), \
+                        mock.patch.object(opencode_account, 'native_current', lambda settings, now: current):
+                    found = collector.collect(str(self.root), dict(scope='s'), settings_path=self.settings,
+                                              ledger_path=self.ledger_path, source=source(self.settings), choices=[dict(
+                                                  provider='claude-agent', model='invented-claude-small', effort='high',
+                                                  harness='claude-agent-sdk via opencode', funding='subscription')],
+                                              harnesses=['claude-agent-sdk via opencode'])['observations']
+                    self.assertEqual([route.get('native_rows') for route in found['routes']], [basis])
+
+    def test_the_ledger_close_marks_only_a_native_basis_claim(self):
+        """Task 14: the shared `complete` finalization (launcher, served `record`, reconcile) reads the recorded
+        basis: a native-row claim writes the boundary, a stored-row claim of the same path does not."""
+        now = int(time.time())
+        for codes, marked in ((['native_rows'], True), ([], False)):
+            with self.subTest(codes=codes):
+                record = dict(attempt_id='a-%d' % len(codes), route='opencode-claude-subscription:s',
+                              reason_codes=codes, billing_class='included_subscription',
+                              pool='claude-subscription-%d' % len(codes))
+                data = dict(admissions=[record], holds={record['attempt_id']: dict(closed=True)})
+                subscription_fallback.after_record(data, dict(kind='complete', attempt_id=record['attempt_id']),
+                                                   self.settings, now)
+                self.assertEqual(collector.consumed_at(self.settings, record['pool']) > 0, marked)
 
     def test_opencode_claude_uses_native_rows_only_while_its_native_login_is_current(self):
         now = int(time.time())

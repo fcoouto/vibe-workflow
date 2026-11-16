@@ -149,6 +149,9 @@ def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, rea
     spec = item['spec']
     if item.get('fallback'):  # recorded distinctly: provider-managed overflow, never included headroom
         reasons = [*reasons, item.get('quota', 'quota_insufficient'), routing.FALLBACK]  # with its quota disposition
+    elif spec.get('native_rows') is True:  # an included claim on the native login's bound rows (Task 14)
+        from runtime import subscription_fallback
+        reasons = [*reasons, subscription_fallback.NATIVE_ROWS]
     credential = spec.get('credential') or {}
     ranked = mode == 'ranked'
     harnesses = assignment.get('allowed_harnesses') or []

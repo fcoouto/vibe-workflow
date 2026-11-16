@@ -42,7 +42,7 @@ RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
-                'next_request_bound', 'account_marker')  # the marker: in memory, from `shortlist`'s verified fact
+                'next_request_bound', 'account_marker', 'native_rows')  # the marker: from `shortlist`'s verified fact
 WINDOW_FIELDS = ('id', 'limit', 'used', 'length', 'reset_at', 'rolling', 'protected', 'organization',
                  'organization_revision', 'unit')
 # User decision 6 (C.3 design 7.1): the one-shot operator op `seed_window` stores a subscription window no host has
@@ -831,6 +831,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         if native is None and billing == 'included_subscription' and type(source) is LocalSource \
                 and opencode_account.family(spec) == 'claude' and opencode_account.native_current(settings_path, now):
             native = 'claude'  # Task 11 (D): the same login's account-bound native readings, never reply rows
+            route['native_rows'] = True  # Task 14: the claim's basis, kept in its admission record
         key = (spec['pool'], native)
         if key not in pools:
             windows = []

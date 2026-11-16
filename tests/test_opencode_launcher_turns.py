@@ -108,7 +108,7 @@ class ConsumptionTests(LauncherBase):
                                                                        status='allowed')))
 
     def test_an_opencode_claude_completion_marks_the_pool_even_when_its_reply_covers(self):
-        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.routes = [route(route='opencode-claude-subscription:s-claude', native_rows=True)]  # Task 14: its basis
         self.covering_reply()
         first = self.launch()
         self.assertEqual((first['state'], first['admission']['reserved'] != {}), ('recorded', True), first)
@@ -120,7 +120,7 @@ class ConsumptionTests(LauncherBase):
     def test_a_refused_attach_after_dispatch_still_marks_the_pool(self):
         """Task 13 (M1): nothing was sent, yet the closing `complete` marks an OpenCode Claude claim's pool (as for a
         fallback): an availability cost only, never over-admission."""
-        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.routes = [route(route='opencode-claude-subscription:s-claude', native_rows=True)]
         self.host.attach_ok = False
         result = self.launch()
         self.assertEqual((result['state'], result['reason']), ('blocked', 'attach_failed'), result)
@@ -136,6 +136,18 @@ class ConsumptionTests(LauncherBase):
         self.assertNotIn('dispatch', self.order)
         self.assertEqual(collector.consumed_at(self.settings, POOL), 0)
 
+    def test_a_stored_row_claim_is_covered_by_its_reply_and_never_marked(self):
+        """Task 14: an OpenCode Claude claim the collector did not draw on native rows (here a code source's stored
+        rows) keeps the pre-F1 covering: its reply covers it, no mark, and the next claim is included again."""
+        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.covering_reply()
+        first = self.launch()
+        self.assertNotIn(subscription_fallback.NATIVE_ROWS, first['admission']['reason_codes'])
+        self.assertTrue(first['admission']['reserved'], first)
+        self.assertEqual(collector.consumed_at(self.settings, POOL), 0)
+        second = self.launch(assignment=self.assignment('a2'))
+        self.assertTrue(second['admission']['reserved'], second)
+
     def test_another_path_with_a_covering_reply_is_unchanged(self):
         self.covering_reply()  # control: `claude-haiku-low` is no OpenCode Claude path; its own reading covers it
         self.assertEqual(self.launch()['state'], 'recorded')
@@ -144,10 +156,13 @@ class ConsumptionTests(LauncherBase):
     def test_the_shared_terminal_rule(self):
         """The ledger's `complete` finalization (and reconcile) marks fallback and OpenCode Claude included records."""
         native = dict(route='claude-native-subscription:x', billing_class='included_subscription', reason_codes=[])
-        opencode = dict(native, route='opencode-claude-subscription:x')
+        opencode = dict(native, route='opencode-claude-subscription:x',
+                        reason_codes=[subscription_fallback.NATIVE_ROWS])
         fallback = dict(native, reason_codes=['quota_unknown', routing.FALLBACK])
         self.assertEqual([subscription_fallback.terminal(item) for item in (native, opencode, fallback)],
                          [False, True, True])
+        stored = dict(opencode, reason_codes=[])  # Task 14: a claim on the pool's stored rows keeps its covering
+        self.assertFalse(subscription_fallback.terminal(stored))
 
 
 class VariantTests(LauncherBase):
