@@ -177,7 +177,7 @@ def validate(root=ROOT):
                  "scripts/repository_gate.py", "clients/repository-gate.md",
                  "scripts/routing.py", "runtime/routing_routes.json", "runtime/native_routing.py",
                  "runtime/opencode_account.py", "runtime/routing_activation.py", "scripts/opencode_launch.py",
-                 "runtime/adapters/opencode_plugin.ts",
+                 "runtime/adapters/opencode_plugin.ts", "runtime/startup_routing.py",
                  "skills/onboard-my-project/SKILL.md",
                  "skills/onboard-my-project/references/procedure.md",
                  "skills/onboard-my-project/references/apply-and-recovery.md",

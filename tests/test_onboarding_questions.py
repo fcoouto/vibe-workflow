@@ -42,7 +42,9 @@ class OnboardingQuestionTests(unittest.TestCase):
         text = self.question(7)
         self.assertIn("- No. Keep my current worker choices. (default)", text)
         self.assertIn("- Yes. Route this project's workers through Smart Router.", text)
-        for required in ("pending", "charge", "advisory", "managed launcher", "machine", "readback", "undo"):
+        for required in ("pending", "charge", "advisory", "managed launcher", "machine", "readback",
+                         "one-way `authority_required`", "cannot be undone",
+                         "enrolment integrated in the primary checkout", "never copy the routing list"):
             self.assertIn(required, text.lower())
 
     def test_the_smart_router_question_links_resolve(self):

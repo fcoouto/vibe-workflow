@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from runtime import routing_settings, startup, startup_routing, state
-from tests import test_minimal_default
+from tests import test_minimal_default, test_startup as startup_fixtures
 
 PREFIX = '\nSmart Routing: managed project. Delegate every worker or reviewer only through '
 CLAUDE = PREFIX + 'the native bridge (clients/claude-code.md#native-routing-bridge).'
@@ -79,3 +79,34 @@ class OrientTests(unittest.TestCase):
             routing_settings.update(settings, dict(managed_projects=[str(fixture.repo)]), 0)
             managed = startup.orient(event, state.PACKAGE, acquisition=acquired)
         self.assertEqual(managed, plain + CODEX)
+
+
+class StartupBudgetTests(unittest.TestCase):
+    """F9: the line is appended after orient's 150-word check, so each client's managed total is pinned here: the
+    line adds exactly these words and the whole orientation stays within the 150-word budget."""
+    LINE_WORDS = {'codex': 23, 'claude-code': 15}
+
+    def orientation(self, fixture_class):
+        fixture = fixture_class('test_unenrolled_is_silent_and_read_only')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.enroll()
+        event = fixture.adapter.normalize(fixture.payload)
+        settings = Path(tempfile.mkdtemp()).resolve() / 'routing' / 'settings.json'
+        self.addCleanup(__import__('shutil').rmtree, settings.parent.parent)
+        with mock.patch.object(startup_routing, 'settings_path', lambda: settings):
+            plain = startup.orient(event, state.PACKAGE)
+            routing_settings.update(settings, dict(managed_projects=[str(fixture.repo)]), 0)
+            managed = startup.orient(event, state.PACKAGE)
+        return fixture.client, plain, managed
+
+    def test_each_clients_managed_total_is_pinned_within_150_words(self):
+        self.assertEqual({client: len((startup_routing.LINE + startup_routing.HOST_PATHS[client]).split())
+                          for client in self.LINE_WORDS}, self.LINE_WORDS)
+        self.assertEqual(len((startup_routing.LINE + startup_routing.OTHER_HOSTS).split()), 15)
+        for fixture_class in (startup_fixtures.StartupTests, startup_fixtures.ClaudeStartupTests):
+            client, plain, managed = self.orientation(fixture_class)
+            with self.subTest(client):
+                self.assertEqual(managed, plain + startup_routing.LINE + startup_routing.HOST_PATHS[client])
+                self.assertEqual(len(managed.split()) - len(plain.split()), self.LINE_WORDS[client])
+                self.assertLessEqual(len(managed.split()), 150)

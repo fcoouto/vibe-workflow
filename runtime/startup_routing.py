@@ -2,7 +2,9 @@
 
 The line names the client's managed delegation path when `routing_settings.managed_project` holds for the checkout,
 the same answer `scripts/routing.py status --project` gives (unreadable settings count as managed there and here).
-Any error adds nothing: routing state never fails or delays startup.
+Any error adds nothing: routing state never fails or delays startup. The line is appended after `startup.orient`'s
+150-word check (which guards the Codex runtime orientation) and adds 23 words for Codex and 15 for every other client;
+`tests/test_startup_routing.py` pins each client's managed total within those 150 words.
 """
 
 LINE = '\nSmart Routing: managed project. Delegate every worker or reviewer only through '

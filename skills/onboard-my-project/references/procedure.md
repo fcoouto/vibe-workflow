@@ -200,19 +200,26 @@ affected choice as inapplicable or pending, respectively.
    model and effort from routing, on your subscriptions. It is machine-level
    state, not committed. On Codex and Claude Code it is advisory: routing chooses
    and records, but cannot block a launch the agent makes anyway. OpenCode
-   workers run only through the managed launcher. State the charge risk from the
+   workers run only through the managed launcher. Yes also turns on this
+   machine's one-way `authority_required` switch, which cannot be undone, and
+   qualifies this machine's subscription paths; both apply machine-wide. State
+   the charge risk from the
    [Smart Routing procedure](../../manage-usage-routing/references/smart-routing.md#charge-risk-acknowledge-before-enabling):
-   a route with unknown included quota may be charged by the provider. Any
-   missing prerequisite stays pending.
+   a route admitted without known included quota may be charged by the
+   provider. Any missing prerequisite stays pending.
    - No. Keep my current worker choices. (default)
    - Yes. Route this project's workers through Smart Router.
    Reuse a recorded answer. Unanswered stays pending: do not apply the default
-   or write anything. No writes nothing to routing. Yes applies the procedure's
+   or write anything. No writes nothing to routing. A Yes is the user's explicit
+   request for the procedure's
    [enable steps](../../manage-usage-routing/references/smart-routing.md#enable-in-this-order)
-   for the primary checkout, reports each unmet prerequisite as pending with its
-   concrete blocker (never as done), and reports Smart Routing on only after the
-   readback. Record the answer, scope and provenance in the setup record and, on
-   Yes, the pre-change routing revision and list as the undo.
+   for the primary checkout; apply them only after step 5 has integrated the
+   enrolment there. Until then, and while a prerequisite is unmet, report Smart
+   Routing pending with its concrete blocker and the resume condition
+   "enrolment integrated in the primary checkout", never as on; report it on
+   only after the readback. Record the answer, scope and provenance in the setup
+   record and, on Yes, only the routing revision before the change and "added
+   this project's primary checkout"; never copy the routing list.
 
 Apply the Graphify and memory questions from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable

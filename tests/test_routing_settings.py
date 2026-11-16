@@ -377,6 +377,37 @@ class LinkedWorktreeTests(unittest.TestCase):
         os.mkfifo(gitdir / 'gitdir')
         self.assertIs(self.managed(planted), False)
 
+    def test_a_self_consistent_forged_chain_outside_the_common_worktrees_never_joins(self):
+        forged = self.root / 'forged-chain'  # F5: its own admin dir names it back and points at the managed common dir
+        admin = forged / 'x'
+        admin.mkdir(parents=True)
+        (forged / '.git').write_text('gitdir: %s\n' % admin)
+        (admin / 'gitdir').write_text('%s\n' % (forged / '.git'))
+        (admin / 'commondir').write_text('%s\n' % (self.primary / '.git'))
+        self.assertIs(self.managed(forged), False)
+        self.assertIs(self.managed(forged / 'inside'), False)
+
+    def test_an_empty_or_absent_list_walks_no_git_link(self):
+        with unittest.mock.patch.object(routing_settings, '_linked_primary', side_effect=AssertionError('walked')):
+            self.assertIs(routing_settings.managed_state(self.worktree, self.root / 'absent' / 'settings.json'), False)
+            routing_settings.update(self.path, dict(managed_projects=[]), 1)
+            self.assertIs(self.managed(self.worktree), False)
+
+    def test_link_files_are_type_checked_before_they_are_opened(self):
+        opened, real = [], os.open
+
+        def spy(path, *args, **kwargs):
+            opened.append(str(path))
+            return real(path, *args, **kwargs)
+        with unittest.mock.patch('os.open', side_effect=spy):
+            with self.assertRaises(ValueError):
+                routing_settings._small('/dev/null')  # a character device is refused before any open
+        self.assertNotIn('/dev/null', opened)
+        (self.root / 'stray-commondir').write_text('../..\n')
+        (self.gitdir / 'commondir').unlink()
+        (self.gitdir / 'commondir').symlink_to(self.root / 'stray-commondir')  # a symlinked link file is no link
+        self.assertIs(self.managed(self.worktree), False)
+
     def test_a_worktree_of_an_unlisted_repository_is_not_managed(self):
         other = self.root / 'other-primary'
         (other / '.git').mkdir(parents=True)

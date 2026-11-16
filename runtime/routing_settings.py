@@ -238,9 +238,11 @@ def _identity(path):
 
 
 def _small(path):
-    """The stripped text of a small regular Git link file; ValueError for anything else. Opened without blocking, so a
-    FIFO planted by a forged link is refused instead of waited on."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    """The stripped text of a small regular Git link file; ValueError for anything else. Its type is checked before it
+    is opened (a symlink, FIFO or device is never opened) and again after a non-blocking, no-follow open."""
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        raise ValueError('git_link_not_a_file')
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError('git_link_not_a_file')
@@ -256,8 +258,10 @@ def _linked_primary(target):
     """The primary checkout of the linked Git worktree holding `target` (a realpath), or None (O5).
 
     No Git process: walk up to the nearest `.git` entry. A directory is a primary checkout or a plain repository,
-    which the caller already matched. A `gitdir: <p>` file counts only when `<p>/gitdir` names this same `.git`
-    file back (by file identity), so a forged `.git` file never joins a list; then `<p>/commondir` gives the common
+    which the caller already matched; a submodule or nested repository inside a linked worktree therefore stops the
+    walk and is not managed through it. A `gitdir: <p>` file counts only when `<p>/gitdir` names this same `.git`
+    file back (by file identity) and `<p>` sits in the common directory's own `worktrees` folder (by identity), so
+    only a writer inside the primary's Git directory can make a link count; `<p>/commondir` gives that common
     directory, whose parent is the primary when that parent's `.git` is the common directory. Relative links resolve
     from the file's own directory. Bounded: one stat per parent until the `.git` entry, three small reads. Any
     error or mismatch is None: an unresolvable worktree is simply not a linked one."""
@@ -275,8 +279,10 @@ def _linked_primary(target):
             if _identity(os.path.join(gitdir, _small(gitdir / 'gitdir'))) != (info.st_dev, info.st_ino):
                 return None
             common = Path(os.path.join(gitdir, _small(gitdir / 'commondir'))).resolve()
-            found = _identity(common)
-            return common.parent if found is not None and _identity(common.parent / '.git') == found else None
+            found, admin = _identity(common), _identity(common / 'worktrees')
+            if found is None or admin is None or _identity(gitdir.parent) != admin:
+                return None  # an admin directory outside `<common>/worktrees`: a self-consistent forgery
+            return common.parent if _identity(common.parent / '.git') == found else None
     except (OSError, ValueError, RuntimeError):
         return None
     return None
@@ -323,6 +329,8 @@ def managed_state(path, settings_path):
     reports None as unavailable, never as on."""
     try:
         projects = read(settings_path)['managed_projects']
+        if not projects:
+            return False  # nothing managed: no path or Git link is read (startup and features stay lightweight)
         target = Path(path).resolve()
         if _within(target, projects):
             return True
