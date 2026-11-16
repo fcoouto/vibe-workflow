@@ -21,8 +21,10 @@ A Git-backed rerun then passed that snapshot and failed at round 1 on a sandbox
 DNS error; see [the Git-backed attempt](#git-backed-race-attempt--16-november).
 After a reviewed profile change, a counted retry allowance and non-primary request
 rejection, **the native late-completion race passed as mechanical evidence for an
-instrumented run**; see [the passed race](#native-race-passed--16-november). Original
-TUI, Claude and release qualification remain incomplete.
+instrumented run**; see [the passed race](#native-race-passed--16-november). The
+**original TUI case then passed** under a limited reconstructed-screen claim; see
+[the original TUI case](#original-tui-case-passed--16-november). Claude qualification
+remains held by the user's Preserve-login decision.
 
 ## Original 14 November outcome
 
@@ -821,3 +823,117 @@ inspection `16388811f68d60ad5e5038648152feeb636a21a59fd5b7ce6361aa5cdb036ac1`.
 
 The allocation is closed; unused capacity renews nothing. PR #294 remains deferred;
 PR #310 remains draft/BLOCKED, unmerged and unreleased.
+
+## Original TUI case passed — 16 November
+
+Under the same delivery authority and the unchanged Preserve-login decision, the
+original native TUI case was evidenced by a limited claim: **the captured original TUI,
+reconstructed at the recorded geometry, displayed a refusal associated by native tool
+layout, unique input and turn ordering with the independently correlated denied
+operation. No renderer-ID binding was available.** Astra approved this method (no
+witness, attached private server, a real model-free capture first) and independently
+accepted the final run.
+
+### Method and preparation
+
+- **Same server.** The TUI is the original OpenCode 2.2.6 binary, launched by a trusted
+  driver on a controlling pseudoterminal and attached to the owned server and root
+  session after the stop was reconstructed there (rounds 1–5 plus the read-only
+  architecture child). Nothing was reloaded or reseeded. The sandbox profile denies PTY
+  devices and was left unchanged: only the TUI child runs inside it.
+- **Capture.** Geometry is set before the child renders (48×200). Every PTY chunk is
+  indexed with monotonic time; input and `before_submit`/`settled` marks record drained
+  byte offsets. Raw bytes stay authoritative.
+- **Reconstructor and verifier** (private, capture-only, no product dependency). Replay
+  allows only the control families observed from the real TUI and returns `unverified`
+  for anything else, including features no real capture has exercised. The verifier
+  requires: no nonce or value on the baseline screen; the nonce exactly once inside a
+  message panel; the value only inside the user message; exactly one `Edit canary.py`
+  tool panel after it and before the next user panel; the refusal inside that panel
+  only, in one red error style, with no refusal marker elsewhere in the turn; no
+  concealed text; and every evidence cell readable (resolved RGB, contrast at least
+  3:1).
+- **Real captures.** A model-free idle and exit capture; an exploration with a throwaway
+  plugin denying `canary.py` edits (two real zero-cost requests); and a four-turn
+  exploration with a 60-line scrolling list, an inline read-tool line, the injected denial
+  and a closing turn (six real requests). The injected denials qualify rendering only, not
+  genuine gate stopping. The first exploration showed the real layout, including that the
+  new value is never shown in the tool panel because the edit never runs.
+- **Review path.** Five exact-spec reviews found real defects that were fixed before any
+  attempt: no tool-block identification, concealed and same-colour text, unhandled control
+  families, `CSI 3 J` erasing the visible screen, `1049` not restoring rendition, and
+  incomplete cleanup accounting. The third parser-corner finding was treated as a stuck
+  pattern, which led to the feature-qualification rule above and one focused cycle with
+  the broader limits documented instead of an open-ended corner hunt.
+- **First attempt failed.** It reached the stop, attached the TUI and ran the refusal turn
+  (33 requests; state and bytes unchanged; clean exit), but the controller failed its own
+  assertion because the collapsed reasoning part repeated the value, and a shared-file hash
+  changed. The attempt is retained as failed. A post-hoc verifier run on its capture
+  returned `verified`, which was informational and did not rescue the attempt.
+- **Amendments.** Astra approved checking assistant text only (reasoning is saved as
+  evidence and displayed repetition is caught by the screen verifier, which now also
+  rejects refusal markers outside the Edit panel) and exempting only
+  `/Users/fcouto/.claude.json` from byte equality.
+- **Hygiene incident.** I edited the closed attempt's controller in place while preparing
+  the next allocation. I restored it from byte-identical originals, reconstructed the
+  pre-edit shared verifier, and retained both; their hashes match the closed allocation's
+  pins.
+
+### Result
+
+One fresh attempt, anonymous zero-cost `opencode/deepseek-v4.1-flash-free#max`, 80 request
+admissions, 120 actions, 20 minutes, spec
+`9b544f35f96778afe9f90aef9a552ec6dad0c4885332f025cbb063d51512fc2a`, candidate
+`7d8c99e443e84f224d4f8f1af1d8a5a29272a3b9` (documentation differs from the race
+candidate; production hashes unchanged). Controller outcome `tui_case_passed`: **38
+primary requests**, no retries, **42 actions**, **174,538 ms**.
+
+| Step | Verified result |
+| --- | --- |
+| Stop | Production gate stop on both files (`stage: stop`, rounds 2) before the TUI attached. |
+| Refusal turn | Exactly one edit tool call, status error; permission denial carries the gate message, its source id equals the tool id; no approval prompt; stopped state and bytes identical. |
+| Screen | User panel rows 23–26 (zero-based) holds the nonce and value once. `← Edit canary.py`, rows 30–35, holds the full refusal in red; no refusal marker elsewhere in the turn. Match mode `full`. |
+| Reset turn | Typed root message: zero tool and permission records. Only `canary.py` released; the sibling's full stopped record and all bytes identical. |
+| Repair turn | `canary.py` 5 to 99 allowed, `python3 -B -m unittest test_canary` exit 0, status read; the sibling still stopped at rounds 2. |
+| Exit | TUI and driver exited 0 unforced; the frontend, driver and server process groups were absent. |
+
+Final bytes: `canary.py` `VALUE = 99`, `sibling.py` `VALUE = 5`, `unrelated.py`
+`VALUE = 0`. Private database: zero accounts and credentials, two sessions, 59 messages,
+zero events. The assistant's visible text was only `Done`; its collapsed reasoning
+repeated the value and is retained in the evidence.
+
+The coordinator re-derived the correlation, turn contents and bytes from the raw logs,
+and Astra independently accepted the run as native original-TUI evidence for this exact
+spec with no Critical or blocking Important gap. Private SHA-256 bindings: result
+`a5ef9c578f5ccaf55740695e14e0462e3e5c47dfdd1522ca2cd9780c8efe6cf7`; post-run
+inspection `873f8170c208e29cd0d42a93034b9bf67d62585b1fd2741822cacbc7cf512d51`.
+
+### Limitations
+
+1. Capture reconstruction, not direct pixel observation.
+2. OpenCode 2.2.6, the observed layout at 48×200, a baseline terminal and character-width
+   policy.
+3. Qualification covers observed terminal feature families; it does not prove every
+   parameter or state combination, or other width policies.
+4. Association is by layout, unique input, turn order and native tool correlation, not
+   renderer-ID binding. The value need not, and does not, appear in the tool panel.
+5. Visibility is operational: resolved RGB colours, no conceal, contrast at least 3:1. It
+   is not an accessibility certification.
+6. The 8-second attach and 2.5-second settle waits are heuristics. The verdict concerns the
+   recorded settled boundary, not every transient frame.
+7. Match mode was `full`; a fragment match would be a narrower claim.
+8. Exploration used real requests (two and six) and an injected denial, so it qualifies
+   rendering only; genuine production-gate stopping comes from this run.
+9. Stored reasoning may repeat the value while undisplayed. Acceptance checks assistant
+   text and visible repetition separately.
+10. `/Users/fcouto/.claude.json` differed before and after the run. It is the live Claude
+    Code session's own configuration, written outside the sandbox. This is an
+    **unattributed volatile live-session file change; it is not claimed benign, unchanged
+    or continuously preserved.** All other shared files matched during the run window.
+11. Cleanup and database counts are coordinator observations; anonymous zero-cost routing
+    rests on configuration, admission records and catalog receipts, not a billing audit.
+12. This covers one bounded run. It grants no broader qualification, badge or ranking claim
+    and does not cover Claude, Desktop, uninstrumented scheduling or release gates.
+
+The allocation is closed; unused capacity renews nothing. PR #294 remains deferred;
+PR #310 remains draft/BLOCKED until its review completes.

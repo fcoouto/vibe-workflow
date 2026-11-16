@@ -64,9 +64,14 @@ transport only) and rejection of non-primary request kinds, the native
 late-completion race **passed** as mechanical evidence for an instrumented run
 (49 requests, 117 s): the held successful callback was delivered after the stop,
 the stop and bytes were preserved, a fresh child edit was denied without an
-approval prompt, and an unrelated edit succeeded. Original TUI, Desktop and Claude
+approval prompt, and an unrelated edit succeeded. Desktop and Claude
 behavior, uninstrumented scheduling and release remain unqualified; see
 [the passed race](../docs/qualification/2026-11-14-unconditional-stop.md#native-race-passed--16-november).
+The original OpenCode TUI case also passed under a limited reconstructed-screen claim at
+48×200: a refusal visibly associated by layout, unique input and turn order with the
+denied edit (no renderer-ID binding), a typed reset releasing only the named file, and a
+repair with the sibling still stopped; see
+[the original TUI case](../docs/qualification/2026-11-14-unconditional-stop.md#original-tui-case-passed--16-november).
 
 ## What it does
 

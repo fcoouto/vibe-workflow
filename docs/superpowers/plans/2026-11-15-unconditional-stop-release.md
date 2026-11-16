@@ -57,7 +57,7 @@ behavioral requirement and changes only qualification organization.
 | Stop denial and late-completion invariants | Existing gate/adapter tests, including `tests/opencode_workflow/plugin.test.ts:640–697`; reuse only after source, test and execution-assumption comparison. Not a substitute for native concurrency. |
 | Native permissions, lineage and explicit continuation | The recorded 57-request flow covers selected sequential controls. Bind reuse to its exact sources and scope; do not relabel it race or new-TUI proof. |
 | Original completion delivered after genuine stop | Task 3, independently admissible after common preflight and its fresh execution approval. |
-| Visible native refusal and separate user continuation | Task 4; its evidence method remains unresolved. Task 3 does not depend on resolving it. |
+| Visible native refusal and separate user continuation | Task 4 passed with a limited reconstructed-screen claim (no renderer-ID binding); see the report. |
 | Claude bridge execution | Task 2 remains held by Preserve login; no OpenCode result substitutes for it. |
 | Preservation, route/budget enforcement and cleanup | Required for every applicable live case; incomplete evidence prevents that case passing. |
 | Overall qualification and release | Require every required layer, independent evidence acceptance and the exact release-candidate full suite. No averaging or partial-pass release. |
@@ -100,17 +100,23 @@ against old state. Keep failed receipts and the ignored task ledger intact.
 This proves a physical write **before** stop with completion notification **after**
 stop. It does not prove prevention of physical writes already admitted.
 
-## Task 4: Observe original native TUI — evidence method pending
+## Task 4: Observe original native TUI — passed (limited claim)
 
-- [ ] Review a bounded evidence procedure before launch. It must correlate the actual visible native tool-error block and relevant prompt/tool-input context with this root turn and native permission/tool/message records. Retain continuous visible context and native records, not assistant narration or an isolated substring.
-- [ ] If proposing a witnessed interaction instead of automated capture, specify the witness's actions, retained evidence and independent acceptance checks; obtain explicit participant and method approval. This plan does not grant either.
-- [ ] Require the method to reject old-refusal redraws, assistant quotations and erased/relocated text; unsupported or ambiguous capture remains unverified. Do not repeat an open-ended source hunt or require internal renderer access merely as a preferred implementation.
-- [ ] With common preflight and fresh UI execution approval satisfied, use a new private original-TUI case with two genuinely stopped files. Retain frontend provenance; do not assume a stopped race runtime remains available.
-- [ ] Submit a distinct edit request. Require the new native refusal visibly associated with that turn/tool, native denial, unchanged stopped state/bytes and no matching permission approval request.
-- [ ] Separately type a root-user request to reset only canary.py and acknowledge without editing. Require only canary released, sibling still stopped, and no tool/permission/byte change or pending-edit resumption.
-- [ ] Type a distinct repair request. Require the original edit to 99 and immutable `python3 -B -m unittest test_canary` exit 0 while sibling remains stopped at 5.
-- [ ] Verify preservation, actor settlement and clean original-TUI/server exit, reaping and absent owned groups. Forced shutdown preserves safety but does not qualify clean frontend exit.
-- [ ] Obtain independent read-only acceptance of visible and native evidence. If association remains ambiguous, record the UI case incomplete; neither a race pass nor human acknowledgment fills the gap.
+- [x] Review a bounded evidence procedure before launch. It must correlate the actual visible native tool-error block and relevant prompt/tool-input context with this root turn and native permission/tool/message records. Retain continuous visible context and native records, not assistant narration or an isolated substring.
+- [-] If proposing a witnessed interaction instead of automated capture, specify the witness's actions, retained evidence and independent acceptance checks; obtain explicit participant and method approval. This plan does not grant either. Not used: automated capture was accepted.
+- [x] Require the method to reject old-refusal redraws, assistant quotations and erased/relocated text; unsupported or ambiguous capture remains unverified. Do not repeat an open-ended source hunt or require internal renderer access merely as a preferred implementation.
+- [x] With common preflight and fresh UI execution approval satisfied, use a new private original-TUI case with two genuinely stopped files. Retain frontend provenance; do not assume a stopped race runtime remains available.
+- [x] Submit a distinct edit request. Require the new native refusal visibly associated with that turn/tool, native denial, unchanged stopped state/bytes and no matching permission approval request.
+- [x] Separately type a root-user request to reset only canary.py and acknowledge without editing. Require only canary released, sibling still stopped, and no tool/permission/byte change or pending-edit resumption.
+- [x] Type a distinct repair request. Require the original edit to 99 and immutable `python3 -B -m unittest test_canary` exit 0 while sibling remains stopped at 5.
+- [x] Verify preservation, actor settlement and clean original-TUI/server exit, reaping and absent owned groups. Forced shutdown preserves safety but does not qualify clean frontend exit.
+- [x] Obtain independent read-only acceptance of visible and native evidence. If association remains ambiguous, record the UI case incomplete; neither a race pass nor human acknowledgment fills the gap.
+
+The method was a capture-only screen reconstruction on an attached private server, with a
+real model-free capture first; five exact-spec reviews fixed concrete defects, and the final
+run (38 requests, 174 s) passed with a limited association claim and no renderer-ID binding.
+A first attempt failed under its own controller rules and is retained. See
+[the original TUI case](../../qualification/2026-11-14-unconditional-stop.md#original-tui-case-passed--16-november).
 
 ## Task 5: Independent review and release preparation
 
@@ -129,7 +135,7 @@ stop. It does not prove prevention of physical writes already admitted.
 
 ## Current State
 
-**Native race passed (instrumented); original TUI, Claude, final review, full suite and release remain.**
+**Native race and original TUI passed (limited, recorded claims); Claude is held by Preserve-login. Release scope needs a user decision: the stop itself is already in tag 0.1.41.**
 Astra's strategy review
 supports separating the required layers, not changing the gate to accommodate
 its harness. Existing source/tests and the sequential native flow provide
@@ -275,3 +281,11 @@ Report behavioral defects, harness/provider failures, preservation uncertainty
 and missing prerequisites separately. Stop only the dependent layer; preserve
 independently accepted proof. No retry, renewed budget, product patch, accepted
 scope reduction or release follows automatically from a blocked case.
+
+## Release scope after the evidence layers
+
+PR #302, the unconditional stop, is an ancestor of tag `0.1.41` (the marketplace release
+branch is at 0.1.41), so Tasks 5 and 6 are not a gate on the stop code, which did not wait
+for them. The remaining evidence-only changes are these documents. Whether a follow-up
+release is warranted, and whether to publish Claude as unqualified or test it against the
+Preserve-login decision, are user decisions; neither is taken here.
