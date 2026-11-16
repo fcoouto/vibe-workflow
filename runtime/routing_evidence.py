@@ -7,9 +7,12 @@ never guessed. Model, effort and harness names appear only as data.
 
 Input shapes (all plain JSON):
   guidance:   [{id, sha256, checked_at, rows:[{work_kind, complexity_band, risk_band,
-                strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
+                strategies:[{model, effort, harness, evidence_refs}]}]}]   # any order: see below
   catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?, list_price?, display_name?}]
   benchmarks: [{id, model, harness, work_kind, sha256, checked_at}]        # harness and work_kind are required to match
+
+The compiled row lists its strategies by list price (unknown last), then by each model's own effort position,
+lowest first; equal keys keep the guidance order.
 
 A row's work kind is one of the task profile template's; a row naming a `role` or `task_family` (the schema-1
 shape) is invalid, so republished guidance must drop them. Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.

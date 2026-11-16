@@ -6,9 +6,11 @@ effort sentinel was sent as an omitted variant even for a model that lists a lit
 session as `default`, and the shim's model check refused `default` against the admitted `none` (`route_mismatch`)
 inside a sent turn.
 """
+import json
 import unittest
 
-from runtime import routing, routing_observations as collector, subscription_fallback
+from runtime import opencode_launcher as launcher, routing, routing_launch, routing_observations as collector, \
+    subscription_fallback
 from tests.test_opencode_launcher import MODEL, POOL, PROVIDER, LauncherBase, route
 
 FAILURE = dict(error=dict(type='unknown', message='invented failure'))  # the observed 2.2.6 idle-record error shape
@@ -75,6 +77,59 @@ class TurnOutcomeTests(LauncherBase):
         self.assertEqual(self.holds()['a1']['state'], 'released')
         self.assertEqual([item for item in self.order if item in ('create', 'prompt', 'record:complete')],
                          ['create', 'prompt', 'record:complete'])  # one send, settled as sent
+
+
+
+class WorkerAnswerTests(LauncherBase):
+    """Wave F1 (R2 B8, B9, B10): the documented request shape, the worker's answer, and a provider quota refusal."""
+
+    def with_text(self, text):
+        real = self.host._assistant
+
+        def assistant(sid, held, now):
+            real(sid, held, now)
+            self.host.sessions[sid]['messages'][-1]['content'] = [dict(type='text', text=text)]
+        self.host._assistant = assistant
+
+    def test_the_documented_job_without_scope_ref_is_launched(self):
+        result = self.launch(job={'role': 'software-engineer', 'profile': {}})  # clients/opencode.md step 2
+        self.assertEqual(result['state'], 'recorded', result)
+
+    def test_an_assignment_without_scope_is_refused_by_name(self):
+        assignment = {key: value for key, value in self.assignment().items() if key != 'scope'}
+        result = self.launch(assignment=assignment, job={'role': 'software-engineer', 'profile': {}})
+        self.assertEqual((result['state'], result['reason']), ('blocked', 'scope_required'), result)
+        self.assertNotIn('prompt', self.order)
+
+    def test_a_succeeded_turn_returns_the_answer_and_session_never_the_prompt_or_token(self):
+        self.with_text('The worker answer.')
+        result = self.launch(prompt='SENTINEL-PROMPT do the task')
+        self.assertEqual((result['state'], result['answer'], result['answer_truncated']),
+                         ('recorded', 'The worker answer.', False), result)
+        self.assertRegex(result['session_id'], r'^ses_[0-9a-f]{32}$')
+        text = json.dumps(result)
+        self.assertNotIn('SENTINEL-PROMPT', text)
+        for held in self.host.attached.values():
+            self.assertNotIn(held['authority'], text)
+
+    def test_a_long_answer_is_bounded_to_4_kib_and_flagged(self):
+        self.with_text('x' * 5000)
+        result = self.launch()
+        self.assertEqual((len(result['answer'].encode()), result['answer_truncated']), (launcher.MAX_ANSWER, True))
+
+    def test_a_provider_quota_refusal_is_named_and_still_settled_as_sent(self):
+        self.host.turn_fails = dict(error=dict(type='provider.chatgpt-limit', message='free text never returned'))
+        result = self.launch()
+        self.assertEqual((result['state'], result.get('failed'), result.get('reason'), result.get('provider_error')),
+                         ('recorded', True, 'provider_quota_limit', 'provider.chatgpt-limit'), result)
+        self.assertNotIn('free text never returned', json.dumps(result))
+        self.assertNotIn('answer', result)
+        self.assertEqual(self.holds()['a1']['state'], 'released')  # settlement unchanged
+
+    def test_another_provider_failure_keeps_host_turn_failed_with_its_type(self):
+        self.host.turn_fails = FAILURE
+        result = self.launch()
+        self.assertEqual((result.get('reason'), result.get('provider_error')), ('host_turn_failed', 'unknown'))
 
 
 class RealHostVariantTests(LauncherBase):

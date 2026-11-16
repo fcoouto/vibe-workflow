@@ -65,6 +65,10 @@ class ModelNameCheckTests(unittest.TestCase):
         (self.root / 'clients' / 'c.md').write_text('An invocation alias such as quick is not a model identity.\n')
         self.assertEqual(self.check(), 'passed')
 
+    def test_the_package_passes_for_a_table_with_the_opus_alias(self):
+        self.table(rows={'a|low|low': [strategy('opus', provider='anthropic')]})  # Wave F1 G1
+        self.assertEqual(model_names.check(Path(__file__).resolve().parents[1], self.settings), 'passed')
+
     def test_a_name_inside_a_longer_word_does_not_match(self):
         (self.root / 'runtime' / 'x.py').write_text(
             'lightweight = "highlight"\nslight = "vendor-q/model-qx"\nother = "vendor-q/model-q-large"\n'

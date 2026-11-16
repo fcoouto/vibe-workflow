@@ -273,6 +273,27 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual(tool.calls, [dict(model=permit['model'], effort=permit['effort'])])
         self.assertEqual((permit['model'], permit['effort']), ('invented-large', 'high'))
 
+    def test_an_omitted_attempt_id_is_generated_and_returned(self):
+        self.billing()
+        body = dict(task='task-gen', scope=routing_launch.assignment_scope(self.checkout))
+        first = self.command(dict(v=1, op='native_prepare', client='claude-code', assignment=dict(body), job=self.job('low')))
+        self.assertEqual(first['state'], 'dispatched', first)
+        self.assertRegex(first['attempt_id'], r'^n[0-9a-f]{24}$')
+        again = self.prepare('claude-code', first['attempt_id'])  # an explicit id keeps today's answer
+        self.assertEqual(again['reason'], 'already_prepared')
+
+    def test_a_model_only_choice_admits_the_lowest_listed_effort_and_names_it(self):
+        self.billing()  # Wave F1 B3: the effort is unconstrained; model and effort together stay a hard constraint
+        choice = dict(provider='anthropic', model='invented-large', harness='claude-native', funding='subscription')
+        permit = self.prepare('claude-code', choice=choice)
+        self.assertEqual((permit['state'], permit['model'], permit['effort']), ('dispatched', 'invented-large', 'low'),
+                         permit)
+        unknown = self.prepare('claude-code', 'n2', choice=dict(choice, model='invented-missing'))
+        self.assertEqual((unknown['state'], unknown['reason']), ('pending', 'explicit_choice_unavailable'), unknown)
+        for bad in ('invented-large', dict(model='invented-large'), dict(choice, model=7)):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.prepare('claude-code', 'n3', choice=bad)['reason'], 'invalid_choice')
+
     def test_native_explicit_choice_is_not_substituted(self):
         self.billing()
         choice = dict(provider='anthropic', model='invented-missing', effort='high', harness='claude-native',

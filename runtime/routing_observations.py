@@ -26,6 +26,16 @@ WINDOWS_FILE = 'window-observations.json'
 ENTITLEMENTS_FILE = 'entitlements.json'
 FRESH_SECONDS = usage_budget.FRESH_SECONDS  # the same 900 s freshness the ledger applies to balances
 QUOTA_EXHAUSTED = 'quota_exhausted'  # Task 11: a fresh bound reading with no capacity left (refuse-only)
+# Wave F1 addendum (user, 16 November 2026): a provider may reset an account early. An exhausted reading refuses only
+# this long, and a provider quota-limit error refuses its pool at most PROVIDER_LIMIT_SECONDS; never the scheduled reset.
+EXHAUSTED_RECHECK_SECONDS = 60
+PROVIDER_LIMIT_SECONDS = 120
+RECHECK_FILE = 'quota-recheck.json'
+
+
+def trust_left(at, now, trust=EXHAUSTED_RECHECK_SECONDS):
+    """The seconds a refusal observed at `at` may still last (at least 1); None once older, or ahead of the clock."""
+    return max(1, trust - (now - at)) if routing._amount(at) and 0 <= now - at <= trust else None
 MAX_FILE = 1 << 20
 MAX_MARKS = 256
 CLOCK_MARGIN = routing.MAX_CLOCK_DRIFT  # seconds a stored observation may run ahead of this clock
@@ -192,6 +202,18 @@ class LocalSource:
         from runtime import claude_usage, codex_account, opencode_account
         producer = next((item for item in (claude_usage, codex_account, opencode_account) if item.applies(route)), None)
         return producer.quota_problem(self.settings_path, route, now) if producer is not None else None
+
+    def quota_retry(self, route, now):
+        """The seconds the route's producer refusal may still last (E3), or None."""
+        from runtime import claude_usage, codex_account, opencode_account
+        producer = next((item for item in (claude_usage, codex_account, opencode_account) if item.applies(route)), None)
+        answer = getattr(producer, 'quota_retry_after', None)
+        return answer(self.settings_path, route, now) if callable(answer) else None
+
+    def recheck_exhausted(self, routes, now):
+        """E1/E2: the bounded on-request re-read (`runtime/quota_recheck.py`)."""
+        from runtime import quota_recheck
+        quota_recheck.recheck(self.settings_path, routes, now)
 
     def acquire_billing(self, routes, now):
         """One bounded native account read per applicable producer when its account is not current: Claude's also
@@ -690,7 +712,22 @@ def acquire_billing(project, assignment, *, settings_path, table=None, strategy_
     if not callable(getattr(source, 'acquire_billing', None)):
         return
     routes, _ = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
-    subscription_billing.acquire(source, routes, int(time.time()))  # unknown demand never hides the account
+    now = int(time.time())
+    subscription_billing.acquire(source, routes, now)  # unknown demand never hides the account
+    _call_quietly(getattr(source, 'recheck_exhausted', None), routes, now)  # E1/E2; a failure changes nothing
+
+
+def _call_quietly(answer, *args):
+    try:
+        return answer(*args) if callable(answer) else None
+    except Exception:  # noqa: BLE001 - an optional source step never fails or authorizes anything
+        return None
+
+
+def _retry(source, spec, now):
+    """E3: the seconds the source's quota refusal may still last, or None (never the scheduled reset)."""
+    found = _call_quietly(getattr(source, 'quota_retry', None), copy.deepcopy(spec), now)
+    return found if type(found) is int and 0 < found <= PROVIDER_LIMIT_SECONDS else None
 
 
 def _exhausted(source, spec, now):
@@ -723,9 +760,9 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
     routes, cache = [], {}
     seen = dict(openrouter_revision=None)
 
-    def leave(route, reason):
+    def leave(route, reason, retry=None):
         excluded.append(dict(route=route.get('route') if type(route) is dict and routing._text(route.get('route'))
-                             else None, reason=reason))
+                             else None, reason=reason, **({} if retry is None else dict(retry_after=retry))))
 
     for spec in candidates:
         reason = marker = None
@@ -736,7 +773,7 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
             else:
                 reason = _exhausted(source, spec, now)  # a fresh bound reading with no capacity left: never sent
         if reason is not None:
-            leave(spec, reason)
+            leave(spec, reason, _retry(source, spec, now) if reason == QUOTA_EXHAUSTED else None)
             continue
         kept = copy.deepcopy(spec)
         if marker is not None:

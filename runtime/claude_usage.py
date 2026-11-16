@@ -418,12 +418,30 @@ def scope_state(settings_path, route, now):
     return state
 
 
+def _quota_gate(settings_path, route, now, native):
+    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
+        return None, None
+    left = observations.trust_left((account(settings_path, now) or {}).get('observed_at'), now)  # the scoped read
+    return ('quota_exhausted', left) if left is not None else (None, None)
+
+
 def quota_problem(settings_path, route, now, native=False):
-    """`quota_exhausted` for a route a fresh model-scoped limit names at 100% with its reset ahead; the OpenCode
-    Claude producer passes `native=True` for its route on this same login. Never headroom, never a claim."""
-    if not (native or applies(route)) or route.get('pool') != POOL:
-        return None
-    return 'quota_exhausted' if scope_state(settings_path, route, now) == 'exhausted' else None
+    """`quota_exhausted` for a route a model-scoped limit names at 100% with its reset ahead, read at most
+    EXHAUSTED_RECHECK_SECONDS ago (a provider may reset early); the OpenCode Claude producer passes `native=True` for
+    its route on this same login. Never headroom, never a claim."""
+    return _quota_gate(settings_path, route, now, native)[0]
+
+
+def quota_retry_after(settings_path, route, now, native=False):
+    return _quota_gate(settings_path, route, now, native)[1]
+
+
+def exhausted_stale(settings_path, route, now, native=False):
+    """E1: whether a model-scoped limit still names `route` at 100% but was read too long ago to refuse."""
+    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
+        return False
+    at = (account(settings_path, now) or {}).get('observed_at')
+    return routing._amount(at) and now - at > observations.EXHAUSTED_RECHECK_SECONDS
 
 
 # -- the private store -------------------------------------------------------------------------------------------

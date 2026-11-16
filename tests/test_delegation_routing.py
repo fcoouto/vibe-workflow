@@ -703,6 +703,32 @@ class RealScopeResolver(ManagedDelegation):
             return service.handle(json.dumps(dict(v=1, op='set', expected_revision=0, change=dict(
                 managed_projects=[str(self.repo)]))).encode())
 
+    def test_a_linked_worktree_reads_its_primarys_enrolment(self):
+        from tests.test_routing_settings import linked_worktree  # Wave F1 B1 (R1: 4 of 4 worktrees refused)
+        self.enrol_as('claude-code', runtime=False)
+        primary = Path(self.repo).resolve()
+        folder = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, folder)
+        worktree = folder / 'task-worktree'
+        linked_worktree(primary, worktree, name='wave-f1')
+        self.assertEqual(delegation_routing.enrolled_hosts(primary), ['claude-code'])
+        self.assertEqual(delegation_routing.enrolled_hosts(worktree), ['claude-code'])
+        from runtime import native_routing
+        self.assertIsNone(native_routing._runtime_delegation(worktree, 'claude-code'))
+        forged = folder / 'forged'
+        admin = forged / 'x'
+        admin.mkdir(parents=True)
+        (forged / '.git').write_text('gitdir: %s\n' % admin)
+        (admin / 'gitdir').write_text('%s\n' % (forged / '.git'))
+        (admin / 'commondir').write_text('%s\n' % (primary / '.git'))
+        with self.assertRaises(Exception):
+            delegation_routing.enrolled_hosts(forged)
+        stranger = folder / 'unenrolled'
+        (stranger / '.git').mkdir(parents=True)
+        linked_worktree(stranger, folder / 'unenrolled-worktree', name='other')
+        with self.assertRaises(Exception):
+            delegation_routing.enrolled_hosts(folder / 'unenrolled-worktree')
+
     def test_the_activation_host_check_reads_the_real_enrolment(self):
         # #222 follow-up, updated by F4.6: the host rule read from the canonical record.
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['codex'])

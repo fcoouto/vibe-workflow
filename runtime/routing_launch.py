@@ -334,7 +334,7 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
             pass
     prepared = _call(service, request)
     if prepared.get('state') != 'admitted':
-        return {key: prepared[key] for key in ('state', 'reason', 'reasons') if key in prepared}
+        return {key: prepared[key] for key in ('state', 'reason', 'reasons', 'retry_after_seconds') if key in prepared}
     admission = prepared['admission']
     attempt = admission['attempt_id']
     facts, reason = admitted_check(admission, host=host, catalog=catalog, settings_path=settings_path, source=source)
