@@ -367,6 +367,7 @@ def main():
     if control:
         return control_main()
     requested_event = sys.argv[2] if len(sys.argv) == 3 else None
+    payload = None
     from runtime.adapters import claude_code, codex, session_start
     from runtime.engine import HookResult
     from runtime.startup import MAX_INPUT, RuntimeScopeError, StartupError, json_object, orient, acquire_project_entry, _entry_scope, qualification_only
@@ -453,6 +454,9 @@ def main():
         except Exception:
             # A diagnostic startup still writes the delivery note; its failure preserves the diagnostic.
             pass
+    if requested_event == "SessionStart" and sys.argv[1:2] in (["codex"], ["claude-code"]):
+        from runtime import startup_routing  # B2: the managed line whatever the enrolment outcome
+        output = startup_routing.with_line(output, sys.argv[1], payload)
     if output is not None:
         print(json.dumps(output))
     return 0

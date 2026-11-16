@@ -88,6 +88,7 @@ SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'i
 EXCLUSION_REASONS = ('no_feasible_route', 'explicit_choice_unavailable')
 EXCLUSION_CODE = re.compile(r'[a-z][a-z0-9_]{0,63}')
 MAX_EXCLUSION_REASONS = 16
+MAX_RETRY_AFTER = 120  # E3: a short-trust `quota_exhausted` names its remaining window, never the scheduled reset
 # The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
 # `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
@@ -160,6 +161,16 @@ def _table_shape(value):
 
 def _public(record):
     return {key: record[key] for key in ADMISSION_FIELDS if key in record}
+
+
+def _retry_after(result, observations):
+    """E3: the shortest remaining trust window (1..MAX_RETRY_AFTER s) of the collector's `quota_exhausted` exclusions."""
+    excluded = observations.get('excluded') if type(observations) is dict else None
+    if result['reason_code'] not in EXCLUSION_REASONS or type(excluded) is not list:
+        return None
+    found = [item['retry_after'] for item in excluded if type(item) is dict and item.get('reason') == 'quota_exhausted'
+             and type(item.get('retry_after')) is int and item['retry_after'] > 0]
+    return min(min(found), MAX_RETRY_AFTER) if found else None
 
 
 def _pending_reasons(result, observations):
@@ -257,6 +268,28 @@ class Service:
             return resolved
         except SettingsError:
             raise Blocked('settings_unavailable') from None
+
+    def _table_summary(self):
+        """G5: the strategy table for `status` from `_table` alone (counts only): `absent`, `invalid`, `outdated` (another
+        schema) or `ok`, and per rule path the distinct strategies with its harness and provider (the routes it would
+        generate once qualified)."""
+        empty = dict(version=None, rows=0, generated_routes_per_path={})
+        if not os.path.lexists(self.table_path):
+            return dict(empty, state='absent')
+        value, problem = self._table()
+        if problem is not None or not value:
+            return dict(empty, state='invalid')
+        try:
+            strategies, counts = routing_paths._strategies(value), {}
+            for path in routing_paths.load_rules()['paths']:
+                found = sum(1 for item in strategies if (item.get('harness'), item.get('provider')) == (path['harness'],
+                                                                                                       path['provider']))
+                if found:
+                    counts[path['path']] = found
+        except Exception:  # noqa: BLE001 - the summary never fails status
+            counts = {}
+        return dict(state='ok' if value.get('schema') == routing.TABLE_SCHEMA else 'outdated',
+                    version=value.get('version'), rows=len(value.get('rows') or {}), generated_routes_per_path=counts)
 
     def _table(self):
         """The compiled strategy table from local state, or ({}, reason): a missing or bad table never blocks."""
@@ -395,6 +428,10 @@ class Service:
         assignment, constraints = body['assignment'], body.get('constraints', {})
         require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS and type(constraints) is dict,
                 'invalid_request')
+        choice = assignment.get('choice')  # B3: a malformed choice, or one without an effort, is named, never a crash
+        require(choice is None or type(choice) is dict and all(_text(choice.get(key)) for key in (
+            'provider', 'model', 'harness', 'funding')), 'invalid_choice')
+        require(choice is None or _text(choice.get('effort')), 'effort_required')  # only the native bridge expands it
         harnesses = constraints.get('allowed_harnesses')
         require('observations' in body or (type(harnesses) is list and harnesses and all(map(_text, harnesses))),
                 'harness_required')
@@ -463,8 +500,10 @@ class Service:
                                workflow=None if bound is None else bound[1], clear_debits=clear)
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
-            return dict(state='pending', reason=result['reason_code'],
-                        reasons=_pending_reasons(result, observations if seen is not None else None), **echo)
+            collected = observations if seen is not None else None
+            retry = _retry_after(result, collected)
+            return dict(state='pending', reason=result['reason_code'], reasons=_pending_reasons(result, collected),
+                        **({} if retry is None else dict(retry_after_seconds=retry)), **echo)
         stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
                     workflow_bound=stored.get('job') is not None,
@@ -663,7 +702,7 @@ class Service:
                     test_inputs=self.test_inputs,
                     project_pinned=self.project is not None,
                     **(dict(managed=self._managed()) if self.project is not None else {}),  # E6: `managed_project`
-                    windows=windows)
+                    windows=windows, table=self._table_summary())
 
     def _set(self, body):
         if 'organization' in body:

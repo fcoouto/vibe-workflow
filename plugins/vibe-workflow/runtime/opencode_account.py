@@ -302,19 +302,72 @@ def native_current(settings_path, now):
     return _account(settings_path, 'claude', now) is not None
 
 
-def quota_problem(settings_path, route, now):
-    """`quota_exhausted` on positive evidence only, never headroom: Go, this acquisition's bound meters (one limited
-    or at 100% with its reset ahead); Claude, the native login's model-scoped limits while it is this fact's login.
-    ChatGPT has no reading (its link to Codex is deferred)."""
+def _quota_gate(settings_path, route, now):
+    """(`quota_exhausted`, seconds it may still last) on positive evidence only, never headroom: a provider quota-limit
+    error on this pool within PROVIDER_LIMIT_SECONDS (E2); Go, this acquisition's bound meters (one limited or at 100%
+    with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago; Claude, the native login's model-scoped limits
+    while it is this fact's login. ChatGPT has no reading (its link to Codex is deferred)."""
     name = family(route)
+    try:
+        mark = _part(observations._read(_store(settings_path)), name).get('provider_limit') if name else None
+    except (OSError, ValueError):
+        mark = None
+    if type(mark) is dict and mark.get('pool') == route.get('pool'):
+        left = observations.trust_left(mark.get('observed_at'), now, observations.PROVIDER_LIMIT_SECONDS)
+        cleared = mark['pool'] == POOLS['chatgpt'] and continuity.capacity_since(settings_path, mark['observed_at'], now)
+        if left is not None and not cleared:  # a newer Codex reading with capacity clears it (never refuses itself)
+            return EXHAUSTED, left
     if name == 'claude':
-        return claude_usage.quota_problem(settings_path, route, now, native=True) \
-            if native_current(settings_path, now) else None
-    usage = (_account(settings_path, name, now) or {}).get('usage') if name == 'go' else None
-    if type(usage) is not dict or route.get('pool') != POOLS['go']:
-        return None
-    return EXHAUSTED if any(usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100)
-                            for name in GO_METERS) else None
+        native = native_current(settings_path, now)
+        return (claude_usage.quota_problem(settings_path, route, now, native=True),
+                claude_usage.quota_retry_after(settings_path, route, now, native=True)) if native else (None, None)
+    found = _account(settings_path, name, now) if name == 'go' else None
+    usage = (found or {}).get('usage')
+    if type(usage) is not dict or route.get('pool') != POOLS['go'] or not any(
+            usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100)
+            for name in GO_METERS):
+        return None, None
+    left = observations.trust_left(found.get('observed_at'), now)
+    return (EXHAUSTED, left) if left is not None else (None, None)
+
+
+def quota_problem(settings_path, route, now):
+    return _quota_gate(settings_path, route, now)[0]
+
+
+def exhausted_stale(settings_path, route, now):
+    """E1: whether Go's stored meters still show exhaustion but were read too long ago to refuse."""
+    found = _account(settings_path, 'go', now) if family(route) == 'go' else None
+    usage = (found or {}).get('usage')
+    if type(usage) is not dict or not routing._amount(found.get('observed_at')):
+        return False
+    return now - found['observed_at'] > observations.EXHAUSTED_RECHECK_SECONDS and any(
+        usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100) for name in GO_METERS)
+
+
+def provider_limit_active(settings_path, pool, now):
+    """Whether an unexpired provider quota-limit mark names `pool` (E2: the cross-check reads Codex only then)."""
+    try:
+        state = observations._read(_store(settings_path))
+    except (OSError, ValueError):
+        return False
+    return any(type(mark) is dict and mark.get('pool') == pool and observations.trust_left(
+        mark.get('observed_at'), now, observations.PROVIDER_LIMIT_SECONDS) is not None
+        for mark in (_part(state, name).get('provider_limit') for name in PATHS))
+
+
+def quota_retry_after(settings_path, route, now):
+    return _quota_gate(settings_path, route, now)[1]
+
+
+def mark_provider_limit(settings_path, route, now):
+    """E2: record that the provider refused `route` for its quota (`observed_at` only, no values), so its pool is
+    refused for at most PROVIDER_LIMIT_SECONDS. Never links the ChatGPT and Codex identities."""
+    name = family(route)
+    if name is None or not routing._amount(now) or not routing._text(route.get('pool')):
+        return False
+    _transition(settings_path, name, lambda part: dict(provider_limit=dict(pool=route['pool'], observed_at=now)))
+    return True
 
 
 def _native_account(settings_path, now):
