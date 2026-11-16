@@ -27,7 +27,7 @@ MAX_PAYLOAD = 128 * 1024
 MAX_DEPTH = 32
 MAX_EVENTS = 8192
 TRACE_PROOFS = 7
-_MARKER = '#native-trace-v1:'
+_MARKER = '#native-trace-v2:'
 
 
 def _require(condition, code='native_trace_relation_unavailable'):
@@ -63,15 +63,18 @@ def _custody(source):
     _require(bundle != home and bundle.is_relative_to(home) and rollout != home and rollout.is_relative_to(home)
         and not home.is_relative_to(root) and not bundle.is_relative_to(root) and not rollout.is_relative_to(root),
         'native_trace_custody_unavailable')
+    directories = {bundle/'payloads'}
     for target in (bundle, rollout.parent):
         for path in (target, *target.parents):
             if not path.is_relative_to(home):
                 break
-            _check(source)
-            _stamp(path, directory=True)
-            _require(not os.path.lexists(path/'.git'), 'native_trace_custody_unavailable')
-    custody = [_stamp(path, directory=True) for path in (home, bundle, bundle/'payloads')]
-    custody.append(_stamp(rollout))
+            directories.add(path)
+    custody = []
+    for path in sorted(directories, key=str):
+        _check(source)
+        custody.append(dict(path=str(path), binding=_stamp(path, directory=True)))
+        _require(not os.path.lexists(path/'.git'), 'native_trace_custody_unavailable')
+    custody.append(dict(path=str(rollout), binding=_stamp(rollout)))
     _check(source)
     return paths, custody
 
@@ -135,9 +138,8 @@ def _id(value):
 
 
 def _proof(path, raw, physical, outer, custody):
-    numbers = [physical['device'], physical['inode']]
-    numbers.extend(number for binding in custody for number in (binding['device'], binding['inode']))
-    token = ':'.join(map(str, numbers))+':'+outer.encode().hex()
+    # Bind every relied-on in-home ancestor without growing each reference with its path chain.
+    token = f"{physical['device']}:{physical['inode']}:{d3._digest(custody)}:{outer.encode().hex()}"
     return dict(reference=str(path)+_MARKER+token, sha256=hashlib.sha256(raw).hexdigest())
 
 
@@ -147,7 +149,8 @@ def retained_selector(proofs):
     path, split, token = proofs[0]['reference'].partition(_MARKER)
     _require(split and Path(path).name == 'manifest.json')
     parts = token.split(':')
-    _require(len(parts) == 11 and all(re.fullmatch(r'(0|[1-9][0-9]{0,19})', part) for part in parts[:10])
+    _require(len(parts) == 4 and all(re.fullmatch(r'(0|[1-9][0-9]{0,19})', part) for part in parts[:2])
+        and re.fullmatch(r'[a-f0-9]{64}', parts[2]) is not None
         and re.fullmatch(r'(?:[a-f0-9]{2}){1,1024}', parts[-1]) is not None)
     outer = _id(bytes.fromhex(parts[-1]).decode('utf-8'))
     return str(startup._canonical_path(path).parent), outer
@@ -167,6 +170,7 @@ def recheck(fact, source):
             raw, physical = _read(path, source, limit)
             _require(_proof(path, raw, physical, fact['native_call_id'], custody) == proof,
                 'native_trace_source_changed')
+        _require(_custody(source) == (paths, custody), 'native_trace_source_changed')
         _check(source)
     except ObservationError:
         raise
