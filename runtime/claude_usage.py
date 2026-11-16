@@ -358,14 +358,24 @@ def parse_usage(use, started, now):
     return found, overflow
 
 
+MAX_SCOPES = 8  # more model-scoped limits than this name no model: every Claude route is quota-unknown
+GENERIC = {'claude'}  # with digits: words that name no model family on their own (Task 12, H2)
+
+
 def _tokens(value):
     return set(re.split('[^0-9a-z]+', value.casefold())) - {''} if type(value) is str else set()
 
 
+def _family(name):
+    """The words of a scope name that can name a model family (generic words and numbers removed)."""
+    return {word for word in name.split() if word not in GENERIC and not word.isdigit()}
+
+
 def scopes(use, models):
     """The answer's model-scoped weekly limits `[{name, utilization, reset, matched}]` (`model_scoped` and the raw
-    `weekly_scoped` items) merged per casefolded name. `matched`: every word of the name is a word of one catalog
-    model's alias or resolved model. A malformed scope refuses the reading."""
+    `weekly_scoped` items) merged per casefolded name. `matched`: the name has a family word (not generic, not a
+    number) and its family words are words of one catalog model's alias or resolved model. A malformed scope refuses
+    the reading; more than MAX_SCOPES become one unmatched entry."""
     rate = use['rate_limits']
     entries = [(item.get('display_name'), item.get('utilization'), item.get('resets_at')) if type(item) is dict
                else (None, None, None) for item in rate.get('model_scoped') or []]
@@ -380,8 +390,10 @@ def scopes(use, models):
         name, used, reset = ' '.join(sorted(_tokens(name))), _percent(used), _time(reset)
         if name not in found or used > found[name]['utilization']:
             found[name] = dict(name=name, utilization=used, reset=reset)
+    if len(found) > MAX_SCOPES:
+        return [dict(name='', utilization=0, reset=0, matched=False)]  # too many: no model is named
     known = [_tokens(item.get('alias')) | _tokens(item.get('resolved')) for item in models if type(item) is dict]
-    return [dict(item, matched=any(set(item['name'].split()) <= words for words in known))
+    return [dict(item, matched=bool(_family(item['name'])) and any(_family(item['name']) <= words for words in known))
             for _, item in sorted(found.items())]
 
 
@@ -398,7 +410,7 @@ def scope_state(settings_path, route, now):
                   if type(item) is dict and item.get('alias') == alias), {})
     words, state = _tokens(alias) | _tokens(entry.get('resolved')), None
     for item in scoped:
-        if item['matched'] and not set(item['name'].split()) <= words:
+        if item['matched'] and not _family(item['name']) <= words:
             continue  # another model's limit
         if item['matched'] and item['utilization'] >= 100 and item['reset'] > now:
             return 'exhausted'

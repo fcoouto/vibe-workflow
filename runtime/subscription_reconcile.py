@@ -96,8 +96,8 @@ def _reconcile(ledger, event, digest, now, settings_path=None):
         body.update(kind=KIND, recorded_at=now, outcome=dict(outcome))
         ledger._store_event(data, event['event_id'], digest, body, now, effect=True)
         record = Ledger.admission(data, attempt)
-        if subscription_fallback.is_fallback(record):
-            try:  # an uncertain fallback may have consumed an unknown amount: the boundary moves before COMMIT
+        if subscription_fallback.terminal(record):
+            try:  # an uncertain fallback (or OpenCode Claude claim) may have consumed an unknown amount: boundary first
                 subscription_fallback.mark_terminal(settings_path, record, now, attempt)
             except (OSError, ValueError):
                 raise BudgetError('observation_store_unavailable') from None

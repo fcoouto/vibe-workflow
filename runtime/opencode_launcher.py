@@ -28,7 +28,7 @@ import tempfile
 import time
 
 from runtime import opencode_accounting, opencode_subscription, routing, routing_launch, routing_observations, \
-    subscription_billing
+    routing_paths, subscription_billing
 from runtime.adapters import opencode as adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6). Codes from the core and the routing command pass through.
@@ -675,9 +675,12 @@ def _store_settled(attempt, admission, settings_path):
     if attempt.read is None:
         return []
     admitted_at, covered = admission.get('at'), []
+    # An OpenCode Claude claim draws on the native login's bound rows: its own unbound reply readings never cover it,
+    # so the pool is marked consumed as a native completion marks it (Task 12, F1; `subscription_fallback.terminal`).
+    native = routing_paths.path_of(admission.get('route')) == 'opencode-claude-subscription'
     for window in windows(attempt.read['result'].get('rate_limit')):
         held = routing_observations.store_window(settings_path, admission['pool'], window)
-        if held is True and routing._amount(admitted_at) and window['observed_at'] >= admitted_at:
+        if held is True and not native and routing._amount(admitted_at) and window['observed_at'] >= admitted_at:
             covered.append(window['id'])
     return covered
 

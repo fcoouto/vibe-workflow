@@ -135,18 +135,20 @@ def _usage_problem(limits):
 
 
 def _quota(limits, started):
-    """The gate reading `{used_percent, reset_at, ordinary_allowed, read_at}` of the primary window (read start as its
-    time), or None for any other shape. `rateLimitResetCredits` is a user action, never required here."""
+    """The gate reading `{windows: [{used_percent, reset_at}], ordinary_allowed, read_at}` of every present window
+    (`primary` and `secondary`; a weekly-only plan may report only one; read start as its time), or None when none
+    is present or any is malformed. `rateLimitResetCredits` is a user action, never required here."""
     by_limit = limits.get('rateLimitsByLimitId')
     snapshot = by_limit.get('codex') if type(by_limit) is dict else limits.get('rateLimits')
-    primary = snapshot.get('primary') if type(snapshot) is dict else None
+    present = [snapshot.get(name) for name in ('primary', 'secondary') if snapshot.get(name) is not None] \
+        if type(snapshot) is dict else []
     ordinary = limits.get('ordinaryUsageAllowed')
-    if type(primary) is not dict or type(primary.get('usedPercent')) not in (int, float) \
-            or not 0 <= primary['usedPercent'] <= 100 or type(primary.get('resetsAt')) is not int \
-            or ordinary not in (None, True, False):
+    if not present or ordinary not in (None, True, False) or any(
+            type(item) is not dict or type(item.get('usedPercent')) not in (int, float)
+            or not 0 <= item['usedPercent'] <= 100 or type(item.get('resetsAt')) is not int for item in present):
         return None
-    return dict(used_percent=primary['usedPercent'], reset_at=primary['resetsAt'], ordinary_allowed=ordinary,
-                read_at=started)
+    return dict(windows=[dict(used_percent=item['usedPercent'], reset_at=item['resetsAt']) for item in present],
+                ordinary_allowed=ordinary, read_at=started)
 
 
 def quota_problem(settings_path, route, now):
@@ -156,7 +158,8 @@ def quota_problem(settings_path, route, now):
     quota = (current or {}).get('quota')
     if type(quota) is not dict or not 0 <= now - quota['read_at'] <= QUOTA_FRESH_SECONDS:
         return None
-    if quota['ordinary_allowed'] is False or quota['used_percent'] >= 100 and quota['reset_at'] > now:
+    if quota['ordinary_allowed'] is False or any(item['used_percent'] >= 100 and item['reset_at'] > now
+                                                  for item in quota['windows']):
         return 'quota_exhausted'
     return None
 

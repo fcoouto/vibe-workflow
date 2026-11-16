@@ -8,7 +8,8 @@ inside a sent turn.
 """
 import unittest
 
-from tests.test_opencode_launcher import MODEL, PROVIDER, LauncherBase, route
+from runtime import routing, routing_observations as collector, subscription_fallback
+from tests.test_opencode_launcher import MODEL, POOL, PROVIDER, LauncherBase, route
 
 FAILURE = dict(error=dict(type='unknown', message='invented failure'))  # the observed 2.2.6 idle-record error shape
 
@@ -93,6 +94,41 @@ class RealHostVariantTests(LauncherBase):
         result = self.launch()  # the default model lists variants and the admitted one is sent and kept
         self.assertEqual((result['state'], result['event']), ('recorded', 'complete'), result)
         self.assertNotIn('failed', result)
+
+
+class ConsumptionTests(LauncherBase):
+    """Task 12 (F1): an OpenCode Claude claim draws on the native login's bound rows, so its own reply readings never
+    cover it: the completion marks the pool consumed, as a native completion does, and no alias claims those rows
+    again until a reading observed after it arrives."""
+
+    def covering_reply(self):
+        resets = self.now + 3000
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=resets,
+                                    unifiedWindows=dict(five_hour=dict(utilization=0.25, resetsAt=resets,
+                                                                       status='allowed')))
+
+    def test_an_opencode_claude_completion_marks_the_pool_even_when_its_reply_covers(self):
+        self.routes = [route(route='opencode-claude-subscription:s-claude')]
+        self.covering_reply()
+        first = self.launch()
+        self.assertEqual((first['state'], first['admission']['reserved'] != {}), ('recorded', True), first)
+        self.assertGreaterEqual(collector.consumed_at(self.settings, POOL), first['admission']['at'])
+        second = self.launch(assignment=self.assignment('a2'))  # the rows it claimed from are no longer fresh
+        self.assertEqual(second['admission']['reserved'], {}, second)
+        self.assertIn(routing.FALLBACK, second['admission']['reason_codes'])
+
+    def test_another_path_with_a_covering_reply_is_unchanged(self):
+        self.covering_reply()  # control: `claude-haiku-low` is no OpenCode Claude path; its own reading covers it
+        self.assertEqual(self.launch()['state'], 'recorded')
+        self.assertEqual(collector.consumed_at(self.settings, POOL), 0)
+
+    def test_the_shared_terminal_rule(self):
+        """The ledger's `complete` finalization (and reconcile) marks fallback and OpenCode Claude included records."""
+        native = dict(route='claude-native-subscription:x', billing_class='included_subscription', reason_codes=[])
+        opencode = dict(native, route='opencode-claude-subscription:x')
+        fallback = dict(native, reason_codes=['quota_unknown', routing.FALLBACK])
+        self.assertEqual([subscription_fallback.terminal(item) for item in (native, opencode, fallback)],
+                         [False, True, True])
 
 
 class VariantTests(LauncherBase):

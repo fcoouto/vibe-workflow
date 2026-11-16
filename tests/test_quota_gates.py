@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from runtime import claude_usage, codex_account, opencode_account, opencode_launcher, routing_observations as collector, \
-    routing_paths, subscription_billing
+    routing_paths, subscription_billing, subscription_fallback
 from tests import test_claude_usage as claude_tests
 from tests.test_opencode_account import ORG, Base, credentials, go_usage, provider, route_of
 from tests.test_routing_observations import Stores, native_reading
@@ -147,6 +147,28 @@ class ClaudeScopeTest(claude_tests.Reader):
                 self.assertEqual((self.state('fable'), self.state('haiku')), ('scoped', None))
                 self.assertEqual(self.gate('fable'), None)  # never a gate without positive evidence
 
+    def test_generic_or_too_many_scopes_are_unmatched_and_a_malformed_one_refuses(self):
+        """H2 and the cap: a scope named only by generic words (`Claude 4`) or a list past the cap names no model, so
+        every route is quota-unknown and nothing is refused; a malformed name refuses the reading."""
+        for name in ('Claude 4', 'claude'):
+            with self.subTest(name=name):
+                claude_usage._store(self.settings).unlink(missing_ok=True)
+                self.answer(self.init(), self.scoped(name=name))
+                self.refresh(force=True)
+                self.assertEqual((self.state('fable'), self.gate('fable'), self.gate('haiku')), ('scoped', None, None))
+        many = self.scoped()
+        many['rate_limits']['model_scoped'] = [dict(display_name='Model%s' % chr(97 + index), utilization=100,
+                                                    resets_at=claude_tests.iso(self.now + 600)) for index in range(9)]
+        claude_usage._store(self.settings).unlink(missing_ok=True)
+        self.answer(self.init(), many)
+        self.refresh(force=True)
+        self.assertEqual((self.state('haiku'), self.gate('fable')), ('scoped', None))
+        bad = self.scoped()
+        bad['rate_limits']['model_scoped'] = [dict(display_name='', utilization=1,
+                                                   resets_at=claude_tests.iso(self.now))]
+        self.answer(self.init(), bad)
+        self.assertEqual(self.refresh(force=True), dict(state='failed', reason='claude_limits_scoped'))
+
     def test_an_unmatched_scope_makes_every_claude_route_quota_unknown(self):
         self.answer(self.init(), self.scoped(name='Nimbus'))
         self.refresh()
@@ -155,10 +177,11 @@ class ClaudeScopeTest(claude_tests.Reader):
 
 
 class CodexGateTest(Stores):
-    def seed(self, **quota):
+    def seed(self, used_percent=50, reset_at=None, **quota):
         now = int(time.time())
         key, generation = 'b' * 32, 'd' * 32
-        quota = dict(dict(used_percent=50, reset_at=now + 3600, ordinary_allowed=True, read_at=now), **quota)
+        windows = [dict(used_percent=used_percent, reset_at=now + 3600 if reset_at is None else reset_at)]
+        quota = dict(dict(windows=windows, ordinary_allowed=True, read_at=now), **quota)
         codex_account._save(self.settings, identity=dict(key=key, generation=generation), account=dict(
             key=key, generation=generation, observed_at=now, client_version='unknown',
             usage_reason=codex_account.USAGE_UNCONFIRMED, quota=quota))
@@ -178,7 +201,22 @@ class CodexGateTest(Stores):
             changed = dict(snapshot, spendControlReached=value)
             self.assertEqual(codex_account._usage_problem(dict(limits, rateLimitsByLimitId=dict(codex=changed))),
                              'codex_limits_unsupported')
-        self.assertEqual(codex_account._quota(limits, 7)['used_percent'], 99)
+        self.assertEqual(codex_account._quota(limits, 7)['windows'][0]['used_percent'], 99)
+
+    def test_any_present_window_can_exhaust_and_an_unknown_shape_never_gates(self):
+        """H1: the secondary window counts too, and a weekly-only plan may report it with no primary."""
+        now = int(time.time())
+        full, light = dict(usedPercent=100, resetsAt=now + 600), dict(usedPercent=10, resetsAt=now + 600)
+        for primary, secondary, exhausted in ((light, full, True), (None, full, True), (light, None, False),
+                                              (None, None, None)):
+            with self.subTest(primary=primary, secondary=secondary):
+                snapshot = dict(limitId='codex', primary=primary, secondary=secondary, spendControlReached=False)
+                found = codex_account._quota(dict(rateLimitsByLimitId=dict(codex=snapshot)), now)
+                if exhausted is None:
+                    self.assertIsNone(found)
+                    continue
+                self.seed(**{key: value for key, value in found.items() if key != 'read_at'})
+                self.assertEqual(self.gate(), 'quota_exhausted' if exhausted else None)
 
     def test_a_fresh_full_or_disallowed_reading_gates_for_fifteen_minutes(self):
         for quota, expected in ((dict(used_percent=100), 'quota_exhausted'),
@@ -214,6 +252,32 @@ class CollectorTest(Stores):
                     found = self.collect('openai', 'invented-chatgpt-model', 'opencode provider openai')
                     self.assertEqual([item['reason'] for item in found['excluded']], excluded)
                     self.assertEqual(len(found['routes']), 1 - len(excluded))
+
+    def test_an_opencode_claude_completion_leaves_the_shared_native_rows_stale_for_every_alias(self):
+        """Task 12 (F1): the boundary the closing `complete` writes for an OpenCode Claude claim (`terminal`) makes the
+        native rows it drew on stale for the next claim; OpenCode and native Claude share this pool entry until a
+        reading observed after it arrives."""
+        now = int(time.time())
+        rows = [dict(id=window, limit=1000, used=100, length=length, reset_at=now + 3600, rolling=False,
+                     observed_at=now - 10, unit=collector.WINDOW_UNIT)
+                for window, length in (('5h', 18000), ('7d', 604800))]
+        native_reading(self.settings, rows, now)
+        routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
+                              evidence='synthetic-1', now=now)
+        double, record = subscription_billing.double('oc'), dict(
+            route='opencode-claude-subscription:s', billing_class='included_subscription', pool='claude-subscription')
+        fresh = []
+        with mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now: double(route, now)), \
+                mock.patch.object(opencode_account, 'native_current', lambda settings, now: True):
+            for step in ('claimable', 'completed', 'newer reading'):
+                if step == 'completed':
+                    self.assertTrue(subscription_fallback.terminal(record))
+                    subscription_fallback.mark_terminal(self.settings, record, now - 5, 'oc-1')
+                if step == 'newer reading':
+                    native_reading(self.settings, [dict(row, observed_at=now - 2) for row in rows], now)
+                found = self.collect('claude-agent', 'invented-claude-small', 'claude-agent-sdk via opencode')
+                fresh.append([window['fresh'] for window in found['pools']['claude-subscription']['windows']])
+        self.assertEqual(fresh, [[True, True], [False, False], [True, True]])
 
     def test_opencode_claude_uses_native_rows_only_while_its_native_login_is_current(self):
         now = int(time.time())

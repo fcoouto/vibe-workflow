@@ -398,10 +398,11 @@ class CoveringSource(collector.LocalSource):
 
 
 class CoveringReadingCodeSourceTest(flows.OpenCodeLaunchFlowTests):
-    """Preserved whole-launch covering-reading proof through the real OpenCode launcher on `CoveringSource`: an included
-    claim, its matching covering settled reading (no consumed mark), legitimate later included eligibility, and the
-    collection/admission recheck when another completed launch changes the pool's readings. Synthetic proof only."""
-    OWN = ('test_a_covering_settled_reading_keeps_the_code_source_pool_included',
+    """Whole-launch proof through the real OpenCode launcher on `CoveringSource`: an included OpenCode Claude claim and
+    its settled reading, and the collection/admission recheck when another completed launch changes the pool's
+    readings. Since Task 12 (F1) an OpenCode Claude reply never covers its claim (production claims draw on the native
+    login's bound rows): the completion marks the pool consumed and the next claim waits for a newer reading."""
+    OWN = ('test_an_opencode_claude_reply_never_covers_its_claim_and_the_pool_is_marked',
            'test_a_covering_completion_between_collection_and_admission_is_seen_on_the_code_source')
 
     def setUp(self):
@@ -409,16 +410,17 @@ class CoveringReadingCodeSourceTest(flows.OpenCodeLaunchFlowTests):
         self.enterContext(mock.patch.object(collector, 'default_source',
                                             lambda settings_path=None: CoveringSource(settings_path)))
 
-    def test_a_covering_settled_reading_keeps_the_code_source_pool_included(self):
+    def test_an_opencode_claude_reply_never_covers_its_claim_and_the_pool_is_marked(self):
         self.claude_only()
         self.covering(0.25, 0.1)
         first = self.launch('cover-1')
         self.assertEqual(first['state'], 'recorded', first)
         self.assertTrue(first['admission']['reserved'], first)  # an included claim on the vouched reading
-        self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)  # covered: no mark
+        self.assertGreaterEqual(collector.consumed_at(self.settings, 'claude-subscription'),
+                                first['admission']['at'])  # Task 12 (F1): never covered, so marked
         second = self.launch('cover-2')
         self.assertEqual(second['state'], 'recorded', second)
-        self.assertTrue(second['admission']['reserved'], second)  # legitimately included again
+        self.assertEqual(second['admission']['reserved'], {}, second)  # no claim until a newer reading
 
     def test_a_covering_completion_between_collection_and_admission_is_seen_on_the_code_source(self):
         self.claude_only()
@@ -430,7 +432,8 @@ class CoveringReadingCodeSourceTest(flows.OpenCodeLaunchFlowTests):
                 order.append('early')
                 early = self.launch('early')  # after `late` collected: an included launch with a covering reading
                 self.assertTrue(early['admission']['reserved'], early)
-                self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+                self.assertGreaterEqual(collector.consumed_at(self.settings, 'claude-subscription'),
+                                        early['admission']['at'])  # Task 12 (F1): its completion marks the pool
             return real(assignment, *args, **kwargs)
         with mock.patch.object(routing, 'admit', interleave):
             late = self.launch('late')

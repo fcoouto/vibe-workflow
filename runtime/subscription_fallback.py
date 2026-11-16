@@ -66,6 +66,16 @@ def is_fallback(record):
     return isinstance(record, dict) and routing.FALLBACK in (record.get('reason_codes') or ())
 
 
+def terminal(record):
+    """Whether closing this subscription record must write its pool's terminal boundary: a provider-managed fallback
+    (unknown consumption), or an included claim on the OpenCode Claude path, which draws on the native login's bound
+    rows that its own reply readings can never cover (Task 12, F1). Native completions mark through
+    `native_complete`."""
+    from runtime import routing_paths
+    return is_fallback(record) or isinstance(record, dict) and record.get('billing_class') == 'included_subscription' \
+        and routing_paths.path_of(record.get('route')) == 'opencode-claude-subscription'
+
+
 def active_pools(data):
     """The pools with a dispatched or uncertain fallback attempt (an empty included reservation still counts)."""
     records = {record.get('attempt_id'): record for record in data.get('admissions', [])}
@@ -106,16 +116,17 @@ def dispatch_problem(data, record, settings_path, now):
 
 def after_record(data, event, settings_path, now):
     """`Ledger.record_event`'s fixed finalization, in its write transaction after the event applied and was stored and
-    before COMMIT: a `complete` that has just closed a provider-managed fallback hold writes the pool's terminal
-    boundary. The ledger refuses an already-closed hold (`attempt_closed`) and answers a replay or conflict before this
-    runs, so a closed hold here was closed by this event. A missing store or failed write raises
+    before COMMIT: a `complete` that has just closed a `terminal` hold (a provider-managed fallback, or an OpenCode
+    Claude included claim) writes the pool's terminal boundary. The ledger refuses an already-closed hold
+    (`attempt_closed`) and answers a replay or conflict before this runs, so a closed hold here was closed by this
+    event. A missing store or failed write raises
     `observation_store_unavailable`, rolling back the closure and the event row so the same event can be retried.
     Returns None."""
     if event.get('kind') != 'complete':
         return None
     hold = data['holds'].get(event['attempt_id'])
     record = Ledger.admission(data, event['attempt_id']) if hold is not None and hold['closed'] else None
-    if record is None or not is_fallback(record):
+    if record is None or not terminal(record):
         return None
     from runtime.usage_budget import BudgetError
     try:

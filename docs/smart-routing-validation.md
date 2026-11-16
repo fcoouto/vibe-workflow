@@ -420,10 +420,12 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
     rows (CACHE_CEILING) and applies model-scoped limits per model (an unmatched scope makes every Claude route
     quota-unknown); OpenCode Claude reuses those native readings only while its native login is current. Native Codex
     gates on a reading fresh for 15 minutes (`QUOTA_FRESH_SECONDS`). Still not claimed: Go, Codex and OpenCode
-    ChatGPT included quota, Go weekly/monthly reset semantics, per-model demand, and the ChatGPT-to-Codex link
-    (deferred).
+    ChatGPT included quota, Go weekly/monthly reset semantics, Go `limited: true` (never observed: as a
+    refuse-only gate, a throttled-but-usable meaning could only cause a false refusal, never a send), per-model
+    demand, and the ChatGPT-to-Codex link (deferred).
   - OpenCode Claude also needs a current native Claude account. When it is not current, the acquisition runs the
-    native reader once with no window demanded (`need=()`, stale-and-needed: account identity, quota unknown). A0 is
+    native reader once (stale-and-needed; `5h`/`7d` only when the route demands them, else `need=()`), and an
+    OpenCode Claude completion marks the pool consumed like a native one (Task 12). A0 is
     merged: the native parse accepts the real 2.1.311 answer shape and keeps the account fact through quota refusals.
   - Verified on OpenCode 2.2.6 (16 November 2026): the producer reads with `opencode api --standalone`, a private
     in-process server of the same CLI version that never uses or starts the background service (plain `opencode api`
