@@ -13,7 +13,7 @@ from runtime import doctor, evidence, setup_observation as source, startup, stat
 from runtime.adapters import codex
 from tests import test_native_behavior_owner as fixtures
 from tests.fixture_native_behavior import PATCH
-from tests.fixture_codex_trace import write_bundle, write_events
+from tests.fixture_codex_trace import write_bundle, write_events, write_json, replace_directory
 
 
 class ParentObservationTests(unittest.TestCase):
@@ -119,14 +119,27 @@ class ParentObservationTests(unittest.TestCase):
             codex.observe_managed_case(self.scope, selected | dict(call_id='exec-parent-inner'),
                 self.allocation['reference'], 'pre-tool-enforcement')
 
-    def trace_denial(self):
+    def trace_denial(self, *, nested=False, observe=True):
         started = self.begin()['task']
         selected = self.deny(wrapped=True)
         bundle, rows, _ = write_bundle(self.original['home'], self.owner.fixture.repo,
             self.original['rollout'], thread=self.identity['session_id'], turn=selected['turn_id'],
             outer=selected['call_id'], inner='exec-parent-inner')
+        if nested:
+            home = self.original['home']
+            traces = home/'traces'; traces.mkdir(mode=0o700)
+            sessions = home/'sessions'; sessions.mkdir(mode=0o700)
+            bundle = bundle.rename(traces/bundle.name)
+            self.original['rollout'] = self.original['rollout'].rename(sessions/'rollout.jsonl')
+            metadata_path = bundle/'payloads/1.json'
+            metadata = json.loads(metadata_path.read_bytes()); metadata['rollout_path'] = str(self.original['rollout'])
+            write_json(metadata_path, metadata)
+            data = json.loads(self.original['settings'].read_bytes())
+            data['threads'][self.identity['session_id']]['path'] = str(self.original['rollout'])
+            data['rollout'] = str(self.original['rollout'])
+            self.original['settings'].write_text(json.dumps(data))
         witness = codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
-            'pre-tool-enforcement', trace_bundle=str(bundle))
+            'pre-tool-enforcement', trace_bundle=str(bundle)) if observe else None
         return started, selected, bundle, rows, witness
 
     def consume_trace(self, witness):
@@ -180,11 +193,62 @@ class ParentObservationTests(unittest.TestCase):
         os.replace(replacement, path)
         with self.assertRaises(startup.StartupError):
             self.consume_trace(witness)
+    def test_retained_trace_relocation_starts_from_valid_witness(self):
+        _, _, bundle, _, witness = self.trace_denial()
+        self.consume_trace(witness)
         relocated = bundle.with_name('relocated')
         bundle.rename(relocated)
         with patch.dict(os.environ, CODEX_ROLLOUT_TRACE_ROOT=str(relocated)):
             with self.assertRaises(startup.StartupError):
                 self.consume_trace(witness)
+
+    def test_observer_final_recheck_rejects_payload_directory_replacement(self):
+        from runtime.adapters import codex_trace
+        _, selected, bundle, _, _ = self.trace_denial(observe=False)
+        original = codex_trace.d3._read_file
+        reads = 0
+        def replacing(path, *args, **kwargs):
+            nonlocal reads
+            raw = original(path, *args, **kwargs)
+            if Path(path) == bundle/'payloads/5.json':
+                reads += 1
+                if reads == 3:
+                    replace_directory(bundle/'payloads')
+            return raw
+        with patch.object(codex_trace.d3, '_read_file', side_effect=replacing):
+            with self.assertRaises(codex.ObservationError):
+                codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                    'pre-tool-enforcement', trace_bundle=str(bundle))
+        self.assertEqual(reads, 3)
+
+    def test_retained_final_recheck_rejects_payload_directory_replacement(self):
+        from runtime.adapters import codex_trace
+        _, _, bundle, _, witness = self.trace_denial()
+        original = codex_trace.d3._read_file
+        reads = 0
+        def replacing(path, *args, **kwargs):
+            nonlocal reads
+            raw = original(path, *args, **kwargs)
+            if Path(path) == bundle/'payloads/5.json':
+                reads += 1
+                if reads == 3:
+                    replace_directory(bundle/'payloads')
+            return raw
+        with patch.object(codex_trace.d3, '_read_file', side_effect=replacing):
+            with self.assertRaises(startup.StartupError):
+                self.consume_trace(witness)
+        self.assertEqual(reads, 3)
+
+    def test_retained_original_proofs_bind_intermediate_bundle_and_rollout_ancestors(self):
+        _, selected, bundle, _, witness = self.trace_denial(nested=True)
+        self.consume_trace(witness)
+        for target in (bundle.parent, self.original['rollout'].parent):
+            replace_directory(target)
+            with self.subTest(target=target), self.assertRaises(startup.StartupError):
+                self.consume_trace(witness)
+            witness = codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                'pre-tool-enforcement', trace_bundle=str(bundle))
+            self.consume_trace(witness)
 
     def test_trace_cannot_select_missing_wrong_or_old_core_receipt(self):
         started, selected, bundle, rows, _ = self.trace_denial()

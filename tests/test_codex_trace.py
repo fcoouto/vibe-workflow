@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from runtime import doctor, startup
 from runtime.adapters import codex
-from tests.fixture_codex_trace import DENIAL, write_bundle, write_events, write_json
+from tests.fixture_codex_trace import DENIAL, write_bundle, write_events, write_json, replace_directory
 from tests.fixture_native_behavior import PATCH, encoded, row
 
 
@@ -186,6 +186,76 @@ class CodexTraceTests(unittest.TestCase):
         for deadline in (float('inf'), float('-inf'), float('nan')):
             with self.subTest(deadline=deadline), self.assertRaises(codex.ObservationError):
                 self.fact(deadline=deadline)
+
+    def nest_sources(self):
+        traces = self.home/'traces'; traces.mkdir(mode=0o700)
+        sessions = self.home/'sessions'; sessions.mkdir(mode=0o700)
+        self.bundle = self.bundle.rename(traces/self.bundle.name)
+        self.rollout = self.rollout.rename(sessions/self.rollout.name)
+        path = self.bundle/'payloads/1.json'
+        metadata = json.loads(path.read_bytes()); metadata['rollout_path'] = str(self.rollout)
+        write_json(path, metadata)
+
+    def test_final_recheck_rejects_directory_and_intermediate_ancestor_replacement(self):
+        from runtime.adapters import codex_trace
+        self.nest_sources()
+        for target in (self.bundle/'payloads', self.bundle.parent, self.rollout.parent):
+            reads = 0
+            original = codex_trace.d3._read_file
+            selected = self.bundle/'payloads/5.json'
+            before = (selected.stat().st_ino, hashlib.sha256(selected.read_bytes()).hexdigest())
+            def replacing(path, *args, **kwargs):
+                nonlocal reads
+                raw = original(path, *args, **kwargs)
+                if Path(path) == selected:
+                    reads += 1
+                    if reads == 2:
+                        replace_directory(target)
+                return raw
+            with self.subTest(target=target), patch.object(codex_trace.d3, '_read_file', side_effect=replacing):
+                with self.assertRaisesRegex(codex.ObservationError, 'native_trace_source_changed'):
+                    self.fact()
+            self.assertEqual(before, (selected.stat().st_ino, hashlib.sha256(selected.read_bytes()).hexdigest()))
+
+    def test_issued_proofs_reject_substituted_intermediate_ancestors(self):
+        from runtime.adapters import codex_trace
+        self.nest_sources()
+        fact = self.fact()
+        for target in (self.bundle.parent, self.rollout.parent):
+            replace_directory(target)
+            source = dict(bundle=str(self.bundle), native_home=str(self.home), repository_root=str(self.root),
+                rollout_path=str(self.rollout), deadline=time.monotonic()+5)
+            with self.subTest(target=target), self.assertRaisesRegex(codex.ObservationError, 'native_trace_source_changed'):
+                codex_trace.recheck(dict(sources=fact['sources'][2:], native_call_id='native-call'), source)
+            fact = self.fact()
+
+    def test_final_custody_capture_obeys_deadline_and_shared_budget(self):
+        from runtime.adapters import codex_trace
+        for expired in (True, False):
+            original = codex_trace._custody
+            captures = 0
+            def final_capture(source):
+                nonlocal captures
+                captures += 1
+                if captures == 3:
+                    if expired:
+                        source['deadline'] = 0
+                    else:
+                        source['_budget']['files'] = codex_trace.MAX_FILES+1
+                return original(source)
+            with self.subTest(expired=expired), patch.object(codex_trace, '_custody', side_effect=final_capture):
+                with self.assertRaises(codex.ObservationError):
+                    self.fact()
+            self.assertEqual(captures, 3)
+
+    def test_retained_selector_rejects_incomplete_trace_v1(self):
+        from runtime.adapters import codex_trace
+        proofs = self.fact()['sources'][2:]
+        self.assertEqual(codex_trace.retained_selector(proofs), (str(self.bundle), 'native-call'))
+        for proof in proofs:
+            proof['reference'] = proof['reference'].replace('#native-trace-v2:', '#native-trace-v1:')
+        with self.assertRaises(codex.ObservationError):
+            codex_trace.retained_selector(proofs)
 
 
 if __name__ == '__main__':

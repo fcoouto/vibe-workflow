@@ -66,3 +66,13 @@ def write_events(bundle, rows):
     path = bundle/'trace.jsonl'
     path.write_bytes(b''.join(json.dumps(row).encode()+b'\n' for row in rows))
     path.chmod(0o600)
+
+
+def replace_directory(path):
+    """Replace only a synthetic directory, preserving every child identity."""
+    replacement = path.with_name(path.name+'-replacement')
+    replacement.mkdir(mode=0o700)
+    for child in path.iterdir():
+        child.rename(replacement/child.name)
+    path.rename(path.with_name(path.name+'-previous'))
+    replacement.rename(path)
