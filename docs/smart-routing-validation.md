@@ -377,6 +377,58 @@ provenance infrastructure for it.
    live qualification, model/provider calls, activation, spending, budget reset,
    settings change or release permission. All unrelated v1 gaps remain open.
 
+## Edit 15 (16 November 2026): account continuity and provider-managed fallback
+
+Registered before any further governed run. The historical numbers, limits, failures and evidence above stay as they
+were; they assumed quota-denominated launches.
+
+**What a launch needs now.**
+- Every subscription launch needs its path's own current account fact, and a native client also the catalog bound to
+  that account. A missing selected-account identity always refuses.
+- Only included-first optimization needs complete, coherent quota readings and measured demand. An account whose
+  quota or demand is unknown may launch only on its provider-managed fallback, with no included claim.
+- Each admission keeps a marker of the account and its random generation. The dispatch transaction refuses a permit
+  when that marker is missing, unverifiable or names another account or generation, and a continuation is pinned to
+  its root's marker. Caller-supplied markers grant nothing, new unverified admissions reserve nothing, legacy unsent
+  records are refused, and issued or uncertain exposure still settles.
+
+**What does not change.** The quota-denominated canary criteria (step 8: samples, coverage and limits) stay as
+registered. Unknown-quota fallback sends never satisfy them and never count toward them. Isolation, the
+lost-acknowledgment drill, strict replay, platform and release gates, activation, user cutover and default-ON
+decisions remain separate prerequisites. Explicit OFF and the kill switch stay. Rollback below this revision and
+mixed versions are unsupported: fix forward, with no manual cache deletion or invented identity migration.
+
+**Known limits.**
+- Native sources are implemented and tested with synthetic transports only. The generation-bound format has no live
+  qualification; older native account observations remain dated historical evidence.
+- Window rows keep their history up to the existing 1 MiB fail-closed store bound (an availability risk).
+  Crash and power-loss durability, and login changes no read has observed, are unproved.
+- All three OpenCode positive sources stay blocked:
+  - Claude (OpenCode 2.2.6) has no secret-free selected subscriber/account projection.
+  - ChatGPT has no binding from the selected OpenCode `openai` connection to a subscriber.
+  - Go lacks member/sign-in identity and provider-to-meter linkage, and complete observation, reset, month and
+    demand semantics for included optimization.
+- Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
+  model call or new account framework.
+- API Usage is next-release scope (`API_FUNDING_QUALIFIED=False`, 20% direct API buffer). Production OpenRouter is
+  deferred. L1 to L3 follow the canary; L4 stays conditional and off.
+- Account authentication, settings, overflow, permissions, spending, credit and coordinator choices are unchanged.
+  A provider-managed fallback may be charged under the provider's own policy. Unknown quota or cost never counts as
+  free included usage or as a dollar estimate.
+
+**Proposed separate live packet: PROPOSAL ONLY, not approved and not executed.** A finite fallback-behaviour check,
+distinct from the canary:
+- Scope: one managed project, one native path whose current account and catalog are verified, at most 3 tasks and
+  3 sends (one per task, each a fresh attempt with its own permit) within 30 minutes.
+- Charge risk: before it starts, the user acknowledges that provider-managed fallback sends may be charged under the
+  provider's policy and that unknown quota is not free capacity.
+- Isolation: a disposable checkout and private routing stores; no retry and no route or model substitution.
+- Stops: the first refusal, the first `uncertain` or unknown send, any account or generation change, or the time
+  limit ends the packet. Nothing is retried.
+- Prerequisites on the same build: the lost-acknowledgment drill, operator reconciliation (`reconcile_subscription`)
+  and strict replay. Platform and release proof stay separate.
+- It grants no activation, cutover, default-ON or release decision, and its sends never count toward the canary.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.

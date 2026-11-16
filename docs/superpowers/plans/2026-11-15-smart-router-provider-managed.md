@@ -430,6 +430,14 @@ Missing quota is optional; missing selected-account identity remains a refusal.
 
 ### Task 5: Prove integration and separate readiness from live authority
 
+**Implementation checkpoint:** existing readiness and historical replay behavior
+needed no runtime change. New real-source regressions and current guidance
+separate account/catalog readiness, included optimization and live authority.
+The new tests passed initially and are regression proof, not earlier TDD.
+Validation Edit 15 retains historical limits and proposes, but does not authorize
+or execute, a separate finite fallback packet. Full-suite/platform execution,
+independent whole-branch review and final publication remain pending.
+
 **Files:** `runtime/native_routing.py:activation_readiness`,
 `runtime/routing_launch.py:readiness`, `tests/qualification/replay_strict.py`,
 matching existing tests; `docs/smart-routing-qualification.md`,
@@ -441,15 +449,15 @@ present quota measurement as a universal launch prerequisite.
 Report included readiness separately from account/launch readiness; status is
 pure and a fallback-ready result grants neither activation nor a live-send budget.
 
-- [ ] **1. Write failing real-service regression tests** for all five path names,
+- [x] **1. Write failing real-service regression tests** for all five path names,
   both admission bases, strict historical/new replay, API-off/gateway-off,
   uncertain duplicate sends, safe refusal continuation and account changes.
   Assert unsupported sources refuse rather than marking all five ready.
-- [ ] **2. Update only the affected readiness/replay consumers and guidance.**
+- [x] **2. Update only the affected readiness/replay consumers and guidance.**
   Preserve consumed-boundary and exposure checks in every native/managed launch.
   Missing telemetry remains unknown in returned results and reconciliation;
   no new learning/reporting subsystem. Preserve explicit OFF and rollback.
-- [ ] **3. Amend the registered validation/runbook before any governed run.**
+- [x] **3. Amend the registered validation/runbook before any governed run.**
   Only included optimization needs quota/demand seeds. Preserve the old
   quota-denominated canary limits/evidence; do not claim unknown-quota launches
   meet them. Describe a separate, still-unapproved finite task/send/time packet

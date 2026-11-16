@@ -7,7 +7,8 @@ or another client's catalog, and no model name is parsed.
 Sources:
 - `current_binding(client)`: a code-supplied `{client_version, connection, controls}` of the client now running; none
   in production. For Claude Code the binding is instead the current native account read (`runtime/claude_usage.py`):
-  its client version, its derived account key as the connection and the alias/effort controls the bridge sends. No
+  its client version, its derived account key and random account generation as the connection
+  (`account:<key>:<generation>`) and the alias/effort controls the bridge sends. No
   UUID or attestation of another coordinator's complete settings is required (15 November account amendment). For
   Codex it is the native account read (`runtime/codex_account.py`), whose missing client version stays `unknown`.
   That read is a point-in-time check of the native login: a later login or backend switch is visible only at the
