@@ -373,7 +373,7 @@ class ActivationChildTests(unittest.TestCase):
             spawned.append((argv, kwargs))
             return real(argv, **kwargs)
         answers = {}
-        with mock.patch.object(subprocess, 'Popen', spy), mock.patch.object(command, 'CAPABILITIES', (capability,)):
+        with mock.patch.object(subprocess, 'Popen', spy), mock.patch('runtime.routing_activation.CAPABILITIES', (capability,)):
             for settings in (ready, empty):
                 service = command.Service(settings, settings.parent.parent / 'usage' / 'organizations.sqlite3',
                                           one_shot=True)  # as only `main()` builds it

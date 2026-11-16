@@ -11,9 +11,10 @@ id's path (`routing_paths.path_of`), times are integer seconds with `observed_at
 ahead of the clock beyond CLOCK_MARGIN, and `valid_until` after now. `paid_crossover` reports the account's own
 overflow setting (`provider_blocked`, `provider_managed` or `unknown`); none of them disqualifies the account, whose
 provider applies its own paid-overflow configuration (the user's 15 November decision). A source answers it through
-`billing(route, now)`; only code selects the source. The one production producer is the native Claude account read
-(`runtime/claude_usage.py`) for its own path; every other path still has none and is refused. A label, digest, quota
-seed, path qualification, zero cost or absent credit is never this fact.
+`billing(route, now)`; only code selects the source. The production producers are the local account reads behind
+`LocalSource.billing` and `acquire_billing`: native Claude (`runtime/claude_usage.py`), Codex
+(`runtime/codex_account.py`) and OpenCode (`runtime/opencode_account.py`), each for its own paths; a path with no
+producer is refused. A label, digest, quota seed, path qualification, zero cost or absent credit is never this fact.
 Code-selected sources may acquire missing/stale facts before eligibility through `acquire_billing(routes, now)`.
 Acquisition is separate from pure reads.
 

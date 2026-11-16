@@ -18,7 +18,7 @@ import types
 import unittest
 from unittest import mock
 
-from runtime import routing_gates, routing_settings, state
+from runtime import routing_activation, routing_gates, routing_settings, state
 from scripts import routing as command
 from tests import test_routing_gates as gate_tests
 from tests.test_routing_command import Base, observations, prepare
@@ -185,6 +185,39 @@ class ObservationTests(ManagedBase):
         self.assertEqual(response['reason'], 'observations_not_accepted')
 
 
+class StatusManagedTests(ManagedBase):
+    """E6: a pinned `status` says whether its checkout is managed, through `routing_settings.managed_project`."""
+
+    def status(self, service=None):
+        return (service or self.service).handle(b'{"v":1,"op":"status"}')
+
+    def test_a_pinned_status_answers_managed_true_or_false(self):
+        self.assertIs(self.status()['managed'], True)
+        routing_settings.update(self.settings, dict(managed_projects=[]), 1)
+        self.assertIs(self.status()['managed'], False)
+
+    def test_an_unpinned_status_has_no_managed_field(self):
+        plain = command.Service(self.settings, self.ledger)
+        self.addCleanup(plain.close)
+        answer = self.status(plain)
+        self.assertEqual(answer['state'], 'ok')
+        self.assertNotIn('managed', answer)
+
+    def test_a_linked_worktree_of_the_managed_checkout_is_managed(self):
+        from tests.test_routing_settings import linked_worktree
+        (self.project / '.git').mkdir()
+        worktree = Path(self.temp.name).resolve() / 'worktrees' / 'task'
+        linked_worktree(self.project, worktree)
+        pinned = command.Service(self.settings, self.ledger, project=worktree)
+        self.addCleanup(pinned.close)
+        self.assertIs(self.status(pinned)['managed'], True)
+
+    def test_unreadable_settings_answer_managed_fail_closed(self):
+        self.settings.write_text('{not json')
+        answer = self.status()
+        self.assertEqual((answer['settings_state'], answer['managed']), ('unavailable', True))
+
+
 def write_checks(folder):
     """Self-check modules for a stand-in package root: pass, fail, sleep, environment probe."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -244,14 +277,44 @@ class ActivationGateTests(Base):
                                                                 change=change)).encode())
 
     def gate(self, *capabilities):
-        return mock.patch.multiple(command, CAPABILITIES=tuple(capabilities), _package=lambda: self.package)
+        return mock.patch.multiple(routing_activation, CAPABILITIES=tuple(capabilities), _package=lambda: self.package)
 
     def test_the_gate_lists_every_phase_w_capability(self):
         self.assertEqual([name for name, _, _ in command.CAPABILITIES],
                          ['collector_and_launcher', 'route_manifest', 'subscription_sources', 'native_delegation',
                           'opencode_launcher', 'openrouter_proposals', 'openrouter_workers', 'api_usage',
-                          'instructions'])
+                          'instructions', 'authority_required'])
         self.assertEqual(command._package(), state.PACKAGE)
+
+    def test_the_gate_lives_in_runtime_routing_activation_and_the_command_reexports_it(self):
+        for name in ('CAPABILITIES', 'MANAGED_HOSTS', 'SELF_CHECK_TIMEOUT', 'SELF_CHECK_REAP', 'SELF_CHECK_MARK',
+                     'SELF_CHECK_CODE', 'SELF_CHECK_CHILD', 'activation_gate', '_self_check', '_package'):
+            with self.subTest(name):
+                self.assertIs(getattr(command, name), getattr(routing_activation, name))
+
+    def test_adding_needs_the_ledgers_one_way_authority_first_and_removal_never_does(self):
+        authority = next(item for item in routing_activation.CAPABILITIES if item[0] == 'authority_required')
+        with self.gate(('ok', 'module', 'gate_pass:managed_self_check'), authority):
+            refused = self.add()
+            self.assertEqual(refused, dict(v=1, state='blocked', reason='managed_path_incomplete',
+                                           failing=['authority_required'],
+                                           codes={'authority_required': ['authority_not_required']}))
+            self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
+            required = self.service.handle(b'{"v":1,"op":"set","authority_required":true}')
+            self.assertEqual(required, dict(v=1, state='updated', authority_required=True))
+            joined = self.add()
+            self.assertEqual(joined['state'], 'updated', joined)
+            with mock.patch.object(command.routing, 'ledger_summary', side_effect=RuntimeError('unreadable')):
+                other = Path(self.temp.name).resolve() / 'other'
+                other.mkdir()
+                unreadable = self.add([str(self.project), str(other)], revision=1)
+            self.assertEqual(unreadable['codes'], {'authority_required': ['ledger_unavailable']})
+        fresh = command.Service(self.settings.parent / 'fresh.json', self.ledger.parent / 'fresh.sqlite3', one_shot=True)
+        self.addCleanup(fresh.close)
+        routing_settings.update(fresh.settings_path, dict(managed_projects=[str(self.project)]), 0)
+        with self.gate(authority):
+            removal = self.add([], revision=1, service=fresh)  # no ledger, no authority: removal still works
+        self.assertEqual(removal['state'], 'updated', removal)
 
     def test_an_in_process_service_refuses_add_and_remove(self):
         routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
@@ -300,12 +363,13 @@ class ActivationGateTests(Base):
             return real(argv, **kwargs)
         capabilities = command.CAPABILITIES + (('simulated_missing', 'module', 'runtime.c3_0b_absent:managed_self_check'),)
         with mock.patch.object(subprocess, 'Popen', spy), \
-                mock.patch.object(command, 'CAPABILITIES', capabilities):
+                mock.patch.object(routing_activation, 'CAPABILITIES', capabilities):
             response = self.add()
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
         self.assertEqual(response['codes']['simulated_missing'], ['self_check_missing'])
         self.assertIn('route_manifest', response['failing'])
-        self.assertEqual(len(spawned), len(capabilities) - 1)  # `subscription_sources` runs in process (F4R-03)
+        self.assertIn('authority_required', response['failing'])  # E2: this ledger never had the one-way switch
+        self.assertEqual(len(spawned), len(capabilities) - 2)  # `subscription_sources` (F4R-03), `authority_required` (E2)
         self.assertEqual(sorted(response['failing']), sorted(response['codes']))
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
         for argv, kwargs in spawned:
@@ -349,7 +413,7 @@ class ActivationGateTests(Base):
             made.append(real(*args, **kwargs))
             return made[-1]
         with self.gate(('slow', 'module', 'gate_sleep:managed_self_check')), \
-                mock.patch.object(command, 'SELF_CHECK_TIMEOUT', 1), mock.patch.object(tempfile, 'mkdtemp',
+                mock.patch.object(routing_activation, 'SELF_CHECK_TIMEOUT', 1), mock.patch.object(tempfile, 'mkdtemp',
                                                                                         record):
             response = self.add()
         self.assertEqual(response['codes'], {'slow': ['self_check_timeout']})
@@ -370,7 +434,8 @@ def managed_self_check(workdir):
 """)
         started = time.monotonic()
         with self.gate(('slow', 'module', 'gate_grandchild:managed_self_check')), \
-                mock.patch.object(command, 'SELF_CHECK_TIMEOUT', 2), mock.patch.object(command, 'SELF_CHECK_REAP', 2):
+                mock.patch.object(routing_activation, 'SELF_CHECK_TIMEOUT', 2), \
+                mock.patch.object(routing_activation, 'SELF_CHECK_REAP', 2):
             response = self.add()
         self.assertEqual(response['codes'], {'slow': ['self_check_timeout']})
         self.assertLess(time.monotonic() - started, 15)

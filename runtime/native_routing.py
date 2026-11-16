@@ -246,7 +246,8 @@ def acquire_billing(projects, settings_path):
     """One-shot preactivation acquisition, before readiness and ledger locks; readiness itself remains pure.
 
     Resolved qualified paths supply the scope, not a pretend account binding. Only a qualified source can
-    establish that binding and group aliases. No production source has this capability yet.
+    establish that binding and group aliases. The production source, `LocalSource.acquire_billing`, reads the native
+    Claude, Codex and OpenCode accounts (`claude_usage`, `codex_account`, `opencode_account`) for their own paths.
     """
     from runtime import delegation_routing, subscription_billing
     from scripts import routing as command

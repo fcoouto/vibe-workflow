@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 import uuid
 
 from runtime import task_profile, usage_budget
@@ -20,6 +21,7 @@ MAX_CHOICES = 16
 # `scripts/routing.py set`, behind its activation gate; C3-7 removes it.
 MAX_MANAGED = 64
 MAX_PROJECT_PATH = 1024
+MAX_GIT_LINK = 4096  # a linked worktree's `.git`, `gitdir` and `commondir` files are one short line each (O5)
 # The fixed code a legacy selector or writer answers for a managed project (design 3.6; used by C3-4b and C3-5).
 LEGACY_ROUTE_RETIRED = 'legacy_route_retired'
 DEFAULTS = dict(smart_routing=True, api_usage_enabled=False, L=0.65, H=0.85, T_hours=72,
@@ -235,6 +237,60 @@ def _identity(path):
     return info.st_dev, info.st_ino
 
 
+def _small(path):
+    """The stripped text of a small regular Git link file; ValueError for anything else. Opened without blocking, so a
+    FIFO planted by a forged link is refused instead of waited on."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('git_link_not_a_file')
+        raw = os.read(fd, MAX_GIT_LINK + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_GIT_LINK:
+        raise ValueError('git_link_too_large')
+    return raw.decode('utf-8').strip()
+
+
+def _linked_primary(target):
+    """The primary checkout of the linked Git worktree holding `target` (a realpath), or None (O5).
+
+    No Git process: walk up to the nearest `.git` entry. A directory is a primary checkout or a plain repository,
+    which the caller already matched. A `gitdir: <p>` file counts only when `<p>/gitdir` names this same `.git`
+    file back (by file identity), so a forged `.git` file never joins a list; then `<p>/commondir` gives the common
+    directory, whose parent is the primary when that parent's `.git` is the common directory. Relative links resolve
+    from the file's own directory. Bounded: one stat per parent until the `.git` entry, three small reads. Any
+    error or mismatch is None: an unresolvable worktree is simply not a linked one."""
+    try:
+        for folder in (target, *target.parents):
+            marker = folder / '.git'
+            try:
+                info = os.stat(marker)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            text = _small(marker) if stat.S_ISREG(info.st_mode) else ''
+            if not text.startswith('gitdir: '):
+                return None
+            gitdir = Path(os.path.join(folder, text[len('gitdir: '):])).resolve()
+            if _identity(os.path.join(gitdir, _small(gitdir / 'gitdir'))) != (info.st_dev, info.st_ino):
+                return None
+            common = Path(os.path.join(gitdir, _small(gitdir / 'commondir'))).resolve()
+            found = _identity(common)
+            return common.parent if found is not None and _identity(common.parent / '.git') == found else None
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return None
+
+
+def _within(target, projects):
+    """Whether the realpath `target` is a registered root or lies inside one, by spelling or by file identity."""
+    chain = [target, *target.parents]
+    if any(item in map(str, chain) for item in projects):
+        return True
+    roots = {found for found in map(_identity, projects) if found is not None}
+    return any(found in roots for found in map(_identity, chain) if found is not None)
+
+
 def managed_project(path, settings_path=None):
     """Whether `path` is a managed project or lies inside one. `settings_path` defaults to the routing command's
     settings (`scripts.routing.default_settings`).
@@ -243,23 +299,23 @@ def managed_project(path, settings_path=None):
     against each registered root's (st_dev, st_ino), so a differently cased spelling on a case-insensitive
     filesystem, `..` and symlinks all match. A path that does not exist yet matches through its nearest existing
     parent, so a new path under a managed root is managed. A registered root that no longer exists still matches
-    by its stored path.
+    by its stored path. A path in a linked Git worktree whose primary checkout is managed is managed too, wherever
+    the worktree lives (O5, `_linked_primary`).
 
     Fail closed: a missing settings file has no managed project, but settings that exist and cannot be read, or a
     path or root that cannot be inspected, count as managed. The managed path then blocks (`settings_unavailable`)
     and every legacy spending entry point refuses, so a corrupt settings file also stops legacy API Usage spending
-    (once C3-5 lands) until it is repaired."""
+    (once C3-5 lands) until it is repaired. A worktree link that cannot be resolved is not managed through it."""
     if settings_path is None:
         from scripts import routing as command
         settings_path = command.default_settings()
     try:
         projects = read(settings_path)['managed_projects']
         target = Path(path).resolve()
-        chain = [target, *target.parents]
-        if any(item in map(str, chain) for item in projects):
+        if _within(target, projects):
             return True
-        roots = {found for found in map(_identity, projects) if found is not None}
-        return any(found in roots for found in map(_identity, chain) if found is not None)
+        primary = _linked_primary(target)
+        return primary is not None and _within(primary, projects)
     except (SettingsError, usage_budget.BudgetError, OSError, RuntimeError, ValueError):
         return True
 
