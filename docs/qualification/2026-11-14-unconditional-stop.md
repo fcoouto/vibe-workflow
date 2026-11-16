@@ -7,7 +7,9 @@ full-stop flow.** Controller and independent coordinator raw-evidence checks
 passed; Astra independently accepted the scoped evidence. See
 [the follow-up](#fresh-authorized-follow-up--15-november).
 
-PR #302's ordinary delivery status is separate from this qualification result.
+PR #302's ordinary delivery status is separate from this qualification result. The
+unconditional stop itself shipped in release 0.1.41 (PR #302 is an ancestor of that tag);
+the layers recorded below are evidence added after delivery.
 PR #294 remains deferred, draft/BLOCKED, unmerged and unreleased.
 No installed-package change, shared-service restart or release occurred.
 
@@ -16,7 +18,8 @@ The later UI/race attempt stopped before either requested case executed; see
 and release remain held under the user's explicit Preserve-login decision.
 A later fresh race-only attempt stopped at its initial gate-status snapshot,
 before inference; see [the latest attempt](#fresh-race-only-attempt--15-november).
-Native race qualification remains incomplete.
+At that point native race qualification remained incomplete; the later results below
+supersede it.
 A Git-backed rerun then passed that snapshot and failed at round 1 on a sandbox
 DNS error; see [the Git-backed attempt](#git-backed-race-attempt--16-november).
 After a reviewed profile change, a counted retry allowance and non-primary request
@@ -873,7 +876,7 @@ accepted the final run.
 - **Amendments.** Astra approved checking assistant text only (reasoning is saved as
   evidence and displayed repetition is caught by the screen verifier, which now also
   rejects refusal markers outside the Edit panel) and exempting only
-  `/Users/fcouto/.claude.json` from byte equality.
+  `~/.claude.json` from byte equality.
 - **Hygiene incident.** I edited the closed attempt's controller in place while preparing
   the next allocation. I restored it from byte-identical originals, reconstructed the
   pre-edit shared verifier, and retained both; their hashes match the closed allocation's
@@ -926,7 +929,7 @@ inspection `873f8170c208e29cd0d42a93034b9bf67d62585b1fd2741822cacbc7cf512d51`.
    rendering only; genuine production-gate stopping comes from this run.
 9. Stored reasoning may repeat the value while undisplayed. Acceptance checks assistant
    text and visible repetition separately.
-10. `/Users/fcouto/.claude.json` differed before and after the run. It is the live Claude
+10. `~/.claude.json` differed before and after the run. It is the live Claude
     Code session's own configuration, written outside the sandbox. This is an
     **unattributed volatile live-session file change; it is not claimed benign, unchanged
     or continuously preserved.** All other shared files matched during the run window.

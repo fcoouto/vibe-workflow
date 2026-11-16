@@ -56,7 +56,7 @@ behavioral requirement and changes only qualification organization.
 | --- | --- |
 | Stop denial and late-completion invariants | Existing gate/adapter tests, including `tests/opencode_workflow/plugin.test.ts:640–697`; reuse only after source, test and execution-assumption comparison. Not a substitute for native concurrency. |
 | Native permissions, lineage and explicit continuation | The recorded 57-request flow covers selected sequential controls. Bind reuse to its exact sources and scope; do not relabel it race or new-TUI proof. |
-| Original completion delivered after genuine stop | Task 3, independently admissible after common preflight and its fresh execution approval. |
+| Original completion delivered after genuine stop | Task 3 passed as instrumented mechanical evidence; see the report. |
 | Visible native refusal and separate user continuation | Task 4 passed with a limited reconstructed-screen claim (no renderer-ID binding); see the report. |
 | Claude bridge execution | Task 2 remains held by Preserve login; no OpenCode result substitutes for it. |
 | Preservation, route/budget enforcement and cleanup | Required for every applicable live case; incomplete evidence prevents that case passing. |
@@ -141,7 +141,10 @@ supports separating the required layers, not changing the gate to accommodate
 its harness. Existing source/tests and the sequential native flow provide
 counterevidence to a product-defect claim, not proof of native race/UI correctness.
 Deterministic evidence reuse still needs its recorded compatibility comparison.
-Race and UI each need fresh allocations; no later layer is marked passed here.
+Race and UI each needed fresh allocations; both have since passed (Tasks 3 and 4, with the limits in the report), while Claude (Task 2) remains held.
+
+The paragraphs below are a dated chronology. Where one says a layer was still pending or
+incomplete, the later paragraphs and the qualification report supersede it.
 
 The user explicitly chose **Preserve login** after disclosure of shared Keychain
 refresh and separate-lock interference risk. Do not perform Claude probes,

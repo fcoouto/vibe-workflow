@@ -4,7 +4,7 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 
 **Status: selected mechanical paths qualified on OpenCode 2.2.6 with released 0.1.39. Six original native cases passed, plus a later actual standalone TUI flow covering rendered refusal, native child permission identity and event ordering. Two instrumented native fault instances passed separately. The TUI follow-up required a fixture-only read-only tool permission correction and forced frontend shutdown; shared-server TUI attachment and general workflow improvement are not qualified. Earlier failures remain recorded; neither general semantic detection nor the deferred judge is qualified. See the [13 November report](../docs/qualification/2026-11-13-opencode-escalation-gate.md), [earlier behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
-**Unreleased behavior change:** the final stop now denies edits rather than
+**Behavior change (shipped in release 0.1.41):** the final stop now denies edits rather than
 offering approval. Late completed edits cannot clear it. Separate explicit user
 direction through the existing root-message control is required before another
 edit; no pending edit resumes automatically. A separately authorized private
@@ -14,6 +14,13 @@ automatic edits. The earlier transport failure remains recorded; see the
 [qualification report](../docs/qualification/2026-11-14-unconditional-stop.md#fresh-authorized-follow-up--15-november).
 The custom approval-panel work in PR #294 remains deferred,
 draft/BLOCKED, unmerged and unreleased.
+
+**Current qualification (16 November).** The native late-completion race and the original
+OpenCode TUI case have since passed, each as a limited, recorded claim, and the unconditional
+stop ships in 0.1.41. Claude, Desktop, uninstrumented scheduling and release gates are not
+qualified by them. The paragraphs from here to the end of this section are a dated chronology
+of earlier attempts, kept for the record where they describe a state that has since changed;
+the final two paragraphs give the results.
 The later 15 November UI/race attempt stopped at a timing-RPC HTTP 400 before
 either case executed. It also observed a changed shared-settings hash with
 unknown attribution. Neither native race nor new TUI coverage is qualified;
@@ -113,4 +120,4 @@ The feature is off by default, needs no consent and changes a tracked file, so c
 - A shell pipeline can hide a runner's failure exit. Output-only detection requires complete unittest footers, one per recognized literal check invocation, with the last footer ending captured output. Positive failures, errors or unexpected successes count; expected failures and zero-only counts do not. Multiple runs count at most once per shell event.
 - Output attribution supports literal check sequences, option-free wrapper prefixes, environment assignments, optional `2>&1` and a single stdin-only `tail -N` or `tail -n N`. Mixed viewer/check commands, wrapper options, quoted or substituted syntax, unsupported filters, malformed footers and mismatched run counts remain unknown. Non-zero exits and tool errors still count through the ordinary check classifier.
 - This is consistency checking, not output authentication. A check can print a convincing footer. Truncated output and unsupported frameworks may hide failures; the agent still owns detection outside this narrow subset.
-- Observed on 2.2.6: shell exit status is `result.metadata.exit`; permission `source.id` matches the completed call's `id`; denial messages reach the model; successful-completion events carry child identities. The earlier CLI trace saw the child prompt before creation and no root creation event, requiring `session.get`. The standalone TUI follow-up observed root creation, child creation before its prompt, rendered gate refusal and native subagent edit permission carrying the child's identity and sharing the root hold. Event ordering is surface-dependent. Shared-server TUI attachment, clean frontend exit and a TUI stop-stage approval dialog remain unqualified.
+- Observed on 2.2.6: shell exit status is `result.metadata.exit`; permission `source.id` matches the completed call's `id`; denial messages reach the model; successful-completion events carry child identities. The earlier CLI trace saw the child prompt before creation and no root creation event, requiring `session.get`. The standalone TUI follow-up observed root creation, child creation before its prompt, rendered gate refusal and native subagent edit permission carrying the child's identity and sharing the root hold. Event ordering is surface-dependent. Shared-server TUI attachment and a TUI stop-stage approval dialog remain unqualified; clean frontend exit was observed only in the later 16 November private-server original-TUI case (limited claim; see the qualification report).
