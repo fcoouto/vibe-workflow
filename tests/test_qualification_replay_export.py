@@ -10,7 +10,7 @@ from unittest import mock
 from tests.qualification import canary, replay_export, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
-from tests.qualification.doubles import qual_plan, qual_driver, qual_run
+from tests.qualification.doubles import qual_plan, qual_driver, qual_run, trusted_routing
 from tests.qualification.server import Routing
 
 
@@ -19,7 +19,8 @@ class ExportTests(Temp):
         super().setUp()
         self.state = self.private(self.tmp / "canary")
         self.settings, self.ledger = self.state / "settings.json", self.state / "ledger.sqlite3"
-        self.routing = Routing(self.settings, self.ledger)
+        self.routing = trusted_routing(Routing(self.settings, self.ledger))  # Task 3B: labelled synthetic builder
+        self.addCleanup(self.routing.stop)
         self.export_dir = self.tmp / "replay" / "canary"
 
     def admit(self, count, tag="t"):

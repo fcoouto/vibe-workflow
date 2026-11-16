@@ -19,8 +19,10 @@ entitlement or a billing boundary.
 through the launcher host's own request transport, only for a kept, statically eligible Go route whose stored
 readings are missing or stale, outside served preparation. It needs a qualified meter binding (`window_semantics`):
 the rolling/fixed semantics, lengths and original observation time that turn parsed meters into store windows. None is
-qualified, so production returns before any preview or read and stores nothing; a Go route then stays
-`window_unobserved`. Only code (a labelled test double) can supply a binding.
+qualified, so production returns before any preview or read and stores nothing; a Go route's included quota then
+stays unknown (`window_unobserved`): with a verified account it could only be provider-managed fallback, and today no
+production source verifies an OpenCode Go account, so it is refused earlier (`billing_unverified`). Only code (a
+labelled test double) can supply a binding.
 """
 from decimal import Decimal
 import hashlib

@@ -481,7 +481,7 @@ def _self_check_in_child(workdir):
               window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
                                observed_at=at, unit=routing_observations.WINDOW_UNIT)],
-        billing=subscription_billing.double('self-check'))  # sandbox only: no production billing producer exists
+        billing=subscription_billing.double('self-check'))  # sandbox only: this path has no production billing producer
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source

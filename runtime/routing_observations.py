@@ -69,7 +69,8 @@ class StaticSource:
     `(route, now)` returning a subscription billing fact (`runtime/subscription_billing.py`), normally that module's
     labelled `double`. Without it every subscription route is `billing_unverified`. `model_demand` is a callable
     `(route) -> bool`: whether a `demand_scope: per_model` path's demand is verified for the route's model; without it
-    such routes are `demand_unverified`."""
+    such routes are `demand_unverified` for included use: their quota stays unknown, so an otherwise eligible,
+    account-verified route is provider-managed fallback only, never an included claim."""
 
     def __init__(self, routes, windows=None, credential=None, billing=None, model_demand=None):
         self.routes, self._windows, self._credential = copy.deepcopy(list(routes)), windows or {}, credential

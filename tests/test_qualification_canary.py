@@ -12,7 +12,7 @@ from runtime import routing, routing_settings
 from tests.qualification import canary, safety
 from tests.qualification import server as qual_server
 from tests.qualification import opencode_live as live
-from tests.qualification.doubles import Fake, FakeOpenCode, Temp, types_namespace
+from tests.qualification.doubles import Fake, FakeOpenCode, Temp, trusted_routing, types_namespace
 from tests.qualification.doubles import QUAL, QUAL_ROUTE, qual_plan, qual_driver, qual_run
 
 
@@ -145,6 +145,22 @@ class PilotDriverTests(Temp):
         result, _ = self.assert_aborts(fake, "admission_refused")
         self.assertEqual(result["abort"]["recovery"], "not_dispatched")
 
+    def test_an_account_fallback_admission_never_sends_or_counts(self):
+        """Validation Edit 15: the quota-denominated pilot never sends or counts a provider-managed fallback."""
+        class FallbackFake(Fake):
+            def prepare(self, body):
+                answer, took = super().prepare(body)
+                if answer.get("state") == "admitted":  # eligible account, unknown quota: fallback, no included claim
+                    answer["admission"] = dict(answer["admission"], reserved={},
+                                               reason_codes=["quota_unknown", "provider_managed_fallback"])
+                return answer, took
+        fake = FallbackFake()
+        result, ledger = self.assert_aborts(fake, "admission_refused")
+        self.assertEqual(result["abort"]["recovery"], "not_dispatched")  # the provably unsent hold is released
+        self.assertEqual(result["completed"], 0)
+        self.assertEqual([call for call in fake.calls if call in ("dispatch", "attach")], [])
+        self.assertEqual(ledger.summary()["pilot"]["open_reservations"], 0)
+
     def test_max_duration_aborts(self):
         clock = iter([0.0, 0.0, 24 * 3600 + 1.0] + [24 * 3600 + 2.0] * 50)
         self.assert_aborts(Fake(), "max_duration", clock=lambda: next(clock))
@@ -261,8 +277,10 @@ class CanaryStateTests(Temp):
     def test_an_unclean_canary_ledger_is_refused_with_reset_advice(self):
         from tests.qualification import server
         paths = canary.check_canary_state(self.state(), home=self.home)
-        routing_cmd = server.Routing(paths["settings"], paths["ledger"])
-        canary.initialize_state(routing_cmd)
+        plain = server.Routing(paths["settings"], paths["ledger"])  # the real, unpatched caller-mode boundary
+        canary.initialize_state(plain)
+        self.assertNotEqual(plain("prepare", **qual_plan(1, "plain")[0]["body"])[0]["state"], "admitted")  # Task 3B
+        routing_cmd = trusted_routing(server.Routing(paths["settings"], paths["ledger"]))  # labelled synthetic builder
         self.assertEqual(routing_cmd("prepare", **qual_plan(1, "left")[0]["body"])[0]["state"], "admitted")
         refusals = canary.preflight(dict(routing_cmd("status")[0], project_pinned=True))
         self.assertIn("open_attempts", refusals)
@@ -426,6 +444,35 @@ class PilotEndToEndTests(PilotHarness):
         run, _ = self.pilot()
         self.assertTrue(callable(run.account))
         self.assertTrue(callable(qual_run(self.private(self.tmp / "iso2"), run.ledger).account))
+
+    def test_a_real_fallback_pilot_admission_is_refused_unsent_with_nothing_open(self):
+        """Supplementary F1 integration proof on the real temporary service: the copied request fixture makes the
+        account-verified route's quota unknown, the actual prepare admits it as provider-managed fallback, and the
+        pilot refuses it before dispatch, leaving no open attempt, spend, reservation or sample."""
+        run, ledger = self.pilot()
+        env, seen, sends = live.CanaryEnv(run), [], []
+        real_prepare, real_dispatch = env.prepare, env.dispatch
+
+        def prepare(body):
+            body = json.loads(json.dumps(body))  # a copy of the request fixture, never the returned admission
+            for route in body["observations"]["routes"]:
+                route["provider_fallback"] = True
+            for pool in body["observations"]["pools"].values():
+                pool["windows"] = []
+            answer, took = real_prepare(body)
+            seen.append(answer)
+            return answer, took
+        env.prepare = prepare
+        env.dispatch = lambda attempt: sends.append(attempt) or real_dispatch(attempt)
+        result = qual_driver(env, ledger, n=1, run=run.run_id, tag="fallback").run()
+        admission = seen[0].get("admission") or {}
+        self.assertEqual((seen[0].get("state"), admission.get("reserved"), (admission.get("reason_codes") or [])[-1:]),
+                         ("admitted", {}, ["provider_managed_fallback"]), seen[0])
+        self.assertEqual((result["abort"]["reason"], result["abort"]["recovery"], result["completed"]),
+                         ("admission_refused", "not_dispatched", 0))
+        self.assertEqual(sends, [])  # no dispatch, so no attach or host transmission
+        self.assertNotIn("open_attempts", canary.preflight(dict(run.routing("status")[0], project_pinned=True)))
+        self.assertEqual((ledger.summary()["pilot"]["spent"], ledger.summary()["pilot"]["open_reservations"]), (0, 0))
 
     def test_one_full_admission_settles_clean(self):
         run, ledger = self.pilot()
@@ -787,7 +834,7 @@ class ProductionLedgerTests(Temp):
         """The production ledger in the temporary HOME, with one admission, written only by scripts/routing.py."""
         for folder in (self.settings.parent, self.ledger.parent):
             self.private(folder)
-        routing_cmd = qual_server.Routing(self.settings, self.ledger)
+        routing_cmd = trusted_routing(qual_server.Routing(self.settings, self.ledger))  # labelled synthetic builder
         canary.initialize_state(routing_cmd)
         answer = routing_cmd("prepare", **qual_plan(1, "prod")[0]["body"])[0]
         self.assertEqual(answer["state"], "admitted", answer)

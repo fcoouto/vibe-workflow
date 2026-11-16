@@ -34,6 +34,10 @@ PRODUCTION_BILLING = collector.LocalSource.billing  # the unpatched production s
 CHILD = ("import sys; sys.path.insert(0, %r); from unittest import mock; "
          "from runtime import routing_observations as c, subscription_billing as b; "
          "mock.patch.object(c.LocalSource, 'billing', lambda s, r, n: b.double(%r)(r, n)).start(); "
+         # Task 3B: an explicitly code-selected TEST-ONLY source whose stored rows are the synthetic account's own
+         # (the `CoveringSource` pattern), never the production LocalSource's unbound-row trust
+         "Covering = type('Covering', (c.LocalSource,), {}); "
+         "mock.patch.object(c, 'default_source', lambda settings_path=None: Covering(settings_path)).start(); "
          "from scripts import routing as m; raise SystemExit(m.main(sys.argv[1:]))") % (str(ROOT), LABEL)
 
 
@@ -150,6 +154,10 @@ class RankedStores(Temp):
                                     subscription_billing.double(LABEL)(route, at))
         billing.start()
         self.addCleanup(billing.stop)
+        from tests.test_routing_account_continuity import CoveringSource  # Task 3B: code-selected synthetic source
+        covering = mock.patch.object(collector, "default_source", lambda settings_path=None: CoveringSource(settings_path))
+        covering.start()
+        self.addCleanup(covering.stop)
         self.project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(self.project), "init", "-q"], check=True)
         self.build(self.tmp)
@@ -362,6 +370,17 @@ class RankedGateTests(RankedStores):
                 ranked.before_dispatch(wrong)
             self.assertEqual(caught.exception.reason, "admission_not_approved")
         ranked.before_dispatch(admission)  # the exact admission passes
+
+    def test_an_account_fallback_admission_is_never_approved(self):
+        """Validation Edit 15: the quota-denominated ranked canary never dispatches or counts a fallback."""
+        run, _ = self.make_run()
+        ranked = self.controller(run)
+        ranked.before_prepare(self.body())
+        admission = self.admitted(run)
+        fallback = dict(admission, reserved={}, reason_codes=["quota_unknown", "provider_managed_fallback"])
+        with self.assertRaises(canary.Abort) as caught:
+            ranked.before_dispatch(fallback)
+        self.assertEqual((caught.exception.reason, ranked.completed), ("admission_not_approved", 0))
 
     def test_canary_dispatches_the_admitted_route(self):
         run, _ = self.make_run()
@@ -632,10 +651,11 @@ class RankedProductionShapedTests(RankedStores):
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
 class RankedChatGPTRefreshTests(RankedStores):
-    """The stale-and-needed ChatGPT refresh through the existing bounded reader, with the Codex app-server double as
-    the reader executable; a private fake HOME and an empty PATH (no real `codex`, no credential)."""
+    """Task 3B retired the automatic pool-wide ChatGPT reader for OpenCode: it proves no OpenCode account. With the
+    Codex app-server double armed as the reader (private fake HOME, empty PATH), nothing starts it, and on the REAL
+    `LocalSource` the stale kept OpenCode ChatGPT route stays account fallback with unknown quota."""
 
-    def test_canary_refreshes_only_a_needed_stale_chatgpt_pool(self):
+    def test_no_pool_reader_starts_for_a_stale_opencode_chatgpt_route_on_the_real_source(self):
         from tests import test_routing_codex_rate_limits as codex
         routing_paths.qualify(self.settings, CHATGPT_PATH, demand={"7d": 5}, evidence="synthetic", now=now())
         self.table(strategy("s-g", "invented-g", provider="openai", harness=CHATGPT), strategy("s-a", "invented-a"))
@@ -662,16 +682,15 @@ class RankedChatGPTRefreshTests(RankedStores):
             if log.exists() else 0  # noqa: E731
         with mock.patch.object(codex_rate_limits, "refresh", side_effect=refresh):
             ranked.before_prepare(self.body())
-            self.assertEqual([call["need"] for call in calls], [("7d",)])  # the kept ChatGPT pool, its window
-            self.assertEqual(spawns(), 1)
-            stored = {w["id"]: w for w in collector.LocalSource(self.settings).windows(CHATGPT_POOL, now())}
-            self.assertEqual((stored["7d"]["used"], stored["7d"]["reset_at"]), (150, self.resets["7d"]))
-            self.assertEqual(ranked.allowance.cumulative[CHATGPT_POOL + "/7d"], 50)  # the reader's reading counts
-            ranked.before_prepare(self.body(1))  # fresh now: the bounded reader answers without a process
-            self.assertEqual(spawns(), 1)
-            answer, _ = live.CanaryEnv(run).prepare(self.body())  # served preparation never starts the reader
+            real = collector.collect(str(self.project), dict(scope="s"), settings_path=self.settings,
+                                     ledger_path=self.state["ledger"], source=collector.LocalSource(self.settings),
+                                     refresh_windows=True, harnesses=[CHATGPT], choices=[dict(
+                                         provider="openai", model="invented-g", effort="low", harness=CHATGPT,
+                                         funding="subscription")])["observations"]
+            answer, _ = live.CanaryEnv(run).prepare(self.body())  # served preparation never starts a reader either
+        self.assertEqual((calls, spawns()), ([], 0))  # zero pool-reader calls and processes
+        self.assertEqual([route["demand"] for route in real["routes"]], [None])  # real source: fallback, no claim
         self.assertIn(answer.get("state"), ("admitted", "pending"), answer)
-        self.assertEqual((len(calls), spawns()), (2, 1))
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")

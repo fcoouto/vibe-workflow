@@ -49,9 +49,9 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.prepared(then=change)
         events, real = [], routing.record_event
 
-        def record(ledger, event, now):
+        def record(ledger, event, now, **options):  # forwards `settings_path` unchanged
             events.append(event['kind'])
-            return real(ledger, event, now)
+            return real(ledger, event, now, **options)
         with patch.object(routing, 'record_event', record):
             begun = self.call('begin', request)
         self.assertEqual(begun['fallback'], 'openrouter_preparation_stale')

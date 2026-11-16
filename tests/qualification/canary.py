@@ -554,6 +554,9 @@ class PilotDriver:
         answer, timings["prepare"] = env.prepare(item["body"])
         if answer.get("state") != "admitted" or (answer.get("admission") or {}).get("billing_class") != "included_subscription":
             raise Abort("admission_refused", answer.get("reason"))
+        from runtime import routing  # Edit 15: a provider-managed fallback is never a quota-canary send
+        if routing.FALLBACK in ((answer.get("admission") or {}).get("reason_codes") or []):
+            raise Abort("admission_refused", routing.FALLBACK)  # admitted, provably unsent: `not_dispatched` releases it
         self.phase("admitted")
         if self.ranked is not None:
             self.ranked.before_dispatch(answer["admission"])

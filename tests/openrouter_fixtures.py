@@ -178,8 +178,8 @@ class ManagedRouting:
         """Every routing lifecycle event as (event, answer)."""
         events, real = [], routing.record_event
 
-        def record(ledger, event, now):
-            answer = real(ledger, event, now)
+        def record(ledger, event, now, **options):  # forwards `settings_path` (the fallback boundary's store)
+            answer = real(ledger, event, now, **options)
             events.append((event, answer))
             return answer
         self.enterContext(patch.object(routing, 'record_event', record))

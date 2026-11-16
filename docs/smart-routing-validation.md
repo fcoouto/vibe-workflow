@@ -391,6 +391,10 @@ were; they assumed quota-denominated launches.
   when that marker is missing, unverifiable or names another account or generation, and a continuation is pinned to
   its root's marker. Caller-supplied markers grant nothing, new unverified admissions reserve nothing, legacy unsent
   records are refused, and issued or uncertain exposure still settles.
+- An ordinary caller-mode pilot (`scripts/routing.py prepare` with its own observations snapshot) therefore cannot
+  admit a subscription route across the real boundary: its markers are stripped and it is refused
+  (`billing_unverified`). A governed run needs managed collection with a verified account. The quota-denominated
+  canary also refuses any provider-managed fallback admission before dispatch.
 
 **What does not change.** The quota-denominated canary criteria (step 8: samples, coverage and limits) stay as
 registered. Unknown-quota fallback sends never satisfy them and never count toward them. Isolation, the
