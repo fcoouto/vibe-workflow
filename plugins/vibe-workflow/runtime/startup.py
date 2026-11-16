@@ -14,6 +14,7 @@ import subprocess
 import time
 from types import MappingProxyType
 
+from runtime import startup_routing
 from runtime.package_manifest import PACKAGE_SCAN_MAX_BYTES, PACKAGE_SCAN_MAX_PATHS
 from runtime.persisted_binding import all_match as _same_all, matches as _same, record_matches as _same_owner
 
@@ -456,7 +457,7 @@ def orient(event, package, *, acquisition=None):
                     f"native Codex session: {json.dumps(event.session_id)}. Read existing task status with task status; startup never changes bindings or pins.")
         if len(context.split()) > 150:
             raise StartupError("Runtime startup orientation exceeds the context limit")
-    return context
+    return context + startup_routing.line(event.client, scope.repository_root)  # T12: '' unless managed
 
 
 # Pure schema-2 APIs are deliberately separate from production startup resolution.

@@ -156,6 +156,16 @@ def _writer_models(service, scope, request, attempt_id):
     return sorted(models)
 
 
+def _refusal(answer):
+    """A routing refusal as delegation reports it: its state and reason, plus `reasons` when routing named more than
+    the reason itself (C1: for example `quota_exhausted` behind `no_feasible_route`)."""
+    routing = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
+    reasons = answer.get('reasons')
+    if type(reasons) is list and any(item != routing['reason'] for item in reasons):
+        routing['reasons'] = list(reasons)
+    return routing
+
+
 def admit(service, scope, request, *, attempt_id, routing_attempt, choice, constraints=None, job=None):
     """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt. `job` is
     the canonical job (`delegation.routing_job`); only the self-check supplies it."""
@@ -233,7 +243,7 @@ def prepare(scope, request, review, inner):
         answer = admit(service, scope, request, attempt_id=attempt, routing_attempt=attempt,
                        choice=_choice(selection), constraints=constraints)
         if answer.get('state') != 'admitted':
-            reply['routing'] = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
+            reply['routing'] = _refusal(answer)
             return reply
         if answer.get('duplicate'):
             reply['routing'] = dict(state='admitted', duplicate=True)
@@ -469,32 +479,54 @@ def _continuation_attempt(record, value):
 def _close_turns(service, record):
     """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
     ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`. The
-    reason a turn's hold had to stay held (`_close`), or None."""
+    reason a turn's hold had to stay held (`_close`, else `turn_close_refused` for any close not recorded), or None.
+    A recorded reply, a duplicate included, closed it."""
     data, kept = _holds(service), None
     for attempt, hold in sorted(data.get('holds', {}).items()):
         if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
             kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
             if kind is not None:
-                kept = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt)).get('reason') or kept
+                closed = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt))
+                if closed.get('state') != 'recorded':  # the hold still counts: no fresh permit on top of it
+                    kept = closed.get('reason') or kept or 'turn_close_refused'
     return kept
 
 
+def _marker(admission):
+    """The account marker a subscription admission retained in `binding.credential`, or None (absent or legacy)."""
+    binding = (admission or {}).get('binding')
+    found = binding.get('credential') if type(binding) is dict else None
+    return found if (admission or {}).get('billing_class') == 'included_subscription' and routing._text(found) \
+        else None
+
+
 def continuation(scope, request, record, value, reply):
-    """`prepare_continuation`: the same child and profile, with a fresh admission on the child's own route."""
+    """`prepare_continuation`: the same child and profile, with a fresh admission on the root admission's own route.
+
+    The trusted root is this assignment's own first admission, resolved through the ledger: an absent, pruned,
+    legacy (unmarked) or no longer resolvable root refuses (`continuation_root_unavailable`), never the original
+    selection, the current login or another route. A child admitted with another account marker than the root's is
+    closed provably unsent (`not_dispatched`) and refused (`account_changed`); the dispatch gate checks it again."""
     if not task_profile.native(record['data']['role']) or not managed(scope):
         return reply
     original, attempt = record['body']['request'], _continuation_attempt(record, value)
     identity = dict({key: original[key] for key in ('client', 'session_id', 'task_id')}, job_id=record['data']['job_id'])
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
-        route = _route(scope, record, _hold(service, record['id'])[1])
-        choice = routing_launch.choice(HOST, 'subscription', model=route['model'], effort=route['effort']) \
-            if route else _choice(original['selection'])
-        kept = _close_turns(service, record) if _hold(service, attempt)[0] is None else None
-        # an earlier turn still holds its capacity: no fresh permit on top of it
-        answer = dict(state='blocked', reason=kept) if kept else admit(
-            service, scope, identity, attempt_id=record['id'], routing_attempt=attempt, choice=choice)
+        root = _hold(service, record['id'])[1]
+        route, marker = _route(scope, record, root), _marker(root)
+        if route is None or marker is None:
+            answer = dict(state='blocked', reason='continuation_root_unavailable')
+        else:
+            choice = routing_launch.choice(HOST, 'subscription', model=route['model'], effort=route['effort'])
+            kept = _close_turns(service, record) if _hold(service, attempt)[0] is None else None
+            # an earlier turn still holds its capacity: no fresh permit on top of it
+            answer = dict(state='blocked', reason=kept) if kept else admit(
+                service, scope, identity, attempt_id=record['id'], routing_attempt=attempt, choice=choice)
+            if answer.get('state') == 'admitted' and _marker(_hold(service, attempt)[1]) != marker:
+                _record(service, attempt, 'not_dispatched', 'continuation:account_changed:' + attempt)
+                answer = dict(state='blocked', reason='account_changed')
     if answer.get('state') != 'admitted':
-        return dict(reply, routing=dict(state=answer.get('state', 'blocked'), reason=answer.get('reason')))
+        return dict(reply, routing=_refusal(answer))
     return dict(reply, routing=dict(state='admitted', attempt_id=attempt))
 
 
@@ -529,8 +561,13 @@ def dispatch(scope, request, routing_attempt=None, *, record=None):
         if admission is None or hold != 'admitted':
             raise state.StateError('Managed native launch needs a current routing admission (%s)'
                                    % ('routing_not_admitted' if admission is None else 'routing_' + str(hold)))
-        facts, reason = routing_launch.admitted_check(admission, host=HOST, catalog=_catalog(scope, record),
-                                                      settings_path=service.settings_path)
+        reason = None
+        if routing_attempt != record['id']:  # a continuation: its trusted root still names the same account marker
+            root = _marker(_hold(service, record['id'])[1])
+            reason = 'continuation_root_unavailable' if root is None else \
+                'account_changed' if root != _marker(admission) else None
+        facts, reason = (None, reason) if reason else routing_launch.admitted_check(
+            admission, host=HOST, catalog=_catalog(scope, record), settings_path=service.settings_path)
         sent = None if reason else _call(service, dict(v=1, op='dispatch', attempt_id=routing_attempt, request=facts))
         if sent is not None:
             sent.pop('authority', None)

@@ -934,7 +934,7 @@ class Ledger:
 
     # -- S3.6a: lifecycle events, completion settlement, root aggregates and retention ----------------------------
     # Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
-    def record_event(self, event, digest, now):
+    def record_event(self, event, digest, now, *, settings_path=None):
         """Apply one validated lifecycle event, its settlement and its root aggregate in ONE write transaction.
 
         `event` is already shape-checked (`runtime.routing.event_error`); `digest` is its canonical SHA-256 and
@@ -952,8 +952,8 @@ class Ledger:
                 return dict(json.loads(known[1])['outcome'], duplicate=True)
             outcome, effect, body = self._apply_event(data, event, now)
             self._store_event(data, event['event_id'], digest, body, now, effect=effect)
-            return outcome
-
+            from runtime import subscription_fallback  # local: that module imports Ledger from this one at load time
+            return subscription_fallback.after_record(data, event, settings_path, now) or outcome
     def lookup_event(self, event_id, now):
         """The stored body of an event id still in force at `now`, or None (expired evidence is never read)."""
         with self.transaction(False) as data:

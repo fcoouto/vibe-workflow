@@ -1,6 +1,14 @@
 # Smart Routing redesign: value ranking, learning and one specialist roster
 
+> Historical. Current behaviour: validation [Edit 15](../../smart-routing-validation.md#edit-15-16-november-2026-account-continuity-and-provider-managed-fallback) and [policy 03](../../../policies/03-agent-delegation.md#managed-projects).
+
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
+
+**Approved design revision, 15 November:** the user approved trustworthy quota
+optimization plus provider-managed fallback in the
+[focused amendment](2026-11-15-smart-router-provider-managed-design.md).
+Its implementation plan is being prepared; design approval changes no runtime,
+activation or live budget. Existing account-settings permissions remain in force.
 
 ## Account-based routing simplification, approved 15 November 2026
 
@@ -196,7 +204,7 @@ waive provider, funding, authority or physical-resource refusals.
 
 This design changes parts of two earlier documents and leaves the rest of them in force:
 
-- [Smart Routing design, 8 November](2026-11-08-usage-routing-opencode-subscriptions-design.md): it replaces sections 5.1 (Jev), 5.3 (optional model ranker) and 11 ("later learning"), and adds one rule to section 7.2 (when OpenRouter may be chosen).
+- [Smart Routing design, 8 November](2026-11-08-usage-routing-opencode-subscriptions-design.md) (deleted in `11a8927c`; see Git history): it replaces sections 5.1 (Jev), 5.3 (optional model ranker) and 11 ("later learning"), and adds one rule to section 7.2 (when OpenRouter may be chosen).
 - [C.3 wiring design](2026-11-10-smart-routing-c3-wiring-design.md): it replaces decision 5's per-model route manifest.
 
 It also changes one rule in [guidance publication](../../../clients/guidance-publication.md#strategy-table-refresh): the ranking table may be recompiled by a due job, not only in a maintenance session.

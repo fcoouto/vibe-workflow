@@ -3188,7 +3188,7 @@ CONTINUATION_LIMIT_FAILURES = {'rateLimitExceeded', 'usageLimitExceeded'}
 
 # ---------------------------------------------------------------------------------------------------
 # Smart Routing dispatch gates (S3.5): read-only view of a planned job, its canonical semantic job and a cheap
-# change marker. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3
+# change marker. Contract: runtime/routing_gates.py (originally Task S3.5 of the plan deleted in 11a8927c)
 # ---------------------------------------------------------------------------------------------------
 ROUTING_PAUSED = {'WAITING', 'PAUSED', 'CANCELLED'}
 WORKSTREAM_REQUEST_FIELDS = {'workstream_revision', 'continuation_limits', 'workstream_context_id'}

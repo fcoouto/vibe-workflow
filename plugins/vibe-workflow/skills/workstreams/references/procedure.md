@@ -11,6 +11,8 @@ No runtime enrollment, database, qualification or separate activation is require
 Enabled automatically selects useful cooperative delivery through native children.
 Follow [Agent Delegation](../../../policies/03-agent-delegation.md), including its
 [outcome ownership rules](../../../policies/03-agent-delegation.md#outcome-ownership).
+In a [managed project](../../../policies/03-agent-delegation.md#managed-projects), each
+child launch goes through that policy's managed path.
 Native children execute this saved preference; it selects no separate service.
 
 Disabled stops optional future automatic native child work. Explicit user

@@ -37,8 +37,8 @@ TEST_ONLY = 'test_only'
 REQUIRED = {'path', 'harness', 'provider', 'sign_in', 'billing_class', 'pool', 'account', 'windows'}
 OPTIONAL = {'binding_enforceable', 'window_unit', 'integration_route', 'host', 'advisory', 'status', 'demand_scope'}
 # `demand_scope: per_model`: the path's measured demand applies to a model only once a per-model demand mapping for
-# it is verified (F4.5, OpenCode Go's model-dependent allowance); the collector leaves other models out
-# (`demand_unverified`).
+# it is verified (F4.5, OpenCode Go's model-dependent allowance); for other models the collector keeps the route with
+# unknown demand (None), so it is only ever provider-managed fallback.
 MODEL_DEMAND = 'per_model'
 RECORD_FIELDS = {'demand', 'account', 'evidence', 'qualified_at'}
 
@@ -103,16 +103,25 @@ def _qualifications_path(settings_path):
 
 
 def _demand_ok(rule, demand):
+    """Measured demand for the path's windows, or explicit null on a subscription path: its account and launch are
+    qualified while its included quota stays unknown (provider-managed fallback only; never a gateway's)."""
+    if demand is None:
+        return rule['billing_class'] == SUBSCRIPTION
     if type(demand) is not dict or set(demand) != set(rule['windows']):
         return False
     top = MAX_SUBSCRIPTION_DEMAND if rule['billing_class'] == SUBSCRIPTION else MAX_GATEWAY_DEMAND
     return all(type(amount) is int and 1 <= amount <= top for amount in demand.values())
 
 
+def _copy(demand):
+    return None if demand is None else dict(demand)
+
+
 def _record_ok(record):
-    return (type(record) is dict and set(record) == RECORD_FIELDS and type(record['demand']) is dict
-            and 0 < len(record['demand']) <= routing.MAX_WINDOWS
-            and all(routing._part(key) and type(amount) is int and amount > 0 for key, amount in record['demand'].items())
+    return (type(record) is dict and set(record) == RECORD_FIELDS and (record['demand'] is None or (
+            type(record['demand']) is dict and 0 < len(record['demand']) <= routing.MAX_WINDOWS
+            and all(routing._part(key) and type(amount) is int and amount > 0
+                    for key, amount in record['demand'].items())))
             and routing._optional(record['account'], routing._text)
             and type(record['evidence']) is str and 0 < len(record['evidence']) <= MAX_EVIDENCE
             and record['evidence'].isprintable() and routing._amount(record['qualified_at']))
@@ -175,7 +184,8 @@ def _write(target, value):
 
 def qualify(settings_path, path_id, *, demand, evidence, account=None, now, rules=None, allow_test_only=False):
     """Record `path_id`'s measured demand (the operator's one-shot `qualify_path`). Demand keys equal the path's
-    windows: thousandths 1-1000 on a subscription path, micro-dollars 1-1,000,000 per launch on a gateway path.
+    windows: thousandths 1-1000 on a subscription path, micro-dollars 1-1,000,000 per launch on a gateway path; an
+    explicit None on a subscription path qualifies its account and launch with unknown included quota.
     `evidence` is the live result's id. A `test_only` path is refused unless `allow_test_only` (test inputs)."""
     rules = load_rules() if rules is None else rules
     rule = next((item for item in rules['paths'] if item['path'] == path_id), None)
@@ -192,7 +202,7 @@ def qualify(settings_path, path_id, *, demand, evidence, account=None, now, rule
     if not routing._amount(now):
         _invalid('invalid_request')
     target = _qualifications_path(settings_path)
-    record = dict(demand=dict(demand), account=account, evidence=evidence, qualified_at=now)
+    record = dict(demand=_copy(demand), account=account, evidence=evidence, qualified_at=now)
     with _locked(target):
         value = _read(target) or dict(version=QUALIFICATIONS_VERSION, paths={})
         by_id = {item['path']: item for item in rules['paths']}
@@ -224,7 +234,9 @@ def operation(name, settings_path, body, now, test_inputs=False):
             _invalid('invalid_request')
         if name == 'unqualify_path':
             return unqualify(settings_path, body['path'])
-        return qualify(settings_path, body['path'], demand=body.get('demand'), evidence=body.get('evidence'),
+        if 'demand' not in body:
+            _invalid('demand_invalid')  # only an explicit null qualifies a launch without measured demand
+        return qualify(settings_path, body['path'], demand=body['demand'], evidence=body.get('evidence'),
                        account=body.get('account'), now=now, allow_test_only=test_inputs)
     except ValueError as error:
         return dict(state='blocked', reason=str(error))
@@ -242,7 +254,7 @@ def resolved(rules, qualified):
         record = qualified.get(rule['path'])
         if record is None or not _demand_ok(rule, record.get('demand')):
             continue
-        found.append(dict(rule, demand=dict(record['demand']), account=record.get('account') or rule['account']))
+        found.append(dict(rule, demand=_copy(record['demand']), account=record.get('account') or rule['account']))
     accounts = {}
     for item in found:
         accounts.setdefault(item['pool'], set()).add(item['account'])
@@ -267,7 +279,7 @@ def _route(path, route_id, provider, model, effort):
     route = dict(route=route_id, status='qualified', path=path['path'], provider=provider, model=model,
                  effort='none' if effort is None else effort, harness=path['harness'],
                  billing_class=path['billing_class'], pool=path['pool'], account=path['account'],
-                 demand=dict(path['demand']))
+                 demand=_copy(path['demand']))
     if path['billing_class'] == SUBSCRIPTION:
         route.update(window_unit=path['window_unit'], binding_enforceable=path['binding_enforceable'])
         if 'demand_scope' in path:

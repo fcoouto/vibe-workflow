@@ -10,6 +10,16 @@
 
 **Spec:** [Approved redesign and dated amendments](../specs/2026-11-10-smart-routing-redesign-design.md), [existing implementation plan](2026-11-10-smart-routing-redesign.md), [qualification runbook](../../smart-routing-qualification.md) and [registered validation](../../smart-routing-validation.md).
 
+**Approved scope revision, 15 November:** the
+[provider-managed design](../specs/2026-11-15-smart-router-provider-managed-design.md)
+and its [focused implementation plan](2026-11-15-smart-router-provider-managed.md)
+replace this plan's universal quota/demand prerequisites with separate account/
+launch eligibility and optional included-quota proof. Use the focused plan for
+the next implementation slice, once accepted. Native Claude remains first; all
+five paths, account identity, dispatch/funding safeguards and later release work
+remain required. The source findings below remain historical evidence, not passed
+gates. No additional research, live read, model send or activation is authorized.
+
 **Status, 15 November 2026:** User confirmed execution: prioritize native Claude
 qualification while other streams progress independently. The plan alone does not
 authorize new observations, model-send budgets or activation.
@@ -303,7 +313,7 @@ qualification fixes only where existing harness consumers lack required source b
 ## Recovered pre-canary, cutover and default-ON obligations
 
 The inherited 8 November plan was removed by `11a8927c`; its last text is
-[pinned in Git history](https://github.com/fcoouto/vibe-workflow/blob/02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6/docs/superpowers/plans/2026-11-08-smart-routing.md).
+[pinned in Git history](https://github.com/fcoouto/vibe-workflow/blob/02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6/docs/superpowers/plans/2026-11-08-smart-routing.md) (deleted in `11a8927c`; see Git history).
 Read it with `git show 02758ebf1ea13dbff75e1d4ebe77b1b5be7a42b6:docs/superpowers/plans/2026-11-08-smart-routing.md`.
 Do not restore its obsolete criteria or treat historical checkboxes as current proof.
 

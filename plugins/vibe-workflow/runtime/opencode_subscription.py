@@ -19,8 +19,10 @@ entitlement or a billing boundary.
 through the launcher host's own request transport, only for a kept, statically eligible Go route whose stored
 readings are missing or stale, outside served preparation. It needs a qualified meter binding (`window_semantics`):
 the rolling/fixed semantics, lengths and original observation time that turn parsed meters into store windows. None is
-qualified, so production returns before any preview or read and stores nothing; a Go route then stays
-`window_unobserved`. Only code (a labelled test double) can supply a binding.
+qualified, so production returns before any preview or read and stores nothing; a Go route's included quota then
+stays unknown (`window_unobserved`): with a verified account (`runtime/opencode_account.py`) it is only
+provider-managed fallback, and without that producer's current fact it is refused earlier (`billing_unverified`).
+Only code (a labelled test double) can supply a binding.
 """
 from decimal import Decimal
 import hashlib
@@ -154,7 +156,9 @@ def refresh(service, read, request, *, now):
              if item['provider'] == GO_PROVIDER}
     body = {key: value for key, value in request.items() if key not in ('v', 'op')}
     preview = service.preview(body) if paths else {}
-    kept = sorted({routing_paths.path_of(route) for route in preview.get('routes', [])} & set(paths))
+    unmeasured = set(preview.get('unmeasured', ()))  # unknown demand: provider-managed fallback needs no usage read
+    kept = sorted({routing_paths.path_of(route) for route in preview.get('routes', []) if route not in unmeasured}
+                  & set(paths))
     if not kept:
         return dict(state='skipped', reason='no_kept_go_route')
     source = collector.LocalSource(settings_path)

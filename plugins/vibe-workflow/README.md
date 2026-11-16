@@ -42,6 +42,10 @@ review. Ask **“Disable API Usage for this project”** to stop new requests.
 See the [routing controls](skills/manage-usage-routing/references/procedure.md)
 and the [optional comparison template](docs/superpowers/specs/2026-10-31-usage-routing-design.md#paired-comparison-template).
 
+Smart Routing, which picks every worker's and reviewer's model on your
+subscriptions, is off until you turn it on for a project on this machine: see
+[Smart Routing for a project](skills/manage-usage-routing/references/smart-routing.md).
+
 ## Prepare your Workspace
 
 Open this checkout in a coding agent with terminal access to the destination machine:

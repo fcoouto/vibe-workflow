@@ -20,10 +20,12 @@ import json
 from pathlib import Path
 import time
 
-from runtime import claude_usage, routing, routing_launch, routing_observations as collector, routing_paths
+from runtime import claude_usage, codex_account, routing, routing_launch, routing_observations as collector, \
+    routing_paths
 from runtime.adapters import native_catalog
 
 CLIENTS = native_catalog.HOSTS
+PRODUCERS = {claude_usage.CLIENT: claude_usage, codex_account.CLIENT: codex_account}  # by exact client, never a label
 OUTCOMES = ('complete', 'not_started', 'unknown')
 OUTCOME_FIELDS = {'kind', 'model', 'effort'}
 
@@ -42,9 +44,22 @@ def _record(service, attempt, kind):
     return {key: value for key, value in answer.items() if key != 'v'}  # the command adds its own `v`
 
 
-def prepare(service, *, client, assignment, job, catalog, profile=None):
+def _changed(settings_path, client, before):
+    """`native_binding_changed` when the client's cached producer binding is missing or differs from `before` in
+    connection or controls, else None. Reads only the local producer store, never the native client."""
+    current = native_catalog._binding(settings_path, client)
+    same = type(before) is dict and type(current) is dict and all(
+        current.get(key) == before.get(key) for key in ('connection', 'controls'))
+    return None if same else 'native_binding_changed'
+
+
+def prepare(service, *, client, assignment, job, catalog, profile=None, bound=False):
     """Admit, check and dispatch one native subscription route for `client` on `catalog` (the host's own route
-    identities). Returns `{state: 'dispatched', attempt_id, model, effort, route, mode}` or the refusal."""
+    identities). When `bound` (the catalog is the client's stored one, gated on its producer's binding), the binding
+    cached just before admission must still be current after admission and just before dispatch, and the check uses
+    the catalog bound to it; otherwise the send is refused (`native_binding_changed`). This fences what the local
+    producer stores show, not a native login switch no read has seen yet. Returns `{state: 'dispatched', attempt_id,
+    model, effort, route, mode}` or the refusal."""
     host = CLIENTS.get(client)
     if host is None:
         return _blocked('invalid_request')
@@ -63,6 +78,7 @@ def prepare(service, *, client, assignment, job, catalog, profile=None):
     reason = routing_launch.preflight(_call(service, dict(v=1, op='status')))
     if reason is not None:
         return _blocked(reason)
+    before = native_catalog._binding(service.settings_path, client) if bound else None  # cached just before admission
     answer = _call(service, request)
     if answer.get('state') != 'admitted':
         return {key: answer[key] for key in ('state', 'reason', 'reasons') if key in answer}
@@ -70,8 +86,18 @@ def prepare(service, *, client, assignment, job, catalog, profile=None):
     attempt = admission['attempt_id']
     if answer.get('duplicate'):
         return _blocked('already_prepared', attempt_id=attempt)  # the permit was granted once, on the first call
-    facts, reason = routing_launch.admitted_check(admission, host=host, catalog=catalog,
-                                                  settings_path=service.settings_path)
+    reason = None
+    if bound:
+        # An account change observed since just before admission (even by the admission's own acquisition)
+        # refuses this attempt and is never substituted; a later attempt on the new account qualifies on its own.
+        reason = _changed(service.settings_path, client, before)
+        if reason is None:
+            catalog, reason = native_catalog.catalog(service.settings_path, client)
+    if reason is None:
+        facts, reason = routing_launch.admitted_check(admission, host=host, catalog=catalog,
+                                                      settings_path=service.settings_path)
+    if reason is None and bound:
+        reason = _changed(service.settings_path, client, before)  # the final recheck just before the send
     if reason is None:
         sent = _call(service, dict(v=1, op='dispatch', attempt_id=attempt, request=facts))
         sent.pop('authority', None)  # advisory host: the token is never kept or returned
@@ -197,14 +223,15 @@ def command_prepare(service, body):
     reason = _runtime_delegation(service.project, client)
     if reason is not None:
         return _blocked(reason)
-    if client == claude_usage.CLIENT and native_catalog.catalog(service.settings_path, client)[1] is not None:
-        # Cold or changed account: one bounded read bootstraps account, catalog and usage before the catalog gate;
-        # the collector then reuses its windows instead of reading again.
-        claude_usage.refresh(service.settings_path)
+    if native_catalog.catalog(service.settings_path, client)[1] is not None:
+        # Cold or changed account: one bounded read of the client's own producer bootstraps account and catalog
+        # before the catalog gate (Claude's also reads usage, which the collector then reuses; Codex's reads none).
+        PRODUCERS[client].refresh(service.settings_path)
     entries, reason = native_catalog.catalog(service.settings_path, client)
     if reason is not None:
         return _blocked(reason)
-    return prepare(service, client=client, assignment=assignment, job=job, catalog=entries, profile=body.get('profile'))
+    return prepare(service, client=client, assignment=assignment, job=job, catalog=entries, profile=body.get('profile'),
+                   bound=True)
 
 
 def command_complete(service, body):
@@ -219,7 +246,8 @@ def acquire_billing(projects, settings_path):
     """One-shot preactivation acquisition, before readiness and ledger locks; readiness itself remains pure.
 
     Resolved qualified paths supply the scope, not a pretend account binding. Only a qualified source can
-    establish that binding and group aliases. No production source has this capability yet.
+    establish that binding and group aliases. The production source, `LocalSource.acquire_billing`, reads the native
+    Claude, Codex and OpenCode accounts (`claude_usage`, `codex_account`, `opencode_account`) for their own paths.
     """
     from runtime import delegation_routing, subscription_billing
     from scripts import routing as command

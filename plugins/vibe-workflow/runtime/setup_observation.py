@@ -20,7 +20,7 @@ from runtime import package_manifest
 from runtime import onboarding as d3, persisted_binding, startup, task_profile
 from runtime.managed_observation import (
     managed_source as _managed_source, projection as managed_observation_projection,
-    readback as managed_observation_readback)
+    readback as managed_observation_readback, retained_readback as _retained_managed_readback)
 from runtime.codex_layout import installation_versions, system_layer_path as _system_layer_path
 
 
@@ -788,7 +788,7 @@ def _merge_managed_witness(content,reference,identity,witness):
                 if child_stream:
                     task_ref.update(stream='child',turn_id=receipt['worker_turn_id'])
         projection=managed_observation_projection(scope,task_ref,value['binding']['attempt_ref'],case_id=case)
-        actual=managed_observation_readback(scope,task_ref,value['binding']['attempt_ref'],case_id=case)
+        native,actual=_retained_managed_readback(scope,task_ref,value['binding']['attempt_ref'],case_id=case,projection=projection,proofs=proofs)
         before=projection['probe']['before'];after=startup._canonical_plain(actual)
         d3._require(projection['probe']['reference']==before_ref and after['reference']==after_ref
             and projection['binding']['client_surface']==content['native']['surface']
@@ -802,7 +802,7 @@ def _merge_managed_witness(content,reference,identity,witness):
         retained=content['source']['observations'].setdefault(case,[])
         retained.extend(proof for proof in proofs if proof not in retained)
         content['source'].setdefault('managed',{})[case]=dict(before=startup._canonical_plain(before),after=after,
-            assignment=assignment_id if 'attempt_id' in task_ref else None,before_reference=before_ref,after_reference=after_ref)
+            assignment=assignment_id if 'attempt_id' in task_ref else None,before_reference=before_ref,after_reference=after_ref,native=native)
 
 
 def _monotonic_coverage(previous, successor):
