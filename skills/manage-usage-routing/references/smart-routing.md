@@ -114,7 +114,7 @@ These replies launch nothing. Report them with their `state` and `reason`, conti
 
 | Reply | Meaning | The one next action |
 | --- | --- | --- |
-| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account is at its limit. | Hold the dependent delegation until the reported reset, then prepare once more. |
+| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account looked full in a reading at most 60 s old, or its provider refused for quota within 120 s (a provider may reset early). | Hold the dependent delegation for `retry_after_seconds` (at most 120), then prepare once more; never wait for the scheduled reset. |
 | ... with `billing_unverified` in `reasons` | No current account fact for the route. | Ask the user to sign in to that account; prepare again afterwards. |
 | `explicit_choice_unavailable` | The exact model and effort chosen by the user are not admissible now; routing never substitutes. | Report it; ask the user before choosing anything else. |
 | `account_changed`, `native_binding_changed` | The account or its catalog changed after admission; the attempt is closed. | Prepare again with a new attempt id. |
