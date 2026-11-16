@@ -1,18 +1,21 @@
 """OpenCode selected-account identity for the three OpenCode subscription paths (Claude, ChatGPT, Go).
 
-LocalSource selects it by exact path only. One bounded `opencode api GET /api/credential` (plus, for Go only, one
-`GET /api/experimental/usage/limits`) reads the selected connections. That answer carries full tokens: it is parsed in
+LocalSource selects it by exact path only. One bounded `opencode api GET /api/credential` (plus, for Go only, the
+secret-free `GET /api/provider/opencode-go`) reads the selected connections; each call runs a transient private
+OpenCode server, so no running service is needed. The credential answer carries full tokens: it is parsed in
 memory and dropped; only domain-separated digests, a random generation per family (kept only across proved continuity
 of the same key, exactly as `codex_account`) and fixed reasons persist, in a private 0600 store.
 
 - Claude: the active `claude-agent` credential must be `external`/`claude-login`, which is the native Claude Code
   login. Its identity is the native one (`claude_usage.account`, rechecked at every read); when it is not current,
-  the existing native reader runs once for identity only (`need=()`); none proved: refused.
+  the existing native reader runs once with no window demanded (`need=()`: account identity; quota unknown). Its
+  zero-token `get_usage` exchange is how that identity is read. None proved: refused.
 - ChatGPT: the active `openai` credential must be `oauth`/`chatgpt-token-sharing`. The key is the access JWT's `sub`
   claim (its payload is decoded locally; no signature check is possible or claimed) with the credential id, so a token
   refresh keeps the generation.
 - Go: the active `opencode-go` key and the active `opencode` Console login (`accountID`, `orgID`), whose org must be
-  the usage workspace. A replaced key or another Console account changes the generation.
+  the `x-opencode-org-id` header the Go provider sends: that proves where Go requests are attributed. That the key
+  belongs to the workspace is user-attested. A replaced key or another Console account changes the generation.
 
 A fact only confirms the account: these routes' quota stays unknown, so they are provider-managed fallback, never an
 included claim. The OpenCode ChatGPT subject and the native Codex login are never merged into one identity.
@@ -35,14 +38,14 @@ FAMILIES = tuple(PATHS)
 STORE_FILE = 'opencode-account.json'
 LOCK = 'opencode-account'
 CREDENTIAL = '/api/credential'
-USAGE = '/api/experimental/usage/limits'
+PROVIDER = '/api/provider/opencode-go'  # secret-free: the provider's request settings, no credential
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
 ENV_ALLOWLIST = ('PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL')
 REFUSED = ('opencode_claude_unsupported', 'opencode_chatgpt_unsupported', 'opencode_go_unsupported',
            'opencode_go_workspace_mismatch')  # an observed refusal or change: continuity ends
 REASONS = ('reader_busy', 'opencode_unavailable', 'opencode_exited', 'opencode_timeout', 'opencode_output_invalid',
-           'opencode_credential_invalid', 'opencode_claude_unproved', 'opencode_go_usage_invalid', *REFUSED,
+           'opencode_credential_invalid', 'opencode_claude_unproved', *REFUSED,
            'observation_store_unsafe', 'observation_store_invalid')
 ReadError = lifecycle.ReadError
 
@@ -164,13 +167,13 @@ def _console(rows):
     return key, metadata['accountID'], metadata['orgID']
 
 
-def _go(found, limits):
+def _go(found, answer):
+    """The Go key: Go requests carry the Console org as `x-opencode-org-id` (the usage workspace is only the Console
+    login's, so it proves nothing about them). The key's own workspace is user-attested, not provable here."""
     key, account, org = found
-    data = limits.get('data') if type(limits) is dict else None
-    workspace = data.get('workspace') if type(data) is dict else None
-    if type(workspace) is not dict or not routing._text(workspace.get('id')):
-        raise ReadError('opencode_go_usage_invalid')
-    if workspace['id'] != org:
+    data = answer.get('data') if type(answer) is dict else None
+    headers = data.get('headers') if type(data) is dict else None
+    if type(headers) is not dict or headers.get('x-opencode-org-id') != org:
         raise ReadError('opencode_go_workspace_mismatch')
     secret = hashlib.sha256(key['value']['key'].encode()).hexdigest()
     return _digest('go', account, org, key['id'], secret)
@@ -254,11 +257,11 @@ def _observe(rows, name, settings_path, command, environ, deadline):
     if name == 'chatgpt':
         return _chatgpt(rows), {}
     found = _console(rows)
-    return _go(found, _api(command, USAGE, environ, deadline)), {}
+    return _go(found, _api(command, PROVIDER, environ, deadline)), {}
 
 
 def refresh(settings_path, *, families=FAMILIES, force=False, command=None, environ=None, timeout=TIMEOUT):
-    """At most one bounded credential read (and Go's usage read) for the wanted families that are not current.
+    """At most one bounded credential read (and Go's provider read) for the wanted families that are not current.
 
     Returns `{state, reason, families}` with fixed reasons only. An observed refusal ends that family's continuity;
     a transport failure brings back only proved continuity, pending; an interrupted read leaves an unprovable fence.
@@ -282,8 +285,8 @@ def refresh(settings_path, *, families=FAMILIES, force=False, command=None, envi
                     return dict(state='backoff', reason=reason if reason in REASONS else 'observation_store_invalid',
                                 families={})
             if 'claude' in wanted and _native_account(settings_path, now) is None:
-                # The OpenCode Claude identity is the native login: the existing bounded native reader, identity
-                # only (no window demanded), never for ChatGPT or Go.
+                # The OpenCode Claude identity is the native login: the existing bounded native reader with no
+                # window demanded (account identity; quota unknown), never for ChatGPT or Go.
                 claude_usage.refresh(settings_path, need=(), environ=environ)
             held = {name: {} for name in wanted}
             for name in wanted:

@@ -1,7 +1,7 @@
 """Task 6: OpenCode selected-account identity (`runtime/opencode_account.py`) for the three OpenCode subscription paths.
 
 Every OpenCode answer here comes from a labelled synthetic `opencode` double (a private script answering the observed
-`/api/credential` and usage-limits shapes with clearly fake, unsigned tokens). No real account, credential, client or
+`/api/credential` and `/api/provider/opencode-go` shapes with clearly fake, unsigned tokens). No real account, credential, client or
 network is touched. Secret hygiene is asserted with sentinel strings that must never leave the reader's memory.
 """
 import base64
@@ -42,9 +42,10 @@ if mode == "oversize":
     sys.stdout.write("x" * (300 << 10))
 elif mode == "invalid":
     sys.stdout.write("{not json")
+elif sys.argv[4:] and sys.argv[4] in config["answers"]:
+    sys.stdout.write(json.dumps(config["answers"][sys.argv[4]]))
 else:
-    sys.stdout.write(json.dumps(config["usage"] if sys.argv[2:] == ["api", "GET", "/api/experimental/usage/limits"]
-                                else config["credential"]))
+    sys.exit(4)  # an endpoint the double does not serve (the usage limits are never asked for)
 '''
 
 
@@ -83,10 +84,12 @@ def credentials(**changes):
     return dict(data=list(rows.values()))
 
 
-def usage(workspace=ORG):
-    window = dict(percent=9, limited=False, resetsAt=1_900_000_000_000)
-    return dict(data=dict(workspace=dict(id=workspace, name='Org', usageURL='https://example.invalid/usage'),
-                          go=dict(rolling=window, weekly=window, monthly=window), budgets=[]))
+def provider(org=ORG):
+    """The observed secret-free `/api/provider/opencode-go` answer: its request header names the workspace Go
+    requests are attributed to (`org=None`: no header)."""
+    return dict(data=dict(id='opencode-go', integrationID='opencode', name='OpenCode Go', activation='enabled',
+                          package='invented-package', settings=dict(baseURL='https://opencode.ai/inference/go/openai/v1'),
+                          headers={} if org is None else {'x-opencode-org-id': org}))
 
 
 def route_of(family):
@@ -103,10 +106,11 @@ class FakeOpenCode:
         self.script, self.config, self.log = folder / 'opencode.py', folder / 'config.json', folder / 'calls.log'
         self.script.write_text(FAKE)
         self.command = [sys.executable, '-I', '-B', str(self.script), str(self.config)]
-        self.answer(credentials(), usage())
+        self.answer(credentials(), provider())
 
-    def answer(self, credential, limits, mode='ok'):
-        self.config.write_text(json.dumps(dict(credential=credential, usage=limits, mode=mode, log=str(self.log))))
+    def answer(self, credential, go_provider, mode='ok'):
+        answers = {'/api/credential': credential, '/api/provider/opencode-go': go_provider}
+        self.config.write_text(json.dumps(dict(answers=answers, mode=mode, log=str(self.log))))
         os.chmod(self.config, 0o600)
 
     def calls(self):
@@ -153,7 +157,7 @@ class Base(Stores):
 class ReaderTest(Base):
     def test_one_bounded_read_proves_all_three_families(self):
         self.assertEqual(self.refresh()['state'], 'stored')
-        self.assertEqual(self.fake.calls(), ['api GET /api/credential', 'api GET /api/experimental/usage/limits'])
+        self.assertEqual(self.fake.calls(), ['api GET /api/credential', 'api GET /api/provider/opencode-go'])
         now = int(time.time())
         for family in ROUTES:
             with self.subTest(family=family):
@@ -172,14 +176,14 @@ class ReaderTest(Base):
         self.refresh()
         first = self.producer('chatgpt')
         refreshed = credentials(openai=dict(value=dict(credentials()['data'][1]['value'], access=jwt(exp=1_950_000_000))))
-        self.fake.answer(refreshed, usage())
+        self.fake.answer(refreshed, provider())
         self.refresh(force=True)
         self.assertEqual(self.producer('chatgpt'), first)  # new access token and expiry, same subject
         other = credentials(openai=dict(value=dict(credentials()['data'][1]['value'], access=jwt(sub=OTHER))))
-        self.fake.answer(other, usage())
+        self.fake.answer(other, provider())
         self.refresh(force=True)
         self.assertNotEqual(self.producer('chatgpt'), first)
-        self.fake.answer(credentials(), usage())
+        self.fake.answer(credentials(), provider())
         self.refresh(force=True)
         back = self.producer('chatgpt')
         self.assertNotEqual(back.split(':')[2], first.split(':')[2])  # A -> B -> A: a new generation
@@ -193,36 +197,38 @@ class ReaderTest(Base):
                        dict(console=dict(value=dict(credentials()['data'][3]['value'], metadata=dict(
                            credentials()['data'][3]['value']['metadata'], accountID='user_' + 'Z' * 26))))):
             with self.subTest(change=sorted(change)):
-                self.fake.answer(credentials(**change), usage())
+                self.fake.answer(credentials(**change), provider())
                 self.refresh(force=True)
                 self.assertNotIn(self.producer('go'), (None, first))
         self.assert_clean()
 
     def test_each_family_refuses_its_own_unproved_connection(self):
-        cases = [  # (family, credential changes, usage, reason)
-            ('chatgpt', dict(openai=dict(active=False)), usage(), 'opencode_chatgpt_unsupported'),
-            ('chatgpt', dict(openai=None), usage(), 'opencode_chatgpt_unsupported'),
-            ('chatgpt', dict(openai=dict(value=dict(type='key', key='SENTINEL-GO-KEY'))), usage(),
+        cases = [  # (family, credential changes, Go provider answer, reason)
+            ('chatgpt', dict(openai=dict(active=False)), provider(), 'opencode_chatgpt_unsupported'),
+            ('chatgpt', dict(openai=None), provider(), 'opencode_chatgpt_unsupported'),
+            ('chatgpt', dict(openai=dict(value=dict(type='key', key='SENTINEL-GO-KEY'))), provider(),
              'opencode_chatgpt_unsupported'),
-            ('chatgpt', dict(openai=dict(value=dict(credentials()['data'][1]['value'], methodID='api-key'))), usage(),
+            ('chatgpt', dict(openai=dict(value=dict(credentials()['data'][1]['value'], methodID='api-key'))), provider(),
              'opencode_chatgpt_unsupported'),
             ('chatgpt', dict(openai=dict(value=dict(credentials()['data'][1]['value'], access=jwt(sub=None)))),
-             usage(), 'opencode_chatgpt_unsupported'),
+             provider(), 'opencode_chatgpt_unsupported'),
             ('chatgpt', dict(openai=dict(value=dict(credentials()['data'][1]['value'], access='not-a-jwt'))),
-             usage(), 'opencode_chatgpt_unsupported'),
-            ('go', dict(go=dict(active=False)), usage(), 'opencode_go_unsupported'),
-            ('go', dict(console=None), usage(), 'opencode_go_unsupported'),
+             provider(), 'opencode_chatgpt_unsupported'),
+            ('go', dict(go=dict(active=False)), provider(), 'opencode_go_unsupported'),
+            ('go', dict(console=None), provider(), 'opencode_go_unsupported'),
             ('go', dict(console=dict(value=dict(credentials()['data'][3]['value'], metadata=dict(orgID=ORG)))),
-             usage(), 'opencode_go_unsupported'),  # no accountID
-            ('go', {}, usage(workspace='org_' + 'Y' * 26), 'opencode_go_workspace_mismatch'),
-            ('claude', dict(claude=dict(active=False)), usage(), 'opencode_claude_unsupported'),
-            ('claude', dict(claude=dict(value=dict(type='oauth', methodID='claude-login'))), usage(),
+             provider(), 'opencode_go_unsupported'),  # no accountID
+            ('go', {}, provider(org='org_' + 'Y' * 26), 'opencode_go_workspace_mismatch'),
+            ('go', {}, provider(org=None), 'opencode_go_workspace_mismatch'),  # no attribution header
+            ('go', {}, dict(data=None), 'opencode_go_workspace_mismatch'),
+            ('claude', dict(claude=dict(active=False)), provider(), 'opencode_claude_unsupported'),
+            ('claude', dict(claude=dict(value=dict(type='oauth', methodID='claude-login'))), provider(),
              'opencode_claude_unsupported'),
-            ('claude', dict(claude=dict(value=dict(type='external', methodID='api-key'))), usage(),
+            ('claude', dict(claude=dict(value=dict(type='external', methodID='api-key'))), provider(),
              'opencode_claude_unsupported')]
         for family, change, limits, reason in cases:
             with self.subTest(family=family, reason=reason, change=sorted(change)):
-                self.fake.answer(credentials(), usage())
+                self.fake.answer(credentials(), provider())
                 self.refresh(force=True)
                 self.assertIsNotNone(self.fact(family))
                 self.fake.answer(credentials(**change), limits)
@@ -231,6 +237,36 @@ class ReaderTest(Base):
                 self.assertIsNone(self.fact(family))
                 for other in set(ROUTES) - {family}:
                     self.assertIsNotNone(self.fact(other), other)  # another family's proof is unaffected
+        self.assert_clean()
+
+    def test_two_active_credentials_of_one_integration_are_refused(self):
+        for family, integration, reason in (('chatgpt', 'openai', 'opencode_chatgpt_unsupported'),
+                                            ('go', 'opencode-go', 'opencode_go_unsupported'),
+                                            ('claude', 'claude-agent', 'opencode_claude_unsupported')):
+            with self.subTest(family=family):
+                answer = credentials()
+                twin = next(row for row in answer['data'] if row['integrationID'] == integration)
+                answer['data'].append(dict(twin, id='cred_' + 'G' * 26))  # which one is selected is ambiguous
+                self.fake.answer(answer, provider())
+                self.assertEqual(self.refresh(force=True)['families'][family], reason)
+                self.assertIsNone(self.fact(family))
+        self.assert_clean()
+
+    def test_a_malformed_answer_holding_tokens_leaks_none(self):
+        self.refresh()
+        for name, answer, reason in (
+                ('object', dict(data=dict(access=jwt(), refresh='SENTINEL-REFRESH-TOKEN', key='SENTINEL-GO-KEY')),
+                 'opencode_credential_invalid'),
+                ('list', ['SENTINEL-CONSOLE-ACCESS', jwt()], 'opencode_credential_invalid'),
+                ('rows', dict(data=[dict(id='cred_' + 'D' * 26, integrationID='openai', active=True,
+                                         value='SENTINEL-REFRESH-TOKEN'),
+                                    dict(id='cred_' + 'E' * 26, integrationID='opencode-go', active='yes',
+                                         value=dict(type='key', key='SENTINEL-GO-KEY'))]), None)):
+            with self.subTest(name):
+                self.fake.answer(answer, provider())
+                result = self.refresh(force=True)
+                self.assertEqual(result['reason'], reason)
+                self.assertEqual([self.fact(family) for family in ROUTES], [None, None, None])
         self.assert_clean()
 
     def test_a_missing_or_changed_native_claude_login_refuses_opencode_claude(self):
@@ -253,7 +289,7 @@ class ReaderTest(Base):
         for mode, reason in (('exit', 'opencode_exited'), ('oversize', 'opencode_output_invalid'),
                              ('invalid', 'opencode_output_invalid'), ('hang', 'opencode_timeout')):
             with self.subTest(mode=mode):
-                self.fake.answer(credentials(), usage(), mode=mode)
+                self.fake.answer(credentials(), provider(), mode=mode)
                 started = time.monotonic()
                 result = self.refresh(force=True, timeout=1.0)
                 self.assertLess(time.monotonic() - started, 10)
@@ -262,7 +298,7 @@ class ReaderTest(Base):
                 self.assertEqual(self.refresh()['state'], 'backoff')  # no new spawn inside the failure backoff
         missing = self.refresh(force=True, command=[str(self.root / 'absent' / 'opencode')])
         self.assertEqual(missing['reason'], 'opencode_unavailable')
-        self.fake.answer(credentials(), usage())
+        self.fake.answer(credentials(), provider())
         self.refresh(force=True)
         self.assertEqual({family: self.producer(family) for family in ROUTES}, first)  # same keys: kept
         self.assert_clean()
@@ -377,7 +413,7 @@ class ServedTest(native_tests.NativeBase):
                        go=dict(go=dict(value=dict(type='key', key='SENTINEL-GO-KEY-2'))), claude=None)
         for family in ROUTES:
             with self.subTest(family=family):
-                self.fake.answer(credentials(), usage())
+                self.fake.answer(credentials(), provider())
                 self.assertEqual(self.read()['state'], 'stored')
                 service, held = self.prepare(family, family + '-same')
                 self.assertEqual(held['state'], 'admitted', held)
@@ -393,7 +429,7 @@ class ServedTest(native_tests.NativeBase):
                                        account=dict(key='9' * 32, generation='e' * 32, observed_at=self.now,
                                                     client_version='invented-2', overflow='unknown', usage_at=None))
                 else:
-                    self.fake.answer(credentials(**changed[family]), usage())
+                    self.fake.answer(credentials(**changed[family]), provider())
                 self.read()
                 sent = self.dispatch(service, family, family + '-moved')
                 self.assertEqual((sent['state'], sent.get('reason')), ('blocked', 'account_changed'), sent)

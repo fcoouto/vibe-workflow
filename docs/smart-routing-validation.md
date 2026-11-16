@@ -408,15 +408,22 @@ mixed versions are unsupported: fix forward, with no manual cache deletion or in
 - Window rows keep their history up to the existing 1 MiB fail-closed store bound (an availability risk).
   Crash and power-loss durability, and login changes no read has observed, are unproved.
 - When this edit was registered, all three OpenCode positive sources were blocked. Task 6 added
-  `runtime/opencode_account.py`, tested with a synthetic `opencode` double only; real-account verification is pending.
+  `runtime/opencode_account.py`, tested with a synthetic `opencode` double; full real-account verification is pending.
   - Identity now comes from the OpenCode connection, read through `opencode api GET /api/credential` in memory, keeping
     only digests. Claude is the native Claude login (`claude-agent`, external `claude-login`). ChatGPT is the access
-    token's `sub` (decoded locally, signature unchecked). Go is the Console account and organization, which must be
-    the usage workspace.
+    token's `sub` (decoded locally, signature unchecked). Go is the Console account and organization, which must equal
+    the Go provider's `x-opencode-org-id` request header (where Go requests are attributed); the key's workspace is
+    user-attested.
   - Quota stays unknown for all three: ChatGPT and Go replies carry none, and binding OpenCode Claude's reported rate
     limits is a later phase. These routes are provider-managed fallback only, never an included claim.
-  - OpenCode Claude also needs a current native Claude account. Its acquisition does not start the native reader, and
-    the native fact stays unavailable for the current real client until the separate follow-up (A0).
+  - OpenCode Claude also needs a current native Claude account. When it is not current, the acquisition runs the
+    native reader once with no window demanded (`need=()`, stale-and-needed: account identity, quota unknown). A0 is
+    merged: the native parse accepts the real 2.1.311 answer shape and keeps the account fact through quota refusals.
+  - Verified on OpenCode 2.2.6 (16 November 2026): `opencode api` runs a transient private server per call (no
+    running service needed, no daemon left); managed launches pass an allowlisted environment, so ambient provider
+    API-key variables cannot override the stored connection; real OpenCode Claude replies carry subscription
+    telemetry (rate-limit windows, overage rejected). Provider options in the user-global OpenCode config remain an
+    unobserved residual.
   - Go still lacks complete observation, reset, month and demand semantics for included optimization.
 - Source acquisition stays stale-and-needed through the existing bounded readers: no polling, daemon, measurement
   model call or new account framework.

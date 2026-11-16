@@ -76,6 +76,7 @@ METERS = dict(five_hour='5h', seven_day='7d')
 SCOPED_METERS = ('seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet')
 UNKNOWN_METERS = ('cinder_cove', 'wattle_ember')  # known server keys without evidenced meaning
 KNOWN_RATE = {*METERS, *SCOPED_METERS, *UNKNOWN_METERS, 'extra_usage', 'limits', 'model_scoped'}
+METER_DEPTH = 4  # nested containers an unknown server value is searched through for a meter
 SESSION = {'total_cost_usd', 'total_api_duration_ms', 'total_duration_ms', 'total_lines_added', 'total_lines_removed',
            'model_usage'}
 ISO = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)')
@@ -283,11 +284,14 @@ def _overflow(rate):
     return {True: 'enabled', False: 'disabled'}.get(extra.get('is_enabled'), 'unknown')
 
 
-def _meter_like(value):
-    """Whether an unknown server value is shaped like a quota meter (a meter object, or a list holding one)."""
-    if type(value) is list:
-        return any(map(_meter_like, value))
-    return type(value) is dict and bool({'utilization', 'resets_at'} & set(value))
+def _meter_like(value, depth=METER_DEPTH):
+    """Whether an unknown server value holds a quota meter (an object with `utilization` or `resets_at`) anywhere in
+    its nested objects and lists. A container nested deeper than `depth` cannot be inspected and counts as one."""
+    if type(value) not in (dict, list):
+        return False
+    if depth <= 0 or type(value) is dict and {'utilization', 'resets_at'} & set(value):
+        return True
+    return any(_meter_like(item, depth - 1) for item in (value.values() if type(value) is dict else value))
 
 
 def _repeats(item, meters):

@@ -158,6 +158,9 @@ class RealClientShapeTest(Reader):
         for name, rate in dict(
                 unknown_meter=dict(tangelo=dict(utilization=5, resets_at=iso(self.now + 600))),
                 unknown_list=dict(pace=[dict(utilization=5, resets_at=iso(self.now + 600))]),
+                nested_meter=dict(seven_day_breakdown=dict(by_surface=[dict(surface='cli', share=dict(
+                    utilization=5, resets_at=iso(self.now + 600)))])),
+                too_deep=dict(seven_day_breakdown=dict(a=dict(b=dict(c=dict(d=dict(note='x')))))),
                 unmatched_limit=dict(limits=real_usage(self.now)['rate_limits']['limits'] + [dict(
                     kind='monthly', group='monthly', percent=3, resets_at=iso(self.now + 9 * 86400), severity='normal',
                     is_active=True, scope=None)])).items():
@@ -169,6 +172,12 @@ class RealClientShapeTest(Reader):
                 self.assertIsNotNone(claude_usage.binding(self.settings))
                 self.assertEqual(claude_usage.usable_windows(self.settings, int(time.time())), [])
                 self.assertEqual(self.refresh(need=()), dict(state='fresh'))  # metadata current: no new read
+
+    def test_a_nested_non_meter_within_the_bound_is_ignored(self):
+        self.answer(initialize(), real_usage(self.now, seven_day_breakdown=dict(by_surface=[dict(
+            surface='cli', share=dict(note='x', amount=3))])))
+        self.assertEqual(self.refresh(), dict(state='stored', windows=['5h', '7d']))
+        self.assertIsNotNone(self.fact())
 
     def test_account_level_refusals_still_end_the_account(self):
         self.answer(initialize(), real_usage(self.now))
