@@ -716,7 +716,7 @@ def documented_bridge():
     profile['context_tokens'] = 100
 
     def fill(command_text, attempt):
-        return (command_text.replace('<new id>', attempt).replace('<id>', attempt)
+        return (command_text.replace('<package>', str(root)).replace('<id>', attempt)
                 .replace('<task id>', 'task-' + attempt).replace('<specialist id>', 'software-engineer')
                 .replace('<task profile>', json.dumps(profile, separators=(',', ':'))))
     return text, prepare, complete, fill
@@ -726,8 +726,9 @@ def split(command_text):
     """(request body, argv after `scripts/routing.py`) of one documented `printf ... | python3 ...` command."""
     import shlex
     body, _, call = command_text.partition('|')
-    words = shlex.split(body)
-    return json.loads(words[2]), shlex.split(call)[shlex.split(call).index('scripts/routing.py') + 1:]
+    words, argv = shlex.split(body), shlex.split(call)
+    script = next(index for index, word in enumerate(argv) if word.endswith('/scripts/routing.py'))  # the package's
+    return json.loads(words[2]), argv[script + 1:]
 
 
 class DocumentedRequestTests(NativeBase):
@@ -750,12 +751,14 @@ class DocumentedRequestTests(NativeBase):
             permit = self.run_documented(fill(prepare, 'doc-launch'))
         self.assertEqual(permit['state'], 'dispatched', permit)
         self.assertEqual(permit['model'], SNAPSHOTS['claude-code'][0]['alias'])  # the low-complexity row's model
-        settled = self.run_documented(fill(complete, 'doc-launch').replace(
+        attempt = permit['attempt_id']  # the documented prepare leaves the id out: the bridge generates it
+        self.assertRegex(attempt, '^n[0-9a-f]{24}$')
+        settled = self.run_documented(fill(complete, attempt).replace(
             '"outcome":{"kind":"complete"}', json.dumps(dict(outcome=tool(permit)))[1:-1]))
         self.assertEqual(settled['state'], 'recorded', settled)
         self.assertEqual(len(tool.calls), 1)
         self.assertEqual(spy.call_args.kwargs['assignment']['scope'], routing_launch.assignment_scope(self.checkout))
-        self.assertTrue(self.holds()['doc-launch']['closed'])
+        self.assertTrue(self.holds()[attempt]['closed'])
 
 
 class BridgeInstructionTests(unittest.TestCase):

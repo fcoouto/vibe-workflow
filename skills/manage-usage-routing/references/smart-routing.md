@@ -10,11 +10,11 @@ Only the user turns Smart Routing on or off for a project. Coordinators and work
 | --- | --- | --- |
 | Claude Code | Each native worker or reviewer only through the [native bridge](../../../clients/claude-code.md#native-routing-bridge). A checkout with runtime task state cannot use the bridge (`claude_code_native_bridge_unavailable`). | Advisory: routing chooses and accounts, but cannot block a launch the agent makes anyway. |
 | Codex | With runtime task state: [delegation preparation](../../../clients/delegation.md#prepare-and-launch-once) (`workflow.py delegation prepare`). Without it (the basic onboarding default): the native bridge with `"client":"codex"` ([Codex client](../../../clients/codex.md)). | Advisory, as for Claude Code. |
-| OpenCode | Workers only through the [managed launcher](../../../clients/opencode.md#launch-a-managed-worker) (`scripts/opencode_launch.py`). The interactive coordinator's own `task` or `subagent` tool is **not routed today**. Onboarding records only Codex and Claude Code, so an OpenCode-coordinated project joins only through a Codex or Claude Code enrolment. OpenCode Claude also needs a current native Claude login ([account identity](../../../clients/opencode.md#opencode-selected-account-identity-task-6)). | Launcher workers are enforced; the interactive coordinator is not. |
+| OpenCode | Workers only through the [managed launcher](../../../clients/opencode-launch.md) (`scripts/opencode_launch.py`). The interactive coordinator's own `task` or `subagent` tool is **not routed today**. Onboarding records only Codex and Claude Code, so an OpenCode-coordinated project joins only through a Codex or Claude Code enrolment. OpenCode Claude also needs a current native Claude login ([account identity](../../../clients/opencode.md#opencode-selected-account-identity-task-6)). | Launcher workers are enforced; the interactive coordinator is not. |
 
-In every host the coordinator never launches outside routing, never switches to another host to get a launch, and never replaces required independent review with self-review.
+In every host the coordinator never launches outside routing on its own (a user's explicit request follows the [bypass rule](../../../policies/03-agent-delegation.md#managed-projects)), never switches to another host to get a launch, and never replaces required independent review with self-review.
 
-Linked task worktrees of the managed primary checkout count automatically. A submodule or nested repository inside a linked task worktree does not: the worktree check stops at its own `.git`, so it counts as unmanaged.
+Linked task worktrees of the managed primary checkout count automatically: `status --project`, the native bridge and the OpenCode launcher each accept a linked worktree of a managed primary checkout. A submodule or nested repository inside a linked task worktree does not: the worktree check stops at its own `.git`, so it counts as unmanaged.
 
 ## Charge risk: acknowledge before enabling
 
@@ -27,15 +27,25 @@ Tell the user, and enable only after they accept it:
 
 ## Commands
 
-Run every command from the installed package root (the folder that holds `scripts/routing.py`). Each one reads exactly one JSON request on stdin; without it the answer is `{"state":"blocked","reason":"invalid_json"}`. Use the checkout's absolute path. Operator commands work only as these one-shot calls (`operator_op_not_served` otherwise).
+Run every command with the installed package's absolute path, written `<package>` below: the folder that holds the installed `scripts/routing.py`. On Codex and Claude Code the startup context names it: the managed line's `routing commands:`, or the package paths it gives for policies. OpenCode has no startup line: `<package>` is two folders above the `manage-usage-routing` skill folder it loads. Never run a checkout's own `scripts/routing.py`: a checkout of this plugin has one, and it can differ from the installed package. Each one reads exactly one JSON request on stdin; without it the answer is `{"state":"blocked","reason":"invalid_json"}`. Use the checkout's absolute path. Operator commands work only as these one-shot calls (`operator_op_not_served` otherwise).
 
 Read the state at any time:
 
 ```sh
-printf '%s' '{"v":1}' | python3 -I -B scripts/routing.py status --project /absolute/checkout
+printf '%s' '{"v":1}' | python3 -I -B <package>/scripts/routing.py status --project /absolute/checkout
 ```
 
-A `blocked` answer is a failed check, not proof that the settings are unreadable; fix the call and read again. In an `ok` answer: `managed` (true or false) answers for this checkout, `settings_state` is `unavailable` when the settings exist but cannot be read (routing then treats every checkout as managed), `settings_revision` and `settings.managed_projects` are needed to change the list, and `ledger.authority_required` shows the one-way switch. An absent ledger (`ledger.state: absent`), or a ledger without the `authority_required` key, means the switch is off.
+A `blocked` answer is a failed check, not proof that the settings are unreadable; fix the call and read again. In an `ok` answer: `managed` (true or false) answers for this checkout, `settings_state` is `unavailable` when the settings exist but cannot be read (routing then treats every checkout as managed), `settings_revision` and `settings.managed_projects` are needed to change the list, and `ledger.authority_required` shows the one-way switch. An absent ledger (`ledger.state: absent`), or a ledger without the `authority_required` key, means the switch is off. `table` summarizes the [strategy table](#strategy-table-first-time).
+
+## Before any launch: the managed check
+
+Before any worker, reviewer, subagent or task launch, read `status --project` for the checkout (above):
+
+- `managed: true`: launch only through the host's managed path (the table above).
+- `managed: false`: the unmanaged instructions apply.
+- Any other answer, or none: the state is unknown, not unmanaged. Hold the dependent launch and report it.
+
+A missing startup line proves nothing: OpenCode prints none, and a failed startup may print none.
 
 ## Prerequisites (read-only)
 
@@ -56,7 +66,7 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 
    ```sh
    printf '%s' '{"v":1,"path":"codex-chatgpt-subscription","demand":null,"evidence":"<evidence id>"}' \
-     | python3 -I -B scripts/routing.py qualify_path
+     | python3 -I -B <package>/scripts/routing.py qualify_path
    ```
 
    - `"demand": null` qualifies the account and the launch with unknown included quota: provider-managed fallback only (see the charge risk). Measured demand instead uses exactly the path's windows in thousandths, 1 to 1000: `{"5h":<n>,"7d":<n>}` (Claude paths), `{"7d":<n>}` (ChatGPT paths), `{"rolling":<n>,"weekly":<n>,"monthly":<n>}` (Go).
@@ -66,21 +76,21 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 3. **Require authority**, once per machine. It is **one-way** and machine-wide: it can never be turned off, every later admission on this machine is stamped with it, and every managed launch needs it.
 
    ```sh
-   printf '%s' '{"v":1,"authority_required":true}' | python3 -I -B scripts/routing.py set
+   printf '%s' '{"v":1,"authority_required":true}' | python3 -I -B <package>/scripts/routing.py set
    ```
 
 4. **Add the checkout** with the full list: the current entries plus the primary checkout's absolute path. Its linked task worktrees count automatically.
 
    ```sh
    printf '%s' '{"v":1,"expected_revision":<settings_revision>,"change":{"managed_projects":["<existing>","/absolute/checkout"]}}' \
-     | python3 -I -B scripts/routing.py set
+     | python3 -I -B <package>/scripts/routing.py set
    ```
 
    Before sending, record in the project's setup record only the `settings_revision` before the change and "added this project's primary checkout". Never copy the list: it names other projects' machine paths, and the setup record may be committed. `stale_revision` means the list changed meanwhile: read `status` again and resend.
 5. **Read back**: `status --project` shows `managed: true`, and
 
    ```sh
-   python3 -I -B scripts/workflow.py features status smart_router --cwd /absolute/checkout
+   python3 -I -B <package>/scripts/workflow.py features status smart_router --cwd /absolute/checkout
    ```
 
    shows `effective: true`. Report Smart Routing as on only after both. In the setup record, record the readback as `managed: true` and `effective: true` and any blocker by its refusal code only: never paste `status` or a refusal, which carry `settings.managed_projects` or `projects` paths.
@@ -101,28 +111,80 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 | `authority_required: [authority_not_required]` | Run step 3, then retry. |
 | `authority_required: [ledger_unavailable]` | The ledger is busy or unreadable: retry later; report if it persists. |
 | `route_manifest: [no_qualified_path]` | Run step 2 for the project's hosts. |
-| `route_manifest: [no_generated_route]` | No strategy-table row uses a qualified path yet: refresh the table ([strategy table refresh](../../../clients/guidance-publication.md#strategy-table-refresh)). |
+| `route_manifest: [no_generated_route]` | No strategy-table row uses a qualified path yet: build the table ([strategy table, first time](#strategy-table-first-time)). |
 | `subscription_sources: [<host>_no_qualified_path]` | Qualify a path for that host (step 2). |
 | `subscription_sources: [<host>_billing_unverified]` | The account read for that host failed or is stale: sign in to that account, then retry the add (it reads again). |
 | `subscription_sources: [claude_code_native_bridge_unavailable]` | Claude Code cannot route a checkout with runtime task state: keep it unmanaged or use Codex. |
 | `subscription_sources: [<host>_native_binding_unverified]` | The host's model catalog is not bound to its current account: sign in to that account, then retry the add (it reads again). |
 | Any other check with `self_check_*` or `heading_missing` | The installed package is incomplete: update or reinstall it, then retry. |
 
+## Strategy table (first time)
+
+`route_manifest: [no_generated_route]` means this machine has no strategy table yet, or none of its rows uses a qualified path. Building one is a separate maintenance session, never part of a launch: it needs network access to the vendors' model documentation, model judgment to turn that guidance into rows, and tokens. Ask the user before starting it.
+
+1. Write the three inputs as local JSON files, in the shapes of the [strategy table refresh](../../../clients/guidance-publication.md#strategy-table-refresh): guidance rows from the vendors' current documentation, the catalog, and benchmarks (`[]` when none can be cited).
+2. Take each client's catalog entries from that client's own catalog, never copied across clients: `claude-native` and `codex-native` from the stored snapshots in `~/.local/state/vibe-workflow/routing/native-catalogs.json`; OpenCode from one `opencode api --standalone GET /api/model`. On `claude-native`, publish only the aliases the native Agent tool accepts. List each entry's `supported_efforts` from the lowest to the highest.
+3. Give each entry exactly the `harnesses` and `provider` its qualified path matches. A wrong string still compiles as `refreshed` but generates no route.
+
+   | Path | `harness` | `provider` |
+   | --- | --- | --- |
+   | `claude-native-subscription` | `claude-native` | `anthropic` |
+   | `codex-chatgpt-subscription` | `codex-native` | `openai` |
+   | `opencode-claude-subscription` | `claude-agent-sdk via opencode` | `claude-agent` |
+   | `opencode-chatgpt-subscription` | `opencode provider openai` | `openai` |
+   | `opencode-go-subscription` | `opencode provider opencode-go` | `opencode-go` |
+
+4. Give every work kind at least the rows `medium|medium`, `high|high` and `critical|critical` (`complexity_band|risk_band`). A profile uses its exact row, else the nearest stricter one, so without `critical|critical` a critical task gets no suggestion.
+5. Compile:
+
+   ```sh
+   python3 -B <package>/scripts/routing_table.py refresh --guidance GUIDANCE.json --catalog CATALOG.json --benchmarks BENCHMARKS.json
+   ```
+
+6. Verify with `status`: `table.state` is `ok`, `table.version` and `table.rows` name the new table, and `table.generated_routes_per_path` lists each qualified path.
+
+`validate.py`'s model-name check fails when a packaged instruction names a model the table names. The package's instructions name no Claude family alias, so a table set aside for that reason can come back: `python3 -B <package>/scripts/routing_table.py rollback` restores the saved previous table. Record the machine's table decisions (sources, rows, exclusions) in the project's setup record.
+
+## Attempt ids
+
+- Native bridge: omit `attempt_id` on the first prepare. The bridge generates one (`n` and 24 hex digits) and returns it as the answer's `attempt_id`; an answer without one held nothing.
+- OpenCode launcher: send a new unique `attempt_id` for each launch.
+- Send the same id again only to retry that same launch, so a retry can never obtain a second permit. Start a new attempt (on the bridge, omit the id again) only where the reply table says so. Never invent an id that imitates an earlier one: every session on this machine shares the ids, and a reused one answers `already_prepared`.
+
+## A user's explicit model choice
+
+A `choice` names `provider`, `model`, `harness` and `funding`, plus `effort` when the user chose one. When the user named only a model:
+
+- the native bridge tries that model's efforts from the lowest and admits the first that fits; the answer's `effort` names it;
+- Codex delegation preparation and the OpenCode launcher answer `blocked` `effort_required`: ask the user for the effort, or prepare routed.
+
+Never invent an effort.
+
 ## What the coordinator does with each reply
 
-These replies launch nothing. Report them with their `state` and `reason`, continue independent work, and take only the action shown.
+These replies launch nothing. Report them with their `state` and `reason`, continue independent work, and take only the action shown. The OpenCode launcher's results after a send are in [its own table](../../../clients/opencode-launch.md).
 
 | Reply | Meaning | The one next action |
 | --- | --- | --- |
-| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account looked full in a reading at most 60 s old, or its provider refused for quota within 120 s (a provider may reset early). | Hold the dependent delegation for `retry_after_seconds` (at most 120), then prepare once more; never wait for the scheduled reset. |
+| `pending` `no_feasible_route` or `explicit_choice_unavailable` with `quota_exhausted` in `reasons` | Every eligible account looked full in a reading at most 60 s old, or its provider refused for quota within the last 120 s. | Hold the dependent delegation. If it is still needed, prepare once more after `retry_after_seconds` (at most 120), not at the scheduled reset: each prepare rechecks the account, so an early provider reset is recognized. Routing never polls; nothing prepares again on its own. |
 | ... with `billing_unverified` in `reasons` | No current account fact for the route. | Ask the user to sign in to that account; prepare again afterwards. |
 | `explicit_choice_unavailable` | The exact model and effort chosen by the user are not admissible now; routing never substitutes. | Report it; ask the user before choosing anything else. |
 | `account_changed`, `native_binding_changed` | The account or its catalog changed after admission; the attempt is closed. | Prepare again with a new attempt id. |
 | `account_binding_missing`, `native_catalog_unavailable` | No account binding or catalog snapshot for the route. | Ask the user to sign in to the host's account; prepare again afterwards (its account read binds them). |
+| `catalog_mismatch` | The host does not list the admitted model, for an explicit choice the user's own model. Nothing was sent. | Report it; never substitute another model. |
+| `effort_required` | A `choice` without `effort` on a path that needs one. | Ask the user for the effort, or prepare routed. |
+| `invalid_choice` | The `choice` is malformed ([explicit model choice](#a-users-explicit-model-choice)). | Fix it; never resend it unchanged. |
+| `scope_required`, `profile_unavailable` | The launcher request has no `assignment.scope`, or the `job` is not a usable task profile. | Fix the request; never resend it unchanged. |
+| `invalid_json` | The command got no JSON request on stdin, or an invalid one. It says nothing about the settings. | Fix the call and run it again. |
+| `enrolment_unavailable` | The checkout's enrolment cannot be read. | Report it; onboarding needs repair. Never resend it unchanged. |
+| `observations_unavailable` | The routing service could not build its own observations. | Report it and hold; never supply observations. |
+| `attempt_closed` | That attempt is already settled. | Start a new attempt ([attempt ids](#attempt-ids)). |
 | `already_dispatched` | An earlier call carried the permit. | Never respawn; find that launch. |
 | `already_prepared` | This attempt id was already admitted. | If its earlier answer was a permit, the worker launched once. Otherwise prepare again with a new attempt id. |
 | `legacy_route_retired` | A legacy spending route is closed in a managed project. | Use the managed path above. |
 | Uncertain hold (`disposition: uncertain`) | A launch reported `not_started` or `unknown`; its capacity stays held. | Report it; `reconcile_subscription` (below) runs only on the user's explicit request. |
+| `ledger_busy` | The ledger stayed busy past its wait. | Retry the same request later. |
+| Any other reply | Not listed here. | Report it and hold the dependent launch; never resend it unchanged. |
 
 ## Uncertain holds
 
@@ -130,7 +192,7 @@ These replies launch nothing. Report them with their `state` and `reason`, conti
 
 ```sh
 printf '%s' '{"v":1,"attempt_id":"<attempt id>","event_id":"<new unique id>","evidence":{"kind":"abandon"}}' \
-  | python3 -I -B scripts/routing.py reconcile_subscription
+  | python3 -I -B <package>/scripts/routing.py reconcile_subscription
 ```
 
 `abandon` releases the held capacity without a reading. The other form, `{"kind":"host_usage","session_id":"<host session>","usage":{...}}`, needs the host's own message totals for that session (`source: host_message_totals`).

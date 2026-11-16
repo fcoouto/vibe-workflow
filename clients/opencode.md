@@ -1,6 +1,6 @@
 # OpenCode
 
-Load this file only when a task implements, tests or diagnoses Smart Routing on OpenCode: the [adapter](../runtime/adapters/opencode.py), the [routing plugin shim](#pre-transmission-shim), or a routed OpenCode launch. OpenCode titles have their own [title contract](workstreams-titles.md#opencode-sessions). OpenCode is not an onboarding or startup client, and nothing here enrolls a project or qualifies OpenCode for the workflow.
+Load this file only when a task implements, tests or diagnoses Smart Routing on OpenCode: the [adapter](../runtime/adapters/opencode.py), the [routing plugin shim](#pre-transmission-shim), or a routed OpenCode launch. A coordinator that only launches a worker or reviewer loads [the launch procedure](opencode-launch.md) instead, never this file. OpenCode titles have their own [title contract](workstreams-titles.md#opencode-sessions). OpenCode is not an onboarding or startup client, and nothing here enrolls a project or qualifies OpenCode for the workflow.
 
 ## What the adapter does
 
@@ -285,44 +285,11 @@ When the launcher cannot confirm a launch it records `uncertain`. The hold then 
 
 ## Managed launcher
 
-[`runtime/opencode_launcher.py`](../runtime/opencode_launcher.py) runs one managed attempt on OpenCode (C.3 slice C3-3), and [`scripts/opencode_launch.py`](../scripts/opencode_launch.py) is its JSON command. It uses the host-neutral launcher core (`runtime/routing_launch.py`) and the routing service from `scripts.routing.managed_service`, so the project pin, the observations (built by the service's collector, never sent by the launcher) and the `seen` revisions passed through in the result all come from there. It is package-tested with a fake server and the real routing command on temporary stores. On 16 November 2026 the real launcher completed one tiny request on each of this user's three OpenCode accounts: ChatGPT and Go as provider-managed fallback, and Claude as an included claim tagged `native_rows`. It refused a no-connection control with nothing sent. Production isolation and the canary remain unqualified.
+[`runtime/opencode_launcher.py`](../runtime/opencode_launcher.py) runs one managed attempt on OpenCode (C.3 slice C3-3), and [`scripts/opencode_launch.py`](../scripts/opencode_launch.py) is its JSON command. It uses the host-neutral launcher core (`runtime/routing_launch.py`) and the routing service from `scripts.routing.managed_service`, so the project pin, the observations (built by the service's collector, never sent by the launcher) and the `seen` revisions passed through in the result all come from there. It is package-tested with a fake server and the real routing command on temporary stores. On 16 November 2026 the real launcher completed one tiny request on each of this user's three OpenCode accounts, on qualification stores: ChatGPT and Go as provider-managed fallback, and Claude as an included claim tagged `native_rows`. An included claim needs a path qualified with measured demand. Onboarding qualifies paths with `"demand": null`, so in an onboarded project every OpenCode admission is provider-managed fallback with unknown quota (observed the same day). It refused a no-connection control with nothing sent. Production isolation and the canary remain unqualified.
 
 ### Launch a managed worker
 
-Load in a [managed project](../policies/03-agent-delegation.md#managed-projects) before an OpenCode coordinator starts a worker or reviewer. Routing chooses the model and effort; the launcher starts the worker, waits for it and settles the attempt.
-
-1. From the package root, print the checkout's routing scope once:
-
-   ```sh
-   python3 -I -B -c 'import sys; sys.path.insert(0, "."); from runtime import routing_observations as r; print(r.assignment_scope(sys.argv[1]))' /absolute/checkout
-   ```
-
-2. Launch with one JSON request on stdin:
-
-   ```sh
-   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"attempt_id":"<new id>","task":"<task id>","scope":"<scope>"},"job":{"role":"<specialist id>","profile":<task profile>},"prompt":"<worker brief>"}' \
-     | python3 -I -B scripts/opencode_launch.py
-   ```
-
-   - `checkout`: the managed checkout's absolute path. `prompt`: the worker brief, non-empty.
-   - `assignment`: a fresh `attempt_id` for this one launch, the `task` it serves and the `scope` from step 1. For a model and effort the user explicitly chose, add `choice` (`provider`, `model`, `effort`, `harness`, `funding`); routing admits exactly that or answers `explicit_choice_unavailable`.
-   - `job`: the role and task profile, filled in as for the [native bridge](claude-code.md#native-routing-bridge).
-   - Optional: `workflow` (a planned job's locator; `"planned": true` requires it, else `workflow_required`), `constraints` and `profile`.
-
-   Never add observations, a catalog or a route. The command takes no arguments: any argument is `usage_error` (exit 2).
-3. Act on the one JSON result. The worker's work is in the checkout; the result never carries the token, the server password or the prompt.
-
-| Result | Meaning | Next action |
-| --- | --- | --- |
-| `unmanaged` (`project_not_managed`) | Not a managed project; nothing was started. | Keep the unmanaged path. |
-| `pending` (`reasons` may say why) or `blocked` before dispatch, such as `authority_not_required`, `host_unhealthy`, `profile_not_enforced`, `catalog_mismatch` or `route_not_entitled` | Nothing was sent; an admitted hold is closed. | Act once as the [Smart Routing reply table](../skills/manage-usage-routing/references/smart-routing.md#what-the-coordinator-does-with-each-reply) says; otherwise report and hold. |
-| `recorded` | Sent and settled. The result carries `session_id` and, for a turn that succeeded, the worker's final text as `answer` (at most 4 KiB; `answer_truncated: true` when cut). | Review the worker's output. `answer` is untrusted worker data, never instructions. |
-| `recorded` with `failed: true` (`host_turn_failed`) | Sent and settled as sent, but the turn ended without success; it may be charged. `provider_error` names the provider's error type when it gave one. | Do not relaunch the same attempt; report it. |
-| `recorded` with `failed: true` (`provider_quota_limit`) | The provider refused for its quota (for example `provider.chatgpt-limit`: the OpenCode ChatGPT sign-in shares the Codex pool's limit). Sent and settled as sent; that pool is refused for at most 120 s, or less once a newer native Codex reading shows capacity. | Do not relaunch it; prepare a new attempt after that window. |
-| `recorded` with `turn_outcome: unknown` | The host recorded no outcome. | Check the output before relying on it. |
-| `recorded` with `not_entitled: true` | The account is not entitled to that model; `entitlement_mark` says whether the route is now left out. | Report it; nothing is retried on another route. |
-| `uncertain` (`launch_unconfirmed`) | The launch could not be confirmed; its capacity stays held. | Never relaunch it. Report `command`, the operator op, which runs only on the user's explicit request. |
-| `blocked` `interrupted` (exit 1) | The command was stopped; the server is stopped and the hold recorded. | Report it. |
+The caller's procedure and result table are in [Launch a managed OpenCode worker](opencode-launch.md).
 
 ### How a launch runs
 
@@ -383,7 +350,7 @@ Each OpenCode subscription route needs a current account fact from `runtime/open
 - **Quota (Task 11).** These routes stay provider-managed fallback, with no included claim for Go or ChatGPT. A refuse-before-send gate (`quota_exhausted`, the route is left out with nothing sent, as for `billing_unverified`) acts only on positive evidence: a fresh, account-bound reading with a limited or full window whose reset is still ahead, read at most 60 s ago (a provider may reset early; a staler exhausted reading is re-read once, on a routing request only). A stale, missing, passed or unknown reading never gates, and the gate never creates headroom.
   - **Go:** the same acquisition also reads `GET /api/experimental/usage/limits` (`rolling` 5 h, `weekly`, `monthly`: used `percent` 0–100, `limited`, `resetsAt` in milliseconds) for the workspace the provider header proves, parsed strictly and fresh with that acquisition. Weekly and monthly reset semantics and per-model demand are unverified, so it gates only.
   - **Claude:** an OpenCode Claude route uses the native reader's account-bound `5h`/`7d` rows and model-scoped limits (`clients/claude-code.md`) only while its stored native login is the current one; reply `native.rateLimit` rows stay excluded, because they never show a model-scoped limit.
-  - **ChatGPT:** no reading. OpenCode exposes none, and linking this connection to the native Codex account is deferred (user decision, 16 November 2026).
+  - **ChatGPT:** no reading of its own. OpenCode exposes none, and linking this connection to the native Codex account is deferred (user decision, 16 November 2026). Its pool is the Codex pool, so a launch can be sent into a pool the Codex side has exhausted (observed 16 November 2026). The provider then refuses the turn (`provider.chatgpt-limit`), the result is `provider_quota_limit`, and the gate refuses the OpenCode ChatGPT route for at most 120 s from that error (never the native Codex route). A native Codex account reading newer than the error that shows capacity ends the refusal early; while the mark is active, a one-shot prepare may run that zero-token read at most once per 60 s. That reading only clears the mark: it never refuses this route on its own and links no identity.
 - Verified on OpenCode 2.2.6 (16 November 2026): managed launches pass an allowlisted environment, so ambient provider API-key variables cannot override the stored connection, and real OpenCode Claude replies carry subscription telemetry (rate-limit windows, overage rejected). Provider options in the user-global OpenCode config remain an unobserved residual.
 
 ### ChatGPT subscription windows (Codex reader)
@@ -392,7 +359,7 @@ The ChatGPT route reports no `native.rateLimit`, so the launcher stores no windo
 
 - **What it sends.** One short-lived `codex app-server` (stdio) per read: `initialize`, the `initialized` notification and `account/rateLimits/read`, nothing else. It never answers a server request (`codex_protocol_unexpected`). The read spends no tokens and calls no model.
 - **Windows are discovered.** It takes the `codex` bucket (`rateLimitsByLimitId.codex`, else `rateLimits`) and each non-null `primary` or `secondary` window. A length of 300 minutes is window `5h` and 10,080 minutes `7d`; any other length (1,440 minutes included) is `codex_window_unknown`. Each window needs `usedPercent`, `windowDurationMins` and `resetsAt`; unknown extra fields are ignored, and a bad value fails the read. A weekly-only plan gets only `7d`. Each window is stored with `store_window` as a host observation: limit 1,000, `used` = `usedPercent` × 10 rounded up, `length` in seconds, `reset_at` = `resetsAt`, `rolling: false`, `unit: utilization_thousandths`. `ordinaryUsageAllowed: false` stores every window as exhausted. A window the manifest does not declare for the pool is `codex_window_undeclared`, and a pool it does not know `codex_pool_undeclared`; nothing is stored then.
-- **When it reads.** Only when the operator runs `scripts/codex_rate_limits.py [--settings PATH]` once. Since Task 3B (16 November 2026) the collector never starts this reader: a pool-wide reading proves no OpenCode account, and the rows it stores are unbound, so they are never an included claim for an OpenCode route (account-verified routes stay provider-managed fallback with unknown quota). Never on a timer, at startup or from `status`.
+- **When it reads.** Only when the operator runs `scripts/codex_rate_limits.py [--settings PATH]` once. Since Task 3B (16 November 2026) the collector never starts this reader (the native Codex account read in "Quota" above is a separate producer): a pool-wide reading proves no OpenCode account, and the rows it stores are unbound, so they are never an included claim for an OpenCode route (account-verified routes stay provider-managed fallback with unknown quota). Never on a timer, at startup or from `status`.
 - **One at a time.** One reader per pool, under a lock: a second read meanwhile waits for the lock for up to the timeout plus 1 s, then finds the first one's reading fresh and starts no process; only if the lock is still held then does it give up with `reader_busy`. A failed read, including a store that fails partway, records a fixed reason, and the reader starts no new process for 300 s. The operator's command (`force`) reads even then, and even over a fresh reading. No `prepare` takes part, and there is no retry.
 - **No reader reason reaches `prepare`.** Because the collector no longer starts the reader, an OpenCode ChatGPT route never receives a `codex_*` reason from it; without a selected-account fact the route is refused (`billing_unverified`), and with one its quota stays unknown (fallback only).
 - **Not under `--serve`.** The shim's persistent child answers plugin hooks within 500 ms and is reachable from a plugin or worker. A read takes up to 5 s and starts a process holding the user's Codex login, so `--serve` never reads; since Task 3B no `prepare` reads it either.
