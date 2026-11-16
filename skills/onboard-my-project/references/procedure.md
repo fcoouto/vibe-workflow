@@ -195,6 +195,24 @@ affected choice as inapplicable or pending, respectively.
    hook.
    - Yes, connect or set it up now. (default, recommended)
    - Not now.
+7. **Enable Smart Router for `<project_name>` on this machine?**
+   Explain that every worker and reviewer the agent starts here would get its
+   model and effort from routing, on your subscriptions. It is machine-level
+   state, not committed. On Codex and Claude Code it is advisory: routing chooses
+   and records, but cannot block a launch the agent makes anyway. OpenCode
+   workers run only through the managed launcher. State the charge risk from the
+   [Smart Routing procedure](../../manage-usage-routing/references/smart-routing.md#charge-risk-acknowledge-before-enabling):
+   a route with unknown included quota may be charged by the provider. Any
+   missing prerequisite stays pending.
+   - No. Keep my current worker choices. (default)
+   - Yes. Route this project's workers through Smart Router.
+   Reuse a recorded answer. Unanswered stays pending: do not apply the default
+   or write anything. No writes nothing to routing. Yes applies the procedure's
+   [enable steps](../../manage-usage-routing/references/smart-routing.md#enable-in-this-order)
+   for the primary checkout, reports each unmet prerequisite as pending with its
+   concrete blocker (never as done), and reports Smart Router on only after the
+   readback. Record the answer, scope and provenance in the setup record and, on
+   Yes, the pre-change routing revision and list as the undo.
 
 Apply the Graphify and memory questions from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable

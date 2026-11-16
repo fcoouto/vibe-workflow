@@ -50,4 +50,5 @@ The project's record of its workflow setup, kept in its setup document or an equ
 - Harness: [selected native method and invocation; input/check identities, client/version/model, observed actions, elapsed time and unrun cases; any separately authorized lab/demo evidence kept distinct]
 - Plan, backups and journal: [private location]
 - Undo: [how to undo, and what it preserves]
+- Smart Routing: [question 7's answer and scope; on Yes, the routing settings revision and `managed_projects` list before the change (the undo), each prerequisite still pending with its blocker, and the readback]
 - Reapply: [how to reapply]

@@ -4,7 +4,6 @@ The line names the client's managed delegation path when `routing_settings.manag
 the same answer `scripts/routing.py status --project` gives (unreadable settings count as managed there and here).
 Any error adds nothing: routing state never fails or delays startup.
 """
-from pathlib import Path
 
 LINE = '\nSmart Routing: managed project. Delegate every worker or reviewer only through '
 HOST_PATHS = {
@@ -16,7 +15,8 @@ OTHER_HOSTS = 'the managed launcher (clients/opencode.md#managed-launcher).'
 
 def settings_path():
     """The routing command's settings (`scripts/routing.py` `default_settings`), without importing that command."""
-    return Path.home() / '.local/state/vibe-workflow/routing/settings.json'
+    from runtime import routing_settings
+    return routing_settings.default_path()
 
 
 def line(client, checkout):

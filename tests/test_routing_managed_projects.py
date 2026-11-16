@@ -185,6 +185,53 @@ class ObservationTests(ManagedBase):
         self.assertEqual(response['reason'], 'observations_not_accepted')
 
 
+class ExclusionReasonTests(ManagedBase):
+    """C1: a managed `prepare` that admits nothing names the collector's exclusion codes in `reasons`, never a route,
+    id or value; other pending answers keep their reasons unchanged."""
+
+    def pending(self, reason, excluded, explicit=False):
+        body = collected(prepare('c1'))
+        if explicit:
+            body['assignment']['choice'] = dict(provider='anthropic', model='m', effort='high', harness='h',
+                                                funding='subscription')
+        decided = dict(status='pending', reason_code=reason, reason_codes=[reason])
+        with collector(dict(observations=dict(observations(), routes=[], excluded=excluded), seen=dict(SEEN))), \
+                mock.patch.object(command.routing, 'admit', return_value=decided):
+            return self.call(body)
+
+    def test_every_route_quota_exhausted_is_named(self):
+        response = self.pending('no_feasible_route', [dict(route='r1', reason='quota_exhausted'),
+                                                      dict(route='r2', reason='quota_exhausted')])
+        self.assertEqual((response['state'], response['reason']), ('pending', 'no_feasible_route'))
+        self.assertEqual(response['reasons'], ['no_feasible_route', 'quota_exhausted'])
+
+    def test_mixed_reasons_are_deduplicated_in_first_seen_order(self):
+        response = self.pending('no_feasible_route', [
+            dict(route='r1', reason='quota_exhausted'), dict(route='r2', reason='billing_unverified'),
+            dict(route='r3', reason='quota_exhausted'), dict(route=None, reason='not_entitled')])
+        self.assertEqual(response['reasons'], ['no_feasible_route', 'quota_exhausted', 'billing_unverified',
+                                               'not_entitled'])
+
+    def test_an_explicit_choice_names_them_too(self):
+        response = self.pending('explicit_choice_unavailable', [dict(route='r1', reason='billing_unverified')],
+                                explicit=True)
+        self.assertEqual(response['reasons'], ['explicit_choice_unavailable', 'billing_unverified'])
+
+    def test_nothing_but_bounded_fixed_codes_leaves(self):
+        excluded = [dict(route='route-SECRET', reason='quota_exhausted'), dict(route='r', reason='Not A Code SECRET'),
+                    dict(route='r', reason='x' * 65), dict(route='r', reason=None), 'SECRET', None,
+                    *[dict(route='r', reason='code_%d' % n) for n in range(40)]]
+        response = self.pending('no_feasible_route', excluded)
+        self.assertNotIn('SECRET', json.dumps(response))
+        self.assertEqual(response['reasons'][:2], ['no_feasible_route', 'quota_exhausted'])
+        self.assertLessEqual(len(response['reasons']), 1 + command.MAX_EXCLUSION_REASONS)
+        self.assertTrue(all(command.EXCLUSION_CODE.fullmatch(code) for code in response['reasons']))
+
+    def test_other_pending_reasons_are_unchanged(self):
+        response = self.pending('no_funded_organization', [dict(route='r1', reason='quota_exhausted')])
+        self.assertEqual(response['reasons'], ['no_funded_organization'])
+
+
 class StatusManagedTests(ManagedBase):
     """E6: a pinned `status` says whether its checkout is managed, through `routing_settings.managed_project`."""
 

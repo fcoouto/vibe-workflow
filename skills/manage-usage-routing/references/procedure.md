@@ -53,8 +53,9 @@ when permitted. Never initiate a purchase or silently switch to a paid API pool.
 ## Managed projects
 
 A checkout listed in, or inside a checkout listed in, the Smart Routing
-settings' `managed_projects` (`python3 -I -B scripts/routing.py status --project
-/absolute/project/path`) is a managed project. There, every legacy API Usage
+settings' `managed_projects` (`printf '%s' '{"v":1}' | python3 -I -B scripts/routing.py
+status --project /absolute/project/path`; a `blocked` answer is a failed check,
+not proof that the settings are unreadable) is a managed project. There, every legacy API Usage
 spending entry refuses with `legacy_route_retired` before it reads any API Usage
 setting, credential or ledger: the Codex host's `freeze` and `execute`, the foreground
 canary, `evaluate`, `handoff` and `claim_handoff`. Routing settings that exist
@@ -79,7 +80,8 @@ printf '%s' '{"v":1,"expected_revision":<revision>,"change":{"api_usage_enabled"
 On a disable request, set it to `false` the same way, then report both states.
 
 Smart Routing worker choices follow [worker choices](worker-choices.md); they
-need none of the API Usage steps here.
+need none of the API Usage steps here. Adding a project to Smart Routing,
+removing it, and reading its state follow [Smart Routing](smart-routing.md).
 
 ## Read-only status, quoting and selection
 

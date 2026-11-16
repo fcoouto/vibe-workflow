@@ -7,7 +7,9 @@ import sys
 import tempfile
 import unittest
 
-from runtime import features, routing_settings, settings_store
+from unittest import mock
+
+from runtime import features, routing_paths, routing_settings, settings_store
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -211,6 +213,30 @@ class ResolveTests(PackageFeatures):
                 bad.write_text(json.dumps(value), encoding="utf-8")
                 with self.assertRaises(ValueError):
                     self.resolve()
+
+    def test_requires_resolve_an_adapter_feature_by_its_effective_value(self):
+        self.manifest("routed", control="adapter", default=False,
+                      source={"store": "routing_managed_projects", "scope": "machine"})
+        self.manifest("needs_routing", control="settings", default=True)
+        path = self.package / "features/needs_routing.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), requires=["routed"])), encoding="utf-8")
+        home = self.base / "home"
+        home.mkdir(mode=0o700)
+        with mock.patch.dict(os.environ, HOME=str(home)):
+            needs = self.feature(self.resolve(), "needs_routing")
+            self.assertEqual((needs["effective"], needs["reason"]), (False, "prerequisite_missing"))
+            routing_settings.update(routing_settings.default_path(), dict(managed_projects=[str(self.root)]), 0)
+            report = self.resolve()
+        self.assertEqual(self.feature(report, "routed")["effective"], True)
+        self.assertEqual((self.feature(report, "needs_routing")["effective"], self.feature(report, "needs_routing")["reason"]),
+                         (True, "default"))
+
+    def test_an_unknown_requires_id_is_a_manifest_error(self):
+        path = self.package / "features/tuned.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), requires=["no_such_feature"])), encoding="utf-8")
+        with self.assertRaises(ValueError) as caught:
+            self.resolve()
+        self.assertIn("no_such_feature", str(caught.exception))
 
     def test_summary_lists_every_feature(self):
         summary = features.summary(self.resolve())
@@ -465,7 +491,8 @@ class CommandTests(Checkout):
         result = self.run_cli("status", "workstreams", "--summary")
         self.assertEqual(result.stdout.strip(), "Features: workstreams on (project)")
         result = self.run_cli("status", "--summary")
-        self.assertEqual(result.stdout.strip(), "Features: cleanup off · escalation_gate off · workstreams on (project)")
+        self.assertEqual(result.stdout.strip(),
+                         "Features: cleanup off · escalation_gate off · smart_router off · workstreams on (project)")
 
     def test_status_fails_when_settings_are_invalid(self):
         self.settings("{not json")
@@ -486,12 +513,103 @@ class ShippedManifestTests(unittest.TestCase):
         self.assertEqual(loaded["workstreams"]["default"], {"enabled": False})
         self.assertEqual(loaded["workstreams"]["control"], "settings")
 
+    def test_smart_router_manifest(self):
+        router = features.manifests()["smart_router"]
+        self.assertEqual((router["default"], router["control"], router["consent"], router["requires"]),
+                         ({"enabled": False}, "adapter", "none", []))
+        self.assertEqual(router["source"], {"store": "routing_managed_projects", "scope": "machine"})
+        self.assertEqual(router["skills"], ["manage-usage-routing", "onboard-my-project"])
+        self.assertEqual(router["procedure"], "skills/manage-usage-routing/references/smart-routing.md")
+        self.assertTrue((PACKAGE / router["procedure"]).is_file())
+
     def test_escalation_gate_manifest(self):
         gate = features.manifests()["escalation_gate"]
         self.assertEqual((gate["default"], gate["control"], gate["consent"]), ({"enabled": False}, "settings", "none"))
         self.assertEqual(sorted(gate["settings"]), ["check_patterns", "ladder"])
         self.assertEqual(gate["settings"]["ladder"], {"type": "array", "default": []})
         self.assertEqual(gate["procedure"], "clients/opencode-escalation-gate.md")
+
+
+class SmartRouterFeatureTests(Checkout):
+    """E8/E9: `smart_router` reads the machine's Smart Routing settings (a temporary HOME here), never the committed
+    settings; `status` opens no ledger and runs no activation gate."""
+
+    def setUp(self):
+        super().setUp()
+        home = self.base / "home"
+        home.mkdir(mode=0o700)
+        patch = mock.patch.dict(os.environ, HOME=str(home))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.routing = home / ".local/state/vibe-workflow/routing/settings.json"
+
+    def manage(self, *projects):
+        routing_settings.update(self.routing, dict(managed_projects=[str(item) for item in projects]),
+                                routing_settings.revision(self.routing))
+
+    def router(self):
+        return features.resolve(self.root)["features"]["smart_router"]
+
+    def test_the_routing_settings_path_is_the_routing_commands(self):
+        from scripts import routing as command
+        self.assertEqual(routing_settings.default_path(), self.routing)
+        self.assertEqual(command.default_settings(), self.routing)
+
+    def test_off_by_default_without_routing_settings(self):
+        router = self.router()
+        self.assertEqual((router["control"], router["consent"], router["effective"], router["reason"]),
+                         ("adapter", "not_required", False, "adapter"))
+        self.assertEqual(router["desired"], {"enabled": False, "source": "routing_managed_projects"})
+        self.assertEqual(router["observed"], {"routing_settings": "absent", "routing_managed": False, "qualified_paths": 0})
+        self.assertEqual(router["procedure"], "skills/manage-usage-routing/references/smart-routing.md")
+
+    def test_on_while_the_checkout_is_managed_and_off_once_removed(self):
+        self.manage(self.root)
+        router = self.router()
+        self.assertEqual((router["effective"], router["reason"], router["desired"]["enabled"]), (True, "adapter", True))
+        self.assertEqual(router["observed"]["routing_managed"], True)
+        self.assertIn("smart_router on", features.summary(features.resolve(self.root)))
+        self.manage()
+        self.assertEqual(self.router()["effective"], False)
+
+    def test_unreadable_routing_settings_are_unavailable_never_on(self):
+        self.manage()
+        self.routing.write_text("{not json", encoding="utf-8")
+        router = self.router()
+        self.assertEqual((router["effective"], router["reason"]), (None, "source_unavailable"))
+        self.assertEqual((router["observed"]["routing_settings"], router["observed"]["routing_managed"]),
+                         ("unavailable", True))  # routing itself treats this checkout as managed: both facts shown
+        self.assertIn("smart_router unavailable", features.summary(features.resolve(self.root)))
+
+    def test_status_shows_no_other_checkout_or_qualification_detail(self):
+        other = self.base / "other-checkout-SECRET"
+        other.mkdir()
+        self.manage(other)
+        routing_paths.qualify(self.routing, "codex-chatgpt-subscription", demand=None, evidence="EVIDENCE-SECRET", now=1)
+        report = features.resolve(self.root)
+        self.assertEqual(report["features"]["smart_router"]["observed"]["qualified_paths"], 1)
+        text = json.dumps(report)
+        for secret in ("SECRET", "codex-chatgpt-subscription", str(self.routing)):
+            self.assertNotIn(secret, text)
+
+    def test_status_opens_no_ledger_and_runs_no_gate(self):
+        self.manage(self.root)
+        from runtime import routing_activation, usage_budget
+        with mock.patch.object(routing_activation, "activation_gate", side_effect=AssertionError("gate")), \
+                mock.patch.object(usage_budget, "Ledger", side_effect=AssertionError("ledger")):
+            self.assertEqual(self.router()["effective"], True)
+
+    def test_writes_are_refused_and_name_the_procedure(self):
+        for change in (dict(enabled=True), dict(enabled=False)):
+            with self.subTest(change), self.assertRaises(settings_store.SettingsError) as caught:
+                features.change(self.root, "smart_router", **change)
+            self.assertIn("skills/manage-usage-routing/references/smart-routing.md", str(caught.exception))
+        self.assertFalse((self.root / ".vibe-workflow").exists())
+
+    def test_a_committed_entry_is_ignored(self):
+        self.settings({"schema_version": 1, "revision": 1, "features": {"smart_router": {"enabled": True}}})
+        router = self.router()
+        self.assertEqual((router["effective"], router["reason"]), (False, "ignored_override"))
 
 
 if __name__ == "__main__":

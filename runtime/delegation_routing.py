@@ -156,6 +156,16 @@ def _writer_models(service, scope, request, attempt_id):
     return sorted(models)
 
 
+def _refusal(answer):
+    """A routing refusal as delegation reports it: its state and reason, plus `reasons` when routing named more than
+    the reason itself (C1: for example `quota_exhausted` behind `no_feasible_route`)."""
+    routing = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
+    reasons = answer.get('reasons')
+    if type(reasons) is list and any(item != routing['reason'] for item in reasons):
+        routing['reasons'] = list(reasons)
+    return routing
+
+
 def admit(service, scope, request, *, attempt_id, routing_attempt, choice, constraints=None, job=None):
     """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt. `job` is
     the canonical job (`delegation.routing_job`); only the self-check supplies it."""
@@ -233,7 +243,7 @@ def prepare(scope, request, review, inner):
         answer = admit(service, scope, request, attempt_id=attempt, routing_attempt=attempt,
                        choice=_choice(selection), constraints=constraints)
         if answer.get('state') != 'admitted':
-            reply['routing'] = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
+            reply['routing'] = _refusal(answer)
             return reply
         if answer.get('duplicate'):
             reply['routing'] = dict(state='admitted', duplicate=True)
@@ -516,7 +526,7 @@ def continuation(scope, request, record, value, reply):
                 _record(service, attempt, 'not_dispatched', 'continuation:account_changed:' + attempt)
                 answer = dict(state='blocked', reason='account_changed')
     if answer.get('state') != 'admitted':
-        return dict(reply, routing=dict(state=answer.get('state', 'blocked'), reason=answer.get('reason')))
+        return dict(reply, routing=_refusal(answer))
     return dict(reply, routing=dict(state='admitted', attempt_id=attempt))
 
 

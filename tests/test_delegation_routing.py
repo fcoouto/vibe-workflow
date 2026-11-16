@@ -128,6 +128,16 @@ class ManagedSelectionModes(ManagedDelegation):
         self.assertEqual(delegation_routing.admitted_route(self.scope, prepared['attempt_id'])['model'],
                          'new-native-model')
 
+    def test_a_refusal_carries_the_routing_exclusion_reasons(self):
+        # C1: a `prepare` that admitted nothing names why (`quota_exhausted` here) beside its reason.
+        answer = dict(state='pending', reason='no_feasible_route', reasons=['no_feasible_route', 'quota_exhausted'])
+        with self.managed(OTHER), mock.patch.object(delegation_routing, 'admit', return_value=answer):
+            request = self.prepare_request(dispatch_id='c1-1')
+            prepared = self.api.prepare_assignment(self.scope, request)
+        self.assertFalse(prepared['launch_admitted'])
+        self.assertEqual(prepared['routing'], answer)
+        delegation_routing.release(self.scope, request, prepared['attempt_id'], 'routing_pending')
+
     def test_explicit_and_inherit_never_get_a_substituted_route(self):
         with self.managed(OTHER):  # only another native model is qualified, and worker_choices list it
             self.worker_choices(self.native('other-native-model'))

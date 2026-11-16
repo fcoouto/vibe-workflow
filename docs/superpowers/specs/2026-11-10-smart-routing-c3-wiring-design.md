@@ -304,6 +304,8 @@ A project may be added to `managed_projects` only through the one-shot `scripts/
 
 Removal skips all four.
 
+> **Current code (16 November 2026), not part of the original design.** The gate now lives in `runtime/routing_activation.py`, which `scripts/routing.py` re-exports. It has ten capabilities: the tenth, `authority_required`, runs in process and refuses with `authority_not_required` until the ledger's one-way `authority_required` switch is on. The host rule is `host_refusal`, and `MANAGED_HOSTS` also lists `claude-code` (F4.6). The user procedure is [Smart Routing](../../../skills/manage-usage-routing/references/smart-routing.md).
+
 **Self-check contract.** Each owning phase W slice adds `managed_self_check(workdir) -> list[str]` to a file it owns. It returns an empty list when the check passes, or fixed failure codes otherwise. The check:
 - runs the slice's managed path end to end against stores created in `workdir`: a temporary routing settings file, a ledger, a workflow double and a test source through the [source seam](#33-observation-collector);
 - makes no network, model, host or secret-store call, and never touches the production defaults or the checkout.

@@ -24,6 +24,29 @@ FEATURE_ID = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
 LIMIT = 2**53
 
 
+def _routing_managed_projects(root):
+    """Smart Routing (`smart_router`): whether the machine's routing settings manage this checkout, read like
+    `scripts/routing.py` reads them. Settings that exist but cannot be read are `effective: None`
+    (`source_unavailable`) although routing treats the checkout as managed; `observed` shows both. Reads the settings
+    and the path-qualification count only: no ledger, lock or activation gate, and no path of another checkout."""
+    from runtime import routing_paths, routing_settings
+    path = routing_settings.default_path()
+    state = routing_settings.managed_state(root, path)
+    try:
+        qualified = len(routing_paths.qualifications(path))
+    except Exception:  # noqa: BLE001 - an unreadable qualification file is reported as unknown, never as a count
+        qualified = None
+    observed = dict(routing_settings="unavailable" if state is None else "ok" if path.exists() else "absent",
+                    routing_managed=state is not False, qualified_paths=qualified)
+    if state is None:
+        return dict(effective=None, reason="source_unavailable", observed=observed)
+    return dict(effective=state, reason="adapter", observed=observed)
+
+
+# Adapter features keep their state in their own store; each `source.store` has one reader of a checkout's state.
+ADAPTERS = {"routing_managed_projects": _routing_managed_projects}
+
+
 def _typed(value, kind):
     if not isinstance(value, TYPES[kind]) or (kind != "boolean" and type(value) is bool):
         return False
@@ -72,6 +95,10 @@ def _manifest(path):
 
 def _load(package):
     found = {path.stem: _manifest(path) for path in sorted((Path(package) / "features").glob("*.json"))}
+    for name, (value, _) in found.items():
+        unknown = sorted(set(value["requires"]) - set(found))
+        if unknown:
+            raise ValueError(f"Manifest {name}: requires unknown features {unknown}")
     return {name: value for name, (value, _) in found.items()}, \
         hashlib.sha256(b"".join(raw + b"\0" for _, raw in found.values())).hexdigest()
 
@@ -106,13 +133,23 @@ def _entry(manifest, entry):
     return entry.get("enabled"), values
 
 
-def _feature(manifest, entry, broken, legacy):
+def _feature(manifest, entry, broken, legacy, root=None):
     default = manifest["default"]["enabled"]
     values = {key: spec["default"] for key, spec in manifest["settings"].items()}
     result = dict(control=manifest["control"], consent="not_required" if manifest["consent"] == "none" else "missing",
                   desired=dict(enabled=default, source="default"), observed="unknown", procedure=manifest["procedure"])
     if manifest["control"] == "settings":
         result["values"] = values
+    reader = ADAPTERS.get(manifest.get("source", {}).get("store")) if manifest["control"] == "adapter" else None
+    if reader is not None and root is not None:
+        try:
+            state = reader(root)  # the store is the state: a committed entry never changes it
+        except Exception:  # noqa: BLE001 - one unreadable store never breaks every other feature's status
+            state = dict(effective=None, reason="source_unavailable", observed="unknown")
+        result.update(desired=dict(enabled=state["effective"], source=manifest["source"]["store"]),
+                      observed=state["observed"])
+        reason = "ignored_override" if entry is not None and state["effective"] is not None else state["reason"]
+        return dict(result, effective=state["effective"], reason=reason)
     if manifest["control"] != "settings":
         effective = default if manifest["control"] == "fixed" else None
         reason = "ignored_override" if entry is not None else ("default" if manifest["control"] == "fixed" else "unchecked")
@@ -176,7 +213,7 @@ def resolve(cwd, package=PACKAGE):
             broken.setdefault("workstreams", found["error"])
         elif found is not None:
             legacy["workstreams"] = found["value"]
-    report = {name: _feature(manifest, entries.get(name), broken.get(name), legacy.get(name))
+    report = {name: _feature(manifest, entries.get(name), broken.get(name), legacy.get(name), root)
               for name, manifest in loaded.items()}
     changed = True
     while changed:
@@ -198,7 +235,7 @@ def summary(report, only=None):
     for name, feature in report["features"].items():
         if only is not None and name != only:
             continue
-        if feature["reason"] == "invalid_settings":
+        if feature["reason"] in ("invalid_settings", "source_unavailable"):
             state = "unavailable"
         elif feature["effective"] is None:
             state = "unchecked"

@@ -18,6 +18,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import time
@@ -82,6 +83,11 @@ PROFILE_FIELDS = ('semantic_digest', 'work_kind', 'complexity_band', 'risk_band'
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
                  'invalid_binding', 'admission_error')
+# C1: a managed `prepare` that admits nothing for these reasons also names the collector's exclusion codes (for example
+# `quota_exhausted`, `billing_unverified`) in `reasons`: deduplicated, fixed codes only, never a route, id or value.
+EXCLUSION_REASONS = ('no_feasible_route', 'explicit_choice_unavailable')
+EXCLUSION_CODE = re.compile(r'[a-z][a-z0-9_]{0,63}')
+MAX_EXCLUSION_REASONS = 16
 # The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
 # `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
@@ -154,6 +160,16 @@ def _table_shape(value):
 
 def _public(record):
     return {key: record[key] for key in ADMISSION_FIELDS if key in record}
+
+
+def _pending_reasons(result, observations):
+    """`admit`'s reason codes, plus the collector's exclusion codes when nothing was feasible (C1)."""
+    excluded = observations.get('excluded') if type(observations) is dict else None
+    if result['reason_code'] not in EXCLUSION_REASONS or type(excluded) is not list:
+        return result['reason_codes']
+    codes = dict.fromkeys(item.get('reason') for item in excluded if type(item) is dict)
+    codes = [code for code in codes if type(code) is str and EXCLUSION_CODE.fullmatch(code)]
+    return list(dict.fromkeys([*result['reason_codes'], *codes[:MAX_EXCLUSION_REASONS]]))
 
 
 def _busy(error):
@@ -447,7 +463,8 @@ class Service:
                                workflow=None if bound is None else bound[1], clear_debits=clear)
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
-            return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'], **echo)
+            return dict(state='pending', reason=result['reason_code'],
+                        reasons=_pending_reasons(result, observations if seen is not None else None), **echo)
         stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
                     workflow_bound=stored.get('job') is not None,
@@ -793,7 +810,7 @@ def serve(service, stdin, stdout):
 
 
 def default_settings():
-    return Path.home() / '.local/state/vibe-workflow/routing/settings.json'
+    return routing_settings.default_path()
 
 
 def default_ledger():

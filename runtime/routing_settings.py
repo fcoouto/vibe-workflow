@@ -291,6 +291,11 @@ def _within(target, projects):
     return any(found in roots for found in map(_identity, chain) if found is not None)
 
 
+def default_path():
+    """The machine's routing settings, `scripts/routing.py`'s default store (HOME-relative, so tests use a temp HOME)."""
+    return Path.home() / '.local/state/vibe-workflow/routing/settings.json'
+
+
 def managed_project(path, settings_path=None):
     """Whether `path` is a managed project or lies inside one. `settings_path` defaults to the routing command's
     settings (`scripts.routing.default_settings`).
@@ -309,6 +314,13 @@ def managed_project(path, settings_path=None):
     if settings_path is None:
         from scripts import routing as command
         settings_path = command.default_settings()
+    return managed_state(path, settings_path) is not False
+
+
+def managed_state(path, settings_path):
+    """`managed_project`'s answer without its fail-closed step: True, False, or None where it counts a project as
+    managed only because the settings or a path cannot be read. One settings read; `workflow.py features status`
+    reports None as unavailable, never as on."""
     try:
         projects = read(settings_path)['managed_projects']
         target = Path(path).resolve()
@@ -317,7 +329,7 @@ def managed_project(path, settings_path=None):
         primary = _linked_primary(target)
         return primary is not None and _within(primary, projects)
     except (SettingsError, usage_budget.BudgetError, OSError, RuntimeError, ValueError):
-        return True
+        return None
 
 
 def workstreams_enabled(scope, *, load=None):
