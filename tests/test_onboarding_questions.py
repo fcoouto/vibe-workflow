@@ -45,7 +45,7 @@ class OnboardingQuestionTests(unittest.TestCase):
         for required in ("pending", "charge", "advisory", "managed launcher", "machine", "readback",
                          "one-way `authority_required`", "cannot be undone",
                          "enrolment integrated in the primary checkout", "never copy the routing list",
-                         "only on the machine and for the user that gave it", "is not consent here",
+                         "only on the machine and for the user that gave it", "is not consent here", "`scope id`", "ask again when the ids differ",
                          "its own refusal code and resume condition", "`managed: true`"):
             self.assertIn(required, ' '.join(text.lower().split()))  # wrapped prose reads as one line
 

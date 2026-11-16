@@ -209,7 +209,7 @@ affected choice as inapplicable or pending, respectively.
    provider. Any missing prerequisite stays pending.
    - No. Keep my current worker choices. (default)
    - Yes. Route this project's workers through Smart Router.
-   Reuse a recorded answer only on the machine and for the user that gave it (its recorded scope); on any other machine or for any other user, ask again: an answer given elsewhere is not consent here. Unanswered stays pending: do not apply the default
+   Reuse a recorded answer only on the machine and for the user that gave it: compare the recorded `scope id` with the current one (`python3 -I -B -c "import getpass,hashlib,socket;print(hashlib.sha256(('%s|%s'%(socket.gethostname().split('.')[0],getpass.getuser())).encode()).hexdigest()[:16])"`, a digest of the host name and OS user, so no raw name is recorded). Ask again when the ids differ, when the record has no `scope id` or when you cannot compute it: an answer given elsewhere is not consent here. Unanswered stays pending: do not apply the default
    or write anything. No writes nothing to routing. A Yes is the user's explicit
    request for the procedure's
    [enable steps](../../manage-usage-routing/references/smart-routing.md#enable-in-this-order)
@@ -218,7 +218,7 @@ affected choice as inapplicable or pending, respectively.
    condition "enrolment integrated in the primary checkout"; report each other
    unmet prerequisite pending with its own refusal code and resume condition.
    Never report it on before the readback shows `managed: true` and
-   `effective: true`. Record the answer, its scope (this machine and this user)
+   `effective: true`. Record the answer, its `scope id` (this machine and this user, computed as above)
    and provenance in the setup record and, on Yes, only the routing revision
    before the change and "added this project's primary checkout"; never copy the
    routing list or a refusal's `projects`.
