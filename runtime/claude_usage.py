@@ -283,13 +283,33 @@ def _overflow(rate):
     return {True: 'enabled', False: 'disabled'}.get(extra.get('is_enabled'), 'unknown')
 
 
+def _meter_like(value):
+    """Whether an unknown server value is shaped like a quota meter (a meter object, or a list holding one)."""
+    if type(value) is list:
+        return any(map(_meter_like, value))
+    return type(value) is dict and bool({'utilization', 'resets_at'} & set(value))
+
+
+def _repeats(item, meters):
+    """Whether an unscoped raw `limits` item only repeats a parsed meter: the same reset (within the cache ceiling)
+    and the same percent (within one point). Anything else is a constraint this reader does not model."""
+    try:
+        percent, reset = _percent(item.get('percent')), _time(item.get('resets_at'))
+    except ReadError:
+        return False
+    return any(abs(percent - used) <= 1 and abs(reset - at) <= CACHE_CEILING for used, at in meters.values())
+
+
 def parse_usage(use, started, now):
     """`(windows, overflow)`. Windows come only from a complete successful answer: both meters, the raw `limits`
-    array present and empty, and `model_scoped: []`; anything else is a fixed reason, never a partial reading."""
+    array present (holding nothing but unscoped repeats of those meters) and no model-scoped meter. Null or
+    non-meter server keys are ignored; an unknown meter or anything else is a fixed reason, never a partial reading.
+    These are usage-level reasons only: the account read is recorded before this parse and stays current."""
     rate = use.get('rate_limits')
     if use.get('rate_limits_available') is not True or type(rate) is not dict:
         raise ReadError('claude_usage_unconfirmed')
-    if set(rate) - KNOWN_RATE or any(rate.get(key) is not None for key in UNKNOWN_METERS):
+    if any(_meter_like(rate[key]) for key in set(rate) - KNOWN_RATE) \
+            or any(rate.get(key) is not None for key in UNKNOWN_METERS):
         raise ReadError('claude_limits_unsupported')
     overflow = _overflow(rate)
     if any(rate.get(key) is not None for key in SCOPED_METERS) or rate.get('model_scoped') not in (None, []):
@@ -305,13 +325,15 @@ def parse_usage(use, started, now):
     limits = rate.get('limits')
     if type(limits) is list:
         for item in limits:
+            if type(item) is dict and item.get('scope') is None and _repeats(item, meters):
+                continue  # an unscoped summary of a parsed meter (the 2.1.311 answer lists them)
             scope = item.get('scope') if type(item) is dict else None
             scoped = item.get('kind') == 'weekly_scoped' and type(scope) is dict and scope.get('model') is not None \
                 if type(item) is dict else False
             raise ReadError('claude_limits_scoped' if scoped else 'claude_limits_unsupported')
     elif limits is not None:
         raise ReadError('claude_usage_invalid')
-    if limits is None or rate.get('model_scoped') != []:
+    if limits is None:
         raise ReadError('claude_usage_unconfirmed')  # a cached or header-seeded answer: no fresh time
     observed = max(0, math.floor(started) - CACHE_CEILING)
     found = []

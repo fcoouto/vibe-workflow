@@ -55,6 +55,10 @@ class RealSourceRefusalTest(Stores):
         self.enterContext(mock.patch.dict(os.environ, HOME=home, CLAUDE_CONFIG_DIR=home, CODEX_HOME=home,
                                           OPENCODE_CONFIG_DIR=home))  # matching invocation inputs, synthetic
         self.readers = [mock.Mock(side_effect=AssertionError('acquisition started')) for _ in range(4)]
+        # Ruling B: only an identity read (`need=()`) of the native login may start for an OpenCode Claude route,
+        # and only when that login is not current (here it is): never a usage/quota read or a pool reader.
+        self.readers[0] = mock.Mock(side_effect=lambda settings, **options: (
+            dict(state='fresh') if options.get('need') == () else (_ for _ in ()).throw(AssertionError('usage read'))))
         self.enterContext(mock.patch.object(claude_usage, 'refresh', self.readers[0]))
         self.enterContext(mock.patch.object(codex_account, 'refresh', self.readers[1]))
         self.enterContext(mock.patch.object(codex_rate_limits, 'refresh', self.readers[2]))

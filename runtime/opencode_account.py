@@ -6,7 +6,8 @@ memory and dropped; only domain-separated digests, a random generation per famil
 of the same key, exactly as `codex_account`) and fixed reasons persist, in a private 0600 store.
 
 - Claude: the active `claude-agent` credential must be `external`/`claude-login`, which is the native Claude Code
-  login. Its identity is the native one (`claude_usage.account`, rechecked at every read); none proved: refused.
+  login. Its identity is the native one (`claude_usage.account`, rechecked at every read); when it is not current,
+  the existing native reader runs once for identity only (`need=()`); none proved: refused.
 - ChatGPT: the active `openai` credential must be `oauth`/`chatgpt-token-sharing`. The key is the access JWT's `sub`
   claim (its payload is decoded locally; no signature check is possible or claimed) with the credential id, so a token
   refresh keeps the generation.
@@ -238,6 +239,13 @@ def billing_fact(settings_path, route, now):
                 valid_until=current['observed_at'] + observations.FRESH_SECONDS, paid_crossover='unknown')
 
 
+def _native_account(settings_path, now):
+    try:
+        return claude_usage.account(settings_path, now)
+    except (OSError, ValueError):
+        return None
+
+
 def _observe(rows, name, settings_path, command, environ, deadline):
     """(key, extra record fields) for one family from the credential rows, or a fixed ReadError."""
     if name == 'claude':
@@ -273,6 +281,10 @@ def refresh(settings_path, *, families=FAMILIES, force=False, command=None, envi
                     reason = failures[0].get('reason')
                     return dict(state='backoff', reason=reason if reason in REASONS else 'observation_store_invalid',
                                 families={})
+            if 'claude' in wanted and _native_account(settings_path, now) is None:
+                # The OpenCode Claude identity is the native login: the existing bounded native reader, identity
+                # only (no window demanded), never for ChatGPT or Go.
+                claude_usage.refresh(settings_path, need=(), environ=environ)
             held = {name: {} for name in wanted}
             for name in wanted:
                 _transition(settings_path, name, lambda part, name=name: continuity._fence(part, held[name]))

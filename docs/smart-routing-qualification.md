@@ -83,9 +83,11 @@ paid overflow is disabled. The account's own Extra Usage setting is reported,
 never required. Two native producers are wired: the native Claude account read
 (`runtime/claude_usage.py`) for `claude-native-subscription`, and the native Codex
 account read (`runtime/codex_account.py`) for `codex-chatgpt-subscription` (account and
-catalog only; its usable quota stays unknown). The three OpenCode subscription paths have
-no supported selected-account source and remain excluded/refused as `billing_unverified`;
-activation's `subscription_sources` check refuses those hosts. For an ordinary native
+catalog only; its usable quota stays unknown). The three OpenCode subscription paths are
+verified only by the OpenCode selected-account read (`runtime/opencode_account.py`, added
+by Task 6 on 16 November). Without its current fact they are excluded/refused as
+`billing_unverified`, and activation's fact-based `subscription_sources` check refuses those
+hosts; with it an OpenCode host can pass, with quota unknown (fallback only). For an ordinary native
 bridge host, activation also needs the native catalog bound to the current account; a
 Codex host whose enrolment keeps runtime task state is checked for billing only (its own
 delegation path keeps its catalog and launch checks), and a Claude Code host with runtime

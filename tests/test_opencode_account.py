@@ -285,6 +285,32 @@ class ReaderTest(Base):
             self.assertEqual(opencode_account.refresh(self.settings)['reason'], 'opencode_unavailable')
 
 
+class NativeIdentityReadTest(Base):
+    """Ruling B: a cold OpenCode Claude route runs the existing native reader once, for identity only (no window
+    demanded); a current fact or the ChatGPT and Go families start none."""
+
+    def test_a_cold_claude_route_reads_the_native_identity_once_and_no_windows(self):
+        claude_usage._save(self.settings, account=dict(pending=True, generation='c' * 32), identity=None)
+        calls = []
+
+        def native(settings, **options):  # the native read's own effect: a current login
+            calls.append(options)
+            self.native(int(time.time()), 'a' * 32)
+            return dict(state='stored', windows=[], reason='claude_limits_unsupported')
+        source = collector.LocalSource(self.settings)
+        with mock.patch.object(claude_usage, 'refresh', side_effect=native), \
+                mock.patch.object(opencode_account, 'default_command', lambda environ: self.fake.command):
+            for family in ('chatgpt', 'go'):
+                subscription_billing.acquire(source, [route_of(family)], int(time.time()))
+            self.assertEqual(calls, [])  # ChatGPT and Go never start the native reader
+            subscription_billing.acquire(source, [route_of('claude')], int(time.time()))
+            self.assertEqual([options.get('need') for options in calls], [()])  # identity only
+            self.assertIsNotNone(subscription_billing.fact(source, route_of('claude'), int(time.time())))
+            subscription_billing.acquire(source, [route_of('claude')], int(time.time()))  # current: nothing
+            self.assertEqual(len(calls), 1)
+        self.assert_clean()
+
+
 class LocalSourceTest(Base):
     """The real `LocalSource` chooses this producer by exact path and acquires only a stale, needed family."""
 

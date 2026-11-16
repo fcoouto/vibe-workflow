@@ -20,9 +20,9 @@ through the launcher host's own request transport, only for a kept, statically e
 readings are missing or stale, outside served preparation. It needs a qualified meter binding (`window_semantics`):
 the rolling/fixed semantics, lengths and original observation time that turn parsed meters into store windows. None is
 qualified, so production returns before any preview or read and stores nothing; a Go route's included quota then
-stays unknown (`window_unobserved`): with a verified account it could only be provider-managed fallback, and today no
-production source verifies an OpenCode Go account, so it is refused earlier (`billing_unverified`). Only code (a
-labelled test double) can supply a binding.
+stays unknown (`window_unobserved`): with a verified account (`runtime/opencode_account.py`) it is only
+provider-managed fallback, and without that producer's current fact it is refused earlier (`billing_unverified`).
+Only code (a labelled test double) can supply a binding.
 """
 from decimal import Decimal
 import hashlib
