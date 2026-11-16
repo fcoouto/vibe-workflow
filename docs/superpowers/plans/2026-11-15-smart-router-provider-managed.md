@@ -305,6 +305,16 @@ Codex `usable_windows` remains `[]`.
 
 ### Task 3B: Bind every subscription permit and continuation to its admitted identity
 
+**Accepted synthetic implementation:** `cf566bb..645b876`. The committed
+43-module gate passed 1,262 tests with zero skips. Independent consumer/security
+review and two scoped fix reviews cleared the raised findings. New unverified
+subscription candidates reserve nothing; legacy unsent records still refuse at
+dispatch. Continuation root-loss tests model the ledger-read result, not actual
+pruning. Some delegation tests followed implementation; mutation checks establish
+regression discrimination, not historical test-first order. Real clients,
+physical crash/durability, full-suite/platform and all-five readiness remain
+unproved; rollback remains unsupported by default.
+
 **Files:** `runtime/subscription_billing.py`, `routing_observations.py`,
 `routing_funding.py`, `subscription_fallback.py`, `delegation_routing.py`;
 line-neutral forwarding/condition edits in `runtime/routing.py`;
@@ -355,29 +365,29 @@ the original-selection fallback for absent/pruned/legacy roots. A new child
 admitted on a mismatch closes only as provably unsent; issued/uncertain exposure
 is never released by this identity check. Preserve prior-turn close refusal.
 
-- [ ] **1. Write failing real-service tests** for native helper (including
+- [x] **1. Write failing real-service tests** for native helper (including
   `bound=False`), managed immediate prepare, split Workstreams consume and
   continuation under same-second A/B/ABA, missing/expired facts and root loss.
   Assert no permit/tool call, no substituted route, proper unsent closure or
   retained uncertain exposure, and an independent new attempt can qualify.
-- [ ] **2. Pin legacy and compatibility negatives:** absent binding; null marker
+- [x] **2. Pin legacy and compatibility negatives:** absent binding; null marker
   admitted-unsent; already-dispatched/uncertain/terminal records; marked roots
   versus missing/pruned/legacy roots; unchanged funded marker behavior.
   Historical strict replay must not consult new live identity or rewrite records.
-- [ ] **3. Observe focused RED, implement the shared marker and guards**, then
+- [x] **3. Observe focused RED, implement the shared marker and guards**, then
   align fixtures through labelled synthetic facts. Never add a missing-marker
   bypass, test-only production branch, canned successful gate or fake native
   identity. No account/ledger backfill.
-- [ ] **4. Verify focused continuity/legacy modules and affected callers**;
+- [x] **4. Verify focused continuity/legacy modules and affected callers**;
   validate, commit and run canonical sharded coverage including the earlier
   31-module gate plus new tests, binding/storage/replay and continuation callers.
   Leave checkout unchanged during tests. Diagnose failures before another edit.
-- [ ] **5. Obtain independent security/consumer/legacy review**, including
+- [x] **5. Obtain independent security/consumer/legacy review**, including
   actual old-revision dispatcher/new-marker source behavior and isolated
   account-free compatibility tests where safe. Use disposable copies and
   historical Git objects; never install or activate old code on real accounts.
   No downgrade is supported unless all affected old paths are proved blocked.
-- [ ] **6. Accept Task 3 only after source and this shared invariant pass.**
+- [x] **6. Accept Task 3 only after source and this shared invariant pass.**
   Then continue Tasks 4/5 and original remaining delivery obligations. Preserve
   unsupported paths and pending live/platform proof; do not manufacture readiness.
 
