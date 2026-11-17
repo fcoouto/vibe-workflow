@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.44
+
+- **Model-only quota refusals keep `retry_after_seconds`.** A model-only explicit choice refused for quota now carries the smallest positive `retry_after_seconds` (at most 120) next to the merged `reasons`, so a coordinator can follow the retry rule in the case the instructions produce.
+- **OpenCode launcher.** The launcher generates and returns an `attempt_id` when the request omits it (the same shape as the native bridge's; an explicit id still answers `attempt_closed` on reuse). An interrupted launch returns `attempt_id`, `uncertain` and, when a dispatch already happened, the operator recovery hint, like `launch_unconfirmed`. `clients/opencode-launch.md` is now self-sufficient: worked routed and explicit requests, the `choice` strings per path, the roster of roles, the `<package>` rule through the skill's base directory and the rule to hold and report `effort_required` when the user cannot be asked.
+- **Codex sandbox.** New `clients/codex-sandbox.md` documents why the native bridge needs write access to the routing state and Codex's own state plus network in a Codex coordinator, and the per-run flags that worked live (no change to the user's Codex config).
+- **Instructions.** The never-bypass rule covers any stop before a managed launch (a refusal, a tool denial or an unknown check): report it and hold that launch, never offer a bypass. Every Agent launch from a permit must carry the permitted effort, and the effort the router chose is reported in one short line after the requested answer.
+- **Tests.** A timing race in `test_codex_account` (a second boundary between taking the time and starting the read) no longer fails under load.
+- Claude Code and Codex stay advisory, an OpenCode coordinator's own `task` calls are still not routed, and no enforcement hooks are included. Package and suite checks do not establish installed-client behavior.
+
 ## 0.1.43
 
 - **Routed workers now work in task worktrees.** The native bridge reads a linked worktree's enrolment from its primary checkout (it was refused with `enrolment_unavailable` although `status` said managed), and startup adds the Smart Routing managed line in worktrees too, naming the installed package's absolute `scripts/routing.py`.
