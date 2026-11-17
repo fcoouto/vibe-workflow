@@ -18,7 +18,6 @@ Codex delegation, D5/D6) keeps its own stronger path (`managed_delegation_requir
 """
 import json
 from pathlib import Path
-import secrets
 import time
 
 from runtime import claude_usage, codex_account, routing, routing_launch, routing_observations as collector, \
@@ -215,19 +214,23 @@ RELAYED = ('state', 'reason', 'reasons', 'retry_after_seconds')  # what a refusa
 def _model_only(service, client, assignment, job, catalog, profile, bound):
     """B3: a choice that names a model without an effort leaves the effort unconstrained. That exact model's catalog
     efforts are tried lowest first and the first admitted one answers (its `effort` names the choice made); a model
-    the catalog does not list, or no admission, is `explicit_choice_unavailable` with every attempt's `reasons`."""
+    the catalog does not list, or no admission, is `explicit_choice_unavailable` with every attempt's `reasons` and
+    the smallest positive `retry_after_seconds` among them (0.1.44 C1, at most 120)."""
     choice = assignment['choice']
     efforts = sorted({item.get('effort') for item in catalog if all(item.get(key) == choice.get(key) for key in (
         'provider', 'model', 'harness'))}, key=lambda effort: (EFFORT_ORDER.index(effort) if effort in EFFORT_ORDER
                                                                else len(EFFORT_ORDER), str(effort)))
-    reasons = []
+    reasons, retry = [], []
     for effort in efforts:
         answer = prepare(service, client=client, assignment=dict(assignment, choice=dict(choice, effort=effort)),
                          job=job, catalog=catalog, profile=profile, bound=bound)
         if answer.get('state') != 'pending' or answer.get('reason') != 'explicit_choice_unavailable':
             return answer
         reasons += [item for item in answer.get('reasons') or () if item not in reasons]
-    return dict(state='pending', reason='explicit_choice_unavailable', **(dict(reasons=reasons) if reasons else {}))
+        if type(answer.get('retry_after_seconds')) is int and answer['retry_after_seconds'] > 0:
+            retry.append(answer['retry_after_seconds'])
+    return dict(state='pending', reason='explicit_choice_unavailable', **(dict(reasons=reasons) if reasons else {}),
+                **(dict(retry_after_seconds=min(min(retry), collector.PROVIDER_LIMIT_SECONDS)) if retry else {}))
 
 
 def command_prepare(service, body):
@@ -247,7 +250,7 @@ def command_prepare(service, body):
     assignment, job = dict(body['assignment'], scope=scope), dict(body['job'])
     generated = 'attempt_id' not in assignment
     if generated:  # B4': an omitted id is generated (never a look-alike guess); an explicit id keeps today's answer
-        assignment['attempt_id'] = 'n' + secrets.token_hex(12)
+        assignment['attempt_id'] = routing_launch.generated_attempt_id()
     job.setdefault('scope_ref', scope)
     if not routing_launch.managed(service.project, service.settings_path):
         return dict(state='unmanaged', reason=routing_launch.PROJECT_NOT_MANAGED)

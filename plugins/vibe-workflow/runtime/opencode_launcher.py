@@ -669,14 +669,15 @@ def _interrupted(service, gate):
     `complete` that already won makes both `attempt_closed`, which changes nothing."""
     attempt = gate.attempt_id
     if attempt is None:
-        return  # nothing was admitted
+        return False  # nothing was admitted
     if gate.dispatch != 'dispatched':
         answer = _record(service, attempt, 'not_dispatched')
         if answer is not None and (answer[0] == 'recorded' or answer[1] == 'attempt_closed'):
-            return
+            return False
         if gate.dispatch is None and (answer is None or answer[1] != 'hold_state_forbidden'):
-            return  # never sent: the hold is only admitted and expires unsent; `uncertain` would keep it
-    _record(service, attempt, 'uncertain')
+            return False  # never sent: the hold is only admitted and expires unsent; `uncertain` would keep it
+    answer = _record(service, attempt, 'uncertain')  # C2: the command's `interrupted` answer names the operator op,
+    return answer is None or answer[1] != 'attempt_closed'  # unless the attempt had already settled
 
 
 def _account_of(settings_path, source, route):
@@ -815,10 +816,11 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                                                request, now=int(time.time())),
                                            settled=lambda admission: _store_settled(attempt, admission,
                                                                                     service.settings_path))
-        except BaseException:
+        except BaseException as error:
             # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`;
-            # close or mark the hold it leaves before re-raising.
-            _interrupted(service, gate)
+            # close or mark the hold it leaves, and tell the command what it left (C2), before re-raising.
+            error.launch_hold = dict(attempt_id=gate.attempt_id, uncertain=_interrupted(service, gate),
+                                     funded=(gate.admission or {}).get('billing_class') in routing.FUNDED)
             raise
         finally:
             detached = attempt.detach()  # after `record complete`: `descendants` answers only while attached
