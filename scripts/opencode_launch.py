@@ -91,6 +91,19 @@ def run(body):
         service.close()
 
 
+def _interrupted(error, body):
+    """C2 (R4b F1): an interrupted launch names its attempt id and, once its hold is `uncertain` (the launch was
+    dispatched), the operator op that settles it, as `launch_unconfirmed` does; never the prompt, token or password."""
+    hold = getattr(error, 'launch_hold', None)
+    hold = hold if type(hold) is dict else {}
+    attempt = hold.get('attempt_id') or (body or {}).get('assignment', {}).get('attempt_id')
+    fields = dict(uncertain=hold.get('uncertain') is True, **(dict(attempt_id=attempt) if type(attempt) is str else {}))
+    if fields['uncertain']:
+        recovery = 'reconcile_uncertain' if hold.get('funded') is True else 'reconcile_subscription'
+        fields.update(recovery=recovery, command='scripts/routing.py ' + recovery)
+    return fields
+
+
 def main(argv=None, stdin=None, write=None):
     write = write or (lambda line: (sys.stdout.write(line + '\n'), sys.stdout.flush()))
     if (sys.argv[1:] if argv is None else argv):
@@ -98,17 +111,22 @@ def main(argv=None, stdin=None, write=None):
         return 2
     raw = stdin if stdin is not None else sys.stdin.buffer.read(MAX_INPUT + 1)
     body, reason = _request(raw)
+    generated = body is not None and 'attempt_id' not in body['assignment']
+    if generated:  # C3 (R3b N1): an omitted id is generated as the native bridge does, and returned
+        body['assignment'] = dict(body['assignment'], attempt_id=routing_launch.generated_attempt_id())
     previous = {number: signal.signal(number, _interrupt) for number in WATCHED}
     code = 0
     try:
         result = _blocked(reason) if body is None else run(body)
-    except (Interrupted, KeyboardInterrupt):  # `run` stopped the server; the launcher recorded what it had to
-        result, code = _blocked('interrupted'), 1
+    except (Interrupted, KeyboardInterrupt) as error:  # `run` stopped the server; the launcher recorded the hold
+        result, code = dict(_blocked('interrupted'), **_interrupted(error, body)), 1
     except Exception:  # noqa: BLE001 - a fixed reason, never a traceback, input text or secret
         result = _blocked('internal_error')
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
+    if generated and 'attempt_id' not in result:
+        result = dict(result, attempt_id=body['assignment']['attempt_id'])
     write(json.dumps(dict(v=VERSION, **result), sort_keys=True))
     return code
 
