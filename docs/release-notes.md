@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Complete OpenCode worker answers.** Successful managed launches return the complete final `answer`, without the former 4 KiB byte cap or `answer_truncated` field. This removes post-generation clipping, not provider generation limits or host transport limits.
+
 ## 0.1.44
 
 - **Model-only quota refusals keep `retry_after_seconds`.** A model-only explicit choice refused for quota now carries the smallest positive `retry_after_seconds` (at most 120) next to the merged `reasons`, so a coordinator can follow the retry rule in the case the instructions produce.

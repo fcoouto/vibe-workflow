@@ -104,18 +104,24 @@ class WorkerAnswerTests(LauncherBase):
     def test_a_succeeded_turn_returns_the_answer_and_session_never_the_prompt_or_token(self):
         self.with_text('The worker answer.')
         result = self.launch(prompt='SENTINEL-PROMPT do the task')
-        self.assertEqual((result['state'], result['answer'], result['answer_truncated']),
-                         ('recorded', 'The worker answer.', False), result)
+        self.assertEqual((result['state'], result['answer']), ('recorded', 'The worker answer.'), result)
+        self.assertNotIn('answer_truncated', result)
         self.assertRegex(result['session_id'], r'^ses_[0-9a-f]{32}$')
         text = json.dumps(result)
         self.assertNotIn('SENTINEL-PROMPT', text)
         for held in self.host.attached.values():
             self.assertNotIn(held['authority'], text)
 
-    def test_a_long_answer_is_bounded_to_4_kib_and_flagged(self):
-        self.with_text('x' * 5000)
-        result = self.launch()
-        self.assertEqual((len(result['answer'].encode()), result['answer_truncated']), (launcher.MAX_ANSWER, True))
+    def test_answers_keep_their_complete_text_including_unicode_and_the_tail(self):
+        for text in ('', 'x' * 4095, 'x' * 4096, 'x' * 4097, 'x' * 100000 + '\nFinal finding.',
+                     'x' * 4095 + '🙂\nConclusão: 日本語.'):
+            with self.subTest(characters=len(text)):
+                self.setUp()
+                self.with_text(text)
+                result = self.launch()
+                self.assertEqual(result['state'], 'recorded', result)
+                self.assertEqual(result['answer'], text)
+                self.assertNotIn('answer_truncated', result)
 
     def test_a_provider_quota_refusal_is_named_and_still_settled_as_sent(self):
         self.host.turn_fails = dict(error=dict(type='provider.chatgpt-limit', message='free text never returned'))

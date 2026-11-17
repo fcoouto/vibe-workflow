@@ -43,8 +43,7 @@ AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
 HOST_TURN_FAILED = 'host_turn_failed'  # a sent turn the host ended without success: surfaced, settled as sent
 FAILED_OUTCOMES = ('failed', 'aborted', 'error', 'cancelled')  # Task 11 (N4): any other outcome is `unknown`
 SCOPE_REQUIRED = 'scope_required'
-# B9/B10: the worker's final answer (untrusted data, bounded) and the provider's error type, a fixed token only.
-MAX_ANSWER = 4096
+# B9/B10: the worker's final answer (untrusted data) and the provider's error type, a fixed token only.
 ERROR_TYPE = re.compile(r'[A-Za-z0-9_.-]{1,64}')
 # A provider refusal for its own quota (R2: the OpenCode ChatGPT sign-in shares the Codex pool's limit): still settled
 # as sent, but named so a coordinator holds until the reset instead of retrying.
@@ -477,7 +476,7 @@ def account(host, root, *, funding, attempt, authority, route=None):
 
 
 def _answer(messages):
-    """The final assistant message's text parts, or None. Untrusted worker output, bounded by the caller."""
+    """The final assistant message's complete text parts, or None. Untrusted worker output."""
     last = next((m for m in reversed(messages) if isinstance(m, dict) and m.get('type') == 'assistant'), None)
     parts = (last or {}).get('content')
     texts = [part['text'] for part in parts if isinstance(part, dict) and part.get('type') == 'text'
@@ -743,8 +742,7 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     elif attempt.outcome != 'succeeded':  # none, or a word another OpenCode version may write: unknown, never failed
         result['turn_outcome'] = 'unknown'
     elif attempt.read.get('answer') is not None:
-        raw = attempt.read['answer'].encode('utf-8')
-        result.update(answer=raw[:MAX_ANSWER].decode('utf-8', 'ignore'), answer_truncated=len(raw) > MAX_ANSWER)
+        result['answer'] = attempt.read['answer']
     admission = result.get('admission') or {}
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
