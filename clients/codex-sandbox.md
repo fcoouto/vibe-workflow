@@ -18,6 +18,7 @@ codex exec --json -C /absolute/checkout \
 - `<home>` is the user's home directory as an absolute path.
 - The profile extends `:read-only`, grants write to `~/.local/state/vibe-workflow` and `~/.codex`, keeps `config.toml`, `hooks.json` and `auth.json` read-only, and enables the network.
 - Add no `--sandbox` flag: a permissions profile must not be combined with `sandbox_mode`.
+- The checkout stays read-only under this profile, so it suits read-only work; adding write access to the checkout is untested.
 - Never edit the user's Codex configuration for this.
 
 **What the profile still allows.** The network for every command, and write access to the rest of `~/.codex`, including its plugin cache, skills, rules and `AGENTS.md`. A tighter guard list is untested.

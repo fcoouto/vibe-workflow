@@ -147,7 +147,7 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 
 ## Attempt ids
 
-- Omit `attempt_id` on the first prepare or launch. The native bridge and the OpenCode launcher each generate one (`n` and 24 hex digits) and return it as `attempt_id`. An id you send must be new.
+- Omit `attempt_id` on the first prepare or launch. The native bridge and the OpenCode launcher each generate one (`n` and 24 hex digits) and return it as `attempt_id`. An id you send for a new launch must be new; reuse an id only to retry that same launch.
 - An id in an answer names the attempt; it is not a permit or a hold. Only a bridge `dispatched` answer is a permit, settled with `native_complete`. A launcher `recorded` result is already settled. Capacity stays held for the user's operator op only after an uncertain outcome: the launcher's `uncertain`, its `interrupted` with `uncertain: true`, or a bridge settlement with `disposition: uncertain`. Every other refusal holds nothing to settle.
 - If a prepare's or launch's output is lost (you never saw its `attempt_id`), never send it again: report it, because a second request is a new attempt and could launch twice.
 - Send the same id again only to retry that same launch, so a retry can never obtain a second permit. Start a new attempt (on the bridge, omit the id again) only where the reply table says so. Never invent an id that imitates an earlier one: every session on this machine shares the ids, and a reused one answers `already_prepared`.

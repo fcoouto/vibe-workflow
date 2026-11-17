@@ -20,7 +20,7 @@ Load only this file when an OpenCode coordinator starts a worker or reviewer in 
    Only for a model and effort the user explicitly chose, add `choice` to `assignment`. For the OpenCode Claude sign-in:
 
    ```sh
-   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"task":"count-policy-files","scope":"<scope>","choice":{"provider":"claude-agent","model":"<model>","effort":"<effort>","harness":"claude-agent-sdk via opencode","funding":"subscription"}},"job":{"role":"explorer-agent","profile":{"complexity_band":"low","risk_band":"low","review_policy":"self","uncertainty":"low"}},"prompt":"Count the .md files directly under policies/ and answer with the number only."}' \
+   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"task":"count-policy-files","scope":"<scope>","choice":{"provider":"claude-agent","model":"<model, exactly as the host lists it>","effort":"<effort>","harness":"claude-agent-sdk via opencode","funding":"subscription"}},"job":{"role":"explorer-agent","profile":{"complexity_band":"low","risk_band":"low","review_policy":"self","uncertainty":"low"}},"prompt":"Count the .md files directly under policies/ and answer with the number only."}' \
      | python3 -I -B <package>/scripts/opencode_launch.py
    ```
 
