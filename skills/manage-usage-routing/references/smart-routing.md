@@ -9,7 +9,7 @@ Only the user turns Smart Routing on or off for a project. Coordinators and work
 | Host | How workers launch in a managed project | What routing can stop |
 | --- | --- | --- |
 | Claude Code | Each native worker or reviewer only through the [native bridge](../../../clients/claude-code.md#native-routing-bridge). A checkout with runtime task state cannot use the bridge (`claude_code_native_bridge_unavailable`). | Advisory: routing chooses and accounts, but cannot block a launch the agent makes anyway. |
-| Codex | With runtime task state: [delegation preparation](../../../clients/delegation.md#prepare-and-launch-once) (`workflow.py delegation prepare`). Without it (the basic onboarding default): the native bridge with `"client":"codex"` ([Codex client](../../../clients/codex.md)). | Advisory, as for Claude Code. |
+| Codex | With runtime task state: [delegation preparation](../../../clients/delegation.md#prepare-and-launch-once) (`workflow.py delegation prepare`). Without it (the basic onboarding default): the native bridge with `"client":"codex"` ([Codex client](../../../clients/codex.md)). To tell which applies, use the bridge: it answers `managed_delegation_required` when the checkout keeps runtime task state. Never probe `task status` to decide. In a Codex sandbox the bridge needs [per-run permissions](../../../clients/codex-sandbox.md). | Advisory, as for Claude Code. |
 | OpenCode | Workers only through the [managed launcher](../../../clients/opencode-launch.md) (`scripts/opencode_launch.py`). The interactive coordinator's own `task` or `subagent` tool is **not routed today**. Onboarding records only Codex and Claude Code, so an OpenCode-coordinated project joins only through a Codex or Claude Code enrolment. OpenCode Claude also needs a current native Claude login ([account identity](../../../clients/opencode.md#opencode-selected-account-identity-task-6)). | Launcher workers are enforced; the interactive coordinator is not. |
 
 In every host the coordinator never launches outside routing on its own (a user's explicit request follows the [bypass rule](../../../policies/03-agent-delegation.md#managed-projects)), never switches to another host to get a launch, and never replaces required independent review with self-review.
@@ -27,7 +27,7 @@ Tell the user, and enable only after they accept it:
 
 ## Commands
 
-Run every command with the installed package's absolute path, written `<package>` below: the folder that holds the installed `scripts/routing.py`. On Codex and Claude Code the startup context names it: the managed line's `routing commands:`, or the package paths it gives for policies. OpenCode has no startup line: `<package>` is two folders above the `manage-usage-routing` skill folder it loads. Never run a checkout's own `scripts/routing.py`: a checkout of this plugin has one, and it can differ from the installed package. Each one reads exactly one JSON request on stdin; without it the answer is `{"state":"blocked","reason":"invalid_json"}`. Use the checkout's absolute path. Operator commands work only as these one-shot calls (`operator_op_not_served` otherwise).
+Run every command with the installed package's absolute path, written `<package>` below: the folder that holds the installed `scripts/routing.py`. On Codex and Claude Code the startup context names it: the managed line's `routing commands:`, or the package paths it gives for policies. OpenCode has no startup line: load this skill with the `skill` tool; its "Base directory" line names `<package>/skills/manage-usage-routing`, so `<package>` is two folders above it. Never use a copy inside a checkout. Never run a checkout's own `scripts/routing.py`: a checkout of this plugin has one, and it can differ from the installed package. Each one reads exactly one JSON request on stdin; without it the answer is `{"state":"blocked","reason":"invalid_json"}`. Use the checkout's absolute path. Operator commands work only as these one-shot calls (`operator_op_not_served` otherwise).
 
 Read the state at any time:
 
@@ -147,19 +147,19 @@ Run these steps only once the checkout's enrolment is integrated in the primary 
 
 ## Attempt ids
 
-- Native bridge: omit `attempt_id` on the first prepare. The bridge generates one (`n` and 24 hex digits) and returns it as the answer's `attempt_id`; an answer without one held nothing.
-- OpenCode launcher: send a new unique `attempt_id` for each launch.
-- If a prepare's output is lost (you never saw its `attempt_id`), never prepare again for that launch: report it, because a second prepare is a new attempt and could launch twice.
+- Omit `attempt_id` on the first prepare or launch. The native bridge and the OpenCode launcher each generate one (`n` and 24 hex digits) and return it as `attempt_id`. An id you send must be new.
+- An id in an answer names the attempt; it is not a permit or a hold. Only a bridge `dispatched` answer is a permit, settled with `native_complete`. A launcher `recorded` result is already settled. Capacity stays held for the user's operator op only after an uncertain outcome: the launcher's `uncertain`, its `interrupted` with `uncertain: true`, or a bridge settlement with `disposition: uncertain`. Every other refusal holds nothing to settle.
+- If a prepare's or launch's output is lost (you never saw its `attempt_id`), never send it again: report it, because a second request is a new attempt and could launch twice.
 - Send the same id again only to retry that same launch, so a retry can never obtain a second permit. Start a new attempt (on the bridge, omit the id again) only where the reply table says so. Never invent an id that imitates an earlier one: every session on this machine shares the ids, and a reused one answers `already_prepared`.
 
 ## A user's explicit model choice
 
 A `choice` names `provider`, `model`, `harness` and `funding`, plus `effort` when the user chose one. When the user named only a model:
 
-- the native bridge tries that model's efforts from the lowest and admits the first that fits (the lowest effort may be too light for a critical task: tell the user which effort it chose); the answer's `effort` names it;
+- the native bridge tries that model's efforts from the lowest and admits the first that fits; the answer's `effort` names it. The lowest effort may be too light for a critical task, so after the requested answer add one short line naming that effort;
 - Codex delegation preparation and the OpenCode launcher answer `blocked` `effort_required`: ask the user for the effort. Prepare routed only if the user says any model will do; never take that option on your own, because routing would pick a different model than the one the user chose.
 
-Never invent an effort.
+Never invent an effort. If you cannot ask (a non-interactive run, or a cancelled question), hold and report `effort_required`; a host's instruction to make reasonable assumptions never overrides this.
 
 ## What the coordinator does with each reply
 
@@ -172,8 +172,9 @@ These replies launch nothing. Report them with their `state` and `reason`, conti
 | `explicit_choice_unavailable` | The exact model and effort chosen by the user are not admissible now; routing never substitutes. | Report it; ask the user before choosing anything else. |
 | `account_changed`, `native_binding_changed` | The account or its catalog changed after admission; the attempt is closed. | Prepare again with a new attempt id. |
 | `account_binding_missing`, `native_catalog_unavailable` | No account binding or catalog snapshot for the route. | Ask the user to sign in to the host's account; prepare again afterwards (its account read binds them). |
+| `native_binding_unverified` or `native_catalog_unavailable` from a Codex coordinator in a sandbox without the [bridge permissions](../../../clients/codex-sandbox.md) | The sandbox stopped the bridge's account read. This is not an account problem. | Report that the bridge needs the sandbox flags, and hold. Never switch hosts. |
 | `catalog_mismatch` | The host does not list the admitted model, for an explicit choice the user's own model. Nothing was sent. | Report it; never substitute another model. |
-| `effort_required` | A `choice` without `effort` on a path that needs one. | Ask the user for the effort. Prepare routed only if the user says any model will do. |
+| `effort_required` | A `choice` without `effort` on a path that needs one. | Ask the user for the effort. Prepare routed only if the user says any model will do. If you cannot ask, hold and report it. |
 | `invalid_choice` | The `choice` is malformed ([explicit model choice](#a-users-explicit-model-choice)). | Fix it; never resend it unchanged. |
 | `scope_required`, `profile_unavailable` | The launcher request has no `assignment.scope`, or the `job` is not a usable task profile. | Fix the request; never resend it unchanged. |
 | `invalid_json` | The command got no JSON request on stdin, or an invalid one. It says nothing about the settings. | Fix the call and run it again. |

@@ -2,7 +2,7 @@
 
 Load only this file when an OpenCode coordinator starts a worker or reviewer in a [managed project](../policies/03-agent-delegation.md#managed-projects). Routing chooses the model and effort; the launcher starts the worker, waits for it and settles the attempt. Its internals are in the [managed launcher](opencode.md#managed-launcher), needed only to implement or diagnose it.
 
-`<package>` is the installed package root, by its absolute path ([commands](../skills/manage-usage-routing/references/smart-routing.md#commands)); never a checkout's own `scripts/`.
+`<package>` is the installed package root, by its absolute path. Load the `manage-usage-routing` skill with the `skill` tool: its "Base directory" line names `<package>/skills/manage-usage-routing`, so `<package>` is two folders above it. Never use a copy inside a checkout.
 
 1. Print the checkout's routing scope once:
 
@@ -10,17 +10,34 @@ Load only this file when an OpenCode coordinator starts a worker or reviewer in 
    python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from runtime import routing_observations as r; print(r.assignment_scope(sys.argv[2]))' <package> /absolute/checkout
    ```
 
-2. Launch with one JSON request on stdin:
+2. Launch with one JSON request on stdin. Routed selection, the default, sends no `choice`:
 
    ```sh
-   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"attempt_id":"<new id>","task":"<task id>","scope":"<scope>"},"job":{"role":"<specialist id>","profile":<task profile>},"prompt":"<worker brief>"}' \
+   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"task":"count-policy-files","scope":"<scope>"},"job":{"role":"explorer-agent","profile":{"complexity_band":"low","risk_band":"low","review_policy":"self","uncertainty":"low"}},"prompt":"Count the .md files directly under policies/ and answer with the number only."}' \
+     | python3 -I -B <package>/scripts/opencode_launch.py
+   ```
+
+   Only for a model and effort the user explicitly chose, add `choice` to `assignment`. For the OpenCode Claude sign-in:
+
+   ```sh
+   printf '%s' '{"v":1,"op":"launch","checkout":"/absolute/checkout","assignment":{"task":"count-policy-files","scope":"<scope>","choice":{"provider":"claude-agent","model":"<model>","effort":"<effort>","harness":"claude-agent-sdk via opencode","funding":"subscription"}},"job":{"role":"explorer-agent","profile":{"complexity_band":"low","risk_band":"low","review_policy":"self","uncertainty":"low"}},"prompt":"Count the .md files directly under policies/ and answer with the number only."}' \
      | python3 -I -B <package>/scripts/opencode_launch.py
    ```
 
    - `checkout`: the managed checkout's absolute path. `prompt`: the worker brief, non-empty.
-   - `assignment`: a new unique `attempt_id` for this one launch ([attempt ids](../skills/manage-usage-routing/references/smart-routing.md#attempt-ids)), the `task` it serves and the `scope` from step 1. Without `scope` the answer is `scope_required`.
-   - `job`: the role and task profile, filled in as for the [native bridge](claude-code.md#native-routing-bridge). A missing `job.scope_ref` is filled from `assignment.scope`.
-   - Selection is routed by default: send no `choice`. Only for a model and effort the user explicitly chose, add `choice` (`provider`, `model`, `effort`, `harness`, `funding`): routing admits exactly that or refuses, never a substitute. A `choice` without `effort` is refused (`effort_required`): ask the user for the effort; launch routed only if the user says any model will do. Never invent one.
+   - `assignment.task`: a short name for the task the worker serves. `assignment.scope`: the line step 1 printed; without it the answer is `scope_required`.
+   - `assignment.attempt_id`: leave it out. The launcher generates one (`n` and 24 hex digits) and returns it in every result. An id you send must be new: a reused one answers `attempt_closed`. If a launch's output is lost, never launch again: report it, because a second launch is a new attempt and could run the work twice.
+   - `job.role`: one roster id from [the task profile template](../templates/task-profile.json), never `check` or a host agent name such as `explorer`: `code-reviewer`, `security-reviewer`, `typescript-reviewer`, `react-reviewer`, `react-build-resolver`, `test-engineer`, `qa-automation-engineer`, `database-architect`, `devops-engineer`, `backend-specialist`, `frontend-specialist`, `seo-specialist`, `performance-optimizer`, `software-engineer`, `product-manager`, `product-owner`, `project-planner`, `code-archaeologist`, `debugger`, `explorer-agent`, `documentation-writer`, `penetration-tester`, `security-auditor`. The orchestrator is never routed.
+   - `job.profile`: each field you can judge: `complexity_band` and `risk_band` (`low`, `medium`, `high`, `critical`), `review_policy` (`none`, `self`, `independent`, `strict`), `uncertainty` (`low`, `medium`, `high`), `context_tokens` (integer, 0 to 1000000000) and `tools` (list). Leave out a field you cannot judge; `{}` is valid. A missing field takes its floor (`complexity_band` and `risk_band` `high`, `review_policy` `independent`). A missing `job.scope_ref` is filled from `assignment.scope`.
+   - `choice`: routing admits exactly that model and effort or refuses, never a substitute. `funding` is `subscription`; `provider` and `harness` per path:
+
+     | Path | `provider` | `harness` |
+     | --- | --- | --- |
+     | `opencode-claude-subscription` | `claude-agent` | `claude-agent-sdk via opencode` |
+     | `opencode-chatgpt-subscription` | `openai` | `opencode provider openai` |
+     | `opencode-go-subscription` | `opencode-go` | `opencode provider opencode-go` |
+
+   - A `choice` without `effort` is refused (`effort_required`): ask the user for the effort; launch routed only if the user says any model will do. If you cannot ask (a non-interactive run, or a cancelled question), hold and report `effort_required`. A host's instruction to make reasonable assumptions never overrides this. Never invent an effort.
    - Optional: `workflow` (a planned job's locator; `"planned": true` requires it, else `workflow_required`), `constraints` and `profile`.
 
    Never add observations, a catalog or a route. The command takes no arguments: any argument is `usage_error` (exit 2).
@@ -36,4 +53,4 @@ Load only this file when an OpenCode coordinator starts a worker or reviewer in 
 | `recorded` with `turn_outcome: unknown` | The host recorded no outcome. | Check the output before relying on it. |
 | `recorded` with `not_entitled: true` | The account is not entitled to that model; `entitlement_mark` says whether the route is now left out. | Report it; nothing is retried on another route. |
 | `uncertain` (`launch_unconfirmed`) | The launch could not be confirmed; its capacity stays held. | Never relaunch it. Report its `command`, an operator op that runs only on the user's explicit request. |
-| `blocked` `interrupted` (exit 1) | The command was stopped; the server is stopped and the hold recorded. | Report it. |
+| `blocked` `interrupted` (exit 1) | The command was stopped and its server with it. `attempt_id` names the attempt. `uncertain: true`: the launch was dispatched and its capacity stays held; `recovery` and `command` name the operator op that settles it. `uncertain: false`: nothing needs settling. | Never relaunch it. Report it, with its `command` when `uncertain` is true; that op runs only on the user's explicit request. |

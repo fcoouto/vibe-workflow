@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import signal
 import stat
 import subprocess
@@ -114,6 +115,12 @@ def host_harnesses(host, catalog=(), *, dollar=False, rules=None):
 
 # The assignment `scope` credential readiness is compared with; the collector derives gateway credentials with it.
 assignment_scope = routing_observations.assignment_scope
+
+
+def generated_attempt_id():
+    """A new attempt id for a launch whose request leaves it out (the native bridge and the OpenCode launcher):
+    `n` and 24 lowercase hex digits from `secrets`, never a guess that imitates an earlier id."""
+    return 'n' + secrets.token_hex(12)
 
 
 def unplanned_job(role, scope_ref, objective, *, tools=None):

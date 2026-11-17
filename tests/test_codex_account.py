@@ -6,6 +6,7 @@ import signal
 import sys
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -220,11 +221,24 @@ class AcquisitionTests(Sandbox):
         self.assertIsNone(account.binding(self.settings))
 
     def test_timestamp_is_request_start_and_missing_version_stays_unknown(self):
+        """`observed_at` is the request start, never the completion. 0.1.44 C4: the real clock may tick between
+        `before` and the request start, so the start is only bounded by `before` and `after`; the module's clock jumps
+        an hour when the slow quota answer arrives, so a completion time can never pass."""
+        offset = []
+        clock = types.SimpleNamespace(time=lambda: time.time() + sum(offset))
+        usage_problem = account._usage_problem
+
+        def answered(limits):  # the slow `account/rateLimits/read` answer has just arrived
+            offset.append(3600)
+            return usage_problem(limits)
         before = int(time.time())
-        self.acquire(scenario='account_slow')
-        now = int(time.time())
-        fact = account.billing_fact(self.settings, self.route, now)
-        self.assertLessEqual(fact['observed_at'], before)
+        with mock.patch.object(account, 'time', clock), mock.patch.object(account, '_usage_problem', answered):
+            self.acquire(scenario='account_slow')
+        after = int(time.time())
+        self.assertEqual(offset, [3600])
+        fact = account.billing_fact(self.settings, self.route, after)
+        self.assertIsNotNone(fact)  # a completion time an hour ahead is no current fact
+        self.assertTrue(before <= fact['observed_at'] <= after, (before, fact['observed_at'], after))
         self.assertEqual(account.binding(self.settings)['client_version'], 'unknown')
 
     def test_concurrent_metadata_reads_reuse_one_pool_lock_and_one_process(self):

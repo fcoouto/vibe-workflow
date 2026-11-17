@@ -761,6 +761,50 @@ class DocumentedRequestTests(NativeBase):
         self.assertTrue(self.holds()[attempt]['closed'])
 
 
+class ModelOnlyRetryTests(unittest.TestCase):
+    """0.1.44 C1 (R3a P1): a model-only choice refused for quota keeps the smallest positive `retry_after_seconds` of
+    its per-effort refusals (at most 120), beside the merged `reasons`. Each effort's `prepare` is a labelled double."""
+    CHOICE = dict(provider='anthropic', model='invented-large', harness='claude-native', funding='subscription')
+
+    def model_only(self, answers):
+        tried, catalog = [], [dict(self.CHOICE, effort=effort) for effort in ('high', 'low', 'medium')]
+
+        def prepare(service, *, client, assignment, job, catalog, profile=None, bound=False):
+            tried.append(assignment['choice']['effort'])
+            return dict(answers[assignment['choice']['effort']])
+        with mock.patch.object(native_routing, 'prepare', prepare):
+            answer = native_routing._model_only(None, 'claude-code', dict(attempt_id='n1', choice=dict(self.CHOICE)),
+                                                {}, catalog, None, True)
+        return answer, tried
+
+    @staticmethod
+    def refused(retry=None, *reasons):
+        return dict(state='pending', reason='explicit_choice_unavailable', reasons=list(reasons or ['quota_exhausted']),
+                    **({} if retry is None else dict(retry_after_seconds=retry)))
+
+    def test_an_exhausted_model_keeps_the_smallest_retry_after_seconds(self):
+        answer, tried = self.model_only(dict(low=self.refused(45), medium=self.refused(30), high=self.refused(110)))
+        self.assertEqual(tried, ['low', 'medium', 'high'])
+        self.assertEqual(answer, dict(state='pending', reason='explicit_choice_unavailable', reasons=['quota_exhausted'],
+                                      retry_after_seconds=30))
+
+    def test_mixed_refusals_keep_only_a_positive_bounded_retry(self):
+        answer, _ = self.model_only(dict(low=self.refused(None, 'billing_unverified'), medium=self.refused(0),
+                                         high=self.refused(500)))
+        self.assertEqual(answer['reasons'], ['billing_unverified', 'quota_exhausted'])
+        self.assertEqual(answer['retry_after_seconds'], 120)  # never above the 120 s bound
+        for odd in (None, 0, -5, '30', True):
+            with self.subTest(odd=odd):
+                answer, _ = self.model_only(dict(low=self.refused(odd), medium=self.refused(), high=self.refused()))
+                self.assertNotIn('retry_after_seconds', answer)
+
+    def test_an_admitted_effort_answers_unchanged(self):
+        permit = dict(state='dispatched', attempt_id='n1', client='claude-code', model='invented-large', effort='medium',
+                      route='r', mode='explicit')
+        answer, tried = self.model_only(dict(low=self.refused(45), medium=permit, high=self.refused(10)))
+        self.assertEqual((answer, tried), (permit, ['low', 'medium']))
+
+
 class BridgeInstructionTests(unittest.TestCase):
     """The documented bridge commands, run as written against disposable stores: on the real sources they answer a
     structured refusal and start nothing, and policy 03 sends a Claude Code coordinator to them."""

@@ -10,6 +10,7 @@ For workspace preparation or a checkout-affecting operation, including review-on
 | [Codex task runtime](runtime.md) | A Codex task needs explicit task controls, a doctor report, or lifecycle troubleshooting. |
 | [Workstreams](../skills/workstreams/SKILL.md) | Name threads, manage saved mode, or coordinate a suitable enabled assignment. |
 | [Claude Code](claude-code.md) | Claude Code startup activates the workflow, or you implement, validate or diagnose its adapter. |
+| [Codex sandbox](codex-sandbox.md) | A Codex coordinator runs the native bridge inside a Codex sandbox. |
 | [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch. Not a startup or onboarding client. |
 | [OpenCode launch](opencode-launch.md) | You launch a worker or reviewer from OpenCode in a managed project. Load only this file, not the OpenCode file. |
 | [OpenCode escalation gate](opencode-escalation-gate.md) | You install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. |
