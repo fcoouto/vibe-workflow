@@ -7,6 +7,11 @@ local-only readiness checks and adds project-aware consultation guidance.
 The export still excludes development documents, `PRODUCT.md`, tests,
 project preference files, credentials and evidence.
 
+`skills/vibe-prepare-my-workspace/` adds the workspace skill, its procedure,
+`partners.json` and a read-only, standard-library `scripts/check.py`. Its source
+is `prepare-my-workspace` in the earlier plugin (`697e1797`). The earlier hooks,
+upgrade records, run directories and `workflow.py` were not carried over.
+
 Follow-up development-only checks: `tests/verify_group.py`,
 `tests/verify_native_loading.py`, `tests/verify_cancel.mjs` and
 `tests/test_verification.py`. The runtime allowlist is unchanged.

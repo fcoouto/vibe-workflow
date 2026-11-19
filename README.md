@@ -35,6 +35,14 @@ after you confirm. The choice lives in `.vibe-workflow/settings.json`. In a
 linked worktree, the question names the main project and the file stays in the
 worktree.
 
+## Prepare your workspace
+
+Ask: **“Use `vibe-prepare-my-workspace` to check my workspace.”**
+
+It reports whether superpowers, caveman, ponytail, impeccable, context7, rtk,
+graphify, git, gh and Python are present and current. It installs or updates
+only what you approve, and backs up your OpenCode config first.
+
 ## Configure routes
 
 Smart Router selects nothing until you configure it. In

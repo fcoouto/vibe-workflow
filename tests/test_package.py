@@ -73,6 +73,8 @@ class PackageTest(unittest.TestCase):
         files = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
         expected = {"index.js", "project.js", "onboarding.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
                     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
+                    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
+                    "skills/vibe-prepare-my-workspace/scripts/check.py", "skills/vibe-prepare-my-workspace/partners.json",
                     "scripts/select.py", "config/routes.json", "config/router.example.json",
                     "config/strategy-table.example.json"}
         expected |= {"runtime/" + name + ".py" for name in [
@@ -103,7 +105,8 @@ await plugin.setup({
   session: { hook: async () => {} },
 })
 assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_workflow_onboard'])
-assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project']])
+assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project'],
+  ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace']])
 assert.match(await readFile(new URL('./references/procedure.md', pathToFileURL(skills[0].path)), 'utf8'),
   /Use Smart Router for this project\\?/)
 """, str(output / "index.js")], env=self.env, cwd=self.root, capture_output=True, text=True, timeout=10)
