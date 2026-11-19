@@ -86,6 +86,19 @@ test("nested locations, separate repositories and worktrees resolve to their own
   assert.equal(await readFile(path, "utf8"), before)
 })
 
+test("duplicate settings keys block without overwriting, even when escaped", async (t) => {
+  const { path, project, write } = await fixture(t)
+  for (const original of [
+    '{"version":1,"smart_router":{"enabled":false,"enabled":true}}',
+    String.raw`{"version":1,"future":[{"keep":1,"\u006beep":2}]}`,
+  ]) {
+    await write(original)
+    assert.equal((await project.inspect()).reason, "project_settings_invalid")
+    assert.equal((await project.apply(true, "0".repeat(64))).reason, "project_settings_invalid")
+    assert.equal(await readFile(path, "utf8"), original)
+  }
+})
+
 test("invalid, oversized and future settings block without overwriting", async (t) => {
   const { path, project, write } = await fixture(t)
   for (const value of ["PRIVATE-SENTINEL", "x".repeat(65537), { version: 2 },

@@ -79,7 +79,8 @@ account is available. Eligibility is checked when the caller requests a route.
 
 To enable later, set `enabled: true`, choose path IDs from `config/routes.json`,
 and supply independently verified native provider/model/effort/harness identities
-in the table. This is a shape example with invented names, not a usable route:
+in the table. The strategy table's `version` must be an integer from 1 to
+2147483647. This example uses invented names, not a usable route:
 
 ```json
 {
@@ -150,11 +151,11 @@ credentials or legacy workflow state is neither required nor recommended.
 
 ## Development
 
-Run from the extracted branch:
+Run from the source checkout:
 
 ```sh
 python3 -B -m unittest discover -s tests
-node --test tests/plugin.test.js
+node --test tests/*.test.js
 python3 -B scripts/validate.py
 python3 -B scripts/package.py --output dist
 python3 -B scripts/validate.py --root dist
@@ -163,5 +164,6 @@ python3 -B scripts/validate.py --root dist
 `dist/` itself is the installable package root; no nested package directory is needed.
 The output path must not already exist. Choose a new path for another export;
 the builder never replaces an existing directory. The explicit allowlist excludes
-tests, development instructions, old adapters, skills, policies and private state.
+tests, development instructions, legacy adapters, legacy skills, policies, and
+private state. It includes the `vibe-onboard-project` skill.
 See `docs/dependencies.md` for source provenance and the exact extraction inventory.

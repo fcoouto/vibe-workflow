@@ -7,16 +7,15 @@ advisory selector and the function-level dependency boundary discussed in chat.
 The deliverable is a validated local, install-ready `vibe-workflow` package.
 Do not install, activate, push, open a PR, merge, or run a new inference trial.
 
-The destination primary checkout is `~/git/dev/vibe-workflow`, on `main`
-tracking `origin/main` at `https://github.com/fcoouto/vibe-workflow.git`.
+The destination primary checkout was on `main`, tracking `origin/main`.
 Implementation belongs in its separate `feat/smart-router-extraction` worktree.
 After the user saw the full remote tree, the user explicitly approved putting
 the destination on the local extraction branch so the folder itself is thin.
 Do this only after verification; local `main` continues tracking `origin/main`.
 This is a branch checkout, not a merge or push.
 
-The old primary is the different path `~/dev/git/vibe-workflow`. Its `main`
-upstream was removed with `git branch --unset-upstream main`. Its remote,
+The legacy primary is a separate checkout. Its `main` upstream was removed
+with `git branch --unset-upstream main`. Its remote,
 branches, commits, Git metadata and 50 registered worktrees remain preserved.
 The user explicitly rejected making that old checkout non-Git after learning
 that it holds shared worktree metadata. Preserve its existing deleted logo.
@@ -38,8 +37,8 @@ The reference source is local commit
 `56cabcba4cdb801b852c7a02670ea3be29e56ab0` in the retained old task worktree.
 The new repository base is
 `697e1797eb0d73cd8ddd559a1a02e78496a5fdd2`.
-The private trial's `choose_route.py` is behavioral evidence, not a production
-module to copy with its temporary paths, request labels or scripted controller.
+The private trial is behavioral evidence. Do not copy its files, temporary
+paths, request labels or scripted controller into the package.
 
 ## Dependency boundary
 

@@ -37,6 +37,21 @@ async function maybeStat(path) {
   catch (error) { if (error.code !== "ENOENT") throw error }
 }
 
+function uniqueKeys(text) {
+  // JSON.parse has validated syntax but collapses duplicate keys.
+  const objects = []
+  for (const [token, key, colon] of text.matchAll(/("(?:[^"\\]|\\[\s\S])*")([ \t\r\n]*:)?|[{}]/g)) {
+    if (token === "{") objects.push(new Set())
+    else if (token === "}") objects.pop()
+    else if (colon) {
+      const keys = objects.at(-1), name = JSON.parse(key)
+      if (keys.has(name)) return false
+      keys.add(name)
+    }
+  }
+  return true
+}
+
 async function readSettings(folder, path) {
   const parent = await maybeStat(folder)
   if (!parent) return {}
@@ -58,9 +73,11 @@ async function readSettings(folder, path) {
     }
     if (size > limit || !same(parent, await lstat(folder))) throw unsafe()
     const raw = buffer.subarray(0, size)
-    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw))
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw)
+    const value = JSON.parse(text)
     if (!object(value) || value.version !== 1 || ("smart_router" in value &&
-      (!object(value.smart_router) || typeof value.smart_router.enabled !== "boolean"))) throw unsafe()
+      (!object(value.smart_router) || typeof value.smart_router.enabled !== "boolean")) ||
+      !uniqueKeys(text)) throw unsafe()
     return { parent, raw, value, mode: actual.mode & 0o777 }
   } finally { await file.close() }
 }

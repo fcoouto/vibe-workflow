@@ -30,7 +30,8 @@ def _configuration(state_dir):
     if table is None:
         return 'table_empty', None, []
     if type(table) is not dict or set(table) != {'schema', 'version', 'rows'} \
-            or type(table['schema']) is not int or table['schema'] != 2:
+            or type(table['schema']) is not int or table['schema'] != 2 \
+            or type(table['version']) is not int or not 1 <= table['version'] <= 2**31 - 1:
         raise ValueError('configuration_invalid')
     return None, table, routing_paths.generate(config['paths'], table)
 

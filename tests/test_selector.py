@@ -111,6 +111,19 @@ class SelectionTest(unittest.TestCase):
                 self.assertEqual(self.run_select()["state"], "no_selection")
                 self.assertEqual(self.source.calls, [])
 
+    def test_invalid_table_version_blocks_readiness_and_selection(self):
+        for version in ({"note": "synthetic metadata"}, "1", True, 0, 2**31):
+            with self.subTest(version=version):
+                self.table["version"] = version
+                self.write()
+                self.assertEqual(selector.check_setup(state_dir=self.root),
+                                 dict(state="setup_needed", reason="configuration_invalid"))
+                answer = self.run_select()
+                self.assertEqual(answer["state"], "blocked")
+                self.assertIsNone(answer["route"])
+                self.assertNotIn("ranking", answer)
+                self.assertEqual(self.source.calls, [])
+
     def test_first_ranked_route_and_authority_boundary(self):
         self.write()
         result = self.run_select()

@@ -11,7 +11,7 @@ Write behavior tests before nontrivial changes. Validate, commit, then run:
 
 ```sh
 python3 -B -m unittest discover -s tests
-node --test tests/plugin.test.js
+node --test tests/*.test.js
 python3 -B scripts/validate.py
 python3 -B scripts/package.py --output dist
 python3 -B scripts/validate.py --root dist

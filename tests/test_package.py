@@ -83,7 +83,7 @@ class PackageTest(unittest.TestCase):
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
         for path in output.rglob("*"):
             if path.suffix in (".py", ".js", ".json", ".md"):
-                self.assertNotIn(b"/Users/fcouto/", path.read_bytes())
+                self.assertNotIn(os.fsencode(self.root), path.read_bytes())
         check = subprocess.run([sys.executable, "-I", "-B", str(output / "scripts/select.py"),
                                 "--state-dir", str(self.root / "absent")], input=b'{"v":1,"work_kind":"testing"}',
                                env=self.env, cwd=self.root, capture_output=True, timeout=5)
