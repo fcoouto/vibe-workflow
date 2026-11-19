@@ -28,7 +28,7 @@ function host(directory, options = {}) {
 async function preference(root, enabled) {
   await mkdir(join(root, ".vibe-workflow"), { recursive: true })
   await writeFile(join(root, ".vibe-workflow", "settings.json"),
-    typeof enabled === "boolean" ? JSON.stringify({ version: 1, smart_router: { enabled } }) : enabled)
+    typeof enabled === "boolean" ? JSON.stringify({ version: 1, features: [{ smart_router: { enabled } }] }) : enabled)
 }
 
 test("registers onboarding and keeps the native tool and existing context untouched", async (t) => {
@@ -126,7 +126,10 @@ print("{}")
   try {
     await rm(join(f.root, ".vibe-workflow", "settings.json"))
     for (const [enabled, reason] of [[null, "project_not_onboarded"], [false, "project_disabled"],
-      ["malformed", "project_settings_invalid"]]) {
+      ["malformed", "project_settings_invalid"],
+      ['{"version":1,"smart_router":{"enabled":true}}', "project_settings_invalid"],
+      ['{"version":1,"smart_router":{"enabled":false},"features":[{"smart_router":{"enabled":true}}]}',
+        "project_settings_invalid"]]) {
       if (enabled !== null) await preference(f.root, enabled)
       const answer = JSON.parse((await f.execute()).content)
       assert.equal(answer.reason, reason)

@@ -75,10 +75,21 @@ async function readSettings(folder, path) {
     const raw = buffer.subarray(0, size)
     const text = new TextDecoder("utf-8", { fatal: true }).decode(raw)
     const value = JSON.parse(text)
-    if (!object(value) || value.version !== 1 || ("smart_router" in value &&
-      (!object(value.smart_router) || typeof value.smart_router.enabled !== "boolean")) ||
+    if (!object(value) || value.version !== 1 || "smart_router" in value || !Array.isArray(value.features) ||
       !uniqueKeys(text)) throw unsafe()
-    return { parent, raw, value, mode: actual.mode & 0o777 }
+    const names = new Set()
+    let routerIndex = -1
+    for (const [index, entry] of value.features.entries()) {
+      if (!object(entry)) throw unsafe()
+      const keys = Object.keys(entry), name = keys[0]
+      if (keys.length !== 1 || !name || names.has(name) || !object(entry[name])) throw unsafe()
+      names.add(name)
+      if (name === "smart_router") {
+        if (typeof entry.smart_router.enabled !== "boolean") throw unsafe()
+        routerIndex = index
+      }
+    }
+    return { parent, raw, value, routerIndex, mode: actual.mode & 0o777 }
   } finally { await file.close() }
 }
 
@@ -117,7 +128,7 @@ export function createProjectSettings(directory) {
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
       const data = await readSettings(folder, path)
-      const enabled = data.value?.smart_router?.enabled ?? null
+      const enabled = data.value?.features[data.routerIndex]?.smart_router.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
         reason: null, root, path, enabled, snapshot: snapshot(root, data.raw), folder, data }
     } catch {
@@ -164,9 +175,12 @@ export function createProjectSettings(directory) {
         if (latest.state === "blocked") return blocked(latest.reason)
         if (!latest.data.parent || !same(parent, latest.data.parent) ||
             latest.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-        const value = latest.data.value
-        const body = JSON.stringify({ ...value, version: 1,
-          smart_router: { ...value?.smart_router, enabled } }, null, 2) + "\n"
+        const { value, routerIndex = -1 } = latest.data
+        const features = [...(value?.features ?? [])]
+        features[routerIndex < 0 ? features.length : routerIndex] = {
+          smart_router: { ...features[routerIndex]?.smart_router, enabled },
+        }
+        const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")
         const target = join(folder, `.settings-${randomUUID()}.tmp`)
         const file = await open(target, "wx", latest.data.mode ?? 0o644)

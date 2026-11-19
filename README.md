@@ -47,8 +47,20 @@ Confirm the preview before saving. Native edit permissions still apply.
 The project choice lives in `.vibe-workflow/settings.json` at the checkout root:
 
 ```json
-{"version": 1, "smart_router": {"enabled": true}}
+{"version": 1, "features": [{"smart_router": {"enabled": true}}]}
 ```
+
+Use one object per feature, with a unique feature name and its settings object.
+An empty `features` array is valid. Onboarding preserves entries it does not
+recognize and changes only the Smart Router preference.
+
+**Upgrading from 0.4.0:** Back up `.vibe-workflow/settings.json` before editing
+it. Move the top-level `smart_router` entry into the `features` array as shown
+above, keeping its settings (including `enabled: false` if you opted out) and
+any unrelated fields. Remove the old top-level key; legacy and mixed layouts
+are rejected and never rewritten automatically. If an old file has no feature
+preferences, add `"features": []`. To roll back to 0.4.0, restore the backup
+before loading the old plugin.
 
 New proposals default to ON. Repeat onboarding preserves a saved choice unless
 you change it. Choose **Keep existing model selection** to opt out. This
