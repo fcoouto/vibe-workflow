@@ -168,3 +168,15 @@ test("an old pull_requests entry no longer drives the hook", async (t) => {
   const { fire } = await fixture(t, { settings: JSON.stringify({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] }) })
   assert.equal((await fire(create)).result, "done")
 })
+
+test("a settings file with worktree_cleanup true adds the cleanup sentence to a gh pr merge result", async (t) => {
+  const { fire } = await fixture(t, { settings: { enabled: true, agent_merge: true, worktree_cleanup: true } })
+  assert.match((await fire("gh pr merge 3")).result, /Cleanup is on: once the merge is confirmed/)
+})
+
+test("a settings file without the worktree_cleanup key adds no cleanup sentence", async (t) => {
+  const { fire } = await fixture(t, { settings: { enabled: true, agent_merge: true } })
+  const result = (await fire("gh pr merge 3")).result
+  assert.match(result, /vibe-workflow:/)
+  assert.doesNotMatch(result, /Cleanup is on/)
+})

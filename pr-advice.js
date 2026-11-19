@@ -177,13 +177,15 @@ const NOTES = {
     "merge only a [READY] pull request whose evidence is current.",
 }
 
-function mergeNote(auto, agentMerge, primaryPath) {
+function mergeNote(auto, agentMerge, primaryPath, cleanup) {
   const where = primaryPath ? ` (${primaryPath})` : ""
   const when = auto ? "once the auto-merge completes" : "if this merge landed on main"
   return `vibe-workflow: ${when}, update the primary checkout${where}: when it is clean (ignoring ` +
     ".vibe-workflow/settings.json) and on main, run `git fetch origin main` then `git merge --ff-only origin/main` there; " +
     "otherwise report it and change nothing." +
-    (agentMerge ? "" : " The user chose to merge pull requests themselves; tell them you merged this one.")
+    (agentMerge ? "" : " The user chose to merge pull requests themselves; tell them you merged this one.") +
+    (cleanup ? ` Cleanup is on: once ${auto ? "the auto-merge completes" : "the merge is confirmed"}, follow the worktree ` +
+      "cleanup steps in the vibe-pull-requests skill (detach, safe-delete the branch, remove the worktree last)." : "")
 }
 
 function remember(map, key, value) {
@@ -204,7 +206,7 @@ export function createAdvisor({ settings, primary, checkout }) {
         if (!actions.length) return null
         const state = await settings()
         if (state?.state !== "on") return null
-        const agentMerge = state.agent_merge === true, notes = []
+        const agentMerge = state.agent_merge === true, cleanup = state.worktree_cleanup === true, notes = []
         const arm = (value) => { if (sessionID) { if (value) remember(armed, sessionID, true); else armed.delete(sessionID) } }
         for (const action of actions) {
           if (action.kind === "pr_create") {
@@ -216,7 +218,7 @@ export function createAdvisor({ settings, primary, checkout }) {
           else if (action.kind === "pr_ready" || (action.kind === "pr_retitle" && action.title.startsWith("[READY]"))) {
             notes.push(agentMerge ? NOTES.agentMerges : NOTES.userMerges)
             arm(true)
-          } else if (action.kind === "pr_merge") notes.push(mergeNote(action.auto, agentMerge, await primary()))
+          } else if (action.kind === "pr_merge") notes.push(mergeNote(action.auto, agentMerge, await primary(), cleanup))
           else if (action.kind === "pr_retitle" && /^\[(BLOCKED|SUPERSEDED)\]/.test(action.title)) arm(false)
           else if (action.kind === "push" && sessionID && armed.has(sessionID)) {
             notes.push(NOTES.push)
