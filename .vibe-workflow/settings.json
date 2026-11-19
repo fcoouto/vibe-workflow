@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "features": [
+    {
+      "smart_router": {
+        "enabled": true
+      }
+    },
+    {
+      "pull_requests": {
+        "enabled": true,
+        "agent_merge": true
+      }
+    }
+  ]
+}
