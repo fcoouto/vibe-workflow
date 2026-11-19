@@ -194,10 +194,16 @@ test("pull_requests apply from a linked worktree writes the main checkout only",
   await assert.rejects(stat(denied.path), { code: "ENOENT" })
 })
 
-test("procedure asks who merges and keeps the Smart Router question", async (t) => {
+test("procedure asks who merges with a control-shaped question and keeps the Smart Router question", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Who merges", "Use Smart Router for this project?", "feature", "Reminders registered", "project_root_unavailable"]) {
+  for (const phrase of ["Use Smart Router for this project?", "Pull request merging", "Who merges ready pull requests in <project path>?",
+    "I merge them (Recommended)", "Agents merge their own", "Skip pull request guidance", "Run onboarding again to change it.",
+    "Save both?", "Pull requests: not saved.", "reminders registered", "project_root_unavailable", "Saved in the main checkout"]) {
     assert.ok(text.includes(phrase), phrase)
   }
+  const labels = ["I merge them (Recommended)", "Agents merge their own", "Skip pull request guidance"]
+  for (const label of labels) assert.ok(label.split(/\s+/).length <= 5, label)
+  assert.ok("Pull request merging".length <= 30)
+  assert.doesNotMatch(text.slice(text.indexOf("3. Call")), /`\[(READY|BLOCKED)\]`/)
 })
