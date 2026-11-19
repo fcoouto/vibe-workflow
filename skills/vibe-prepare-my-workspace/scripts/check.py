@@ -3,6 +3,9 @@
 import json
 from pathlib import Path
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 
 STATES = ("ready", "missing", "outdated", "unknown", "not-supported")
 PRECEDENCE = ("missing", "outdated", "unknown", "not-supported", "ready")
@@ -125,3 +128,64 @@ def integration_present(spec, config, home):
         raise ValueError("unsupported_integration")
     pattern = spec.get("version_from")
     return found, _cached_version(pattern, home) if found and pattern else None
+
+
+ALLOWED_HOSTS = ("registry.npmjs.org", "api.github.com", "raw.githubusercontent.com")
+VERSION_KEY = re.compile(r'"version"\s*:\s*"([^"]+)"')
+
+
+def _allowed(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme == "https" and parts.hostname in ALLOWED_HOSTS
+
+
+class AllowedRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _allowed(newurl):
+            raise urllib.error.HTTPError(newurl, code, "redirect_not_allowed", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def http_fetch(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "vibe-workflow-workspace-check"})
+    try:
+        with urllib.request.build_opener(AllowedRedirects).open(request, timeout=5) as response:
+            return response.read(1 << 20).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise OSError("bad_encoding") from error
+
+
+def _json_field(body, field):
+    try:
+        value = json.loads(body)[field]
+        parse_version(value)
+    except (ValueError, KeyError, TypeError) as error:
+        raise LookupError("bad_response") from error
+    return value
+
+
+def latest_version(spec, fetch):
+    kind = spec.get("type")
+    if kind == "npm":
+        url, field = f"https://registry.npmjs.org/{spec['package'].replace('/', '%2F')}/latest", "version"
+    elif kind == "github":
+        url, field = f"https://api.github.com/repos/{spec['repo']}/releases/latest", "tag_name"
+    elif kind == "raw":
+        url, field = spec["url"], None
+    else:
+        raise LookupError("unsupported_source")
+    if not _allowed(url):
+        raise LookupError("host_not_allowed")
+    try:
+        body = fetch(url)
+    except OSError as error:
+        raise LookupError("lookup_failed") from error
+    if field:
+        return _json_field(body, field)
+    found = VERSION_KEY.search(body)
+    try:
+        text = found.group(1) if found else body
+        parse_version(text)
+    except ValueError as error:
+        raise LookupError("bad_response") from error
+    return text if found else ".".join(map(str, parse_version(body)))

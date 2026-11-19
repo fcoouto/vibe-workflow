@@ -117,5 +117,67 @@ class LocalTest(unittest.TestCase):
         self.assertEqual(self.check.integration_present(spec, {"plugins": ["pkg"]}, self.home), (True, None))
 
 
+class UpstreamTest(unittest.TestCase):
+    def setUp(self):
+        self.check = load()
+        self.urls = []
+
+    def fetch(self, body):
+        def fetch(url):
+            self.urls.append(url)
+            if isinstance(body, Exception):
+                raise body
+            return body
+        return fetch
+
+    def test_npm_url_and_version(self):
+        latest = self.check.latest_version({"type": "npm", "package": "@scope/tool"}, self.fetch('{"version": "1.4.0"}'))
+        self.assertEqual(latest, "1.4.0")
+        self.assertEqual(self.urls, ["https://registry.npmjs.org/@scope%2Ftool/latest"])
+
+    def test_github_release_tag(self):
+        latest = self.check.latest_version({"type": "github", "repo": "o/r"}, self.fetch('{"tag_name": "v2.0.1"}'))
+        self.assertEqual(latest, "v2.0.1")
+        self.assertEqual(self.urls, ["https://api.github.com/repos/o/r/releases/latest"])
+
+    def test_raw_takes_the_first_version(self):
+        spec = {"type": "raw", "url": "https://raw.githubusercontent.com/o/r/main/package.json"}
+        self.assertEqual(self.check.latest_version(spec, self.fetch('{"name": "x", "version": "3.1.2"}')), "3.1.2")
+
+    def test_unlisted_host_is_refused_before_fetch(self):
+        fetch = self.fetch("{}")
+        for url in ("https://evil.test/x", "http://registry.npmjs.org/x", "https://registry.npmjs.org.evil.test/x"):
+            with self.assertRaises(LookupError) as raised:
+                self.check.latest_version({"type": "raw", "url": url}, fetch)
+            self.assertEqual(str(raised.exception), "host_not_allowed")
+        self.assertEqual(self.urls, [])
+
+    def test_unknown_type_is_unsupported(self):
+        with self.assertRaises(LookupError) as raised:
+            self.check.latest_version({"type": "ftp"}, self.fetch("{}"))
+        self.assertEqual(str(raised.exception), "unsupported_source")
+
+    def test_fetch_error_is_lookup_failed(self):
+        with self.assertRaises(LookupError) as raised:
+            self.check.latest_version({"type": "npm", "package": "x"}, self.fetch(OSError("offline")))
+        self.assertEqual(str(raised.exception), "lookup_failed")
+
+    def test_bad_bodies_are_bad_response(self):
+        for body in ("<html>rate limited</html>", "{}", '{"version": "latest"}', "[1]"):
+            with self.assertRaises(LookupError) as raised:
+                self.check.latest_version({"type": "npm", "package": "x"}, self.fetch(body))
+            self.assertEqual(str(raised.exception), "bad_response", body)
+
+    def test_redirect_to_unlisted_host_is_refused(self):
+        import urllib.error
+        import urllib.request
+        handler = self.check.AllowedRedirects()
+        request = urllib.request.Request("https://api.github.com/repos/o/r/releases/latest")
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(request, None, 302, "Found", {}, "https://evil.test/x")
+        allowed = handler.redirect_request(request, None, 301, "Moved", {}, "https://api.github.com/repos/o/r2/releases/latest")
+        self.assertEqual(allowed.full_url, "https://api.github.com/repos/o/r2/releases/latest")
+
+
 if __name__ == "__main__":
     unittest.main()
