@@ -35,7 +35,9 @@ The user-facing flow has five steps:
    opt-out. Existing saved choices take precedence on repeat onboarding.
 3. **Preview proposed changes.** Identify the target project/client, feature
    preference and intended configuration edits. Preserve unrelated settings.
-4. **Apply after confirmation.** Cancellation leaves setup untouched.
+4. **Apply after the answers.** The user's answers are the consent; there is no
+   separate confirmation question (changed 2026-11-19). The client's native edit
+   permission still applies, and cancelling leaves setup untouched.
 5. **Report actual readiness.** State what works or what needs attention.
    Do not turn an enabled preference into an unsupported readiness claim.
 
@@ -62,7 +64,7 @@ Continue with your current model-selection workflow. You can enable Smart Router
 later.
 
 The default is a proposed preference, not permission to write configuration
-before the preview is confirmed.
+before the user answers.
 
 ## Readiness and fallback
 

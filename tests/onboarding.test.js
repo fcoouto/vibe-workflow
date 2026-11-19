@@ -198,7 +198,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
   const questions = text.split(/^### \d+\. /m).slice(1).map((block) => block.split(/^## /m)[0])
-  assert.equal(questions.length, 3)
+  assert.equal(questions.length, 2)
   for (const block of questions) {
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
@@ -214,17 +214,17 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   }
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
-  assert.match(questions[2], /Save both\?/)
+  assert.doesNotMatch(text, /Save both\?|Save onboarding choices|one confirmation/)
   assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
 })
 
 test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Two short questions, then one confirmation", "Saved in the main checkout", "project_root_unavailable",
+  for (const phrase of ["Two short questions.", "Saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Pull requests: Off —", "Pull requests: On · I merge —",
     "Pull requests: On · Agents merge —", "Pull requests: not saved.", "reminders registered", "Run onboarding again to change them",
-    "Nothing to change"]) {
+    "Nothing to change", "Saving:", "native file-edit permission"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })

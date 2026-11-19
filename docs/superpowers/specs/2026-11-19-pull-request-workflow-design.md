@@ -109,9 +109,11 @@ truth and a test checks its shape:
   guidance** (sets `enabled: false`; without it the `enabled` flag has no way to
   be false).
 
-The default is a proposal, not permission to write. Both questions share one
-confirmation question covering both previews; cancelling leaves everything
-untouched. If every preview says nothing changes, the flow says so and stops. The
+The default is a proposal, not permission to write. There is no separate
+confirmation question (removed 2026-11-19): the answers are the consent, the flow
+says what it will save in one plain line, and the client's native edit permission
+still applies; cancelling leaves everything untouched. If every preview says
+nothing changes, the flow says so and stops. The
 onboarding tool is extended in a backward-compatible way: today's calls keep their
 exact behavior and results. The `agent_merge` choice is the one setting a task
 checkout must not be able to give itself, so it is read and written at the main
