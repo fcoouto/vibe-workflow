@@ -7,7 +7,7 @@
       }
     },
     {
-      "pull_requests": {
+      "git_workflow": {
         "enabled": true,
         "agent_merge": true
       }
