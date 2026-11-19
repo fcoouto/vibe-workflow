@@ -76,7 +76,9 @@ function uniqueKeys(text) {
   return true
 }
 
-const FEATURES = { smart_router: ["enabled"], pull_requests: ["enabled", "agent_merge"] }
+const FEATURES = { smart_router: ["enabled"], git_workflow: ["enabled", "agent_merge"] }
+// 0.5.0 and 0.5.1 saved the git_workflow choice as `pull_requests`; that entry is still read and is migrated when saved.
+const LEGACY = { git_workflow: "pull_requests" }
 
 async function readSettings(folder, path, feature) {
   const parent = await maybeStat(folder)
@@ -104,20 +106,21 @@ async function readSettings(folder, path, feature) {
     if (!object(value) || value.version !== 1 || "smart_router" in value || !Array.isArray(value.features) ||
       !uniqueKeys(text)) throw unsafe()
     const names = new Set()
-    let featureIndex = -1
+    let featureIndex = -1, legacyIndex = -1
     for (const [index, entry] of value.features.entries()) {
       if (!object(entry)) throw unsafe()
       const keys = Object.keys(entry), name = keys[0]
       if (keys.length !== 1 || !name || names.has(name) || !object(entry[name])) throw unsafe()
       names.add(name)
-      if (name === feature) {
+      if (name === feature || name === LEGACY[feature]) {
         const settings = entry[name]
         if (typeof settings.enabled !== "boolean" || FEATURES[feature].some((key) =>
           key in settings && typeof settings[key] !== "boolean")) throw unsafe()
-        featureIndex = index
+        if (name === feature) featureIndex = index
+        else legacyIndex = index
       }
     }
-    return { parent, raw, value, featureIndex, mode: actual.mode & 0o777 }
+    return { parent, raw, value, featureIndex, legacyIndex, mode: actual.mode & 0o777 }
   } finally { await file.close() }
 }
 
@@ -149,8 +152,8 @@ function numbersRoundTrip(raw) {
 
 export function createProjectSettings(directory, feature = "smart_router", { atProject = false } = {}) {
   if (!Object.hasOwn(FEATURES, feature)) throw new Error("unsupported feature")
-  const prefs = feature === "pull_requests"
-  // The default feature accepts a boolean or { enabled }; pull_requests accepts { enabled?, agent_merge? }.
+  const prefs = feature === "git_workflow"
+  // The default feature accepts a boolean or { enabled }; git_workflow accepts { enabled?, agent_merge? }.
   // Unknown keys and non-boolean values are invalid.
   function normalize(values) {
     if (values === undefined) return {}
@@ -171,7 +174,8 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
       const data = await readSettings(folder, path, feature)
-      const entry = data.value?.features[data.featureIndex]?.[feature]
+      const own = data.featureIndex >= 0 ? feature : LEGACY[feature]
+      const entry = data.value?.features[data.featureIndex >= 0 ? data.featureIndex : data.legacyIndex ?? -1]?.[own]
       const enabled = entry?.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
         reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null }),
@@ -190,7 +194,8 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (!asked) return { state: "blocked", reason: "invalid_request" }
       const enabled = asked.enabled ?? state.enabled ?? true
       const agentMerge = asked.agent_merge ?? state.agent_merge ?? false
-      const same = enabled === state.enabled && (!prefs || agentMerge === state.agent_merge)
+      const migrating = data.featureIndex < 0 && data.legacyIndex >= 0
+      const same = !migrating && enabled === state.enabled && (!prefs || agentMerge === state.agent_merge)
       return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
         ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge }),
         change: !data.raw ? "create" : same ? "none" : "update" }
@@ -210,7 +215,8 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      if (initial.enabled === enabled && (!prefs || initial.agent_merge === agentMerge)) return result("unchanged")
+      const migrating = initial.data.featureIndex < 0 && initial.data.legacyIndex >= 0
+      if (!migrating && initial.enabled === enabled && (!prefs || initial.agent_merge === agentMerge)) return result("unchanged")
       if (initial.data.raw && !numbersRoundTrip(initial.data.raw)) return blocked("project_settings_lossy")
       const lockPath = join(folder, ".settings.lock")
       let lock, temporary, createdFolder = false, saved = false
@@ -230,10 +236,11 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
         if (latest.state === "blocked") return blocked(latest.reason)
         if (!latest.data.parent || !same(parent, latest.data.parent) ||
             latest.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-        const { value, featureIndex = -1 } = latest.data
+        const { value, featureIndex = -1, legacyIndex = -1 } = latest.data
         const features = [...(value?.features ?? [])]
-        features[featureIndex < 0 ? features.length : featureIndex] = {
-          [feature]: { ...features[featureIndex]?.[feature], enabled, ...(prefs && { agent_merge: agentMerge }) },
+        const at = featureIndex >= 0 ? featureIndex : legacyIndex, from = featureIndex >= 0 ? feature : LEGACY[feature]
+        features[at < 0 ? features.length : at] = {
+          [feature]: { ...features[at]?.[from], enabled, ...(prefs && { agent_merge: agentMerge }) },
         }
         const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")

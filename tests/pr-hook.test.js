@@ -17,7 +17,7 @@ async function fixture(t, { hook = true, settings = { enabled: true, agent_merge
   if (settings) {
     await mkdir(join(root, ".vibe-workflow"))
     await writeFile(join(root, ".vibe-workflow", "settings.json"),
-      typeof settings === "string" ? settings : JSON.stringify({ version: 1, features: [{ pull_requests: settings }] }))
+      typeof settings === "string" ? settings : JSON.stringify({ version: 1, features: [{ git_workflow: settings }] }))
   }
   const hooks = new Map(), contexts = [], tools = new Map()
   const ctx = {
@@ -137,7 +137,7 @@ test("fallback context line appears with Smart Router off, pull requests on and 
 test("onboarding readiness follows hook availability", async (t) => {
   const ready = async (options) => {
     const { tools } = await fixture(t, options)
-    const result = await tools.get("vibe_workflow_onboard").execute({ v: 1, op: "preview", feature: "pull_requests" },
+    const result = await tools.get("vibe_workflow_onboard").execute({ v: 1, op: "preview", feature: "git_workflow" },
       { sessionID: "s", messageID: "m", id: "c", signal: new AbortController().signal })
     return JSON.parse(result.content).readiness
   }
@@ -162,4 +162,9 @@ test("odd results never throw and are left unchanged", async (t) => {
   }
   const objectContent = (await fire(create, { result: { content: {}, output: "o" } })).result
   assert.match(objectContent.content[0].text, /^o\n\nvibe-workflow:/)
+})
+
+test("a legacy pull_requests entry still drives the hook", async (t) => {
+  const { fire } = await fixture(t, { settings: JSON.stringify({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] }) })
+  assert.match((await fire(create)).result, /vibe-workflow:/)
 })

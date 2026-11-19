@@ -49,7 +49,7 @@ the user never has to learn a new layout:
    and stop.
 2. Ask question 1. In an existing project, show the saved Smart Router choice as
    the current one.
-3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"pull_requests"}`.
+3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
    If that preview is blocked, explain the fixed reason, skip question 2 and
    leave pull request guidance off; for `project_root_unavailable`, say the main
    checkout could not be found from this worktree and onboarding must run there.
@@ -61,21 +61,21 @@ the user never has to learn a new layout:
    `enabled: false` and `agent_merge: false`). If every preview says
    `change: "none"`, say **Nothing to change.**, keep the saved choices and stop.
    Otherwise say what will be saved, in one plain line per change and not as a
-   question, for example **Saving: Smart Router On, Pull requests I merge them —
+   question, for example **Saving: Smart Router On, Git workflow I merge them —
    .vibe-workflow/settings.json (created).** Use the full `path` when `root`
    differs. For pull requests, add that the main checkout's settings file will
    change and that committing it is the user's step.
 5. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
    `snapshot`. Both features share one file on a primary checkout, so then
-   preview `pull_requests` again with the answered values. If its `change` and
-   values match what the user answered, apply it with `feature: "pull_requests"`,
+   preview `git_workflow` again with the answered values. If its `change` and
+   values match what the user answered, apply it with `feature: "git_workflow"`,
    both booleans and that fresh `snapshot`; otherwise ask question 2 again and say
    why. The user's answers are the consent; native file-edit permission is the
    only other prompt, and it stays the client's. If edit is denied or permission
    is unavailable, do not write another way. Report each feature that was not
    saved as **<Feature>: not saved.** followed by how to recover, for example
-   **Pull requests: not saved. Run onboarding from the main checkout.** If
+   **Git workflow: not saved. Run onboarding from the main checkout.** If
    settings changed or the result is lost, inspect with a fresh preview instead of
    repeating apply, and ask the affected question again if the proposal changed.
    If apply reports `project_settings_lossy`, say that existing numbers cannot be
@@ -85,11 +85,11 @@ the user never has to learn a new layout:
    - Smart Router, `off`: Smart Router: Off — existing model selection.
    - Smart Router, `ready`: Smart Router: On · Configuration checked — route eligibility is checked when work is delegated.
    - Smart Router, `setup_needed`: Smart Router: On · Setup needed — followed by the reported reason.
-   - Pull requests, `off`: Pull requests: Off — no pull request guidance.
-   - Pull requests, `ready`: Pull requests: On · I merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
-   - Pull requests, `ready`, agents merge: Pull requests: On · Agents merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
-   - Pull requests, `setup_needed` with `guard_unavailable`: Pull requests: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Pull requests: On · Agents merge — guidance only; reminders are not available in this OpenCode.)
-   - Pull requests, any other `setup_needed` reason: give the reported reason.
+   - Git workflow, `off`: Git workflow: Off — no git workflow guidance.
+   - Git workflow, `ready`: Git workflow: On · I merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
+   - Git workflow, `ready`, agents merge: Git workflow: On · Agents merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
+   - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.)
+   - Git workflow, any other `setup_needed` reason: give the reported reason.
 
    An enabled preference is not proof of account availability or entitlement.
    Finish with one line: **Run onboarding again to change them.**

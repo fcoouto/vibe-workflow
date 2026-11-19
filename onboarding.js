@@ -15,14 +15,14 @@ export async function registerSkill(ctx, skill) {
   await ctx.skill.transform((editor) => editor.add({ id: skill, name: skill, path, description, content }))
 }
 
-const features = ["smart_router", "pull_requests"]
+const features = ["smart_router", "git_workflow"]
 
 export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
   await registerSkill(ctx, name)
   await ctx.tool.transform((editor) => editor.add({
     name: toolName,
-    description: `Preview or save a confirmed project preference: Smart Router (default) or pull request guidance ` +
-      `(feature "pull_requests"). Follow the ${name} skill.`,
+    description: `Preview or save a confirmed project preference: Smart Router (default) or git workflow guidance ` +
+      `(feature "git_workflow"). Follow the ${name} skill.`,
     input: {
       type: "object", additionalProperties: false, required: ["v", "op"],
       properties: {
@@ -32,7 +32,7 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
       },
     },
     execute: async (request, invocation) => {
-      const feature = request?.feature ?? "smart_router", prefs = feature === "pull_requests"
+      const feature = request?.feature ?? "smart_router", prefs = feature === "git_workflow"
       if (!request || request.v !== 1 || !["preview", "apply"].includes(request.op) || !features.includes(feature) ||
           Object.keys(request).some((key) => !["v", "op", "feature", "enabled", "agent_merge", "expected_snapshot"].includes(key)) ||
           ("agent_merge" in request && !prefs) ||
