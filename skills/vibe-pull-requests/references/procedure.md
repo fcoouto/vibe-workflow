@@ -6,7 +6,7 @@ checked or blocked for you.
 
 ## Who may merge
 
-Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"pull_requests"}`.
+Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
 Agents may merge only when `previous_enabled` is `true` and `previous_agent_merge`
 is `true`. A missing, off, blocked or not-onboarded result means the user merges.
 An explicit request from the user authorizes one merge either way.

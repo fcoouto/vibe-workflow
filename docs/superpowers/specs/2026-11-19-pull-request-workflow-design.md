@@ -74,10 +74,14 @@ not a live run.
 
 ## Settings
 
-One feature entry, booleans only, like Smart Router:
+One feature entry, booleans only, like Smart Router. The entry was named
+`pull_requests` in 0.5.0 and 0.5.1 and was renamed `git_workflow` on 2026-11-19 so
+related behavior (such as worktree cleanup) can live under one umbrella. The old
+entry is still read, and is replaced by `git_workflow` the next time the choice is
+saved:
 
 ```json
-{"pull_requests": {"enabled": true, "agent_merge": false}}
+{"git_workflow": {"enabled": true, "agent_merge": false}}
 ```
 
 - `enabled`: the hook and reminders run only when true. Absent means not
@@ -191,7 +195,7 @@ what a case needs, that case stays silent. Never imply protection.
 
 Marked as the writer's calls; the user can change any of them.
 
-- **Tracked settings file.** `pull_requests` stays in `.vibe-workflow/settings.json`
+- **Tracked settings file.** `git_workflow` stays in `.vibe-workflow/settings.json`
   (this repository commits that file, and the PR template's readiness story
   needs it portable). Onboarding's preview says the main checkout's file will
   change and that committing it is the user's step. Rule 7's "clean" ignores that
@@ -241,7 +245,7 @@ Marked as the writer's calls; the user can change any of them.
    authorizes one bounded live run, it replaces this step. This is the builder's
    call, made so the user can still override it.
 1. Feature-aware settings in `project.js` (tests first), including the
-   main-project-path read for `pull_requests`.
+   main-project-path read for `git_workflow`.
 2. Onboarding tool extension and the added question in the procedure.
 3. The skill and template.
 4. Hook cases 1 to 3.
@@ -251,7 +255,7 @@ Marked as the writer's calls; the user can change any of them.
 ## Proof expected
 
 - Settings: Smart Router outputs unchanged (existing tests untouched and green);
-  `pull_requests` valid, invalid, missing and unknown-entry cases; the worktree
+  `git_workflow` valid, invalid, missing, legacy and unknown-entry cases; the worktree
   copy never changes the effective `agent_merge`.
 - Hook: each case fires on its command, stays silent otherwise, tolerates an
   `rtk ` prefix, never throws into the host, never mutates a failed call, follows
