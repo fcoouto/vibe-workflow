@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage Observability Integration"
-  short_description: "Manage optional observability integration"
-  default_prompt: "Use $manage-observability to manage optional observability integration for the selected Project."

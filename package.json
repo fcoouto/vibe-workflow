@@ -1,0 +1,10 @@
+{
+  "name": "vibe-workflow-smart-router",
+  "version": "0.4.0",
+  "description": "On-demand advisory subscription selector for OpenCode V2",
+  "type": "module",
+  "exports": { ".": "./index.js" },
+  "private": true,
+  "license": "MIT",
+  "files": ["index.js", "project.js", "onboarding.js", "skills/vibe-onboard-project", "runtime", "scripts/select.py", "config", "README.md", "LICENSE", "assets/logo.png"]
+}

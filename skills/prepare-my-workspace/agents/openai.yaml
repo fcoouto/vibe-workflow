@@ -1,4 +1,0 @@
-interface:
-  display_name: "Prepare my Workspace"
-  short_description: "Prepare development tools and agent integrations"
-  default_prompt: "Use $prepare-my-workspace to prepare this machine with the current Vibe Coding Toolkit environment setup."

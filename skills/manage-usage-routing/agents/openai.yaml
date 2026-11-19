@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage API Usage"
-  short_description: "Manage API credits, spending limits and routing"
-  default_prompt: "Use $manage-usage-routing to show API usage settings and help me choose a routing mode."

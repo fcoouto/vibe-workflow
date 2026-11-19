@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage OpenRouter Integration"
-  short_description: "Control saved OpenRouter enablement and status"
-  default_prompt: "Use $manage-openrouter to manage OpenRouter integration for the selected Project."

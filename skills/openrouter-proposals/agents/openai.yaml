@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenRouter Proposals"
-  short_description: "Select bounded proposals for native verification"
-  default_prompt: "Use $openrouter-proposals for a bounded task through my approved OpenRouter connection, then verify the result natively."

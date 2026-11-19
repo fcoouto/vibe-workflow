@@ -1,2 +1,0 @@
-def unrelated():
-    return "excluded"

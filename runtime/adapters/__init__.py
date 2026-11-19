@@ -1,1 +1,0 @@
-"""Client-specific event adapters."""
