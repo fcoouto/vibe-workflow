@@ -17,19 +17,27 @@ async function findRoot(directory) {
   const location = await realpath(directory)
   if (!(await lstat(location)).isDirectory()) throw unsafe()
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+  const git = (...args) => exec("git", args, {
+    cwd: location, env: { ...env, LC_ALL: "C" }, timeout: 2000, maxBuffer: 65536,
+  })
   let stdout
   try {
-    ({ stdout } = await exec("git", ["rev-parse", "--show-toplevel"], {
-      cwd: location, env: { ...env, LC_ALL: "C" }, timeout: 2000, maxBuffer: 8192,
-    }))
+    ({ stdout } = await git("rev-parse", "--show-toplevel"))
   } catch (error) {
-    if (error.code === 128 && /^fatal: not a git repository \(or any (?:of the )?parent director(?:y|ies)\): \.git\s*$/.test(error.stderr)) return location
+    if (error.code === 128 && /^fatal: not a git repository \(or any (?:of the )?parent director(?:y|ies)\): \.git\s*$/.test(error.stderr)) {
+      return { root: location, project: location }
+    }
     throw error
   }
   const root = await realpath(stdout.replace(/\n$/, ""))
   const below = relative(root, location)
   if (below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below)) throw unsafe()
-  return root
+  // Settings stay in this checkout, but a linked worktree names its main worktree,
+  // listed first, as the project. A bare repository has no main checkout.
+  const [main] = (await git("worktree", "list", "--porcelain", "-z")).stdout.split("\0\0")
+  const [path, ...attributes] = main.split("\0")
+  if (!path.startsWith("worktree ")) throw unsafe()
+  return { root, project: attributes.includes("bare") ? root : await realpath(path.slice("worktree ".length)) }
 }
 
 async function maybeStat(path) {
@@ -123,16 +131,17 @@ export function createProjectSettings(directory) {
   let discovery
   async function current() {
     discovery ??= findRoot(directory).catch(() => null)
-    const root = await discovery
-    if (!root) return { state: "blocked", reason: "project_root_unavailable", root: null, path: null }
+    const found = await discovery
+    if (!found) return { state: "blocked", reason: "project_root_unavailable", root: null, project: null, path: null }
+    const { root, project } = found
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
       const data = await readSettings(folder, path)
       const enabled = data.value?.features[data.routerIndex]?.smart_router.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
-        reason: null, root, path, enabled, snapshot: snapshot(root, data.raw), folder, data }
+        reason: null, root, project, path, enabled, snapshot: snapshot(root, data.raw), folder, data }
     } catch {
-      return { state: "blocked", reason: "project_settings_invalid", root, path }
+      return { state: "blocked", reason: "project_settings_invalid", root, project, path }
     }
   }
   const publicState = ({ data, folder, ...state }) => state
@@ -150,12 +159,12 @@ export function createProjectSettings(directory) {
       if (typeof enabled !== "boolean" || typeof expectedSnapshot !== "string" ||
           !/^[a-f0-9]{64}$/.test(expectedSnapshot)) return { state: "blocked", reason: "invalid_request" }
       const initial = await current()
-      const { root, path, folder } = initial
-      const blocked = (reason) => ({ state: "blocked", reason, root, path, enabled: null })
+      const { root, project, path, folder } = initial
+      const blocked = (reason) => ({ state: "blocked", reason, root, project, path, enabled: null })
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      if (initial.enabled === enabled) return { state: "unchanged", reason: null, root, path, enabled }
+      if (initial.enabled === enabled) return { state: "unchanged", reason: null, root, project, path, enabled }
       if (initial.data.raw && !numbersRoundTrip(initial.data.raw)) return blocked("project_settings_lossy")
       const lockPath = join(folder, ".settings.lock")
       let lock, temporary, createdFolder = false, saved = false
@@ -196,7 +205,7 @@ export function createProjectSettings(directory) {
         if (signal?.aborted) return blocked("project_settings_cancelled")
         await rename(temporary, path)
         saved = true
-        return { state: "saved", reason: null, root, path, enabled }
+        return { state: "saved", reason: null, root, project, path, enabled }
       } catch {
         return blocked("project_settings_write_failed")
       } finally {

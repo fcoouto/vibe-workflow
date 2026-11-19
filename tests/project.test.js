@@ -105,7 +105,7 @@ test("apply refuses numbers that cannot round-trip without changing existing set
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).future, [125, 0.1, 'escaped "1e400"'])
 })
 
-test("nested locations, separate repositories and worktrees resolve to their own checkout", async (t) => {
+test("nested locations, separate repositories and worktrees keep their own checkout and name the main project", async (t) => {
   const { root, path, write, create } = await fixture(t)
   const git = (...args) => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", ...args], {
     env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
@@ -118,14 +118,32 @@ test("nested locations, separate repositories and worktrees resolve to their own
   const before = await readFile(path, "utf8")
   const sub = join(root, "sub"), linked = join(root, "linked")
   await mkdir(sub)
-  assert.equal((await create(sub).inspect()).root, root)
+  assert.deepEqual(await create(sub).inspect().then(({ root, project }) => ({ root, project })), { root, project: root })
   git("-C", sub, "init", "-q")
-  assert.equal((await create(sub).inspect()).root, sub)
+  assert.deepEqual(await create(sub).inspect().then(({ root, project }) => ({ root, project })), { root: sub, project: sub })
   git("worktree", "add", "--detach", linked)
+  await mkdir(join(linked, "deep"))
+  assert.equal((await create(join(linked, "deep")).inspect()).project, root)
   const project = create(linked), preview = await project.preview()
   assert.equal(preview.root, linked)
-  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.equal(preview.project, root)
+  assert.equal(preview.path, join(linked, ".vibe-workflow", "settings.json"))
+  const saved = await project.apply(true, preview.snapshot)
+  assert.deepEqual([saved.state, saved.project], ["saved", root])
   assert.equal(await readFile(path, "utf8"), before)
+})
+
+test("worktrees of a bare repository keep their own checkout", async (t) => {
+  const { root, create } = await fixture(t)
+  const bare = join(root, "bare.git"), linked = join(root, "linked")
+  const git = (...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    stdio: "pipe",
+  })
+  git("init", "-q", "--bare", bare)
+  git("-C", bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked)
+  const { root: own, project } = await create(linked).inspect()
+  assert.deepEqual({ own, project }, { own: linked, project: linked })
 })
 
 test("duplicate settings keys block without overwriting, even when escaped", async (t) => {

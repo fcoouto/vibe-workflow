@@ -41,10 +41,12 @@ configuration changes; no background service restart is needed.
 Once the plugin is loaded, ask in the project's OpenCode chat:
 **“Use `vibe-onboard-project` to onboard this project.”**
 The `vibe-onboard-project` skill and `vibe_workflow_onboard` tool show the
-detected checkout, ask about Smart Router, and preview the settings change.
+detected project, ask about Smart Router, and preview the settings change.
+In a linked worktree, the project shown is the main worktree's path.
 Confirm the preview before saving. Native edit permissions still apply.
 
-The project choice lives in `.vibe-workflow/settings.json` at the checkout root:
+The project choice lives in `.vibe-workflow/settings.json` at the checkout root,
+so each linked worktree keeps its own file:
 
 ```json
 {"version": 1, "features": [{"smart_router": {"enabled": true}}]}

@@ -1,8 +1,11 @@
 # Vibe Workflow project onboarding
 
-1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the detected
-   project root and client. If blocked, explain the fixed reason and stop.
-2. Ask **Use Smart Router for this project?** with these choices:
+1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the
+   preview's `project` path as the project, and the client. When `root`
+   differs, the session is in a worktree; say its settings file is saved in that
+   worktree. If blocked, explain the fixed reason and stop.
+2. Ask **Use Smart Router for this project?**, with the `project` path in the
+   question's context, and these choices:
 
    **Use Smart Router — default**\
    Automatically get provider, model, and effort recommendations before delegating
