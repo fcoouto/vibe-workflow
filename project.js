@@ -76,7 +76,7 @@ function uniqueKeys(text) {
   return true
 }
 
-const FEATURES = { smart_router: ["enabled"], git_workflow: ["enabled", "agent_merge"] }
+const FEATURES = { smart_router: ["enabled"], git_workflow: ["enabled", "agent_merge", "worktree_cleanup"] }
 
 async function readSettings(folder, path, feature) {
   const parent = await maybeStat(folder)
@@ -150,7 +150,7 @@ function numbersRoundTrip(raw) {
 export function createProjectSettings(directory, feature = "smart_router", { atProject = false } = {}) {
   if (!Object.hasOwn(FEATURES, feature)) throw new Error("unsupported feature")
   const prefs = feature === "git_workflow"
-  // The default feature accepts a boolean or { enabled }; git_workflow accepts { enabled?, agent_merge? }.
+  // The default feature accepts a boolean or { enabled }; git_workflow accepts { enabled?, agent_merge?, worktree_cleanup? }.
   // Unknown keys and non-boolean values are invalid.
   function normalize(values) {
     if (values === undefined) return {}
@@ -174,7 +174,8 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       const entry = data.value?.features[data.featureIndex]?.[feature]
       const enabled = entry?.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
-        reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null }),
+        reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null,
+          worktree_cleanup: entry ? entry.worktree_cleanup ?? null : null }),
         snapshot: snapshot(root, data.raw), folder, data }
     } catch {
       return { state: "blocked", reason: "project_settings_invalid", root, project, path }
@@ -190,27 +191,30 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (!asked) return { state: "blocked", reason: "invalid_request" }
       const enabled = asked.enabled ?? state.enabled ?? true
       const agentMerge = asked.agent_merge ?? state.agent_merge ?? false
-      const same = enabled === state.enabled && (!prefs || agentMerge === state.agent_merge)
+      const cleanup = asked.worktree_cleanup ?? state.worktree_cleanup ?? false
+      const same = enabled === state.enabled && (!prefs || (agentMerge === state.agent_merge && cleanup === state.worktree_cleanup))
       return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
-        ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge }),
+        ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge,
+          previous_worktree_cleanup: state.worktree_cleanup, worktree_cleanup: cleanup }),
         change: !data.raw ? "create" : same ? "none" : "update" }
     },
     async apply(values, expectedSnapshot, { signal } = {}) {
       const asked = normalize(values)
-      if (!asked || typeof asked.enabled !== "boolean" || (prefs && typeof asked.agent_merge !== "boolean") ||
+      if (!asked || typeof asked.enabled !== "boolean" || (prefs && (typeof asked.agent_merge !== "boolean" || typeof asked.worktree_cleanup !== "boolean")) ||
           typeof expectedSnapshot !== "string" ||
           !/^[a-f0-9]{64}$/.test(expectedSnapshot)) return { state: "blocked", reason: "invalid_request" }
-      const { enabled, agent_merge: agentMerge } = asked
+      const { enabled, agent_merge: agentMerge, worktree_cleanup: cleanup } = asked
       const initial = await current()
       const { root, project, path, folder } = initial
       const blocked = (reason) => ({ state: "blocked", reason, root, project, path, enabled: null,
-        ...(prefs && { agent_merge: null }) })
+        ...(prefs && { agent_merge: null, worktree_cleanup: null }) })
       const result = (state) => ({ state, reason: null, root, project, path, enabled,
-        ...(prefs && { agent_merge: agentMerge }) })
+        ...(prefs && { agent_merge: agentMerge, worktree_cleanup: cleanup }) })
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      if (initial.enabled === enabled && (!prefs || initial.agent_merge === agentMerge)) return result("unchanged")
+      if (initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
+        initial.worktree_cleanup === cleanup))) return result("unchanged")
       if (initial.data.raw && !numbersRoundTrip(initial.data.raw)) return blocked("project_settings_lossy")
       const lockPath = join(folder, ".settings.lock")
       let lock, temporary, createdFolder = false, saved = false
@@ -233,7 +237,7 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
         const { value, featureIndex = -1 } = latest.data
         const features = [...(value?.features ?? [])]
         features[featureIndex < 0 ? features.length : featureIndex] = {
-          [feature]: { ...features[featureIndex]?.[feature], enabled, ...(prefs && { agent_merge: agentMerge }) },
+          [feature]: { ...features[featureIndex]?.[feature], enabled, ...(prefs && { agent_merge: agentMerge, worktree_cleanup: cleanup }) },
         }
         const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")

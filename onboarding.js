@@ -27,20 +27,20 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
       type: "object", additionalProperties: false, required: ["v", "op"],
       properties: {
         v: { type: "integer", const: 1 }, op: { enum: ["preview", "apply"] }, feature: { enum: features },
-        enabled: { type: "boolean" }, agent_merge: { type: "boolean" },
+        enabled: { type: "boolean" }, agent_merge: { type: "boolean" }, worktree_cleanup: { type: "boolean" },
         expected_snapshot: { type: "string", pattern: snapshotPattern.source },
       },
     },
     execute: async (request, invocation) => {
       const feature = request?.feature ?? "smart_router", prefs = feature === "git_workflow"
       if (!request || request.v !== 1 || !["preview", "apply"].includes(request.op) || !features.includes(feature) ||
-          Object.keys(request).some((key) => !["v", "op", "feature", "enabled", "agent_merge", "expected_snapshot"].includes(key)) ||
-          ("agent_merge" in request && !prefs) ||
-          ["enabled", "agent_merge"].some((key) => key in request && typeof request[key] !== "boolean")) {
+          Object.keys(request).some((key) => !["v", "op", "feature", "enabled", "agent_merge", "worktree_cleanup", "expected_snapshot"].includes(key)) ||
+          (("agent_merge" in request || "worktree_cleanup" in request) && !prefs) ||
+          ["enabled", "agent_merge", "worktree_cleanup"].some((key) => key in request && typeof request[key] !== "boolean")) {
         return output(blocked("invalid_request"))
       }
       const { signal } = invocation, project = projects[feature]
-      const values = prefs ? Object.fromEntries(["enabled", "agent_merge"].filter((key) => key in request)
+      const values = prefs ? Object.fromEntries(["enabled", "agent_merge", "worktree_cleanup"].filter((key) => key in request)
         .map((key) => [key, request[key]])) : request.enabled
       const ready = async (enabled) => !enabled ? { state: "off", reason: null } : prefs ? prGuard() : checkSetup(signal)
       if (signal?.aborted) return output(blocked("project_settings_cancelled"))
@@ -50,7 +50,7 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
         if ("expected_snapshot" in request) return output(blocked("invalid_request"))
         return output({ ...proposed, readiness: await ready(proposed.enabled) })
       }
-      if (typeof request.enabled !== "boolean" || (prefs && typeof request.agent_merge !== "boolean") ||
+      if (typeof request.enabled !== "boolean" || (prefs && (typeof request.agent_merge !== "boolean" || typeof request.worktree_cleanup !== "boolean")) ||
           typeof request.expected_snapshot !== "string" ||
           !snapshotPattern.test(request.expected_snapshot)) return output(blocked("invalid_request"))
       if (request.expected_snapshot !== proposed.snapshot) return output(blocked("project_settings_changed"))

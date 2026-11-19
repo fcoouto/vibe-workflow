@@ -271,13 +271,13 @@ test("git_workflow preview defaults on with user merge and writes nothing", asyn
   assert.equal(preview.previous_agent_merge, null)
   assert.equal(preview.change, "create")
   await assert.rejects(stat(folder), { code: "ENOENT" })
-  assert.equal((await project.apply({ enabled: true, agent_merge: false }, preview.snapshot)).state, "saved")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: false }, preview.snapshot)).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-    version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false } }],
+    version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }],
   })
   const repeat = await project.preview()
   assert.equal(repeat.change, "none")
-  assert.equal((await project.apply({ enabled: true, agent_merge: false }, repeat.snapshot)).state, "unchanged")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: false }, repeat.snapshot)).state, "unchanged")
 })
 
 test("git_workflow apply keeps the Smart Router entry, unknown entries and order", async (t) => {
@@ -286,29 +286,31 @@ test("git_workflow apply keeps the Smart Router entry, unknown entries and order
     { other: { x: 1 } }, { git_workflow: { enabled: true, agent_merge: false, note: "keep" } }] })
   const project = create(root, "git_workflow"), preview = await project.preview({ agent_merge: true })
   assert.equal(preview.change, "update")
-  assert.equal((await project.apply({ enabled: true, agent_merge: true }, preview.snapshot)).state, "saved")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true, worktree_cleanup: false }, preview.snapshot)).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
     version: 1, future: "PRIVATE-SENTINEL", features: [{ smart_router: { enabled: false, keep: 1 } },
-      { other: { x: 1 } }, { git_workflow: { enabled: true, agent_merge: true, note: "keep" } }] })
+      { other: { x: 1 } }, { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: false, note: "keep" } }] })
 })
 
-test("git_workflow apply requires both booleans and unchanged compares both", async (t) => {
+test("git_workflow apply requires all three booleans and unchanged compares all three", async (t) => {
   const { create, root, write } = await fixture(t)
-  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false } }] })
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }] })
   const project = create(root, "git_workflow"), { snapshot } = await project.preview()
-  for (const values of [{ enabled: true }, { agent_merge: true }, true, undefined, { enabled: 1, agent_merge: false },
-    { enabled: true, agent_merge: false, extra: true }]) {
+  for (const values of [{ enabled: true }, { agent_merge: true }, { worktree_cleanup: true }, true, undefined,
+    { enabled: true, agent_merge: false }, { enabled: 1, agent_merge: false, worktree_cleanup: false },
+    { enabled: true, agent_merge: false, worktree_cleanup: 1 },
+    { enabled: true, agent_merge: false, worktree_cleanup: false, extra: true }]) {
     assert.deepEqual(await project.apply(values, snapshot).then(({ state, reason }) => ({ state, reason })),
       { state: "blocked", reason: "invalid_request" })
   }
   assert.equal((await project.preview({ enabled: true, extra: 1 })).reason, "invalid_request")
-  assert.equal((await project.apply({ enabled: true, agent_merge: false }, snapshot)).state, "unchanged")
-  assert.equal((await project.apply({ enabled: true, agent_merge: true }, snapshot)).state, "saved")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: false }, snapshot)).state, "unchanged")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: true }, snapshot)).state, "saved")
 })
 
 test("invalid entries block only their own feature", async (t) => {
   const { create, root, write } = await fixture(t)
-  for (const entry of [{ enabled: 1 }, { enabled: true, agent_merge: "yes" }]) {
+  for (const entry of [{ enabled: 1 }, { enabled: true, agent_merge: "yes" }, { enabled: true, worktree_cleanup: "yes" }]) {
     await write({ version: 1, features: [{ git_workflow: entry }] })
     assert.equal((await create(root, "git_workflow").inspect()).reason, "project_settings_invalid")
     assert.equal((await create(root).inspect()).state, "not_onboarded")
@@ -358,7 +360,7 @@ test("atProject is blocked in a linked worktree of a bare repository, and nothin
   const state = await project.inspect()
   assert.deepEqual([state.state, state.reason, state.project], ["blocked", "project_root_unavailable", null])
   assert.equal((await project.preview()).state, "blocked")
-  assert.equal((await project.apply({ enabled: true, agent_merge: true }, "0".repeat(64))).state, "blocked")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true, worktree_cleanup: true }, "0".repeat(64))).state, "blocked")
   await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
   assert.equal((await create(linked).inspect()).project, linked)
 })
@@ -387,7 +389,61 @@ test("an old pull_requests entry is only an unknown entry: ignored, and kept whe
   await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }] })
   const project = create(root, "git_workflow"), preview = await project.preview()
   assert.deepEqual([preview.state, preview.previous_enabled, preview.agent_merge, preview.change], ["preview", null, false, "update"])
-  assert.equal((await project.apply({ enabled: true, agent_merge: false }, preview.snapshot)).state, "saved")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: false }, preview.snapshot)).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ pull_requests: { enabled: true, agent_merge: true } },
-    { git_workflow: { enabled: true, agent_merge: false } }])
+    { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }])
+})
+
+test("a missing worktree_cleanup key reads null and previews false with an update", async (t) => {
+  const { path, create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true } }] })
+  const project = create(root, "git_workflow")
+  assert.equal((await project.inspect()).worktree_cleanup, null)
+  const preview = await project.preview()
+  assert.deepEqual([preview.previous_worktree_cleanup, preview.worktree_cleanup, preview.change], [null, false, "update"])
+  assert.equal((await project.apply({ enabled: true, agent_merge: true, worktree_cleanup: false }, preview.snapshot)).state, "saved")
+  assert.equal(JSON.parse(await readFile(path, "utf8")).features[0].git_workflow.worktree_cleanup, false)
+  assert.equal((await project.preview()).change, "none")
+  assert.equal((await create(root, "git_workflow").inspect()).worktree_cleanup, false)
+})
+
+test("no file and no entry read worktree_cleanup as null", async (t) => {
+  const { create, root, write } = await fixture(t)
+  assert.equal((await create(root, "git_workflow").inspect()).worktree_cleanup, null)
+  await write({ version: 1, features: [{ smart_router: { enabled: true } }] })
+  assert.equal((await create(root, "git_workflow").inspect()).worktree_cleanup, null)
+})
+
+test("worktree_cleanup round-trips true and false and keeps unknown keys", async (t) => {
+  const { path, create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false, note: "keep" } }] })
+  const project = create(root, "git_workflow"), preview = await project.preview({ worktree_cleanup: true })
+  assert.deepEqual([preview.previous_worktree_cleanup, preview.worktree_cleanup, preview.change], [false, true, "update"])
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: true }, preview.snapshot)).worktree_cleanup, true)
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
+    [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true, note: "keep" } }])
+  assert.equal((await project.inspect()).worktree_cleanup, true)
+})
+
+test("a worktree copy never turns cleanup on when read at the project path", async (t) => {
+  const { root, create, write } = await fixture(t)
+  gitIn(root, "init", "-q")
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }] })
+  const linked = join(root, "linked")
+  gitIn(root, "worktree", "add", "--detach", linked)
+  await mkdir(join(linked, ".vibe-workflow"))
+  await writeFile(join(linked, ".vibe-workflow", "settings.json"),
+    JSON.stringify({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: true } }] }))
+  const main = await create(linked, "git_workflow", { atProject: true }).inspect()
+  assert.deepEqual([main.root, main.agent_merge, main.worktree_cleanup], [root, false, false])
+})
+
+test("Smart Router results have no worktree_cleanup key", async (t) => {
+  const { create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: true } }] })
+  const project = create(root), inspected = await project.inspect(), preview = await project.preview()
+  for (const result of [inspected, preview, await project.apply(true, preview.snapshot)]) {
+    assert.ok(!("worktree_cleanup" in result) && !("previous_worktree_cleanup" in result), JSON.stringify(result))
+  }
 })

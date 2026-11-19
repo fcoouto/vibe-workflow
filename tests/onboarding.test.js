@@ -111,10 +111,10 @@ test("git_workflow apply asks for edit permission and saves only that entry", as
   const { execute, write, path, assertCalls } = await fixture(t)
   await write({ version: 1, features: [{ smart_router: { enabled: false } }] })
   const preview = await prefs(execute, { op: "preview", agent_merge: true })
-  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: true, expected_snapshot: preview.snapshot })
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: true, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.deepEqual([saved.state, saved.enabled, saved.agent_merge], ["saved", true, true])
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ smart_router: { enabled: false } }, { git_workflow: { enabled: true, agent_merge: true } }])
+    [{ smart_router: { enabled: false } }, { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: false } }])
   assert.deepEqual(assertCalls.map(({ action, resources }) => ({ action, resources })),
     [{ action: "edit", resources: ["../.vibe-workflow/settings.json"] }])
 })
@@ -134,39 +134,68 @@ test("git_workflow readiness reports guard_unavailable", async (t) => {
 
 test("skip saves enabled false and agent_merge false with readiness off", async (t) => {
   const { execute, path } = await fixture(t)
-  const preview = await prefs(execute, { op: "preview", enabled: false, agent_merge: false })
-  const saved = await prefs(execute, { op: "apply", enabled: false, agent_merge: false, expected_snapshot: preview.snapshot })
+  const preview = await prefs(execute, { op: "preview", enabled: false, agent_merge: false, worktree_cleanup: false })
+  const saved = await prefs(execute, { op: "apply", enabled: false, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.deepEqual([saved.state, saved.readiness], ["saved", { state: "off", reason: null }])
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ git_workflow: { enabled: false, agent_merge: false } }])
+    [{ git_workflow: { enabled: false, agent_merge: false, worktree_cleanup: false } }])
 })
 
-test("git_workflow apply without agent_merge is blocked", async (t) => {
+test("git_workflow apply without agent_merge or worktree_cleanup is blocked", async (t) => {
   const { execute, path } = await fixture(t)
   const preview = await prefs(execute, { op: "preview" })
   assert.equal((await prefs(execute, { op: "apply", enabled: true, expected_snapshot: preview.snapshot })).reason, "invalid_request")
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })).reason,
+    "invalid_request")
   await assert.rejects(stat(path), { code: "ENOENT" })
+})
+
+test("worktree_cleanup with the default feature is invalid", async (t) => {
+  const { execute } = await fixture(t)
+  assert.equal((await execute({ op: "preview", worktree_cleanup: true })).reason, "invalid_request")
+  assert.equal((await execute({ op: "preview", worktree_cleanup: "yes", feature: "git_workflow" })).reason, "invalid_request")
+})
+
+test("preview reports previous_worktree_cleanup null for a file saved before this feature", async (t) => {
+  const { execute, write } = await fixture(t)
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true } }] })
+  const preview = await prefs(execute, { op: "preview" })
+  assert.deepEqual([preview.previous_worktree_cleanup, preview.previous_agent_merge, preview.worktree_cleanup, preview.change],
+    [null, true, false, "update"])
+})
+
+test("an applied worktree_cleanup true is saved and read back", async (t) => {
+  const { execute, path } = await fixture(t)
+  const preview = await prefs(execute, { op: "preview", worktree_cleanup: true })
+  assert.equal(preview.worktree_cleanup, true)
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: true,
+    expected_snapshot: preview.snapshot })
+  assert.deepEqual([saved.state, saved.worktree_cleanup], ["saved", true])
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
+    [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } }])
+  const again = await prefs(execute, { op: "preview" })
+  assert.deepEqual([again.previous_worktree_cleanup, again.change], [true, "none"])
 })
 
 test("both choices apply in sequence on a primary checkout", async (t) => {
   const { execute, path } = await fixture(t)
   const router = await execute({ op: "preview", enabled: true })
-  const pullRequests = await prefs(execute, { op: "preview", enabled: true, agent_merge: false })
+  const pullRequests = await prefs(execute, { op: "preview", enabled: true, agent_merge: false, worktree_cleanup: false })
   assert.equal(router.snapshot, pullRequests.snapshot)
   assert.equal((await execute({ op: "apply", enabled: true, expected_snapshot: router.snapshot })).state, "saved")
-  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false,
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false,
     expected_snapshot: pullRequests.snapshot })).reason, "project_settings_changed")
-  const again = await prefs(execute, { op: "preview", enabled: true, agent_merge: false })
+  const again = await prefs(execute, { op: "preview", enabled: true, agent_merge: false, worktree_cleanup: false })
   assert.equal(again.change, "update")
-  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: again.snapshot })).state, "saved")
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: again.snapshot })).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ smart_router: { enabled: true } }, { git_workflow: { enabled: true, agent_merge: false } }])
+    [{ smart_router: { enabled: true } }, { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }])
 })
 
 test("a missing ctx.permission blocks git_workflow apply", async (t) => {
   const { execute, path } = await fixture(t, null)
   const preview = await prefs(execute, { op: "preview" })
-  const blocked = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })
+  const blocked = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.equal(blocked.reason, "project_permission_unavailable")
   await assert.rejects(stat(path), { code: "ENOENT" })
 })
@@ -183,14 +212,14 @@ test("git_workflow apply from a linked worktree writes the main checkout only", 
   const { execute, path, assertCalls, root } = await fixture(t, async () => {}, prepare)
   const preview = await prefs(execute, { op: "preview" })
   assert.deepEqual([preview.root, preview.project], [root, root])
-  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.equal(saved.state, "saved")
   assert.equal(JSON.parse(await readFile(path, "utf8")).features[0].git_workflow.enabled, true)
   await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
   assert.deepEqual(assertCalls.map(({ resources }) => resources), [["../.vibe-workflow/settings.json"]])
   const denied = await fixture(t, async () => { throw denial }, prepare)
   const again = await prefs(denied.execute, { op: "preview" })
-  await assert.rejects(prefs(denied.execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: again.snapshot }), denial)
+  await assert.rejects(prefs(denied.execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: again.snapshot }), denial)
   await assert.rejects(stat(denied.path), { code: "ENOENT" })
 })
 
