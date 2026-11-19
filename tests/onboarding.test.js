@@ -227,7 +227,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
   const questions = text.split(/^### \d+\. /m).slice(1).map((block) => block.split(/^## /m)[0])
-  assert.equal(questions.length, 2)
+  assert.equal(questions.length, 4)
   for (const block of questions) {
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
@@ -243,6 +243,9 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   }
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
+  assert.equal(questions[2].match(/^- Question: (.+)$/m)[1], "Clean up after a pull request is merged in this project?")
+  assert.equal(questions[3].match(/^- Question: (.+)$/m)[1], "Delete merged branches on GitHub automatically?")
+  assert.match(questions[1], /Skip git workflow guidance — Saves all of this as off, including cleanup\./)
   assert.doesNotMatch(text, /Save both\?|Save onboarding choices|one confirmation/)
   assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
 })
@@ -250,10 +253,11 @@ test("every onboarding question has the same control-shaped form", async (t) => 
 test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Two short questions.", "Saved in the main checkout", "project_root_unavailable",
+  for (const phrase of ["Up to four short questions.", "Saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
-    "Nothing to change", "Saving:", "native file-edit permission"]) {
+    "Nothing to change", "Saving:", "native file-edit permission",
+    "Git workflow: On · I merge, cleanup on —", "Git workflow: On · Agents merge, cleanup on —"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })
@@ -261,4 +265,22 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
 test("the old feature name is not accepted by the tool, only by stored settings", async (t) => {
   const { execute } = await fixture(t)
   assert.equal((await execute({ feature: "pull_requests", op: "preview" })).reason, "invalid_request")
+})
+
+test("the procedure pins the cleanup questions, the GitHub conditions, the apply order and cancel", async (t) => {
+  const { skills } = await fixture(t)
+  const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
+  for (const phrase of ["Skip git workflow guidance", "skips questions 3 and 4",
+    "gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission", "`deleteBranchOnMerge` is `false`",
+    "`viewerPermission` is `ADMIN`", "gh repo edit", "--delete-branch-on-merge", "the same `gh repo view` call",
+    "GitHub auto-delete: already on.", "GitHub auto-delete: not changed (admin access is needed).",
+    "GitHub auto-delete: not available (gh is missing or not logged in).",
+    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: turned on.",
+    "GitHub: turn on auto-delete of merged branches", "previous_worktree_cleanup", '"worktree_cleanup"',
+    "A yes to question 4 counts as a change", "the Saving line comes before anything is applied",
+    "a cancel at any question or a denied native file-edit permission means no GitHub change",
+    "runs after the settings apply", "independent of a technical failure"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(text, /Two short questions\./)
 })
