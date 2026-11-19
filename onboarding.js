@@ -3,16 +3,20 @@ import { relative, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const name = "vibe-onboard-project"
-const skillPath = fileURLToPath(new URL(`./skills/${name}/SKILL.md`, import.meta.url))
 const toolName = "vibe_workflow_onboard"
 const blocked = (reason) => ({ state: "blocked", reason })
 const output = (value) => ({ content: JSON.stringify({ client: "opencode", ...value }) })
 const snapshotPattern = /^[a-f0-9]{64}$/
 
+export async function registerSkill(ctx, skill) {
+  const path = fileURLToPath(new URL(`./skills/${skill}/SKILL.md`, import.meta.url))
+  const [, description, content] = new RegExp(`^---\\nname: ${skill}\\ndescription: ([^\\n]+)\\n---\\n([\\s\\S]+)$`)
+    .exec(await readFile(path, "utf8"))
+  await ctx.skill.transform((editor) => editor.add({ id: skill, name: skill, path, description, content }))
+}
+
 export async function registerOnboarding(ctx, project, checkSetup) {
-  const text = await readFile(skillPath, "utf8")
-  const [, description, content] = /^---\nname: vibe-onboard-project\ndescription: ([^\n]+)\n---\n([\s\S]+)$/.exec(text)
-  await ctx.skill.transform((editor) => editor.add({ id: name, name, path: skillPath, description, content }))
+  await registerSkill(ctx, name)
   await ctx.tool.transform((editor) => editor.add({
     name: toolName,
     description: `Preview or save a confirmed Smart Router project preference. Follow the ${name} skill.`,

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "partners": [
+    {
+      "id": "superpowers",
+      "why": "Design, planning, execution and review skills the workflow partners with.",
+      "docs": "https://github.com/obra/superpowers",
+      "clients": {"opencode": {"kind": "plugin", "match": "superpowers", "version_from": "git-superpowers-*/*/node_modules/superpowers/package.json"}},
+      "upstream": {"type": "raw", "url": "https://raw.githubusercontent.com/obra/superpowers/main/package.json"}
+    },
+    {
+      "id": "ponytail",
+      "why": "The smallest complete change by default.",
+      "docs": "https://github.com/DietrichGebert/ponytail",
+      "clients": {"opencode": {"kind": "plugin", "match": "@dietrichgebert/ponytail", "version_from": "@dietrichgebert/ponytail@*/*/node_modules/@dietrichgebert/ponytail/package.json"}},
+      "upstream": {"type": "npm", "package": "@dietrichgebert/ponytail"}
+    },
+    {
+      "id": "caveman",
+      "why": "Concise communication without losing technical substance.",
+      "docs": "https://github.com/JuliusBrussee/caveman",
+      "clients": {"opencode": {"kind": "plugin", "match": "plugins/caveman"}},
+      "upstream": {"type": "github", "repo": "JuliusBrussee/caveman"}
+    },
+    {
+      "id": "impeccable",
+      "why": "Design critique and polish for frontend work.",
+      "docs": "https://github.com/pbakaus/impeccable",
+      "clients": {"opencode": {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}},
+      "upstream": {"type": "raw", "url": "https://raw.githubusercontent.com/pbakaus/impeccable/main/package.json"}
+    },
+    {
+      "id": "context7",
+      "why": "Current library documentation instead of stale memory.",
+      "docs": "https://github.com/upstash/context7",
+      "clients": {"opencode": {"kind": "mcp", "name": "context7"}},
+      "upstream": {"type": "hosted"}
+    },
+    {
+      "id": "rtk",
+      "why": "Compact command output and fewer wasted tokens.",
+      "docs": "https://github.com/rtk-ai/rtk",
+      "machine": {"command": "rtk", "version_args": ["--version"]},
+      "clients": {"opencode": {"kind": "file", "path": "plugins/rtk.ts"}},
+      "upstream": {"type": "github", "repo": "rtk-ai/rtk"}
+    },
+    {
+      "id": "graphify-cli",
+      "why": "Builds the local code map that agents query instead of reading many files.",
+      "docs": "https://docs.graphify.com",
+      "machine": {"command": "graphify", "version_args": ["--version"]},
+      "upstream": {"type": "github", "repo": "Graphify-Labs/graphify"}
+    },
+    {
+      "id": "graphify-skill",
+      "why": "Lets OpenCode use the code map.",
+      "docs": "https://docs.graphify.com",
+      "clients": {"opencode": {"kind": "skill", "name": "graphify"}},
+      "upstream": {"type": "presence"}
+    },
+    {
+      "id": "git",
+      "why": "Branches, worktrees and the checks that rely on them.",
+      "docs": "https://git-scm.com/downloads",
+      "machine": {"command": "git", "version_args": ["--version"]},
+      "upstream": {"type": "minimum", "version": "2.30"}
+    },
+    {
+      "id": "gh",
+      "why": "Publishes branches and pull requests.",
+      "docs": "https://cli.github.com",
+      "machine": {"command": "gh", "version_args": ["--version"]},
+      "upstream": {"type": "minimum", "version": "2.40"}
+    },
+    {
+      "id": "python",
+      "why": "Runs the plugin's selector and this check.",
+      "docs": "https://www.python.org/downloads/",
+      "machine": {"command": "python3", "version_args": ["--version"]},
+      "upstream": {"type": "minimum", "version": "3.11"}
+    }
+  ]
+}

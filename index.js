@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { registerOnboarding } from "./onboarding.js"
+import { registerOnboarding, registerSkill } from "./onboarding.js"
 import { createProjectSettings } from "./project.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -146,6 +146,7 @@ export default {
       return result
     } }, (signal) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }))
+    await registerSkill(ctx, "vibe-prepare-my-workspace")
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       const preference = await project.inspect()
