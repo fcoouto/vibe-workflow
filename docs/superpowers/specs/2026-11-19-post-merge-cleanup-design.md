@@ -117,16 +117,16 @@ starting with the project path, labels of one to five words with descriptions,
   work." Choices: **Clean up (Recommended)** — "Removes the task's worktree and its
   local branch after a confirmed merge." and **Keep them** — "Leaves worktrees and
   branches in place. You can remove them yourself."
-- **Question 4 — Auto-delete merged branches (conditional).** Asked only when
+- **Question 4 — Remote branch cleanup (conditional).** Asked only when
   `git_workflow` stays on **and** one read-only call
   `gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission` succeeds
   **and** `deleteBranchOnMerge` is `false` **and** `viewerPermission` is `ADMIN`.
-  Header **Auto-delete merged branches**; question **Turn on automatic deletion of
-  merged branches on GitHub?** Context: "Project: <project path>. GitHub can delete a
-  pull request's branch as soon as it merges. It is off for <owner/repo>. It applies
+  Header **Remote branch cleanup**; question **Delete merged branches on GitHub
+  automatically?** Context: "Project: <project path>. GitHub, not the agent, can delete
+  a pull request's branch as soon as it merges. It is off for <owner/repo>. It applies
   to every merge there, and you can turn it off again in GitHub's settings." Choices:
-  **Turn it on (Recommended)** — "Runs gh repo edit --delete-branch-on-merge." and
-  **Not now** — "Leaves the setting off." On yes the agent runs
+  **Turn it on (Recommended)** — "GitHub deletes a PR's branch when it merges. Runs gh
+  repo edit --delete-branch-on-merge." and **Not now** — "Leaves the setting off." On yes the agent runs
   `gh repo edit <owner/repo> --delete-branch-on-merge`, reads it back with the same
   `gh repo view` call, and reports the result. A failed read-back is reported, not
   claimed. Because that edit changes the whole repository and cancelling afterwards
@@ -264,6 +264,11 @@ completes". Nothing else changes; the settings read already happens per match.
 
 - Cleanup covers the worktree **and its local branch** (safe delete).
 - The detach, delete-branch, remove-worktree-last order, with the report first.
+- Worktree cleanup and remote branch cleanup stay **two questions**. An impeccable
+  review proposed one four-choice question, but it needed different choices when
+  GitHub's setting is already on (or cannot be read), and it would have mixed what an
+  agent removes with what GitHub removes. Two questions keep each question's choices
+  fixed and name who acts. Neither is preselected; an explicit choice is the consent.
 - Question 2's Skip is relabelled and also skips Questions 3 and 4.
 - Question 4 is asked only for an ADMIN on a GitHub repository whose setting is off.
 - A missing `worktree_cleanup` key means "ask once", not "no".
