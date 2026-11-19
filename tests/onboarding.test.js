@@ -197,7 +197,7 @@ test("pull_requests apply from a linked worktree writes the main checkout only",
 test("procedure asks who merges and keeps the Smart Router question", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Who merges", "Use Smart Router for this project?", "feature", "Reminders registered"]) {
+  for (const phrase of ["Who merges", "Use Smart Router for this project?", "feature", "Reminders registered", "project_root_unavailable"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })

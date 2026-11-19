@@ -348,3 +348,36 @@ test("unsupported feature names throw", async (t) => {
   const { create, root } = await fixture(t)
   assert.throws(() => create(root, "other"), /unsupported feature/)
 })
+
+test("atProject is blocked in a linked worktree of a bare repository, and nothing is written", async (t) => {
+  const { root, create } = await fixture(t)
+  const bare = join(root, "bare.git"), linked = join(root, "linked")
+  execFileSync("git", ["init", "-q", "--bare", bare], { stdio: "pipe" })
+  execFileSync("git", ["-C", bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked], { stdio: "pipe" })
+  const project = create(linked, "pull_requests", { atProject: true })
+  const state = await project.inspect()
+  assert.deepEqual([state.state, state.reason, state.project], ["blocked", "project_root_unavailable", null])
+  assert.equal((await project.preview()).state, "blocked")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true }, "0".repeat(64))).state, "blocked")
+  await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
+  assert.equal((await create(linked).inspect()).project, linked)
+})
+
+test("atProject is blocked when the worktree listing fails in a linked worktree", async (t) => {
+  const { root, create } = await fixture(t)
+  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim()
+  gitIn(root, "init", "-q")
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  const linked = join(root, "linked")
+  gitIn(root, "worktree", "add", "-q", "--detach", linked)
+  const bin = join(root, "bin")
+  await mkdir(bin)
+  await writeFile(join(bin, "git"), `#!/bin/sh\n[ "$1" = worktree ] && exit 129\nexec "${real}" "$@"\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => { process.env.PATH = path })
+  const state = await create(linked, "pull_requests", { atProject: true }).inspect()
+  assert.deepEqual([state.state, state.reason, state.project], ["blocked", "project_root_unavailable", null])
+  assert.equal((await create(linked).inspect()).project, linked)
+  assert.equal((await create(root, "pull_requests", { atProject: true }).inspect()).state, "not_onboarded")
+})

@@ -19,7 +19,10 @@
    show the saved choice and keep it unless the user chooses otherwise. No
    answer is not consent. Stop on cancel.
 3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"pull_requests"}`.
-   Ask **Who merges `[READY]` PRs in this project?** and these choices:
+   If that preview is blocked, explain the fixed reason, skip this question and
+   leave pull request guidance off; for `project_root_unavailable`, say the main
+   checkout could not be found from this worktree and onboarding must run there.
+   Otherwise ask **Who merges `[READY]` PRs in this project?** and these choices:
 
    **I merge them. Agents mark the PR `[READY]` and wait.** — default
 

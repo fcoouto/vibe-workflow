@@ -32,23 +32,28 @@ async function findRoot(directory) {
   const root = await realpath(stdout.replace(/\n$/, ""))
   const below = relative(root, location)
   if (below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below)) throw unsafe()
-  return { root, project: await mainWorktree(git, location).catch(() => null) ?? root }
+  const main = await mainWorktree(git, location)
+  return { root, project: main.project ?? root, unresolved: main.linked && !main.project }
 }
 
 // Settings stay in this checkout, but a linked worktree names its main worktree,
 // listed first, as the project. Bare repositories, submodules and separate Git
-// directories have no main checkout outside Git's own folder.
+// directories have no main checkout outside Git's own folder. A linked worktree whose
+// main checkout cannot be resolved is reported as `unresolved`, so a setting that must
+// come from the main checkout is never taken from the worktree itself.
 async function mainWorktree(git, location) {
-  const [gitDir, commonDir] = (await git("rev-parse", "--absolute-git-dir", "--git-common-dir")).stdout
-    .replace(/\n$/, "").split("\n")
-  const common = await realpath(resolve(location, commonDir))
-  if (await realpath(gitDir) === common) return null
-  const [main] = (await git("worktree", "list", "--porcelain", "-z")).stdout.split("\0\0")
-  const [path, ...attributes] = main.split("\0")
-  if (!path.startsWith("worktree ") || attributes.includes("bare")) return null
-  const project = await realpath(path.slice("worktree ".length))
-  const below = relative(common, project)
-  return below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below) ? project : null
+  try {
+    const [gitDir, commonDir] = (await git("rev-parse", "--absolute-git-dir", "--git-common-dir")).stdout
+      .replace(/\n$/, "").split("\n")
+    const common = await realpath(resolve(location, commonDir))
+    if (await realpath(gitDir) === common) return { linked: false, project: null }
+    const [main] = (await git("worktree", "list", "--porcelain", "-z")).stdout.split("\0\0")
+    const [path, ...attributes] = main.split("\0")
+    if (!path.startsWith("worktree ") || attributes.includes("bare")) return { linked: true, project: null }
+    const project = await realpath(path.slice("worktree ".length))
+    const below = relative(common, project)
+    return { linked: true, project: below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below) ? project : null }
+  } catch { return { linked: true, project: null } }
 }
 
 async function maybeStat(path) {
@@ -159,6 +164,9 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
     discovery ??= findRoot(directory).catch(() => null)
     const found = await discovery
     if (!found) return { state: "blocked", reason: "project_root_unavailable", root: null, project: null, path: null }
+    if (atProject && found.unresolved) {
+      return { state: "blocked", reason: "project_root_unavailable", root: found.root, project: null, path: null }
+    }
     const { project } = found, root = atProject ? project : found.root
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
