@@ -5,6 +5,7 @@ This repository contains only an OpenCode V2 advisory selector. Start with
 Source provenance and the exact extraction inventory live in `docs/dependencies.md`.
 
 - Keep the smallest sufficient change. Reuse the standard library and existing helpers.
+- Keep `README.md` short and limited to what users need. Update it only through the `impeccable` skill.
 - Preserve credentials, native configuration, other plugins, local changes and private evidence.
 - Selection never launches, admits, reserves quota or grants a spend permit.
 - Keep tasks, agent roles, reviews, permissions and execution with the caller.
