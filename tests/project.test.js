@@ -146,6 +146,48 @@ test("worktrees of a bare repository keep their own checkout", async (t) => {
   assert.deepEqual({ own, project }, { own: linked, project: linked })
 })
 
+test("submodules and separate git directories name their own checkout as the project", async (t) => {
+  const { root, create } = await fixture(t)
+  const git = (...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    stdio: "pipe",
+  })
+  const roots = async (directory) => {
+    const { state, root, project } = await create(directory).inspect()
+    return { state, root, project }
+  }
+  const source = join(root, "source"), superproject = join(root, "super"), separate = join(root, "separate")
+  git("init", "-q", source)
+  git("-C", source, "commit", "--allow-empty", "-qm", "fixture")
+  git("init", "-q", superproject)
+  git("-C", superproject, "submodule", "add", "-q", source, "s")
+  const submodule = join(superproject, "s")
+  assert.deepEqual(await roots(submodule), { state: "not_onboarded", root: submodule, project: submodule })
+  git("init", "-q", "--separate-git-dir", join(root, "store.git"), separate)
+  git("-C", separate, "commit", "--allow-empty", "-qm", "fixture")
+  assert.deepEqual(await roots(separate), { state: "not_onboarded", root: separate, project: separate })
+  const linked = join(root, "linked")
+  git("-C", separate, "worktree", "add", "-q", "--detach", linked)
+  assert.deepEqual(await roots(linked), { state: "not_onboarded", root: linked, project: linked })
+})
+
+test("a failing worktree listing keeps the checkout usable", async (t) => {
+  const { root, create } = await fixture(t)
+  const bin = join(root, "bin"), real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim()
+  await mkdir(bin)
+  await writeFile(join(bin, "git"), `#!/bin/sh\n[ "$1" = worktree ] && exit 129\nexec "${real}" "$@"\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => { process.env.PATH = path })
+  const checkout = join(root, "checkout")
+  execFileSync(real, ["init", "-q", checkout], { stdio: "pipe" })
+  await mkdir(join(checkout, ".vibe-workflow"))
+  await writeFile(join(checkout, ".vibe-workflow", "settings.json"), '{"version":1,"features":[{"smart_router":{"enabled":true}}]}')
+  const { state, root: own, project } = await create(checkout).inspect()
+  assert.deepEqual({ state, own, project }, { state: "on", own: checkout, project: checkout })
+})
+
 test("duplicate settings keys block without overwriting, even when escaped", async (t) => {
   const { path, project, write } = await fixture(t)
   for (const original of [

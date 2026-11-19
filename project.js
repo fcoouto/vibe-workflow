@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { lstat, mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises"
-import { isAbsolute, join, relative, sep } from "node:path"
+import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { promisify, TextDecoder } from "node:util"
 
 const exec = promisify(execFile)
@@ -32,12 +32,23 @@ async function findRoot(directory) {
   const root = await realpath(stdout.replace(/\n$/, ""))
   const below = relative(root, location)
   if (below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below)) throw unsafe()
-  // Settings stay in this checkout, but a linked worktree names its main worktree,
-  // listed first, as the project. A bare repository has no main checkout.
+  return { root, project: await mainWorktree(git, location).catch(() => null) ?? root }
+}
+
+// Settings stay in this checkout, but a linked worktree names its main worktree,
+// listed first, as the project. Bare repositories, submodules and separate Git
+// directories have no main checkout outside Git's own folder.
+async function mainWorktree(git, location) {
+  const [gitDir, commonDir] = (await git("rev-parse", "--absolute-git-dir", "--git-common-dir")).stdout
+    .replace(/\n$/, "").split("\n")
+  const common = await realpath(resolve(location, commonDir))
+  if (await realpath(gitDir) === common) return null
   const [main] = (await git("worktree", "list", "--porcelain", "-z")).stdout.split("\0\0")
   const [path, ...attributes] = main.split("\0")
-  if (!path.startsWith("worktree ")) throw unsafe()
-  return { root, project: attributes.includes("bare") ? root : await realpath(path.slice("worktree ".length)) }
+  if (!path.startsWith("worktree ") || attributes.includes("bare")) return null
+  const project = await realpath(path.slice("worktree ".length))
+  const below = relative(common, project)
+  return below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below) ? project : null
 }
 
 async function maybeStat(path) {
