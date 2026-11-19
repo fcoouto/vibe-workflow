@@ -1,99 +1,169 @@
-# Vibe Workflow
+# Smart Router for OpenCode
 
-<img src="assets/logo.png" alt="Vibe Workflow logo: a gold W on a dark rounded square" width="160" height="160">
+An on-demand **advisory selector**, extracted from Vibe Workflow.
+It returns a configured provider, model and effort. It never launches a worker,
+reserves quota, grants spending authority, or changes another plugin's behavior.
 
-[Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit), packaged for your coding agent.
+**Breaking change in 0.4.0:** The slim OpenCode plugin replaces the legacy
+workflow toolkit. It is not an update for legacy Codex or Claude Code installs.
+It does not migrate legacy settings, credentials, or account caches.
 
-**Early development.** Codex has opt-in task controls, read-only diagnostics and shared schema-2 worker/check/review ownership. Recorded [D2](docs/d2-validation.md) and [D5](docs/d5-validation.md) qualification covers bounded CLI/bundled app-server behavior, a controlled Interrupt case, Desktop startup orientation and the earlier D5 lifecycle at their stated versions and pins. It does not qualify the new schema-2 native lifecycle. General guard/continuation turn correlation, other desktop behavior and Claude lifecycle remain unqualified. See the [client contracts](clients/index.md) for local procedures.
+## Requirements
 
-Ordinary editing, checks, review and handoff use the [native workflow](clients/codex.md#startup-behavior) and applicable [shared policies](policies/00-index.md). For explicitly selected managed task controls, read [task runtime](clients/runtime.md); for managed checks, review and completion, load [evidence](clients/evidence.md); for managed worker assignments, load [delegation](clients/delegation.md). Local readiness covers current task evidence and grants no merge authority. D7's [bounded fixture inspector](clients/repository-gate.md) is implemented but always exits 1; production evidence sources, publishing and repository enforcement remain unqualified.
+- OpenCode V2 with server tool transforms and the session context hook.
+- Git for project discovery, even in folders that are not Git repositories.
+- Python 3.11+ on macOS or Linux. No Python or npm dependencies.
+- For the Claude path only, the existing native Claude CLI login.
 
-Enable [Workstreams](skills/workstreams/SKILL.md) during project onboarding or ask
-the skill to **enable**, **disable** or show **status** for this project. Both use
-one saved Enabled/Disabled choice in `.vibe-workflow/settings.json` ([feature settings](clients/features.md)). Enabled automatically
-uses suitable native child work; small tasks can stay with the coordinator. This
-choice needs no runtime database or separate activation. Resource admission and
-capacity recovery keep their separate advanced controls and prerequisites.
-[Thread Naming](clients/workstreams-naming.md) starts automatically with
-implementation, including solo work, independently of delegation and these
-features. Question-only and planning chats stay untouched. Manual-title overrides
-remain protected. See the [main-runtime boundary](docs/workstreams-main-port.md).
+Downloading the package does not install or activate it.
+No credentials, strategy rows, account history or trial evidence are included.
 
-Use [Review my Project](skills/review-my-project/SKILL.md) to review selected repositories against their own project rules. It runs only the local checks it can confirm are safe and returns findings in chat; it needs no enrollment or database, and it never installs tools or applies fixes without your separate approval.
+## Install later
 
-Use the separate [Manage Observability Integration](skills/manage-observability/SKILL.md) skill for optional observability requests. Langfuse is the first provider; exports are metrics-only and collection stays off. Connection controls use the current canonical checkout and private consent; local task preparation uses current task states. Required local evidence stays intact. Native collection and live execution remain separately qualified; see the [port boundary](docs/d9-observability-preparation.md#selective-port-to-current-main).
+After choosing to install, add the export directory to the existing `plugins`
+array in `opencode.jsonc`. Preserve every other entry and setting.
 
-Observability activation stays outside project onboarding; successful onboarding may propose the separate skill as an optional follow-up.
-
-Use [Manage API Usage](skills/manage-usage-routing/SKILL.md) for OpenAI credit
-usage, spending limits and opt-in
-API proposals in enrolled Codex checkouts. Routing defaults to OFF.
-
-To opt in, open the project checkout in Codex and ask **“Enable API Usage for
-this project.”** Existing compatible account setup is reused. If several setups
-apply, select one; connect an OpenAI project key only when a new connection is
-needed. Each checkout needs its own activation. The API project is separate from
-your local repository. Activation saves the task scope and funding policy,
-including any spending caps you choose, and is the only approval: the agent then
-routes eligible tasks to the API on its own, including the checkout's
-task-relevant files. Each live request checks funding, budget and independent
-review. Ask **“Disable API Usage for this project”** to stop new requests.
-
-See the [routing controls](skills/manage-usage-routing/references/procedure.md)
-and the [optional comparison template](docs/superpowers/specs/2026-10-31-usage-routing-design.md#paired-comparison-template).
-
-Smart Routing, which picks every worker's and reviewer's model on your
-subscriptions, is off until you turn it on for a project on this machine: see
-[Smart Routing for a project](skills/manage-usage-routing/references/smart-routing.md).
-
-## Prepare your Workspace
-
-Open this checkout in a coding agent with terminal access to the destination machine:
-
-```text
-Read skills/prepare-my-workspace/SKILL.md and use it to prepare this machine.
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    { "package": "/absolute/path/to/export" }
+  ]
+}
 ```
 
-For Codex releases, register the Git-backed marketplace:
+Do not copy `index.js` alone: its Python runtime and configuration manifest must
+remain beside it. To unload, remove only this package's entry. OpenCode reloads
+configuration changes; no background service restart is needed.
 
-```sh
-codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref codex/marketplace-release
+### Onboard a project
+
+Once the plugin is loaded, ask in the project's OpenCode chat:
+**“Use `vibe-onboard-project` to onboard this project.”**
+The `vibe-onboard-project` skill and `vibe_workflow_onboard` tool show the
+detected checkout, ask about Smart Router, and preview the settings change.
+Confirm the preview before saving. Native edit permissions still apply.
+
+The project choice lives in `.vibe-workflow/settings.json` at the checkout root:
+
+```json
+{"version": 1, "smart_router": {"enabled": true}}
 ```
 
-In Codex Desktop, select **Vibe Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
+New proposals default to ON. Repeat onboarding preserves a saved choice unless
+you change it. Choose **Keep existing model selection** to opt out. This
+portable file contains only project preferences; native credentials, strategy
+configuration and account caches stay separate. Onboarding does not install
+anything, change client configuration or create a strategy table.
 
-For local plugin testing, install a clean export as described in [Development](#development), in a separate Codex profile. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
+For ON projects, additive chat context asks callers to consult
+`smart_router_select` before delegating. If no recommendation is available,
+the caller should show the `vibe-workflow` notice and keep the client's existing
+selection. The plugin does not replace `subagent`, agent roles, permissions,
+models or retries. This is advisory guidance, not enforced model behavior.
 
-For Claude Code local testing without installing, launch `claude --plugin-dir .` from this checkout; it loads the folder in place and copies nothing into a cache. See the [Claude Code contract](clients/claude-code.md) for loading and qualification.
+## Configure explicitly
 
-## Enroll a project
+State defaults to `${XDG_STATE_HOME:-~/.local/state}/vibe-workflow/smart-router`.
+An optional plugin `options.state_dir` must be an absolute canonical path.
+Use private directories (`0700`) and files (`0600`), without symlinks or hardlinks.
+The selector never reads legacy `routing/` or `usage/` state.
 
-For an explicitly selected existing project, use [onboard-my-project](skills/onboard-my-project/SKILL.md) to prepare a private plan, apply authorized configuration, activate qualified managed behavior, or undo owned changes. Configuration completes independently of runtime creation and native qualification. Canonical operations use the verified coordinator entry; the JSON CLI is for retained schema-1 requests. See [application and recovery](skills/onboard-my-project/references/apply-and-recovery.md). Package validation and actual client execution remain separate.
+Copy the two examples into that directory as `router.json` and
+`strategy-table.json`. They deliberately start **disabled and empty**.
+Missing/disabled configuration or empty rows produce no selection without
+starting a native reader or creating state.
+Onboarding reports **On · Setup needed** in that case. **On · Ready** means
+local configuration passed inspection, not that a route is eligible or an
+account is available. Eligibility is checked when the caller requests a route.
 
-Every onboarded repository follows [checkout stability](policies/02-task-planning.md#planning-and-verification): keep the primary checkout on its designated branch and use task worktrees. Native observations detect drift; this is not a Git hook or enforced sandbox. Existing installations need an authorized plugin/project update to reconcile old pointers and branch-only choices; no automatic fleet migration or active-session update occurs.
+To enable later, set `enabled: true`, choose path IDs from `config/routes.json`,
+and supply independently verified native provider/model/effort/harness identities
+in the table. The strategy table's `version` must be an integer from 1 to
+2147483647. This example uses invented names, not a usable route:
+
+```json
+{
+  "schema": 2,
+  "version": 1,
+  "rows": {
+    "review|high|high": [
+      {
+        "strategy_id": "example-review",
+        "provider": "claude-agent",
+        "model": "replace-with-native-model-id",
+        "effort": "replace-with-native-effort",
+        "harness": "claude-agent-sdk via opencode"
+      }
+    ]
+  }
+}
+```
+
+Rows are ordered preferences, not evidence of entitlement. Optional
+`context_limit` is a token count. Caller constraints only narrow the rows.
+Without profile bands, classification uses high complexity, high risk and
+independent review. Supported work kinds: implementation, review, investigation,
+planning, testing and writing.
+
+```json
+{"v": 1, "work_kind": "review"}
+```
+
+Optional `profile` fields: `complexity_band`, `risk_band` (low/medium/high/critical),
+`review_policy` (none/self/independent/strict), `context_tokens`, `tools`, and
+`uncertainty` (low/medium/high). Optional `constraints` fields: `allowed_models`,
+`excluded_models`, `allowed_efforts`, `allowed_harnesses`, `allowed_strategy_ids`.
+The tool accepts no credentials, observations, commands or execution requests.
+
+## What selection proves
+
+Only a current, account-bound `provider_blocked` paid-overflow fact permits a
+selected result. `provider_managed` and `unknown` are excluded, never relabeled.
+Current ChatGPT and Go readers do not prove blocked overflow, so those paths
+normally remain unselected. The Claude reader can prove it only when native
+metadata explicitly reports extra usage disabled.
+
+Results have `state: selected`, `no_selection` or `blocked`, and always:
+
+```json
+{"admission": false, "reservation": false, "spend_permit": false}
+```
+
+Only `selected` carries a non-null `route`, with exact `provider`, `model`, and
+`effort`. A choice is not a permit, billing receipt, resolved SKU, entitlement
+check or proof of production safety. Native execution must independently honor
+the account, permissions and requested model.
+
+Readers reuse native credentials in memory; they never copy them into state.
+Facts expire after 900 seconds. Only positive, account-bound exhaustion observed
+within 60 seconds excludes a route; unknown quota is not invented headroom.
+Explicit zero-utilization/null-reset idle meters create no window or reset.
+Acquisition runs on demand, with bounded transports, private caches, generation
+fences and 300-second failure backoff. No polling, daemon, model probe or provider
+retry is added. Native metadata readers may contact their providers without
+inference; global native configuration remains a documented upstream boundary,
+not a sandbox provided by this plugin.
+
+To pause selection, set `router.json`'s `enabled` to `false`. State and credentials
+remain untouched. To remove the plugin, unload its registration; deleting native
+credentials or legacy workflow state is neither required nor recommended.
 
 ## Development
 
-Requires Git and Python 3.11+ on macOS or Linux. There is no package manager, linter or CI.
+Run from the source checkout:
 
-Install the plugin for both clients from a clean export of this checkout, never from the checkout itself:
-
-```text
-python3 -B scripts/package.py
-codex plugin marketplace add ~/.cache/vibe-workflow/dev-package
-codex plugin add vibe-workflow@vibe-workflow-local
-claude plugin marketplace add ~/.cache/vibe-workflow/dev-package
-claude plugin install vibe-workflow@vibe-workflow-local
+```sh
+python3 -B -m unittest discover -s tests
+node --test tests/*.test.js
+python3 -B scripts/validate.py
+python3 -B scripts/package.py --output dist
+python3 -B scripts/validate.py --root dist
 ```
 
-Clients copy the whole source folder, including ignored local files and Git history, so the export holds only tracked files (stage new files first) and leaves out `tests/` and its runner `scripts/test_sharded.py`, which nothing installed uses; evidence links from `docs/` into `tests/` resolve only in a checkout. Each run replaces the previous build and passes package validation. `--prune-caches` also removes cached copies no client still uses; with `--dry-run` it lists them instead, while the build still runs. A project whose instructions link into a removed cached copy needs onboarding again.
-
-Start a new session in each client afterwards. To refresh after changes, rerun `python3 -B scripts/package.py`. Claude Code runs a folder marketplace's plugin from the folder itself, so its new sessions use the rebuild. Codex keeps its own copy: run `codex plugin remove` then `add`, and approve the changed hooks.
-
-To publish a release to the Codex Git marketplace, follow [Publish a release](docs/release.md).
-
-Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and the tests that the [development guide](docs/development.md#checks) selects for a change. `python3 -B scripts/test_sharded.py <module-or-glob>...` runs selected test modules in parallel; without names it runs the full suite, which `python3 -B -m unittest discover -s tests` runs serially. None of these establishes live client behavior.
-
-Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
-
-[Development guide](docs/development.md)
+`dist/` itself is the installable package root; no nested package directory is needed.
+The output path must not already exist. Choose a new path for another export;
+the builder never replaces an existing directory. The explicit allowlist excludes
+tests, development instructions, legacy adapters, legacy skills, policies, and
+private state. It includes the `vibe-onboard-project` skill.
+See `docs/dependencies.md` for source provenance and the exact extraction inventory.

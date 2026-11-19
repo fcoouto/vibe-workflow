@@ -49,8 +49,7 @@ import selectors
 import subprocess
 import time
 
-from runtime import codex_rate_limits as lifecycle, routing, routing_observations as observations, routing_paths, \
-    usage_budget
+from runtime import processes as lifecycle, routing, routing_observations as observations, routing_paths, storage
 
 PATH = 'claude-native-subscription'
 POOL = 'claude-subscription'
@@ -222,7 +221,7 @@ def parse_account(init, use):
     other source) nor an `apiKeySource` (a key). The subscription type is the normalized one of the same exchange's
     usage answer: initialization carries only the user-visible plan label ("Claude Max"), which is never matched."""
     key = parse_identity(init, use)
-    from runtime.adapters import native_catalog
+    from runtime import native_catalog
     models = native_catalog.from_claude_initialize(init)
     version = init.get('claude_code_version')
     if not models or not routing._text(version):
@@ -298,10 +297,14 @@ def _repeats(item, meters):
     """Whether an unscoped raw `limits` item only repeats a parsed meter: the same reset (within the cache ceiling)
     and the same percent (within one point). Anything else is a constraint this reader does not model."""
     try:
-        percent, reset = _percent(item.get('percent')), _time(item.get('resets_at'))
+        percent, reset = _percent(item.get('percent')), item.get('resets_at')
+        if percent == 0 and 'resets_at' in item and reset is None:
+            return (0, None) in meters.values()
+        reset = _time(reset)
     except ReadError:
         return False
-    return any(abs(percent - used) <= 1 and abs(reset - at) <= CACHE_CEILING for used, at in meters.values())
+    return any(at is not None and abs(percent - used) <= 1 and abs(reset - at) <= CACHE_CEILING
+               for used, at in meters.values())
 
 
 def parse_usage(use, started, now):
@@ -328,7 +331,10 @@ def parse_usage(use, started, now):
             raise ReadError('claude_window_missing')
         if type(meter) is not dict:
             raise ReadError('claude_usage_invalid')
-        meters[window] = (_percent(meter.get('utilization')), _time(meter.get('resets_at')))
+        percent, reset = _percent(meter.get('utilization')), meter.get('resets_at')
+        if not (percent == 0 and 'resets_at' in meter and reset is None):
+            reset = _time(reset)
+        meters[window] = percent, reset
     limits = rate.get('limits')
     if type(limits) is list:
         for item in limits:
@@ -348,6 +354,8 @@ def parse_usage(use, started, now):
     found = []
     for key, window in METERS.items():
         percent, reset = meters[window]
+        if reset is None:
+            continue  # an explicitly unused meter has no evidenced window boundary
         length = observations.RATE_WINDOWS[key][1]
         if not now < reset <= now + length + observations.CLOCK_MARGIN:
             raise ReadError('claude_usage_invalid')
@@ -355,7 +363,7 @@ def parse_usage(use, started, now):
                           used=min(observations.WINDOW_UNITS, math.ceil(percent * observations.WINDOW_UNITS / 100
                                                                         - 1e-9)),
                           unit=observations.WINDOW_UNIT, observed_at=observed))
-    return found, overflow
+    return (found if len(found) == len(METERS) else []), overflow
 
 
 MAX_SCOPES = 8  # more model-scoped limits than this name no model: every Claude route is quota-unknown
@@ -401,7 +409,7 @@ def scope_state(settings_path, route, now):
     """How the current account's model-scoped limits bear on `route` (user decision 2026-11-16: scope by model):
     None when none names its model (the account-wide windows hold), 'exhausted' when one names it at 100% with its
     reset ahead, else 'scoped' (one names it, or one names no catalog model: quota unknown for every Claude route)."""
-    from runtime.adapters import native_catalog
+    from runtime import native_catalog
     scoped = (account(settings_path, now) or {}).get('scoped') or []
     if not scoped:
         return None
@@ -646,7 +654,7 @@ def _expect(key, generation, change):
 def _fresh(settings_path, need, now):
     """Whether the required metadata is current (the account and the catalog snapshot bound to the client's current
     binding, whatever the quota state) and then each demanded window (none with `need=()`) has a fresh reading."""
-    from runtime.adapters import native_catalog
+    from runtime import native_catalog
     snapshot = native_catalog.stored(settings_path, CLIENT)
     current = native_catalog._binding(settings_path, CLIENT)
     if account(settings_path, now) is None or snapshot is None or type(current) is not dict \
@@ -667,7 +675,7 @@ def _record(settings_path, init, use, started, held):
     bound to it; the complete account; and only after every row is stored, the confirmed exchange. A usage problem
     still records the account and catalog, with no confirmed exchange, so no earlier row stays usable. Rows are bound
     to the key and generation, so another account's or generation's rows never match; nothing earlier is re-dated."""
-    from runtime.adapters import native_catalog
+    from runtime import native_catalog
     key = parse_identity(init, use)
     check_quiet(use)
     _transition(settings_path, _observe(key, held))  # recorded before the catalog can refuse the exchange
@@ -754,6 +762,5 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             return dict(state='stored', windows=[item['id'] for item in windows])
     except ReadError as error:
         return dict(state='failed', reason=str(error))
-    except (OSError, ValueError, usage_budget.BudgetError):
+    except (OSError, ValueError, storage.StorageError):
         return dict(state='failed', reason='observation_store_invalid')
-

@@ -1,318 +1,78 @@
 #!/usr/bin/env python3
-"""Check this plugin's metadata, local paths, and instruction budget; no network."""
-
-import hashlib
+"""Validate the thin package boundary without network, native readers or inference."""
+import argparse
+import ast
 import json
 from pathlib import Path
 import re
 import sys
-import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest import FILES, RUNTIME
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-# Long files cost agents context to read. Files that were already over the limit
-# when this check was added keep their size at that time as a ceiling until they are
-# split. Lower an entry when a file shrinks and remove it once the file is under the
-# limit; do not add entries or raise them.
-MAX_PYTHON_LINES = 1000
-SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
-OVERSIZED_PYTHON = {
-    "runtime/adapters/codex.py": 1464,
-    "runtime/changes.py": 6073,
-    "runtime/delegation.py": 3339,
-    "runtime/evidence.py": 8505,
-    "runtime/onboarding.py": 2620,
-    "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1415,
-    "runtime/setup_observation.py": 1416,
-    "runtime/startup.py": 1515,
-    "runtime/state.py": 2607,
-    "runtime/usage_budget.py": 1467,
-}
 
 
-def read_json(path):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def local_file(root, value):
-    if not isinstance(value, str) or not value.startswith("./"):
-        raise ValueError("Package paths must start with ./")
-    path = (root / value).resolve(strict=True)
-    if not path.is_relative_to(root) or not path.is_file():
-        raise ValueError("Referenced file must stay inside the plugin")
-    return path
-
-
-def validate_receiver_patch(root, name, provenance):
-    patch = local_file(root, f"./assets/habblaud/{name}.patch").read_bytes()
-    if provenance.get("patch_sha256") != hashlib.sha256(patch).hexdigest():
-        raise ValueError(f"Bundled {name} patch digest differs from its provenance")
-    files = re.findall(r"^diff --git a/(\S+) b/\S+$", patch.decode("utf-8"), re.MULTILINE)
-    if not files or provenance.get("files") != files:
-        raise ValueError(f"Bundled {name} patch inventory differs from its provenance")
-
-
-def validate_startup_hook(root, manifest, client, root_variable):
-    hook_file = local_file(root, manifest["hooks"])
-    hooks = read_json(hook_file)["hooks"]
-    if set(hooks) != {"SessionStart"} or len(hooks["SessionStart"]) != 1:
-        raise ValueError("Require one startup hook group per client")
-    group = hooks["SessionStart"][0]
-    if group.get("matcher") != "^(startup|resume|clear|compact|fork)$" or len(group["hooks"]) != 1:
-        raise ValueError("Register each supported startup source once")
-    handler = group["hooks"][0]
-    command = f'python3 -I -B "${{{root_variable}}}/scripts/workflow.py" {client} SessionStart'
-    if handler != {"type": "command", "command": command, "timeout": 5}:
-        raise ValueError("Use the bounded, silent native startup command")
-    local_file(root, "./clients/" + client + ".md")
-    local_file(root, "./runtime/adapters/" + client.replace("-", "_") + ".py")
-
-
-def validate_codex_hooks(root, manifest):
-    hooks = read_json(local_file(root, manifest["hooks"]))["hooks"]
-    events = {
-        "SessionStart": ("^(startup|resume|clear|compact|fork)$", 5),
-        "PreToolUse": ("^apply_patch$", 5),
-        "PostToolUse": ("*", 5),
-        "Stop": (None, 5),
-        "Interrupt": (None, 1),
-    }
-    if set(hooks) != set(events):
-        raise ValueError("Require the supported Codex hook events exactly once")
-    for event, (matcher, timeout) in events.items():
-        groups = hooks[event]
-        if not isinstance(groups, list) or len(groups) != 1:
-            raise ValueError("Register one Codex hook group per event")
-        group = groups[0]
-        expected_group = {"hooks"} if matcher is None else {"matcher", "hooks"}
-        if not isinstance(group, dict) or set(group) != expected_group or group.get("matcher") != matcher:
-            raise ValueError("Use the required Codex event matcher")
-        command = f'python3 -I -B "${{PLUGIN_ROOT}}/scripts/workflow.py" codex {event}'
-        if group["hooks"] != [{"type": "command", "command": command, "timeout": timeout}]:
-            raise ValueError("Use the bounded Codex runtime command")
-
-
-def package_export(root, deadline=None):
-    """Measure what scripts/package.py exports from root against the Codex bundle scan's limits."""
-    from runtime import package_manifest as limits
-    usage = limits.export_usage(root, deadline=deadline)
-    if usage["excluded"]:
-        raise ValueError(f"Package export contains development-only paths: {usage['excluded'][0]}")
-    if usage["bytes"] >= limits.PACKAGE_SCAN_MAX_BYTES:
-        raise ValueError(f"Package export has {usage['bytes']} bytes; the bundle scan reads fewer than "
-                         f"{limits.PACKAGE_SCAN_MAX_BYTES}")
-    if usage["scan_paths"] > limits.PACKAGE_SCAN_MAX_PATHS:
-        raise ValueError(f"Package export needs {usage['scan_paths']} scan paths; limit is {limits.PACKAGE_SCAN_MAX_PATHS}")
-    if usage["largest_bytes"] > limits.PACKAGE_SCAN_MAX_FILE:
-        raise ValueError(f"{usage['largest_file']} has {usage['largest_bytes']} bytes; "
-                         f"the bundle scan reads at most {limits.PACKAGE_SCAN_MAX_FILE} per file")
-    warnings = []
-    if usage["bytes"] * 4 >= limits.PACKAGE_SCAN_MAX_BYTES * 3:
-        warnings.append(f"Package export uses {usage['bytes']} of {limits.PACKAGE_SCAN_MAX_BYTES} bundle scan bytes "
-                        f"(at least 75%); largest file: {usage['largest_file']}")
-    return {"files": usage["files"], "directories": usage["directories"], "bytes": usage["bytes"],
-            "scan_paths": usage["scan_paths"], "largest_file": usage["largest_file"],
-            "largest_bytes": usage["largest_bytes"], "max_bytes": limits.PACKAGE_SCAN_MAX_BYTES,
-            "max_paths": limits.PACKAGE_SCAN_MAX_PATHS, "max_file_bytes": limits.PACKAGE_SCAN_MAX_FILE,
-            "warnings": warnings}
-
-
-def validate(root=ROOT):
-    root = root.resolve(strict=True)
-    manifest = read_json(root / ".codex-plugin/plugin.json")
-    if (root / "plugin.json").exists():
-        raise ValueError("A root manifest hides hooks in the qualified Codex versions")
-    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", manifest["name"]):
-        raise ValueError("Use a lowercase, hyphenated plugin name")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]):
-        raise ValueError("Set a numeric major.minor.patch package version")
-    if not isinstance(manifest["description"], str) or not manifest["description"].strip():
-        raise ValueError("Provide a plugin description")
-    extension = manifest["extensions"]["com.openai"]
-    onboarding = local_file(root, extension["onboardingSkill"])
-    claude = read_json(root / ".claude-plugin/plugin.json")
-    if any(claude.get(key) != manifest[key] for key in ("name", "version", "description")):
-        raise ValueError("Client manifests must identify the same package version")
-    if (root / "hooks/hooks.json").exists():
-        raise ValueError("Default hooks would duplicate Claude's explicit registration")
-    local_file(root, "./clients/codex.md")
-    local_file(root, "./runtime/adapters/codex.py")
-    from scripts.read_instructions import instruction_name, source_entry, source_path
-    local_file(root, "./scripts/read_instructions.py")
-    local_file(root, "./scripts/drain_instructions.js")
-    for path in sorted([*(root / "clients").glob("*.md"), *(root / "policies").glob("*.md"),
-                        *(root / "templates").rglob("*.md"), *(root / "skills").rglob("*.md")]):
-        name = path.relative_to(root).as_posix()
-        if not instruction_name(name):
-            raise ValueError(f"Invalid instruction source name: {name}")
-        source_entry(source_path(root, name).read_bytes(), name)
-    from runtime import task_profile
-    drift = task_profile.brief_drift(root)  # the worker brief's generated Task Profile section
-    if drift:
-        raise ValueError("; ".join(drift))
-    validate_codex_hooks(root, manifest)
-    validate_startup_hook(root, claude, "claude-code", "CLAUDE_PLUGIN_ROOT")
-    receiver = read_json(local_file(root, "./assets/habblaud/receiver.json"))
-    local_file(root, "./assets/habblaud/LICENSE")
-    upgrade = receiver.get("upgrade")
-    if (receiver.get("version") != 1 or not isinstance(upgrade, dict)
-            or not re.fullmatch(r"[a-f0-9]{64}", str(upgrade.get("from_patch_sha256")))
-            or upgrade["from_patch_sha256"] == receiver.get("patch_sha256")):
-        raise ValueError("Invalid receiver upgrade provenance")
-    validate_receiver_patch(root, "receiver", receiver)
-    validate_receiver_patch(root, "receiver-upgrade", upgrade)
-    for path in ("scripts/workflow.py", "runtime/__init__.py", "runtime/startup.py",
-                 "runtime/engine.py", "runtime/state.py", "runtime/doctor.py", "runtime/evidence.py",
-                 "runtime/adapters/__init__.py", "runtime/adapters/session_start.py",
-                 "clients/index.md", "clients/startup.md", "clients/runtime.md", "clients/evidence.md", "policies/00-index.md",
-                 "runtime/onboarding.py", "runtime/changes.py", "scripts/onboard_coordinator.py",
-                 "runtime/recovery_uses.py", "runtime/resource_accounting.py", "runtime/closure_witness.py",
-                 "runtime/review_storage.py", "runtime/screening.py",
-                 "runtime/delegation.py", "clients/delegation.md", "runtime/repository_gate.py",
-                 "runtime/worker_visibility.py", "runtime/habblaud.py", "scripts/worker_visibility.py", "clients/worker-visibility.md",
-                 "clients/habblaud-receiver.md",
-                 "scripts/repository_gate.py", "clients/repository-gate.md",
-                 "scripts/routing.py", "runtime/routing_routes.json", "runtime/native_routing.py",
-                 "runtime/opencode_account.py", "runtime/routing_activation.py", "scripts/opencode_launch.py",
-                 "runtime/adapters/opencode_plugin.ts", "runtime/startup_routing.py", "runtime/quota_recheck.py", "clients/opencode-launch.md", "clients/codex-sandbox.md",
-                 "skills/onboard-my-project/SKILL.md",
-                 "skills/onboard-my-project/references/procedure.md",
-                 "skills/onboard-my-project/references/apply-and-recovery.md",
-                 "skills/onboard-my-project/agents/openai.yaml",
-                 "clients/harness-evaluation.md", "scripts/validate-harness.mjs",
-                 "assets/harness-evaluation/LICENSE", "assets/harness-evaluation/cases.md",
-                 "assets/harness-evaluation/boundary/AGENTS.md",
-                 "assets/harness-evaluation/boundary/access.mjs",
-                 "assets/harness-evaluation/boundary/local-notes.txt",
-                 "assets/harness-evaluation/phase-two/minimal/input/README.md",
-                 "assets/harness-evaluation/phase-two/minimal/input/AGENTS.md",
-                 "assets/harness-evaluation/phase-two/minimal/input/arithmetic.py",
-                 "assets/harness-evaluation/phase-two/minimal/input/check.py",
-                 "assets/harness-evaluation/phase-two/minimal/expected-final/README.md",
-                 "assets/harness-evaluation/phase-two/minimal/expected-final/AGENTS.md",
-                 "assets/harness-evaluation/phase-two/customized/input/README.md",
-                 "assets/harness-evaluation/phase-two/customized/input/AGENTS.md",
-                 "assets/harness-evaluation/phase-two/customized/input/check.py",
-                 "assets/harness-evaluation/phase-two/customized/input/handbook/overview.md",
-                 "assets/harness-evaluation/phase-two/customized/input/handbook/engineering.md",
-                 "assets/harness-evaluation/phase-two/customized/input/handbook/ARCHITECTURE.md",
-                 "assets/harness-evaluation/phase-two/customized/input/src/AGENTS.md",
-                 "assets/harness-evaluation/phase-two/customized/input/src/cleaning.py",
-                 "assets/harness-evaluation/phase-two/customized/expected-after-partial-undo/handbook/engineering.md"):
-        local_file(root, "./" + path)
-    if manifest.get("skills") != "./skills/":
-        raise ValueError("Discover the packaged skills directory")
-    skills = sorted((root / "skills").glob("*/SKILL.md"))
-    if onboarding not in [path.resolve() for path in skills]:
-        raise ValueError("Onboarding must reference a packaged skill")
-
-    counts = {}
-    for path in skills:
-        text = path.read_text(encoding="utf-8")
-        parts = text.split("---\n", 2)
-        if len(parts) != 3 or parts[0]:
-            raise ValueError(f"Missing skill frontmatter: {path.parent.name}")
-        metadata = {}
-        for line in parts[1].splitlines():
-            key, separator, value = line.partition(":")
-            if not separator or key in metadata or not value.strip():
-                raise ValueError("Use distinct, nonempty single-line metadata fields")
-            metadata[key] = value.strip()
-        if set(metadata) != {"name", "description"} or metadata["name"] != path.parent.name:
-            raise ValueError("Skill metadata must name its containing directory")
-        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", metadata["name"]):
-            raise ValueError("Use a lowercase, hyphenated skill name")
-        count = len(text.split())
-        if count > 150:
-            raise ValueError(f"{path.parent.name} has {count} words; limit is 150")
-        counts[path.parent.name] = count
-
-    for path in sorted(root.rglob("*.py")):
-        relative = path.relative_to(root)
-        if any(part.startswith(".") or part in SKIPPED_DIRECTORIES for part in relative.parts):
-            continue
-        lines = len(path.read_text(encoding="utf-8").splitlines())
-        limit = OVERSIZED_PYTHON.get(relative.as_posix(), MAX_PYTHON_LINES)
-        if lines > limit:
-            raise ValueError(f"{relative} has {lines} lines; limit is {limit}")
-
-    market = read_json(root / ".agents/plugins/marketplace.json")
-    entries = [item for item in market["plugins"] if item["name"] == manifest["name"]]
-    if len(entries) != 1 or entries[0]["source"] != {"source": "local", "path": "./"}:
-        raise ValueError("Local marketplace must reference this package root once")
-    export = package_export(root)
-    from runtime import model_names  # the user's compiled table names the models; none there means not_checked
-    return {"package": manifest["name"], "validation": "passed", "skill_words": counts,
-            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked",
-            "model_names": model_names.check(root)}
-
-
-def release_pathspecs():
-    """The paths a release ships: everything tracked except what scripts/package.py leaves out."""
-    from runtime.package_manifest import EXCLUDED
-    return [".", *[f":(exclude){item.rstrip('/')}" for item in EXCLUDED]]
-
-
-def _tracked_changes(root, *revisions):
-    """Shipped paths that differ between the revisions (the working tree against HEAD for none or one)."""
-    from runtime.package_manifest import PackageManifestError, _git
-    try:
-        output = _git(root, "diff", "--name-only", "-z", *revisions, "--", *release_pathspecs(), deadline=time.monotonic() + 60)
-    except PackageManifestError:
-        raise ValueError("Release check: cannot compare shipped content with Git; run it inside the repository") from None
-    return [name for name in output.decode("utf-8", "replace").split("\0") if name]
-
-
-def _listed(names):
-    return ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
-
-
-def release_check(root=ROOT):
-    """Fail when shipped paths have uncommitted changes, or the package version is already a release tag and
-    HEAD's shipped content differs from that tag.
-
-    A version without a tag is unreleased and passes. The comparison is HEAD against the tag, which is what
-    `scripts/package.py --release` ships, limited to the paths it exports, so development-only changes need no
-    version bump."""
-    from runtime.package_manifest import PackageManifestError, _git
+def validate(root, exported=False):
     root = Path(root).resolve(strict=True)
-    version = read_json(root / ".codex-plugin/plugin.json")["version"]
-    uncommitted = _tracked_changes(root, "HEAD")
-    if uncommitted:
-        raise ValueError(f"Shipped paths have uncommitted changes ({_listed(uncommitted)}); commit them first, "
-                         "because a release ships the committed tree")
-    try:
-        tags = _git(root, "tag", "--list", version, deadline=time.monotonic() + 60).decode("utf-8").split()
-    except (PackageManifestError, UnicodeDecodeError):
-        raise ValueError("Release check: cannot read this checkout's Git tags; run it inside the repository") from None
-    if version not in tags:
-        return {"release_tag": "absent", "version": version}
-    changed = _tracked_changes(root, f"refs/tags/{version}", "HEAD")
-    if changed:
-        raise ValueError(f"Version {version} is already released as a tag, but shipped content changed since "
-                         f"({_listed(changed)}); raise the version in both plugin manifests before releasing")
-    return {"release_tag": "unchanged", "version": version}
+    if exported:
+        actual = {p.relative_to(root).as_posix() for p in root.rglob("*") if not p.is_dir()}
+        if actual != set(FILES):
+            raise ValueError("export_inventory_invalid")
+    for name in FILES:
+        path = root / name
+        if not path.is_file() or path.is_symlink() or path.resolve() != path or path.stat().st_size > 1 << 20:
+            raise ValueError("package_path_invalid")
+        if path.suffix not in (".py", ".js", ".json", ".md"):
+            continue
+        text = path.read_text()
+        if re.search(r"/Users/[^/]+/|/home/[^/]+/|[A-Z]:\\\\Users\\\\", text):
+            raise ValueError("machine_path_in_export")
+        if path.suffix == ".py":
+            tree = ast.parse(text)
+            if len(text.splitlines()) > 1000:
+                raise ValueError("module_too_large")
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        raise ValueError("relative_import_invalid")
+                    modules = [node.module]
+                    if node.module == "runtime":
+                        modules = ["runtime." + alias.name for alias in node.names]
+                else:
+                    continue
+                for module in modules:
+                    if module.startswith("runtime."):
+                        if module.split(".")[1:] not in [[item] for item in RUNTIME]:
+                            raise ValueError("local_import_outside_package")
+                    elif module.split(".")[0] not in sys.stdlib_module_names:
+                        raise ValueError("third_party_import")
+        elif path.suffix == ".json":
+            json.loads(text)
+    package = json.loads((root / "package.json").read_text())
+    if package.get("dependencies") or package.get("exports") != {".": "./index.js"}:
+        raise ValueError("plugin_metadata_invalid")
+    if json.loads((root / "config/router.example.json").read_text()) != dict(version=1, enabled=False, paths=[]):
+        raise ValueError("example_must_be_disabled")
+    if json.loads((root / "config/strategy-table.example.json").read_text()).get("rows") != {}:
+        raise ValueError("example_must_be_empty")
+    return len(FILES), sum((root / name).stat().st_size for name in FILES)
 
 
-def main(arguments):
-    if arguments not in ([], ["--release"]):
-        print("Usage: validate.py [--release]", file=sys.stderr)
-        return 2
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path)
+    args = parser.parse_args()
     try:
-        report = validate()
-        if arguments:
-            report["release_check"] = release_check()
-        for warning in report["warnings"]:
-            print(f"Validation warning: {warning}", file=sys.stderr)
-        print(json.dumps(report, indent=2))
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        print(f"Validation failed: {error}", file=sys.stderr)
+        count, size = validate(args.root or ROOT, exported=args.root is not None)
+    except (OSError, ValueError, SyntaxError):
+        print("validation: failed (package contract)", file=sys.stderr)
         return 1
+    print(f"validation: passed ({count} files, {size} bytes); native client execution not checked")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

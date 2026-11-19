@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "paths": [
+    {"path": "opencode-claude-subscription", "provider": "claude-agent", "harness": "claude-agent-sdk via opencode", "billing_class": "included_subscription", "account": "claude-plan", "pool": "claude-subscription", "windows": ["5h", "7d"], "window_unit": "utilization_thousandths"},
+    {"path": "opencode-chatgpt-subscription", "provider": "openai", "harness": "opencode provider openai", "billing_class": "included_subscription", "account": "chatgpt-plan", "pool": "chatgpt-subscription", "windows": ["7d"], "window_unit": "utilization_thousandths"},
+    {"path": "opencode-go-subscription", "provider": "opencode-go", "harness": "opencode provider opencode-go", "billing_class": "included_subscription", "account": "opencode-go-workspace", "pool": "opencode-go-subscription", "windows": ["rolling", "weekly", "monthly"], "window_unit": "utilization_thousandths", "demand_scope": "per_model"}
+  ]
+}

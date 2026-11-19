@@ -229,3 +229,6 @@ __marimo__/
 
 # Generated local code map
 /graphify-out/
+
+# Private extraction evidence; never packaged
+/.superpowers/

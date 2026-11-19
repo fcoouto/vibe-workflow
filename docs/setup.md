@@ -1,96 +1,71 @@
-# Setup record
-
-Project: `vibe-workflow` (this repository is the plugin itself; enrolled by explicit user selection on 2026-11-08). Clients: Codex and Claude Code. Shape: standalone repository, remote `fcoouto/vibe-workflow`, primary branch `main`.
-
-## Source
-
-Vibe Coding Toolkit `soumatheusgomes/vibe-coding-toolkit` at `21b71b68679c11184f49c23168852014bf6dde8b` (online, 2026-11-08). Setup source only: nothing here fetches or runs Toolkit content.
+# Local extraction record
 
 ## Decisions
 
-| Choice | Answer | Provenance |
-| --- | --- | --- |
-| Publishing | Commit, push a task branch, open a draft PR | User, 2026-11-08 |
-| Merging into `main` | Yes, for independently reviewed `[READY]` PRs when checks pass; agents set the prefix and merge under the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) | User, 2026-11-08; kept 2026-11-09 |
-| Post-merge cleanup | Enabled in `.vibe-workflow/settings.json`. Standing permission for eligible task worktrees and local and remote branches in this repository, under [post-merge cleanup](../clients/delivery.md#post-merge-cleanup); `delete_remote_branch` retains its `true` default. | User, 2026-11-13: "Enable cleanup in this project." |
-| Workstreams | Enabled, in `.vibe-workflow/settings.json` | User, 2026-11-09 |
-| Checkout stability | Primary worktree of this repository stays on designated branch `main`; task work uses separate worktrees under the shared contract | User, 2026-11-12, every onboarded repository; `main` from this repository's development guide |
-| Smart Router | Enabled for this primary checkout; details in [Smart Routing](#smart-routing-16-november-2026) | User, 2026-11-16, explicit request in the conversation (not onboarding question 7) |
-| `.vibe-workflow/project.json` in Git | Not committed; `.gitignore` lists `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`, and `.vibe-workflow/settings.json` is committed | User, 2026-11-09 |
+On 19 November 2026 the user approved extracting only the tested OpenCode advisory
+Smart Router and its required dependencies. The deliverable is a local,
+install-ready package, not an installation or routing activation.
 
-The repository has no CI or branch protection, so the merge permission relies on the local checks and independent review.
+The approved design and plan in `docs/superpowers/` describe that local phase.
+It did not authorize a push, PR, merge, release archive or new inference trial.
+The separate 0.4.0 release decision authorizes replacing the legacy toolkit on
+`main` through a PR and publishing the slim OpenCode package. Legacy reference
+files stay local; existing Git history is unchanged.
+The earlier trial's eight authorized executions are exhausted.
 
-## Document mapping
+Implementation runs on `feat/smart-router-extraction` in the native task worktree.
+The user explicitly authorized checking out the verified extraction branch at
+the destination primary afterward. Local `main` keeps tracking `origin/main`;
+the checkout operation is not a merge. The separate old repository, its source
+changes, worktrees, history and private evidence remain intact.
 
-| Responsibility | Location |
-| --- | --- |
-| Product and overview | `README.md`, `docs/onboard-my-project-plan.md` |
-| Shared instructions | `AGENTS.md` |
-| Client instructions | `CLAUDE.md` imports `AGENTS.md` (Codex reads `AGENTS.md` directly) |
-| Architecture | `clients/index.md`, `policies/00-index.md`, `docs/onboard-my-project-plan.md` |
-| Design and accessibility | Not applicable: no user interface |
-| Local preparation and quality | `README.md` "Development" (setup and install); [development guide](development.md) (where to work, checks, PRs) |
-| Setup and evidence | This file |
+The old primary's upstream tracking was removed. Its routing-list entry is to be
+retired only through the accepted old package's supported command at the current
+revision. Keep old state, qualifications, ledgers, caches and credentials.
 
-## Component assessment
+## Evidence boundary
 
-Reused user-level installs, no project change: Superpowers, Ponytail, RTK, Context7, Claude memory (Caveman verified in Claude Code only). Not applicable: ESLint/Biome (no JS/TS), browser tools and Chrome DevTools MCP (no UI), Vercel skills, Next.js, PostgreSQL, shadcn, Sentry, Anthropic artifact skills, Obsidian tooling (existing `~/ai-memory-vault` is separate; `AGENTS.md` points to it), project Git hooks (excluded by the Toolkit), `gh-fix-ci` (no GitHub Actions; revisit if CI is added). Security and code review use the local policies in `policies/04-security-review.md` and `policies/06-code-review.md`. Graphify: no graph exists; generating one is a separate choice and is pending.
+Synthetic tests cover classification, ranking, account continuity, idle meters,
+positive exhaustion, private storage, CLI errors, plugin coexistence and export.
+Package validation does not prove native model execution, billing or production
+qualification. Real process-group termination could not be qualified because the
+tool environment denied group signaling; no alternate permission path was used.
 
-Harness improvement: native method adaptation, the default because no other mode was chosen. The current agent compares a baseline and one candidate using this repository's own checks. It is inspired by Harness2, but it does not run the Harness2 framework or reproduce its algorithm or benchmark results. The official Harness2 CLI lab is not selected and is not installed.
+The task ledger retains exact commands, results, review and remaining limits.
+Installation and activation have not occurred. Future installation uses the
+README's opt-in instructions and existing native credentials without copying them.
 
-- **How to use it:** when a concrete instruction, memory, context-routing or tool-use failure recurs, follow "One bounded improvement" in `policies/09-workflow-maintenance.md`, with protected inputs from `clients/harness-evaluation.md` and `assets/harness-evaluation/`. The limit is one candidate comparison, then report. More rounds need a concrete reason and an agreed limit. Source: Toolkit prompt 15 and `docs/tools/23-harness2.md` at `790a895`. That was still the latest commit for prompt 15 when checked on 2026-11-09. Routine use needs no Toolkit fetch.
-- **Initial smoke run (2026-11-09):** run in an OpenCode session hosting the Claude Code harness, model Opus 5.5 (authentication mode not observed), on macOS arm64 with Node 26.13.0 and Python 3.15.2. Inputs were copied to a disposable directory under `/tmp`, outside this checkout. The checks took under a second.
-  - Pass: the boundary baseline, `node scripts/validate-harness.mjs <copy>`, gave 7 results. Only "denies matching user IDs across tenants" and "denies missing, empty, or non-string identities" failed. The fixture bytes did not change.
-  - Pass: `python3 -B check.py` succeeded on the `phase-two/minimal` input, on that input with `expected-final` laid over it, on the `phase-two/customized` input, and on that input with `expected-after-partial-undo` laid over it. The last copy kept the Friday-release note and `src/AGENTS.md`.
-  - Pass: before/after SHA-256 snapshots showed no change to `assets/harness-evaluation/` or the evaluator.
-  - Not run: the stale-handoff and read-only-review cases, which need a fresh native worker. None was dispatched, and a worker in this OpenCode-hosted session would not count as a Codex or Claude Code run. Lifecycle and title observations are historical only (see `assets/harness-evaluation/cases.md`).
-  - These deterministic checks prove the inputs and evaluator are portable. They do not prove instruction loading, client behavior or general reliability.
-- **Decision:** no failure was observed, so no trial ran and no change was adopted or rejected. Reapplying setup updates this entry in place. Reuse these results while the fixtures, evaluator, Node and Python stay the same, and run the smoke checks again after material changes. Next: run one native stale-handoff case in Codex or Claude Code when a client or instruction change calls for requalification.
+## Extraction verification
 
-## Checks run
+The independent behavior/security review of candidate `f4233f1` found two Important
+selection issues: missing account-wide Claude exhaustion filtering, and
+overflow-ineligible rows consuming the bounded shortlist. Both received failing
+regression tests before fixes. The corrected suite passes 36 Python tests;
+plugin tests and final export validation are recorded separately in the task ledger.
+No Critical finding or separate Minor finding was substantiated.
 
-- `python3 -B scripts/validate.py`: passed (package only; client execution not checked).
-- `python3 -B -m unittest discover -s tests`: baseline run started before setup edits; it had not finished when this record was written, so no result is recorded yet
-- Source-size screening (brief, partial): 62 of 363 tracked Python files exceed the 350-line reference; largest are `runtime/evidence.py`, `runtime/changes.py`, `runtime/delegation.py`. Structural impact is unknown and not a blocker. Use `review-my-project` for a detailed assessment.
+The single credential-free discovery smoke on OpenCode v2.2.6 exited successfully
+but returned an empty plugin inventory. This does not establish native plugin
+loading. No inference or global registration occurred. Mid-acquisition cancellation
+and real process-group termination remain unqualified; synthetic and pre-aborted
+tool checks are narrower evidence.
 
-## Client integration
+The accepted old package's supported routing command removed only the old
+primary's list entry at settings revision 3. Readback confirmed revision 4,
+unmanaged status and preservation of the other list entries. The command wrapper
+expected `ok` instead of `updated` and stopped after the successful mutation.
+Readback reconciled it without repeating the mutation. A whole-state before/after
+hash record was not persisted, so no cryptographic preservation claim is made.
 
-- Registration: `vibe-workflow@vibe-workflow-local` in Codex and Claude Code (user scope). Since 9 November 2026 the marketplace source is the clean export `~/.cache/vibe-workflow/dev-package`, built by `scripts/package.py`, instead of this checkout: copying the checkout put ignored files and Git history into the caches. Refresh: rerun `python3 -B scripts/package.py`, then reinstall in Codex and approve the changed hooks; Claude Code runs the export folder directly. For installed versions, sources and the expected-version record, run `python3 -B scripts/workflow.py upgrade status`.
-- OpenCode skill source (15 November 2026): repaired its global registration from the removed Codex `0.1.39` cache to `~/.cache/vibe-workflow/dev-package/skills`, preserving every unrelated configuration byte. Fresh native discovery changed from 110 skills without recovery to 120 including `recovering-task-context` from the accepted 0.1.40 export. This is skill discovery, not startup-hook or fresh-context instruction-delivery proof. Future upgrades follow [dependent-source reconciliation](../skills/prepare-my-workspace/references/upgrade.md#reconcile-dependent-sources); keep the export fresh without rewriting active task pins.
-- Cache cleanup (9 November 2026): removed Claude's orphaned 0.1.0 copy with `--prune-caches`, and ten `vibe-coding-workflow@vcw-*` qualification installs with `codex plugin remove`. Their Codex hook-trust entries remain in `~/.codex/config.toml`. Codex's `.marketplace-plugin-source-staging` holds other marketplaces' leftovers and was left alone.
-- Startup membership: canonical startup-only `.vibe-workflow/project.json` for `codex` and `claude-code`, status `configured`, no runtime. The record is local to this checkout and ignored by Git. Other clones/worktrees need their own admission only for startup membership or selected managed operations; ordinary task work follows carried tracked instructions and installed-package/setup pointers without copying enrollment or re-onboarding every temporary worktree.
-- Codex installation from the clean export and its startup hook are qualified in a disposable home on Codex 0.167.0 (CLI app-server, unauthenticated, SessionStart only); see [dev package validation](dev-package-validation.md).
-- Startup observations on this machine are dated evidence in [dev package validation](dev-package-validation.md#real-sessions-on-this-machine).
-- Package scan and its two bounds: the setup observation's Codex bundle scan reads an installed export as it is, and a checkout as the export `scripts/package.py` would build from it: tracked files minus the development-only paths in `runtime/package_manifest.py`, so untracked, ignored and `dist/` files never count. That scan keeps Codex's own `codex-plugin-bundle-v1` limits (`PACKAGE_SCAN_MAX_BYTES` 8 MiB in total, 1 MiB per file, 4096 paths), which Codex owns: a package the scan accepted but Codex rejected would fail at install. Onboarding's project inventory bound, `MAX_TOTAL` in `runtime/onboarding.py`, is separate: 16 MiB since 9 November 2026 (the user's decision), so this repository (about 9.3 MiB with `tests/`) fits. Only the inventory's own budgets carry it; each startup observation it makes keeps its own 8 MiB entry bound. Every other aggregate that used to share `MAX_TOTAL` keeps 8 MiB as `LEGACY_MAX_TOTAL`: repository screening (its budget is shared with review storage), review storage, the birth artifact inventory, retained Toolkit sources and any other owner's budget passed to onboarding's observers. `python3 -B scripts/validate.py` reports the export as `package_export`, fails when it exceeds a bundle limit or still holds a development-only path, and warns at 75% of the bytes. Membership uses Git's stored names, so a file whose name differs on disk only by Unicode normalization would be left out of a checkout's scan; none does today, and the checkout-versus-export test would catch it.
+## Follow-up verification
 
-## Rename migration (8 November 2026)
+The user requested the canonical distribution directory `dist/vibe-workflow`
+and authorized the three missing loading/lifecycle checks. All three passed
+without product runtime changes; see [native verification](native-verification.md)
+for commands, evidence boundaries and remaining limits. These results supersede
+the earlier unqualified loading/group-cleanup/cancellation statements only within
+that tested scope. No permanent installation or routing activation occurred.
 
-0.1.33 renamed the plugin and its state paths; nothing migrates automatically. On this machine:
-
-- Copied and verified identical, then removed the old copies: the Workstreams family register (`~/.vibe-workflow/workstreams-families.sqlite3`) and the usage directory (`~/.local/state/vibe-workflow/usage`, including its one open run). The new code loads the ledger and upgrades it on first write. Routing is off for both enrolled checkouts, because per-checkout activation is keyed to the enrollment path and content that changed. Status reports `reusable_setup_unavailable`, so the previous setup cannot be reused as is; set routing up again.
-- Not copied: `machine.json`, which records the old directory chain, and the old review storage under `~/.local/share/vibe-coding-workflow`.
-- Kept for now, pending a decision: old onboarding, update and proposal records under `~/.local/state/vibe-coding-workflow/`, including rollback journals for earlier enrollments.
-- Not changed: `/Users/fcouto/dev/git/opus/AGENTS.md` still has a `vibe-coding-workflow:` Workstreams marker and a link into an old plugin cache, so its Workstreams choice reads as not configured.
-
-## Smart Routing (16 November 2026)
-
-Enabled for this primary checkout on 2026-11-16 at the user's explicit request in the conversation, not through onboarding question 7. The routing list, qualifications and switch are machine state under `~/.local/state/vibe-workflow/`, following the [Smart Routing procedure](../skills/manage-usage-routing/references/smart-routing.md).
-
-- Scope id: `134b55a8c1b79498` (a digest, not names).
-- Paths qualified with `qualify_path`, evidence id `onboarding-20261116`, all with `demand: null`: `claude-native-subscription`, `codex-chatgpt-subscription`, `opencode-claude-subscription`, `opencode-chatgpt-subscription` and `opencode-go-subscription`. With unknown demand, every admission on them is provider-managed fallback.
-- The one-way `authority_required` switch is on.
-- Routing settings revision before the change: 0; added this project's primary checkout.
-- Readback: `managed: true` and `effective: true`.
-- Strategy table: bootstrapped from the live catalogs of this machine's clients (table-bootstrap run, 16 November 2026). Decisions:
-  - Opus was left out, because the model-name check in `validate.py` failed on this package's own wording until the 0.1.43 reword. The table with Opus is kept as the previous table; `python3 -I -B <package>/scripts/routing_table.py rollback` (the installed package's script) restores it.
-  - Haiku comes first in the light Claude rows.
-  - OpenCode Go appears in the light rows only.
-  - Fable, GPT-6 Astra and the `max` and `ultra` efforts are excluded.
-- Undo: read `status`, then remove this checkout from the current `managed_projects` list as the procedure's "Disable or undo" says; never resend an older list. `authority_required` stays on, and the qualifications stay until `unqualify_path`.
-
-## Maintenance and undo
-
-- Private plan, backups and journal: `~/.local/state/vibe-workflow/onboarding/vibe-workflow-20261108/`.
-- Undo: run `rollback` for that plan directory. It restores only content still matching this operation's output and keeps later edits.
-- Reapply: use `onboard-my-project` again; it preserves existing sections and registrations.
-- Transaction lock directory (`~/.local/share/vcw-transactions`, `runtime/changes.py`): production never deletes its lock files or owner markers, so test runs and abandoned checkouts leave many of them. `python3 -B scripts/prune_state.py` reports what is provably stale (dry run by default). Stop every agent session and test run first. `--yes` deletes empty old locks; `--yes --markers` also moves markers whose plan directory is gone into a private run directory with a manifest (undo steps are in `--help`); `--max-delete` caps a run. It never deletes markers, only moves them.
+The user subsequently requested removing the extra directory level. The current
+installable package root is `dist/`, not `dist/vibe-workflow/`. Packaging behavior
+is unchanged; current export commands now target `dist` directly.
