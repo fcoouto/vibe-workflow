@@ -242,7 +242,9 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
         features[at < 0 ? features.length : at] = {
           [feature]: { ...features[at]?.[from], enabled, ...(prefs && { agent_merge: agentMerge }) },
         }
-        const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
+        // A legacy entry left beside the new one would go stale, so it is dropped when the new one is saved.
+        const kept = features.filter((_, index) => index !== legacyIndex || index === at)
+        const body = JSON.stringify({ ...value, version: 1, features: kept }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")
         const target = join(folder, `.settings-${randomUUID()}.tmp`)
         const file = await open(target, "wx", latest.data.mode ?? 0o644)
