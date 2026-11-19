@@ -1,5 +1,7 @@
 """Exercise the read-only workspace check with injected probes, never the network."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -116,6 +118,13 @@ class LocalTest(unittest.TestCase):
         spec = {"kind": "plugin", "match": "pkg"}
         self.assertEqual(self.check.integration_present(spec, {"plugins": ["pkg"]}, self.home), (True, None))
 
+    def test_skill_version_from_frontmatter(self):
+        skill = self.config_dir / "skills/impeccable"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: impeccable\nversion: 4.10.0\n---\nbody version: 9.9.9\n")
+        spec = {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}
+        self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "4.10.0"))
+
 
 class UpstreamTest(unittest.TestCase):
     def setUp(self):
@@ -173,10 +182,162 @@ class UpstreamTest(unittest.TestCase):
         import urllib.request
         handler = self.check.AllowedRedirects()
         request = urllib.request.Request("https://api.github.com/repos/o/r/releases/latest")
-        with self.assertRaises(urllib.error.HTTPError):
-            handler.redirect_request(request, None, 302, "Found", {}, "https://evil.test/x")
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            handler.redirect_request(request, io.BytesIO(), 302, "Found", {}, "https://evil.test/x")
+        raised.exception.close()
         allowed = handler.redirect_request(request, None, 301, "Moved", {}, "https://api.github.com/repos/o/r2/releases/latest")
         self.assertEqual(allowed.full_url, "https://api.github.com/repos/o/r2/releases/latest")
+
+
+class JudgeTest(unittest.TestCase):
+    def setUp(self):
+        self.check = load()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name).resolve()
+        (self.home / ".config/opencode/plugins").mkdir(parents=True)
+
+    def env(self, commands=None, pages=None):
+        def run(argv):
+            answer = (commands or {})[argv[0]]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        def fetch(url):
+            answer = (pages or {})[url]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return self.check.Env(home=self.home, run=run, fetch=fetch)
+
+    RTK = {"id": "rtk", "why": "Compact output.", "docs": "https://x.test",
+           "machine": {"command": "rtk", "version_args": ["--version"]},
+           "clients": {"opencode": {"kind": "file", "path": "plugins/rtk.ts"}},
+           "upstream": {"type": "github", "repo": "rtk-ai/rtk"}}
+    RTK_PAGE = "https://api.github.com/repos/rtk-ai/rtk/releases/latest"
+
+    def hook(self):
+        (self.home / ".config/opencode/plugins/rtk.ts").write_text("//")
+
+    def test_rtk_binary_without_hook_is_missing(self):
+        row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.1.0"}, {self.RTK_PAGE: '{"tag_name": "v1.1.0"}'}))
+        self.assertEqual((row["state"], row["reason"]), ("missing", "integration_missing"))
+
+    def test_rtk_with_hook_and_current_version_is_ready(self):
+        self.hook()
+        row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.1.0"}, {self.RTK_PAGE: '{"tag_name": "v1.1.0"}'}))
+        self.assertEqual((row["state"], row["installed"], row["upstream"], row["reason"]), ("ready", "1.1.0", "1.1.0", None))
+        self.assertEqual((row["id"], row["why"]), ("rtk", "Compact output."))
+
+    def test_behind_upstream_is_outdated(self):
+        self.hook()
+        row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.1.0"}, {self.RTK_PAGE: '{"tag_name": "v1.2.0"}'}))
+        self.assertEqual((row["state"], row["upstream"], row["reason"]), ("outdated", "1.2.0", "behind_upstream"))
+
+    def test_lookup_failure_is_unknown_with_reason(self):
+        self.hook()
+        row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.1.0"}, {self.RTK_PAGE: OSError("offline")}))
+        self.assertEqual((row["state"], row["reason"]), ("unknown", "lookup_failed"))
+
+    def test_absent_or_broken_command(self):
+        for failure, state, reason in ((FileNotFoundError(), "missing", "command_not_found"),
+                                       (TimeoutError(), "unknown", "command_failed"),
+                                       ("no digits here", "unknown", "unreadable_version")):
+            row = self.check.judge(self.RTK, {}, self.env({"rtk": failure}))
+            self.assertEqual((row["state"], row["reason"]), (state, reason), failure)
+
+    def test_minimum_only_tools_never_ask_upstream(self):
+        git = {"id": "git", "why": "Branches.", "docs": "https://x.test",
+               "machine": {"command": "git", "version_args": ["--version"]},
+               "upstream": {"type": "minimum", "version": "2.30"}}
+        apple = "git version 2.39.5 (Apple Git-154)"
+        row = self.check.judge(git, {}, self.env({"git": apple}))
+        self.assertEqual((row["state"], row["installed"], row["upstream"]), ("ready", "2.39.5", "2.30"))
+        git["upstream"]["version"] = "2.40"
+        row = self.check.judge(git, {}, self.env({"git": apple}))
+        self.assertEqual((row["state"], row["reason"]), ("outdated", "below_minimum"))
+
+    def test_hosted_presence_only_partner(self):
+        context7 = {"id": "context7", "why": "Docs.", "docs": "https://x.test",
+                    "clients": {"opencode": {"kind": "mcp", "name": "context7"}}, "upstream": {"type": "hosted"}}
+        self.assertEqual(self.check.judge(context7, {"mcp": {"servers": {"context7": {}}}}, self.env())["state"], "ready")
+        self.assertEqual(self.check.judge(context7, {}, self.env())["state"], "missing")
+
+    def test_unreadable_config_is_unknown_not_missing(self):
+        row = self.check.judge({**self.RTK, "machine": None}, None, self.env())
+        self.assertEqual((row["state"], row["reason"]), ("unknown", "config_unreadable"))
+
+    def test_no_comparable_local_version_and_no_source(self):
+        plugin = {"id": "caveman", "why": "Terse.", "docs": "https://x.test",
+                  "clients": {"opencode": {"kind": "plugin", "match": "caveman"}},
+                  "upstream": {"type": "github", "repo": "o/caveman"}}
+        row = self.check.judge(plugin, {"plugins": ["./plugins/caveman"]}, self.env())
+        self.assertEqual((row["state"], row["reason"]), ("unknown", "no_comparable_version"))
+        plugin["upstream"] = {"type": "none"}
+        row = self.check.judge(plugin, {"plugins": ["./plugins/caveman"]}, self.env())
+        self.assertEqual((row["state"], row["reason"]), ("unknown", "no_upstream_source"))
+
+
+class MainTest(unittest.TestCase):
+    def setUp(self):
+        self.check = load()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name).resolve()
+        self.config_dir = self.home / ".config/opencode"
+        self.partners = self.home / "partners.json"
+        self.partners.write_text(json.dumps({"version": 1, "partners": [
+            {"id": "superpowers", "why": "Skills.", "docs": "https://x.test",
+             "clients": {"opencode": {"kind": "plugin", "match": "superpowers"}},
+             "upstream": {"type": "hosted"}}]}))
+
+    def run_main(self, *extra):
+        env = self.check.Env(home=self.home, run=lambda argv: "", fetch=lambda url: "")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = self.check.main(["--partners", str(self.partners), *extra], env)
+        return code, out.getvalue()
+
+    def test_main_prints_rows_and_exit_code(self):
+        self.config_dir.mkdir(parents=True)
+        (self.config_dir / "opencode.json").write_text('{"plugins": ["superpowers@git+https://x.test/s.git"]}')
+        code, text = self.run_main("--json")
+        report = json.loads(text)
+        self.assertEqual((code, report["client"], [r["state"] for r in report["rows"]]), (0, "opencode", ["ready"]))
+        self.assertIn("superpowers", self.run_main()[1])
+
+    def test_no_config_file_means_integrations_missing(self):
+        code, text = self.run_main("--json")
+        self.assertEqual((code, json.loads(text)["rows"][0]["state"]), (1, "missing"))
+
+    def test_garbage_config_is_unknown(self):
+        self.config_dir.mkdir(parents=True)
+        (self.config_dir / "opencode.jsonc").write_text("not json")
+        code, text = self.run_main("--json")
+        self.assertEqual((code, json.loads(text)["rows"][0]["reason"]), (2, "config_unreadable"))
+
+    def test_check_writes_nothing(self):
+        self.config_dir.mkdir(parents=True)
+        (self.config_dir / "opencode.json").write_text("{}")
+
+        def snapshot():
+            return sorted((str(p), p.stat().st_mtime_ns, p.is_dir() or p.stat().st_size) for p in self.home.rglob("*"))
+        before = snapshot()
+        self.run_main("--json")
+        self.assertEqual(snapshot(), before)
+
+    def test_shipped_partners_json_is_valid(self):
+        shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
+        ids = [p["id"] for p in shipped["partners"]]
+        self.assertEqual(ids, ["superpowers", "ponytail", "caveman", "impeccable", "context7", "rtk",
+                               "graphify-cli", "graphify-skill", "git", "gh", "python"])
+        for partner in shipped["partners"]:
+            self.assertTrue(partner["why"] and partner["docs"].startswith("https://"), partner["id"])
+            upstream = partner["upstream"]
+            if upstream["type"] in ("npm", "github", "raw"):
+                self.assertTrue(self.check.latest_version(upstream, lambda url: self.assertTrue(
+                    self.check._allowed(url), url) or '{"version": "1", "tag_name": "1"}'))
 
 
 if __name__ == "__main__":

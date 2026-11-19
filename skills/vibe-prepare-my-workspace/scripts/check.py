@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Read-only check of the partner tools OpenCode relies on. Never installs or writes."""
+import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
+from typing import Callable
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -112,6 +117,19 @@ def _cached_version(pattern, home):
     return max(versions)[1] if versions else None
 
 
+def _frontmatter_version(path):
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines[1:] if lines and lines[0] == "---" else ():
+        if line == "---":
+            break
+        if line.startswith("version:"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
 def integration_present(spec, config, home):
     kind, base = spec["kind"], home / ".config/opencode"
     if kind == "plugin":
@@ -127,7 +145,11 @@ def integration_present(spec, config, home):
     else:
         raise ValueError("unsupported_integration")
     pattern = spec.get("version_from")
-    return found, _cached_version(pattern, home) if found and pattern else None
+    if not found or not pattern:
+        return found, None
+    if pattern == "frontmatter" and kind == "skill":
+        return found, _frontmatter_version(base / "skills" / spec["name"] / "SKILL.md")
+    return found, _cached_version(pattern, home)
 
 
 ALLOWED_HOSTS = ("registry.npmjs.org", "api.github.com", "raw.githubusercontent.com")
@@ -189,3 +211,109 @@ def latest_version(spec, fetch):
     except ValueError as error:
         raise LookupError("bad_response") from error
     return text if found else ".".join(map(str, parse_version(body)))
+
+
+@dataclass
+class Env:
+    home: Path
+    run: Callable[[list], str]
+    fetch: Callable[[str], str]
+
+
+def real_env():
+    def run(argv):
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError("command_timeout") from error
+        if done.returncode:
+            raise OSError("nonzero_exit")
+        return done.stdout + done.stderr
+    return Env(home=Path.home(), run=run, fetch=http_fetch)
+
+
+def _dotted(text):
+    return ".".join(map(str, parse_version(text)))
+
+
+def judge(partner, config, env):
+    def row(state, reason=None, installed=None, upstream=None):
+        return {"id": partner["id"], "state": state, "installed": installed, "upstream": upstream,
+                "why": partner["why"], "reason": reason}
+
+    installed, machine = None, partner.get("machine")
+    if machine:
+        try:
+            output = env.run([machine["command"], *machine["version_args"]])
+        except FileNotFoundError:
+            return row("missing", "command_not_found")
+        except OSError:
+            return row("unknown", "command_failed")
+        try:
+            installed = _dotted(output)
+        except ValueError:
+            return row("unknown", "unreadable_version")
+    spec = partner.get("clients", {}).get("opencode")
+    if spec:
+        if config is None:
+            return row("unknown", "config_unreadable", installed)
+        found, local = integration_present(spec, config, env.home)
+        if not found:
+            return row("missing", "integration_missing", installed)
+        try:
+            installed = installed or (local and _dotted(local))
+        except ValueError:
+            pass
+    upstream = partner["upstream"]
+    kind = upstream["type"]
+    if kind in ("hosted", "presence"):
+        return row("ready", installed=installed)
+    if kind == "none":
+        return row("unknown", "no_upstream_source", installed)
+    if not installed:
+        return row("unknown", "no_comparable_version")
+    if kind == "minimum":
+        latest, behind = _dotted(upstream["version"]), "below_minimum"
+    else:
+        try:
+            latest, behind = _dotted(latest_version(upstream, env.fetch)), "behind_upstream"
+        except LookupError as error:
+            return row("unknown", str(error), installed)
+    if compare(installed, latest) < 0:
+        return row("outdated", behind, installed, latest)
+    return row("ready", installed=installed, upstream=latest)
+
+
+def _load_config(home):
+    for name in ("opencode.json", "opencode.jsonc"):
+        path = home / ".config/opencode" / name
+        if path.exists():
+            try:
+                return read_config(path)
+            except ValueError:
+                return None
+    return {}
+
+
+def _table(rows):
+    columns = ("id", "state", "installed", "upstream", "reason")
+    cells = [columns] + [tuple(str(row[c] or "-") for c in columns) for row in rows]
+    widths = [max(len(line[i]) for line in cells) for i in range(len(columns))]
+    return "\n".join("  ".join(cell.ljust(width) for cell, width in zip(line, widths)).rstrip() for line in cells)
+
+
+def main(argv=None, env=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--partners", default=str(Path(__file__).resolve().parent.parent / "partners.json"))
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    env = env or real_env()
+    partners = json.loads(Path(args.partners).read_text())["partners"]
+    config = _load_config(env.home)
+    rows = [judge(partner, config, env) for partner in partners]
+    print(json.dumps({"client": "opencode", "rows": rows}, indent=2) if args.json else _table(rows))
+    return exit_code([row["state"] for row in rows])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
