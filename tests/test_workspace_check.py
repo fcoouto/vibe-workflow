@@ -1,5 +1,6 @@
 """Exercise the read-only workspace check with injected probes, never the network."""
 import contextlib
+import http.client
 import importlib.util
 import io
 import json
@@ -37,6 +38,13 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(compare("1.2", "1.2.0"), 0)
         self.assertEqual(compare("1.10.0", "1.9.9"), 1)
         self.assertEqual(compare("1.9.9", "1.10.0"), -1)
+
+    def test_prerelease_sorts_below_its_release(self):
+        compare = self.check.compare
+        self.assertEqual(compare("1.0.0-rc1", "1.0.0"), -1)
+        self.assertEqual(compare("1.0.0", "1.0.0-rc1"), 1)
+        self.assertEqual(compare("1.0.0-rc1", "1.0.0-rc2"), 0)
+        self.assertEqual(compare("git version 2.39.5 (Apple Git-154)", "2.39.5"), 0)
 
     def test_exit_code_prefers_action_over_unknown(self):
         code = self.check.exit_code
@@ -161,6 +169,19 @@ class UpstreamTest(unittest.TestCase):
             self.assertEqual(str(raised.exception), "host_not_allowed")
         self.assertEqual(self.urls, [])
 
+    def test_raw_without_a_version_key_is_a_bad_response(self):
+        spec = {"type": "raw", "url": "https://raw.githubusercontent.com/o/r/main/package.json"}
+        for body in ("<html>Error 404 page</html>", '{"engines": {"node": ">=18"}}'):
+            with self.assertRaises(LookupError) as raised:
+                self.check.latest_version(spec, self.fetch(body))
+            self.assertEqual(str(raised.exception), "bad_response", body)
+        self.assertEqual(self.check.latest_version(spec, self.fetch("v2.1.0\n")), "v2.1.0")
+
+    def test_truncated_download_is_lookup_failed(self):
+        with self.assertRaises(LookupError) as raised:
+            self.check.latest_version({"type": "npm", "package": "x"}, self.fetch(http.client.IncompleteRead(b"")))
+        self.assertEqual(str(raised.exception), "lookup_failed")
+
     def test_unknown_type_is_unsupported(self):
         with self.assertRaises(LookupError) as raised:
             self.check.latest_version({"type": "ftp"}, self.fetch("{}"))
@@ -234,6 +255,11 @@ class JudgeTest(unittest.TestCase):
         self.hook()
         row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.1.0"}, {self.RTK_PAGE: '{"tag_name": "v1.2.0"}'}))
         self.assertEqual((row["state"], row["upstream"], row["reason"]), ("outdated", "1.2.0", "behind_upstream"))
+
+    def test_installed_prerelease_is_behind_its_release(self):
+        self.hook()
+        row = self.check.judge(self.RTK, {}, self.env({"rtk": "rtk 1.2.0-rc1"}, {self.RTK_PAGE: '{"tag_name": "v1.2.0"}'}))
+        self.assertEqual((row["state"], row["installed"], row["reason"]), ("outdated", "1.2.0", "behind_upstream"))
 
     def test_lookup_failure_is_unknown_with_reason(self):
         self.hook()
@@ -310,6 +336,16 @@ class MainTest(unittest.TestCase):
     def test_no_config_file_means_integrations_missing(self):
         code, text = self.run_main("--json")
         self.assertEqual((code, json.loads(text)["rows"][0]["state"]), (1, "missing"))
+
+    def test_both_config_files_are_read(self):
+        self.config_dir.mkdir(parents=True)
+        (self.config_dir / "opencode.json").write_text('{"plugins": ["other"]}')
+        (self.config_dir / "opencode.jsonc").write_text('{"plugins": ["superpowers"], "mcp": {"servers": {"a": {}}}}')
+        self.assertEqual(json.loads(self.run_main("--json")[1])["rows"][0]["state"], "ready")
+        (self.config_dir / "opencode.json").write_text('{"mcp": {"servers": {"b": {}}}}')
+        merged = self.check._load_config(self.home)
+        self.assertEqual(sorted(merged["mcp"]["servers"]), ["a", "b"])
+        self.assertEqual(merged["plugins"], ["superpowers"])
 
     def test_garbage_config_is_unknown(self):
         self.config_dir.mkdir(parents=True)

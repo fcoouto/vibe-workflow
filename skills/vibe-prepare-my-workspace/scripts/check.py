@@ -2,6 +2,7 @@
 """Read-only check of the partner tools OpenCode relies on. Never installs or writes."""
 import argparse
 from dataclasses import dataclass
+import http.client
 import json
 from pathlib import Path
 import re
@@ -23,11 +24,16 @@ def parse_version(text):
     return tuple(int(part) for part in match.group().split("."))
 
 
+def _is_prerelease(text):
+    match = re.search(r"\d+(?:\.\d+)*(-[0-9A-Za-z])?", text)
+    return bool(match and match.group(1))
+
+
 def compare(installed, latest):
     a, b = parse_version(installed), parse_version(latest)
     size = max(len(a), len(b))
     a, b = a + (0,) * (size - len(a)), b + (0,) * (size - len(b))
-    return (a > b) - (a < b)
+    return (a > b) - (a < b) or _is_prerelease(latest) - _is_prerelease(installed)
 
 
 def worst(states):
@@ -200,17 +206,15 @@ def latest_version(spec, fetch):
         raise LookupError("host_not_allowed")
     try:
         body = fetch(url)
-    except OSError as error:
+    except (OSError, http.client.HTTPException) as error:
         raise LookupError("lookup_failed") from error
     if field:
         return _json_field(body, field)
     found = VERSION_KEY.search(body)
-    try:
-        text = found.group(1) if found else body
-        parse_version(text)
-    except ValueError as error:
-        raise LookupError("bad_response") from error
-    return text if found else ".".join(map(str, parse_version(body)))
+    text = found.group(1) if found else body.strip()
+    if not found and not re.fullmatch(r"v?\d+(\.\d+)*(-[0-9A-Za-z.]+)?", text):
+        raise LookupError("bad_response")
+    return text
 
 
 @dataclass
@@ -236,12 +240,19 @@ def _dotted(text):
     return ".".join(map(str, parse_version(text)))
 
 
+def _shown(raw):
+    try:
+        return raw and _dotted(raw)
+    except ValueError:
+        return None
+
+
 def judge(partner, config, env):
     def row(state, reason=None, installed=None, upstream=None):
         return {"id": partner["id"], "state": state, "installed": installed, "upstream": upstream,
                 "why": partner["why"], "reason": reason}
 
-    installed, machine = None, partner.get("machine")
+    raw, machine = None, partner.get("machine")
     if machine:
         try:
             output = env.run([machine["command"], *machine["version_args"]])
@@ -250,49 +261,58 @@ def judge(partner, config, env):
         except OSError:
             return row("unknown", "command_failed")
         try:
-            installed = _dotted(output)
+            parse_version(output)
         except ValueError:
             return row("unknown", "unreadable_version")
+        raw = output
     spec = partner.get("clients", {}).get("opencode")
     if spec:
         if config is None:
-            return row("unknown", "config_unreadable", installed)
+            return row("unknown", "config_unreadable", _shown(raw))
         found, local = integration_present(spec, config, env.home)
         if not found:
-            return row("missing", "integration_missing", installed)
-        try:
-            installed = installed or (local and _dotted(local))
-        except ValueError:
-            pass
+            return row("missing", "integration_missing", _shown(raw))
+        raw = raw or local
     upstream = partner["upstream"]
     kind = upstream["type"]
     if kind in ("hosted", "presence"):
-        return row("ready", installed=installed)
+        return row("ready", installed=_shown(raw))
     if kind == "none":
-        return row("unknown", "no_upstream_source", installed)
+        return row("unknown", "no_upstream_source", _shown(raw))
+    installed = _shown(raw)
     if not installed:
         return row("unknown", "no_comparable_version")
     if kind == "minimum":
-        latest, behind = _dotted(upstream["version"]), "below_minimum"
+        latest, behind = upstream["version"], "below_minimum"
     else:
         try:
-            latest, behind = _dotted(latest_version(upstream, env.fetch)), "behind_upstream"
+            latest, behind = latest_version(upstream, env.fetch), "behind_upstream"
         except LookupError as error:
             return row("unknown", str(error), installed)
-    if compare(installed, latest) < 0:
-        return row("outdated", behind, installed, latest)
-    return row("ready", installed=installed, upstream=latest)
+    if compare(raw, latest) < 0:
+        return row("outdated", behind, installed, _dotted(latest))
+    return row("ready", installed=installed, upstream=_dotted(latest))
 
 
 def _load_config(home):
+    merged = {"plugins": [], "plugin": [], "mcp": {"servers": {}}}
     for name in ("opencode.json", "opencode.jsonc"):
         path = home / ".config/opencode" / name
-        if path.exists():
-            try:
-                return read_config(path)
-            except ValueError:
-                return None
-    return {}
+        if not path.exists():
+            continue
+        try:
+            config = read_config(path)
+        except ValueError:
+            return None
+        for key in ("plugins", "plugin"):
+            if isinstance(config.get(key), list):
+                merged[key] += config[key]
+        mcp = config.get("mcp")
+        if isinstance(mcp, dict):
+            servers = mcp.get("servers")
+            merged["mcp"]["servers"].update(servers if isinstance(servers, dict) else {})
+            merged["mcp"].update({key: value for key, value in mcp.items() if key != "servers"})
+    return merged
 
 
 def _table(rows):
