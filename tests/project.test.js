@@ -256,3 +256,128 @@ test("stale previews, held locks and failed replacement preserve existing bytes"
   assert.equal(await readFile(path, "utf8"), before)
   await assert.rejects(stat(lock), { code: "ENOENT" })
 })
+
+const gitIn = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture",
+  "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+  env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))), stdio: "pipe",
+})
+
+test("pull_requests preview defaults on with user merge and writes nothing", async (t) => {
+  const { folder, path, create, root } = await fixture(t)
+  const project = create(root, "pull_requests")
+  const preview = await project.preview()
+  assert.equal(preview.enabled, true)
+  assert.equal(preview.agent_merge, false)
+  assert.equal(preview.previous_agent_merge, null)
+  assert.equal(preview.change, "create")
+  await assert.rejects(stat(folder), { code: "ENOENT" })
+  assert.equal((await project.apply({ enabled: true, agent_merge: false }, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }],
+  })
+  const repeat = await project.preview()
+  assert.equal(repeat.change, "none")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false }, repeat.snapshot)).state, "unchanged")
+})
+
+test("pull_requests apply keeps the Smart Router entry, unknown entries and order", async (t) => {
+  const { path, create, root, write } = await fixture(t)
+  await write({ version: 1, future: "PRIVATE-SENTINEL", features: [{ smart_router: { enabled: false, keep: 1 } },
+    { other: { x: 1 } }, { pull_requests: { enabled: true, agent_merge: false, note: "keep" } }] })
+  const project = create(root, "pull_requests"), preview = await project.preview({ agent_merge: true })
+  assert.equal(preview.change, "update")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true }, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    version: 1, future: "PRIVATE-SENTINEL", features: [{ smart_router: { enabled: false, keep: 1 } },
+      { other: { x: 1 } }, { pull_requests: { enabled: true, agent_merge: true, note: "keep" } }] })
+})
+
+test("pull_requests apply requires both booleans and unchanged compares both", async (t) => {
+  const { create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] })
+  const project = create(root, "pull_requests"), { snapshot } = await project.preview()
+  for (const values of [{ enabled: true }, { agent_merge: true }, true, undefined, { enabled: 1, agent_merge: false },
+    { enabled: true, agent_merge: false, extra: true }]) {
+    assert.deepEqual(await project.apply(values, snapshot).then(({ state, reason }) => ({ state, reason })),
+      { state: "blocked", reason: "invalid_request" })
+  }
+  assert.equal((await project.preview({ enabled: true, extra: 1 })).reason, "invalid_request")
+  assert.equal((await project.apply({ enabled: true, agent_merge: false }, snapshot)).state, "unchanged")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true }, snapshot)).state, "saved")
+})
+
+test("invalid entries block only their own feature", async (t) => {
+  const { create, root, write } = await fixture(t)
+  for (const entry of [{ enabled: 1 }, { enabled: true, agent_merge: "yes" }]) {
+    await write({ version: 1, features: [{ pull_requests: entry }] })
+    assert.equal((await create(root, "pull_requests").inspect()).reason, "project_settings_invalid")
+    assert.equal((await create(root).inspect()).state, "not_onboarded")
+  }
+  await write({ version: 1, features: [{ smart_router: { enabled: "no" } }] })
+  assert.equal((await create(root).inspect()).reason, "project_settings_invalid")
+  assert.equal((await create(root, "pull_requests").inspect()).state, "not_onboarded")
+})
+
+test("default-feature results have no agent_merge key and ignore pull_requests entries", async (t) => {
+  const { create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }] })
+  const project = create(root), inspected = await project.inspect(), preview = await project.preview()
+  assert.equal(inspected.state, "not_onboarded")
+  for (const result of [inspected, preview, await project.apply(true, preview.snapshot)]) {
+    assert.ok(!("agent_merge" in result), JSON.stringify(result))
+  }
+})
+
+test("a worktree copy never grants merge when read at the project path", async (t) => {
+  const { root, create, write } = await fixture(t)
+  gitIn(root, "init", "-q")
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] })
+  const linked = join(root, "linked")
+  gitIn(root, "worktree", "add", "--detach", linked)
+  await mkdir(join(linked, ".vibe-workflow"))
+  await writeFile(join(linked, ".vibe-workflow", "settings.json"),
+    JSON.stringify({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }] }))
+  const main = await create(linked, "pull_requests", { atProject: true }).inspect()
+  assert.equal(main.root, root)
+  assert.equal(main.agent_merge, false)
+  assert.equal((await create(linked, "pull_requests").inspect()).agent_merge, true)
+})
+
+test("unsupported feature names throw", async (t) => {
+  const { create, root } = await fixture(t)
+  assert.throws(() => create(root, "other"), /unsupported feature/)
+})
+
+test("atProject is blocked in a linked worktree of a bare repository, and nothing is written", async (t) => {
+  const { root, create } = await fixture(t)
+  const bare = join(root, "bare.git"), linked = join(root, "linked")
+  execFileSync("git", ["init", "-q", "--bare", bare], { stdio: "pipe" })
+  execFileSync("git", ["-C", bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked], { stdio: "pipe" })
+  const project = create(linked, "pull_requests", { atProject: true })
+  const state = await project.inspect()
+  assert.deepEqual([state.state, state.reason, state.project], ["blocked", "project_root_unavailable", null])
+  assert.equal((await project.preview()).state, "blocked")
+  assert.equal((await project.apply({ enabled: true, agent_merge: true }, "0".repeat(64))).state, "blocked")
+  await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
+  assert.equal((await create(linked).inspect()).project, linked)
+})
+
+test("atProject is blocked when the worktree listing fails in a linked worktree", async (t) => {
+  const { root, create } = await fixture(t)
+  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim()
+  gitIn(root, "init", "-q")
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  const linked = join(root, "linked")
+  gitIn(root, "worktree", "add", "-q", "--detach", linked)
+  const bin = join(root, "bin")
+  await mkdir(bin)
+  await writeFile(join(bin, "git"), `#!/bin/sh\n[ "$1" = worktree ] && exit 129\nexec "${real}" "$@"\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => { process.env.PATH = path })
+  const state = await create(linked, "pull_requests", { atProject: true }).inspect()
+  assert.deepEqual([state.state, state.reason, state.project], ["blocked", "project_root_unavailable", null])
+  assert.equal((await create(linked).inspect()).project, linked)
+  assert.equal((await create(root, "pull_requests", { atProject: true }).inspect()).state, "not_onboarded")
+})

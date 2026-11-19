@@ -45,9 +45,15 @@ placeholder toggles or required questions in this version.
 
 ## First question: approved copy
 
+Standardized on 2026-11-19 with the pull request question: every onboarding
+question now has a header, a context line starting with the project path, and
+labeled choices with descriptions, and the recommended choice carries
+"(Recommended)" in place of "— default". The wording below is the approved intent;
+`skills/vibe-onboard-project/references/procedure.md` holds the current copy.
+
 **Use Smart Router for this project?**
 
-**Use Smart Router — default**\
+**Use Smart Router (Recommended)**\
 Automatically get provider, model, and effort recommendations before delegating
 work. Your client still launches and controls the tasks.
 

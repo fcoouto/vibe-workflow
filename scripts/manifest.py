@@ -5,10 +5,12 @@ RUNTIME = (
     "native_catalog", "claude_usage", "opencode_account",
 )
 FILES = (
-    "index.js", "project.js", "onboarding.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
+    "index.js", "project.js", "onboarding.js", "pr-advice.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
     "skills/vibe-prepare-my-workspace/scripts/check.py", "skills/vibe-prepare-my-workspace/partners.json",
+    "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
+    "skills/vibe-pull-requests/references/pull-request-template.md",
     "scripts/select.py", "config/routes.json", "config/router.example.json",
     "config/strategy-table.example.json",
     *(f"runtime/{name}.py" for name in RUNTIME),

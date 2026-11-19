@@ -12,6 +12,13 @@ project preference files, credentials and evidence.
 is `prepare-my-workspace` in the earlier plugin (`697e1797`). The earlier hooks,
 upgrade records, run directories and `workflow.py` were not carried over.
 
+`pr-advice.js` and `skills/vibe-pull-requests/` add the pull request guidance: a
+classifier and advisor for `gh pr` and `git` shell commands, the skill, its
+procedure and template. Sources are the earlier plugin's PR lifecycle
+(`policies/08-merge-readiness.md`), `templates/pull-request.md`, the onboarding
+merge question and the primary checkout stability design. Managed delivery, the
+GitHub App, merge queue and repository enforcement were not carried over.
+
 Follow-up development-only checks: `tests/verify_group.py`,
 `tests/verify_native_loading.py`, `tests/verify_cancel.mjs` and
 `tests/test_verification.py`. The runtime allowlist is unchanged.
