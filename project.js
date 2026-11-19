@@ -71,7 +71,9 @@ function uniqueKeys(text) {
   return true
 }
 
-async function readSettings(folder, path) {
+const FEATURES = { smart_router: ["enabled"], pull_requests: ["enabled", "agent_merge"] }
+
+async function readSettings(folder, path, feature) {
   const parent = await maybeStat(folder)
   if (!parent) return {}
   if (!parent.isDirectory() || !owned(parent) || await realpath(folder) !== folder) throw unsafe()
@@ -97,18 +99,20 @@ async function readSettings(folder, path) {
     if (!object(value) || value.version !== 1 || "smart_router" in value || !Array.isArray(value.features) ||
       !uniqueKeys(text)) throw unsafe()
     const names = new Set()
-    let routerIndex = -1
+    let featureIndex = -1
     for (const [index, entry] of value.features.entries()) {
       if (!object(entry)) throw unsafe()
       const keys = Object.keys(entry), name = keys[0]
       if (keys.length !== 1 || !name || names.has(name) || !object(entry[name])) throw unsafe()
       names.add(name)
-      if (name === "smart_router") {
-        if (typeof entry.smart_router.enabled !== "boolean") throw unsafe()
-        routerIndex = index
+      if (name === feature) {
+        const settings = entry[name]
+        if (typeof settings.enabled !== "boolean" || FEATURES[feature].some((key) =>
+          key in settings && typeof settings[key] !== "boolean")) throw unsafe()
+        featureIndex = index
       }
     }
-    return { parent, raw, value, routerIndex, mode: actual.mode & 0o777 }
+    return { parent, raw, value, featureIndex, mode: actual.mode & 0o777 }
   } finally { await file.close() }
 }
 
@@ -138,19 +142,32 @@ function numbersRoundTrip(raw) {
   return true
 }
 
-export function createProjectSettings(directory) {
+export function createProjectSettings(directory, feature = "smart_router", { atProject = false } = {}) {
+  if (!Object.hasOwn(FEATURES, feature)) throw new Error("unsupported feature")
+  const prefs = feature === "pull_requests"
+  // The default feature accepts a boolean or { enabled }; pull_requests accepts { enabled?, agent_merge? }.
+  // Unknown keys and non-boolean values are invalid.
+  function normalize(values) {
+    if (values === undefined) return {}
+    if (!prefs && typeof values === "boolean") return { enabled: values }
+    if (!object(values) || Object.keys(values).some((key) => !FEATURES[feature].includes(key) ||
+      typeof values[key] !== "boolean")) return null
+    return values
+  }
   let discovery
   async function current() {
     discovery ??= findRoot(directory).catch(() => null)
     const found = await discovery
     if (!found) return { state: "blocked", reason: "project_root_unavailable", root: null, project: null, path: null }
-    const { root, project } = found
+    const { project } = found, root = atProject ? project : found.root
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
-      const data = await readSettings(folder, path)
-      const enabled = data.value?.features[data.routerIndex]?.smart_router.enabled ?? null
+      const data = await readSettings(folder, path, feature)
+      const entry = data.value?.features[data.featureIndex]?.[feature]
+      const enabled = entry?.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
-        reason: null, root, project, path, enabled, snapshot: snapshot(root, data.raw), folder, data }
+        reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null }),
+        snapshot: snapshot(root, data.raw), folder, data }
     } catch {
       return { state: "blocked", reason: "project_settings_invalid", root, project, path }
     }
@@ -158,24 +175,34 @@ export function createProjectSettings(directory) {
   const publicState = ({ data, folder, ...state }) => state
   return {
     async inspect() { return publicState(await current()) },
-    async preview(enabled) {
+    async preview(values) {
       const { data, folder, ...state } = await current()
       if (state.state === "blocked") return state
-      if (enabled !== undefined && typeof enabled !== "boolean") return { state: "blocked", reason: "invalid_request" }
-      const proposed = enabled ?? state.enabled ?? true
-      return { ...state, state: "preview", previous_enabled: state.enabled, enabled: proposed,
-        change: !data.raw ? "create" : proposed === state.enabled ? "none" : "update" }
+      const asked = normalize(values)
+      if (!asked) return { state: "blocked", reason: "invalid_request" }
+      const enabled = asked.enabled ?? state.enabled ?? true
+      const agentMerge = asked.agent_merge ?? state.agent_merge ?? false
+      const same = enabled === state.enabled && (!prefs || agentMerge === state.agent_merge)
+      return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
+        ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge }),
+        change: !data.raw ? "create" : same ? "none" : "update" }
     },
-    async apply(enabled, expectedSnapshot, { signal } = {}) {
-      if (typeof enabled !== "boolean" || typeof expectedSnapshot !== "string" ||
+    async apply(values, expectedSnapshot, { signal } = {}) {
+      const asked = normalize(values)
+      if (!asked || typeof asked.enabled !== "boolean" || (prefs && typeof asked.agent_merge !== "boolean") ||
+          typeof expectedSnapshot !== "string" ||
           !/^[a-f0-9]{64}$/.test(expectedSnapshot)) return { state: "blocked", reason: "invalid_request" }
+      const { enabled, agent_merge: agentMerge } = asked
       const initial = await current()
       const { root, project, path, folder } = initial
-      const blocked = (reason) => ({ state: "blocked", reason, root, project, path, enabled: null })
+      const blocked = (reason) => ({ state: "blocked", reason, root, project, path, enabled: null,
+        ...(prefs && { agent_merge: null }) })
+      const result = (state) => ({ state, reason: null, root, project, path, enabled,
+        ...(prefs && { agent_merge: agentMerge }) })
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      if (initial.enabled === enabled) return { state: "unchanged", reason: null, root, project, path, enabled }
+      if (initial.enabled === enabled && (!prefs || initial.agent_merge === agentMerge)) return result("unchanged")
       if (initial.data.raw && !numbersRoundTrip(initial.data.raw)) return blocked("project_settings_lossy")
       const lockPath = join(folder, ".settings.lock")
       let lock, temporary, createdFolder = false, saved = false
@@ -195,10 +222,10 @@ export function createProjectSettings(directory) {
         if (latest.state === "blocked") return blocked(latest.reason)
         if (!latest.data.parent || !same(parent, latest.data.parent) ||
             latest.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-        const { value, routerIndex = -1 } = latest.data
+        const { value, featureIndex = -1 } = latest.data
         const features = [...(value?.features ?? [])]
-        features[routerIndex < 0 ? features.length : routerIndex] = {
-          smart_router: { ...features[routerIndex]?.smart_router, enabled },
+        features[featureIndex < 0 ? features.length : featureIndex] = {
+          [feature]: { ...features[featureIndex]?.[feature], enabled, ...(prefs && { agent_merge: agentMerge }) },
         }
         const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")
@@ -216,7 +243,7 @@ export function createProjectSettings(directory) {
         if (signal?.aborted) return blocked("project_settings_cancelled")
         await rename(temporary, path)
         saved = true
-        return { state: "saved", reason: null, root, project, path, enabled }
+        return result("saved")
       } catch {
         return blocked("project_settings_write_failed")
       } finally {
