@@ -19,8 +19,8 @@ plugins or skills. Detailed audience segmentation has not been established.
 `vibe-workflow` helps users adopt workflow capabilities without replacing the
 client or recreating tools that already serve the project.
 Project onboarding should be a thin, quick chat-based question-and-answer flow.
-Success means the user understands the project choices, confirms proposed
-changes, and can continue working without onboarding becoming a new framework.
+Success means the user understands the project choices, answers them, and can
+continue working without onboarding becoming a new framework.
 
 ## Operating Context
 
@@ -58,7 +58,9 @@ different from the approved future onboarding default below.
 - Offer Smart Router with its choice defaulting to ON and a clear opt-out.
 - Store client-neutral project preferences in `.vibe-workflow/settings.json`
   at the project root. Credentials and account/usage caches remain outside it.
-- Preview proposed changes and apply only after confirmation.
+- Say what will be saved, then apply after the user's answers; there is no
+  separate confirmation question. The client's native edit permission still
+  applies and cancelling stops the flow.
 - Distinguish the saved preference from actual readiness.
 - If an enabled router cannot recommend an eligible route, post a brief
   `vibe-workflow`-identified notice with a relevant corrective action, then
