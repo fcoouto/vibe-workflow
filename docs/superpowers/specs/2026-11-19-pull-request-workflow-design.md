@@ -77,8 +77,8 @@ not a live run.
 One feature entry, booleans only, like Smart Router. The entry was named
 `pull_requests` in 0.5.0 and 0.5.1 and was renamed `git_workflow` on 2026-11-19 so
 related behavior (such as worktree cleanup) can live under one umbrella. The old
-entry is still read, and is replaced by `git_workflow` the next time the choice is
-saved:
+name is no longer read: an old `pull_requests` entry is just an unknown entry and is
+kept as is, so a project saved under it is asked again by onboarding:
 
 ```json
 {"git_workflow": {"enabled": true, "agent_merge": false}}
@@ -255,7 +255,7 @@ Marked as the writer's calls; the user can change any of them.
 ## Proof expected
 
 - Settings: Smart Router outputs unchanged (existing tests untouched and green);
-  `git_workflow` valid, invalid, missing, legacy and unknown-entry cases; the worktree
+  `git_workflow` valid, invalid, missing and unknown-entry cases; the worktree
   copy never changes the effective `agent_merge`.
 - Hook: each case fires on its command, stays silent otherwise, tolerates an
   `rtk ` prefix, never throws into the host, never mutates a failed call, follows
