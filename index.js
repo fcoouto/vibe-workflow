@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { registerOnboarding, registerSkill } from "./onboarding.js"
+import { registerPrAdvice } from "./pr-advice.js"
 import { createProjectSettings } from "./project.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -141,17 +142,23 @@ export default {
       },
     }))
     const pullRequests = createProjectSettings(directory, "pull_requests", { atProject: true })
+    const prAdvice = await registerPrAdvice(ctx, { settings: () => pullRequests.inspect(),
+      primary: async () => (await pullRequests.inspect()).project ?? null })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) notices.clear()
       return result
     } }, pull_requests: pullRequests }, (signal) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }),
-    () => ({ state: "setup_needed", reason: "guard_unavailable" }))
+    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" })
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await ctx.session.hook("context", async (event) => {
       if (closed) return
+      if (!prAdvice.registered && (await pullRequests.inspect()).state === "on") {
+        event.system.push({ type: "text", text:
+          "vibe-workflow: open pull requests as [BLOCKED] drafts and follow the vibe-pull-requests skill." })
+      }
       const preference = await project.inspect()
       if (preference.state === "off") notices.clear()
       if (preference.state !== "on" || closed) return
@@ -164,6 +171,7 @@ export default {
     })
     return () => {
       closed = true
+      prAdvice.close()
       notices.clear()
       for (const stop of active) stop()
     }

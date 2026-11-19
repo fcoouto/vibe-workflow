@@ -1,3 +1,9 @@
+import { execFile } from "node:child_process"
+import { realpath } from "node:fs/promises"
+import { resolve } from "node:path"
+import { promisify } from "node:util"
+
+const exec = promisify(execFile)
 const MAX_SESSIONS = 200
 const SHELLS = new Set(["bash", "shell"])
 const SEPARATORS = new Set([";", "&", "|", "(", ")", "{", "}"])
@@ -171,6 +177,15 @@ const NOTES = {
     "merge only a [READY] pull request whose evidence is current.",
 }
 
+function mergeNote(auto, agentMerge, primaryPath) {
+  const where = primaryPath ? ` (${primaryPath})` : ""
+  const when = auto ? "once the auto-merge completes" : "if this merge landed on main"
+  return `vibe-workflow: ${when}, update the primary checkout${where}: when it is clean (ignoring ` +
+    ".vibe-workflow/settings.json) and on main, run `git fetch origin main` then `git merge --ff-only origin/main` there; " +
+    "otherwise report it and change nothing." +
+    (agentMerge ? "" : " The user chose to merge pull requests themselves; tell them you merged this one.")
+}
+
 function remember(map, key, value) {
   map.delete(key)
   map.set(key, value)
@@ -201,14 +216,71 @@ export function createAdvisor({ settings, primary, checkout }) {
           else if (action.kind === "pr_ready" || (action.kind === "pr_retitle" && action.title.startsWith("[READY]"))) {
             notes.push(agentMerge ? NOTES.agentMerges : NOTES.userMerges)
             arm(true)
-          } else if (action.kind === "pr_retitle" && /^\[(BLOCKED|SUPERSEDED)\]/.test(action.title)) arm(false)
+          } else if (action.kind === "pr_merge") notes.push(mergeNote(action.auto, agentMerge, await primary()))
+          else if (action.kind === "pr_retitle" && /^\[(BLOCKED|SUPERSEDED)\]/.test(action.title)) arm(false)
           else if (action.kind === "push" && sessionID && armed.has(sessionID)) {
             notes.push(NOTES.push)
             arm(false)
+          } else if (action.kind === "checkout" && sessionID && !action.moved) {
+            const directory = action.dir ? resolve(event.directory ?? "", action.dir) : event.directory
+            const [info, home] = directory ? await Promise.all([checkout(directory), primary()]) : []
+            const seen = branches.get(sessionID) ?? new Set()
+            if (info && home && info.top === home && info.branch !== "main" && !seen.has(info.branch)) {
+              seen.add(info.branch)
+              remember(branches, sessionID, seen)
+              notes.push(`vibe-workflow: the primary checkout (${home}) is now ` +
+                (info.branch === "HEAD" ? "detached" : `on ${info.branch}`) +
+                "; keep it on main and do task work in a worktree.")
+            }
           }
         }
         return notes.length ? notes.join("\n") : null
       } catch { return null }
     },
   }
+}
+
+async function defaultCheckout(directory) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+  try {
+    const { stdout } = await exec("git", ["-C", directory, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"],
+      { env: { ...env, LC_ALL: "C" }, timeout: 2000, maxBuffer: 8192 })
+    const [top, branch] = stdout.trimEnd().split("\n")
+    return top && branch ? { top: await realpath(top), branch } : null
+  } catch { return null }
+}
+
+function appendNote(event, note) {
+  try {
+    const result = event.result
+    if (typeof result === "string") event.result = `${result}\n\n${note}`
+    else if (result && typeof result === "object") {
+      for (const key of ["output", "content"]) {
+        if (typeof result[key] === "string") { result[key] = `${result[key]}\n\n${note}`; return }
+      }
+    }
+  } catch {}
+}
+
+// The hook is unverified on the installed host: every field is read defensively and a missing one keeps the note silent.
+export async function registerPrAdvice(ctx, { settings, primary, checkout = defaultCheckout }) {
+  const advisor = createAdvisor({ settings, primary, checkout })
+  let closed = false
+  const close = () => { closed = true; advisor.clear() }
+  if (typeof ctx.tool?.hook !== "function") return { registered: false, close }
+  try {
+    await ctx.tool.hook("execute.after", async (event) => {
+      try {
+        if (closed) return
+        const input = event?.input ?? event?.args
+        if (typeof input?.command !== "string") return
+        const exits = [event.result?.metadata?.exit, event.result?.metadata?.exitCode, event.exitCode, event.metadata?.exit]
+        const ok = event.status === "completed" && !exits.some((code) => typeof code === "number" && code !== 0)
+        const note = await advisor.advise({ tool: event.tool, command: input.command, ok,
+          directory: input.workdir ?? input.cwd ?? ctx.location?.directory }, event.sessionID ?? event.session?.id)
+        if (note) appendNote(event, note)
+      } catch {}
+    })
+  } catch { return { registered: false, close } }
+  return { registered: true, close }
 }

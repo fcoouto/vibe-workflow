@@ -110,3 +110,47 @@ test("a missing sessionID skips case 2 only, and per-session state is bounded an
   clear()
   assert.equal(await advise("git push", "ses_259"), null)
 })
+
+test("case 4 names the primary path and the fast-forward commands", async () => {
+  const note = await advisor().advise("gh pr merge 3 --squash")
+  assert.match(note, /\/repo/)
+  assert.match(note, /git fetch origin main/)
+  assert.match(note, /git merge --ff-only origin\/main/)
+  assert.match(note, /chose to merge pull requests themselves/)
+  assert.doesNotMatch(await advisor({ state: "on", agent_merge: true }).advise("gh pr merge 3"), /chose to merge/)
+})
+
+test("case 4 with auto-merge waits for completion, and a missing primary still advises", async () => {
+  assert.match(await advisor().advise("gh pr merge 3 --auto"), /auto-merge completes/)
+  const note = await advisor(on, { primary: async () => null }).advise("gh pr merge 3")
+  assert.match(note, /git merge --ff-only origin\/main/)
+})
+
+test("case 5 names the branch once, stays silent on main, another repository, failure and cd", async () => {
+  const seen = []
+  let info = { top: "/repo", branch: "feat/x" }
+  const { advise } = advisor(on, { checkout: async (dir) => { seen.push(dir); return info } })
+  const note = await advise("git switch -c feat/x")
+  assert.match(note, /feat\/x/)
+  assert.match(note, /worktree/)
+  assert.equal(await advise("git checkout feat/x"), null)
+  info = { top: "/repo", branch: "other" }
+  assert.match(await advise("git checkout other"), /other/)
+  info = { top: "/repo", branch: "main" }
+  assert.equal(await advise("git checkout main"), null)
+  info = { top: "/elsewhere", branch: "feat/y" }
+  assert.equal(await advise("git checkout -b feat/y"), null)
+  info = null
+  assert.equal(await advise("git checkout -b feat/z"), null)
+  info = { top: "/repo", branch: "feat/q" }
+  assert.equal(await advise("cd /repo && git checkout -b feat/q"), null)
+  assert.equal(await advise("git checkout -b feat/q", null), null)
+  assert.deepEqual(seen.slice(0, 2), ["/repo", "/repo"])
+  assert.equal(await advise("git -C /repo/sub checkout -b feat/q", "ses_c") === null, false)
+  assert.equal(seen.at(-1), "/repo/sub")
+})
+
+test("a detached primary checkout is reported", async () => {
+  const { advise } = advisor(on, { checkout: async () => ({ top: "/repo", branch: "HEAD" }) })
+  assert.match(await advise("git checkout abc123"), /detached/)
+})
