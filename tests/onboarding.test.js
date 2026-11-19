@@ -111,10 +111,10 @@ test("git_workflow apply asks for edit permission and saves only that entry", as
   const { execute, write, path, assertCalls } = await fixture(t)
   await write({ version: 1, features: [{ smart_router: { enabled: false } }] })
   const preview = await prefs(execute, { op: "preview", agent_merge: true })
-  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: true, expected_snapshot: preview.snapshot })
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: true, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.deepEqual([saved.state, saved.enabled, saved.agent_merge], ["saved", true, true])
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ smart_router: { enabled: false } }, { git_workflow: { enabled: true, agent_merge: true } }])
+    [{ smart_router: { enabled: false } }, { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: false } }])
   assert.deepEqual(assertCalls.map(({ action, resources }) => ({ action, resources })),
     [{ action: "edit", resources: ["../.vibe-workflow/settings.json"] }])
 })
@@ -134,39 +134,68 @@ test("git_workflow readiness reports guard_unavailable", async (t) => {
 
 test("skip saves enabled false and agent_merge false with readiness off", async (t) => {
   const { execute, path } = await fixture(t)
-  const preview = await prefs(execute, { op: "preview", enabled: false, agent_merge: false })
-  const saved = await prefs(execute, { op: "apply", enabled: false, agent_merge: false, expected_snapshot: preview.snapshot })
+  const preview = await prefs(execute, { op: "preview", enabled: false, agent_merge: false, worktree_cleanup: false })
+  const saved = await prefs(execute, { op: "apply", enabled: false, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.deepEqual([saved.state, saved.readiness], ["saved", { state: "off", reason: null }])
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ git_workflow: { enabled: false, agent_merge: false } }])
+    [{ git_workflow: { enabled: false, agent_merge: false, worktree_cleanup: false } }])
 })
 
-test("git_workflow apply without agent_merge is blocked", async (t) => {
+test("git_workflow apply without agent_merge or worktree_cleanup is blocked", async (t) => {
   const { execute, path } = await fixture(t)
   const preview = await prefs(execute, { op: "preview" })
   assert.equal((await prefs(execute, { op: "apply", enabled: true, expected_snapshot: preview.snapshot })).reason, "invalid_request")
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })).reason,
+    "invalid_request")
   await assert.rejects(stat(path), { code: "ENOENT" })
+})
+
+test("worktree_cleanup with the default feature is invalid", async (t) => {
+  const { execute } = await fixture(t)
+  assert.equal((await execute({ op: "preview", worktree_cleanup: true })).reason, "invalid_request")
+  assert.equal((await execute({ op: "preview", worktree_cleanup: "yes", feature: "git_workflow" })).reason, "invalid_request")
+})
+
+test("preview reports previous_worktree_cleanup null for a file saved before this feature", async (t) => {
+  const { execute, write } = await fixture(t)
+  await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true } }] })
+  const preview = await prefs(execute, { op: "preview" })
+  assert.deepEqual([preview.previous_worktree_cleanup, preview.previous_agent_merge, preview.worktree_cleanup, preview.change],
+    [null, true, false, "update"])
+})
+
+test("an applied worktree_cleanup true is saved and read back", async (t) => {
+  const { execute, path } = await fixture(t)
+  const preview = await prefs(execute, { op: "preview", worktree_cleanup: true })
+  assert.equal(preview.worktree_cleanup, true)
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: true,
+    expected_snapshot: preview.snapshot })
+  assert.deepEqual([saved.state, saved.worktree_cleanup], ["saved", true])
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
+    [{ git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } }])
+  const again = await prefs(execute, { op: "preview" })
+  assert.deepEqual([again.previous_worktree_cleanup, again.change], [true, "none"])
 })
 
 test("both choices apply in sequence on a primary checkout", async (t) => {
   const { execute, path } = await fixture(t)
   const router = await execute({ op: "preview", enabled: true })
-  const pullRequests = await prefs(execute, { op: "preview", enabled: true, agent_merge: false })
+  const pullRequests = await prefs(execute, { op: "preview", enabled: true, agent_merge: false, worktree_cleanup: false })
   assert.equal(router.snapshot, pullRequests.snapshot)
   assert.equal((await execute({ op: "apply", enabled: true, expected_snapshot: router.snapshot })).state, "saved")
-  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false,
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false,
     expected_snapshot: pullRequests.snapshot })).reason, "project_settings_changed")
-  const again = await prefs(execute, { op: "preview", enabled: true, agent_merge: false })
+  const again = await prefs(execute, { op: "preview", enabled: true, agent_merge: false, worktree_cleanup: false })
   assert.equal(again.change, "update")
-  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: again.snapshot })).state, "saved")
+  assert.equal((await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: again.snapshot })).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ smart_router: { enabled: true } }, { git_workflow: { enabled: true, agent_merge: false } }])
+    [{ smart_router: { enabled: true } }, { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: false } }])
 })
 
 test("a missing ctx.permission blocks git_workflow apply", async (t) => {
   const { execute, path } = await fixture(t, null)
   const preview = await prefs(execute, { op: "preview" })
-  const blocked = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })
+  const blocked = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.equal(blocked.reason, "project_permission_unavailable")
   await assert.rejects(stat(path), { code: "ENOENT" })
 })
@@ -183,14 +212,14 @@ test("git_workflow apply from a linked worktree writes the main checkout only", 
   const { execute, path, assertCalls, root } = await fixture(t, async () => {}, prepare)
   const preview = await prefs(execute, { op: "preview" })
   assert.deepEqual([preview.root, preview.project], [root, root])
-  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: preview.snapshot })
+  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
   assert.equal(saved.state, "saved")
   assert.equal(JSON.parse(await readFile(path, "utf8")).features[0].git_workflow.enabled, true)
   await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
   assert.deepEqual(assertCalls.map(({ resources }) => resources), [["../.vibe-workflow/settings.json"]])
   const denied = await fixture(t, async () => { throw denial }, prepare)
   const again = await prefs(denied.execute, { op: "preview" })
-  await assert.rejects(prefs(denied.execute, { op: "apply", enabled: true, agent_merge: false, expected_snapshot: again.snapshot }), denial)
+  await assert.rejects(prefs(denied.execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: again.snapshot }), denial)
   await assert.rejects(stat(denied.path), { code: "ENOENT" })
 })
 
@@ -198,7 +227,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
   const questions = text.split(/^### \d+\. /m).slice(1).map((block) => block.split(/^## /m)[0])
-  assert.equal(questions.length, 2)
+  assert.equal(questions.length, 4)
   for (const block of questions) {
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
@@ -214,6 +243,9 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   }
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
+  assert.equal(questions[2].match(/^- Question: (.+)$/m)[1], "Clean up after a pull request is merged in this project?")
+  assert.equal(questions[3].match(/^- Question: (.+)$/m)[1], "Delete merged branches on GitHub automatically?")
+  assert.match(questions[1], /Skip git workflow guidance — Saves all of this as off, including cleanup\./)
   assert.doesNotMatch(text, /Save both\?|Save onboarding choices|one confirmation/)
   assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
 })
@@ -221,10 +253,11 @@ test("every onboarding question has the same control-shaped form", async (t) => 
 test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Two short questions.", "Saved in the main checkout", "project_root_unavailable",
+  for (const phrase of ["Up to four short questions.", "Saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
-    "Nothing to change", "Saving:", "native file-edit permission"]) {
+    "Nothing to change", "Saving:", "native file-edit permission",
+    "Git workflow: On · I merge, cleanup on —", "Git workflow: On · Agents merge, cleanup on —"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })
@@ -232,4 +265,22 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
 test("the old feature name is not accepted by the tool, only by stored settings", async (t) => {
   const { execute } = await fixture(t)
   assert.equal((await execute({ feature: "pull_requests", op: "preview" })).reason, "invalid_request")
+})
+
+test("the procedure pins the cleanup questions, the GitHub conditions, the apply order and cancel", async (t) => {
+  const { skills } = await fixture(t)
+  const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
+  for (const phrase of ["Skip git workflow guidance", "skips questions 3 and 4",
+    "gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission", "`deleteBranchOnMerge` is `false`",
+    "`viewerPermission` is `ADMIN`", "gh repo edit", "--delete-branch-on-merge", "the same `gh repo view` call",
+    "GitHub auto-delete: already on.", "GitHub auto-delete: not changed (admin access is needed).",
+    "GitHub auto-delete: not available (gh is missing or not logged in).",
+    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: not available (could not be read).", "ignored files", "GitHub auto-delete: turned on.",
+    "GitHub: turn on auto-delete of merged branches", "previous_worktree_cleanup", '"worktree_cleanup"',
+    "A yes to question 4 counts as a change", "the Saving line comes before anything is applied",
+    "a cancel at any question or a denied native file-edit permission means no GitHub change",
+    "runs after the settings apply", "independent of a technical failure"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(text, /Two short questions\./)
 })

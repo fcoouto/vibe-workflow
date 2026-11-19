@@ -43,9 +43,23 @@ test("template has the five sections", async () => {
 })
 
 test("skill files never point to Superpowers or claim enforcement", async () => {
-  for (const name of ["SKILL.md", "references/procedure.md", "references/pull-request-template.md"]) {
+  for (const name of ["SKILL.md", "references/procedure.md", "references/pull-request-template.md",
+    "references/worktree-cleanup.md"]) {
     const text = await read(name)
     assert.doesNotMatch(text, /superpowers/i, name)
     assert.doesNotMatch(text.replaceAll("not enforced", ""), /enforce/i, name)
   }
+})
+
+test("the cleanup reference states the checks, the order, the mapping and the no-force rules", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  for (const phrase of ["worktree_cleanup", "previous_enabled", "previous_worktree_cleanup", "gh pr view", "defaultBranchRef",
+    "merge-base --is-ancestor", "git switch --detach", "--git-dir", "branch -d", "last action that changes anything",
+    "git -C", "status --porcelain --ignored", "--path-format=absolute", "worktree list --porcelain", ".gitmodules", "origin/<default branch>", "worktree_remove", "ExitWorktree", "git worktree remove", "--delete-branch", "backstop"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  for (const line of text.split("\n").filter((line) => line.includes("-D"))) assert.match(line, /never/i, line)
+  const procedure = await read("references/procedure.md")
+  assert.ok(procedure.includes("worktree-cleanup.md"))
+  assert.match(procedure, /--delete-branch/)
 })

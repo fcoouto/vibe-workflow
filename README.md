@@ -30,14 +30,17 @@ Keep the whole directory; `index.js` needs the files beside it.
 In the project's OpenCode chat, ask:
 **“Use `vibe-onboard-project` to onboard this project.”**
 
-OpenCode asks whether to use Smart Router and who merges `[READY]` pull
-requests, says what it will save, then saves your answers. Your client's own
-edit permission still applies. The choices live in `.vibe-workflow/settings.json`. In a linked worktree, the questions name the
-main project; the Smart Router file stays in the worktree, and the pull request
-choice is saved in the main checkout.
+OpenCode asks whether to use Smart Router, who merges `[READY]` pull requests,
+and whether to clean up a task's worktree and local branch after a merge. If
+GitHub's auto-delete of merged branches is off, it also offers to turn it on. It
+says what it will save, then saves your answers; your client's own edit
+permission still applies. The choices live in `.vibe-workflow/settings.json`. In a
+linked worktree, the Smart Router file stays in the worktree and the git
+workflow choices are saved in the main checkout.
 
-Pull request reminders are advisory, not enforced. Agents open PRs as `[BLOCKED]`
-drafts, mark them `[READY]`, and keep the main checkout on a current `main`.
+Reminders are advisory, not enforced. Agents open PRs as `[BLOCKED]` drafts, mark
+them `[READY]`, keep the main checkout on a current `main`, and clean up only
+when chosen and after a verified merge.
 
 ## Prepare your workspace
 

@@ -84,6 +84,8 @@ kept as is, so a project saved under it is asked again by onboarding:
 {"git_workflow": {"enabled": true, "agent_merge": false}}
 ```
 
+- A third boolean, `worktree_cleanup`, was added for post-merge cleanup; see
+  `2026-11-19-post-merge-cleanup-design.md`.
 - `enabled`: the hook and reminders run only when true. Absent means not
   onboarded: nothing runs.
 - `agent_merge`: default false. True means agents may merge their `[READY]` PRs.

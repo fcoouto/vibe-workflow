@@ -37,50 +37,88 @@ the user never has to learn a new layout:
 - Choices:
   - I merge them (Recommended) — Agents mark the PR [READY] and wait for you to merge it.
   - Agents merge their own — Agents merge a PR once it is [READY], without asking you first.
-  - Skip pull request guidance — Saves this as off. No PR reminders. Run onboarding again to change it.
+  - Skip git workflow guidance — Saves all of this as off, including cleanup. Run onboarding again to change it.
+
+### 3. Worktree cleanup
+
+- Header: Worktree cleanup
+- Question: Clean up after a pull request is merged in this project?
+- Context: Project: <project path>. A worktree is the separate folder an agent works in for one task. Cleanup runs only after a merge is confirmed, and never removes unmerged work, uncommitted work or ignored files; it stops and tells you instead.
+- Choices:
+  - Clean up (Recommended) — Removes the task's worktree and its local branch after a confirmed merge.
+  - Keep them — Leaves worktrees and branches in place. You can remove them yourself.
+
+### 4. Remote branch cleanup
+
+- Header: Remote branch cleanup
+- Question: Delete merged branches on GitHub automatically?
+- Context: Project: <project path>. GitHub, not the agent, can delete a pull request's branch as soon as it merges. It is off for <owner/repo>. It applies to every merge there, and you can turn it off again in GitHub's settings.
+- Choices:
+  - Turn it on (Recommended) — GitHub deletes a PR's branch when it merges. Runs gh repo edit --delete-branch-on-merge.
+  - Not now — Leaves the setting off.
 
 ## Steps
 
 1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the
    preview's `project` path as the project, and the client. When `root` differs,
    the session is in a worktree; say its Smart Router file is saved in that
-   worktree. Tell the user what is coming in one line: **Two short questions.**
+   worktree. Tell the user what is coming in one line: **Up to four short questions.**
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
 2. Ask question 1. In an existing project, show the saved Smart Router choice as
    the current one.
 3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
-   If that preview is blocked, explain the fixed reason, skip question 2 and
-   leave pull request guidance off; for `project_root_unavailable`, say the main
+   If that preview is blocked, explain the fixed reason, skip questions 2, 3 and 4 and
+   leave git workflow guidance off; for `project_root_unavailable`, say the main
    checkout could not be found from this worktree and onboarding must run there.
    Otherwise ask question 2. In an existing project, show the saved choice as the
    current one (the preview's `previous_enabled` and `previous_agent_merge` hold
-   it).
-4. If an answer changes a proposal, preview that feature again with the selected
-   booleans (`enabled`, and `agent_merge` for pull requests; **Skip** is
-   `enabled: false` and `agent_merge: false`). If every preview says
-   `change: "none"`, say **Nothing to change.**, keep the saved choices and stop.
+   it). Choosing **Skip git workflow guidance** skips questions 3 and 4.
+4. Ask question 3, unless question 2 was skipped. In an existing project, show a saved
+   `previous_worktree_cleanup` of `true` or `false` as the current choice; `null` means
+   it was never asked, so ask without a current marker.
+5. Unless question 2 was skipped, run `gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission`
+   before question 4. Ask question 4 only when the call succeeds, `deleteBranchOnMerge` is `false` and `viewerPermission` is `ADMIN`.
+   Otherwise skip it and report one line:
+   - `GitHub auto-delete: already on.` when `deleteBranchOnMerge` is `true`.
+   - `GitHub auto-delete: not changed (admin access is needed).` when it is `false` and the user is not an admin.
+   - `GitHub auto-delete: not available (gh is missing or not logged in).` when the call fails because `gh` is missing or not logged in.
+   - `GitHub auto-delete: not available (this remote is not on GitHub).` when there is no GitHub remote.
+   - `GitHub auto-delete: not available (could not be read).` for any other failure.
+6. If an answer changes a proposal, preview that feature again with the selected
+   booleans (`enabled`, `agent_merge` and `worktree_cleanup` for git workflow;
+   **Skip** is all three `false`). If every preview says `change: "none"` and no
+   GitHub change is pending, say **Nothing to change.**, keep the saved choices and
+   stop. A yes to question 4 counts as a change, so it is never swallowed by that stop.
    Otherwise say what will be saved, in one plain line per change and not as a
-   question, for example **Saving: Smart Router On, Git workflow I merge them —
-   .vibe-workflow/settings.json (created).** Use the full `path` when `root`
-   differs. For pull requests, add that the main checkout's settings file will
-   change and that committing it is the user's step.
-5. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
+   question, for example **Saving: Smart Router On, Git workflow I merge them, cleanup on —
+   .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
+   Use the full `path` when `root` differs. For git workflow, add that the main checkout's
+   settings file will change and that committing it is the user's step.
+   Say it in order: the Saving line comes before anything is applied, and a cancel at any question or a denied native file-edit permission means no GitHub change.
+7. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
    `snapshot`. Both features share one file on a primary checkout, so then
    preview `git_workflow` again with the answered values. If its `change` and
-   values match what the user answered, apply it with `feature: "git_workflow"`,
-   both booleans and that fresh `snapshot`; otherwise ask question 2 again and say
-   why. The user's answers are the consent; native file-edit permission is the
-   only other prompt, and it stays the client's. If edit is denied or permission
-   is unavailable, do not write another way. Report each feature that was not
-   saved as **<Feature>: not saved.** followed by how to recover, for example
-   **Git workflow: not saved. Run onboarding from the main checkout.** If
-   settings changed or the result is lost, inspect with a fresh preview instead of
-   repeating apply, and ask the affected question again if the proposal changed.
-   If apply reports `project_settings_lossy`, say that existing numbers cannot be
-   preserved by the writer. Do not rewrite the file; ask the user to review it.
-6. Report actual readiness, one line per feature, in the form
+   values match what the user answered, apply it with all three booleans and that
+   fresh `snapshot`, for example
+   `{"v":1,"op":"apply","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":true,"expected_snapshot":"<snapshot>"}`;
+   otherwise ask the affected question again and say why. The user's answers are the
+   consent; native file-edit permission is the only other prompt, and it stays the
+   client's. If edit is denied or permission is unavailable, do not write another way.
+   Report each feature that was not saved as **<Feature>: not saved.** followed by how
+   to recover, for example **Git workflow: not saved. Run onboarding from the main
+   checkout.** If settings changed or the result is lost, inspect with a fresh preview
+   instead of repeating apply, and ask the affected question again if the proposal
+   changed. If apply reports `project_settings_lossy`, say that existing numbers cannot
+   be preserved by the writer. Do not rewrite the file; ask the user to review it.
+8. On a yes to question 4, run `gh repo edit <owner/repo> --delete-branch-on-merge`. It
+   runs after the settings apply and is independent of a technical failure there (busy,
+   changed or lossy settings), but not of a cancel or a denied permission. Read the setting
+   back with the same `gh repo view` call and report one line: `GitHub auto-delete: turned on.`,
+   or `GitHub auto-delete: not changed.` with the reported reason, or that it could not be
+   verified. Never claim the change without the read-back.
+9. Report actual readiness, one line per feature, in the form
    **<Feature>: <state> — <detail>.** Use these lines, exactly:
    - Smart Router, `off`: Smart Router: Off — existing model selection.
    - Smart Router, `ready`: Smart Router: On · Configuration checked — route eligibility is checked when work is delegated.
@@ -88,9 +126,11 @@ the user never has to learn a new layout:
    - Git workflow, `off`: Git workflow: Off — no git workflow guidance.
    - Git workflow, `ready`: Git workflow: On · I merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
    - Git workflow, `ready`, agents merge: Git workflow: On · Agents merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
-   - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.)
+   - Git workflow, `ready`, cleanup on: Git workflow: On · I merge, cleanup on — reminders registered; not yet observed in this OpenCode. Advisory, not enforced. (Agents merge: Git workflow: On · Agents merge, cleanup on — …)
+   - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.) Add ", cleanup on" after the merge choice when cleanup is on.
    - Git workflow, any other `setup_needed` reason: give the reported reason.
 
+   Add the GitHub line from step 5 or step 8 when question 4 ran or was skipped for a reason.
    An enabled preference is not proof of account availability or entitlement.
    Finish with one line: **Run onboarding again to change them.**
 

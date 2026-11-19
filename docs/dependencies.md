@@ -19,6 +19,12 @@ procedure and template. Sources are the earlier plugin's PR lifecycle
 merge question and the primary checkout stability design. Managed delivery, the
 GitHub App, merge queue and repository enforcement were not carried over.
 
+`skills/vibe-pull-requests/references/worktree-cleanup.md` adds the post-merge
+cleanup rules, adapted from the earlier plugin's post-merge cleanup
+(`clients/delivery.md`). Its helper script, runtime and managed delivery were not
+carried over: git and the client already refuse unsafe removals, and GitHub's own
+setting covers remote branches.
+
 Follow-up development-only checks: `tests/verify_group.py`,
 `tests/verify_native_loading.py`, `tests/verify_cancel.mjs` and
 `tests/test_verification.py`. The runtime allowlist is unchanged.

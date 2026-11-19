@@ -155,3 +155,25 @@ test("a detached primary checkout is reported", async () => {
   const { advise } = advisor(on, { checkout: async () => ({ top: "/repo", branch: "HEAD" }) })
   assert.match(await advise("git checkout abc123"), /detached/)
 })
+
+test("case 4 adds the cleanup sentence only when worktree_cleanup is true", async () => {
+  const sentence = /Cleanup is on: once the merge is confirmed, follow the worktree cleanup steps in the vibe-pull-requests skill \(detach, safe-delete the branch, remove the worktree last\)\./
+  assert.match(await advisor({ state: "on", agent_merge: true, worktree_cleanup: true }).advise("gh pr merge 3"), sentence)
+  for (const worktree_cleanup of [false, null, undefined]) {
+    assert.doesNotMatch(await advisor({ state: "on", agent_merge: true, worktree_cleanup }).advise("gh pr merge 3"), /Cleanup is on/)
+  }
+  assert.equal(await advisor({ state: "off", agent_merge: true, worktree_cleanup: true }).advise("gh pr merge 3"), null)
+  assert.equal(await advisor({ state: "not_onboarded", agent_merge: null, worktree_cleanup: true }).advise("gh pr merge 3"), null)
+})
+
+test("case 4 with auto waits for the auto-merge to complete before cleanup", async () => {
+  const note = await advisor({ state: "on", agent_merge: true, worktree_cleanup: true }).advise("gh pr merge 3 --auto")
+  assert.match(note, /Cleanup is on: once the auto-merge completes, follow the worktree cleanup steps/)
+  assert.doesNotMatch(note, /once the merge is confirmed, follow/)
+})
+
+test("the user-merges and cleanup sentences appear together", async () => {
+  const note = await advisor({ state: "on", agent_merge: false, worktree_cleanup: true }).advise("gh pr merge 3")
+  assert.match(note, /chose to merge pull requests themselves/)
+  assert.match(note, /Cleanup is on/)
+})
