@@ -95,17 +95,23 @@ One feature entry, booleans only, like Smart Router:
 
 ## Onboarding
 
-One added question, after the existing Smart Router question. Copy (the user
-approved the intent; exact wording is the builder's, in the existing style):
+One added question, after the existing Smart Router question, in the same
+control-shaped form as every onboarding question (header of at most 30
+characters, context before the choices, one-to-five-word labels with
+descriptions, "(Recommended)" first or "(Current)" for a saved choice). The copy
+was fixed after an impeccable critique and standardized across all questions on
+2026-11-19; `skills/vibe-onboard-project/references/procedure.md` is the source of
+truth and a test checks its shape:
 
-**Who merges `[READY]` PRs in `<project>`?**
-- **I merge them. Agents mark the PR `[READY]` and wait.** — default
-- **Agents merge their own `[READY]` PRs.**
-- **Skip pull request guidance.** — sets `enabled: false` (my call: without it the
-  `enabled` flag has no way to be false)
+- Header **Pull request merging**; question **Who merges ready pull requests in
+  this project?**
+- **I merge them (Recommended)**, **Agents merge their own**, **Skip pull request
+  guidance** (sets `enabled: false`; without it the `enabled` flag has no way to
+  be false).
 
 The default is a proposal, not permission to write. Both questions share one
-confirmation covering both previews; cancelling leaves everything untouched. The
+confirmation question covering both previews; cancelling leaves everything
+untouched. If every preview says nothing changes, the flow says so and stops. The
 onboarding tool is extended in a backward-compatible way: today's calls keep their
 exact behavior and results. The `agent_merge` choice is the one setting a task
 checkout must not be able to give itself, so it is read and written at the main
@@ -135,9 +141,11 @@ Rules it states (all advisory guidance to the agent):
    result before reporting.
 6. **The prefix belongs to the agent.** Never ask a person to change it. Re-read
    the title before changing it and keep the rest.
-7. **Primary checkout.** Keep it on `main` and never switch, detach, rename or
-   rebase it. Do task work in a worktree. After an agent merge, if the primary is
-   clean and on `main`, run `git fetch origin main` then
+7. **Primary checkout.** Never touch it: no edits, commits, switching, detaching,
+   renaming or rebasing, and all task work in a worktree. If it has left `main`,
+   tell the user and change nothing. The one exception is the user's decision to
+   keep it current: after an agent merge, if the primary is clean and on `main`,
+   run `git fetch origin main` then
    `git merge --ff-only origin/main` there. If dirty, diverged, detached or
    uncertain, report and change nothing. A change to `.vibe-workflow/settings.json`
    alone does not make the primary dirty for this rule; if the merge is then

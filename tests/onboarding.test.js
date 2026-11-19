@@ -194,16 +194,37 @@ test("pull_requests apply from a linked worktree writes the main checkout only",
   await assert.rejects(stat(denied.path), { code: "ENOENT" })
 })
 
-test("procedure asks who merges with a control-shaped question and keeps the Smart Router question", async (t) => {
+test("every onboarding question has the same control-shaped form", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Use Smart Router for this project?", "Pull request merging", "Who merges ready pull requests in <project path>?",
-    "I merge them (Recommended)", "Agents merge their own", "Skip pull request guidance", "Run onboarding again to change it.",
-    "Save both?", "Pull requests: not saved.", "reminders registered", "project_root_unavailable", "Saved in the main checkout"]) {
+  const questions = text.split(/^### \d+\. /m).slice(1).map((block) => block.split(/^## /m)[0])
+  assert.equal(questions.length, 3)
+  for (const block of questions) {
+    const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
+    assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
+    assert.match(field("Question"), /\?$/)
+    assert.ok(field("Context")?.startsWith("Project: <project path>."), field("Header"))
+    const choices = [...block.matchAll(/^ {2,}- (.+?) — (.+)$/gm)]
+    assert.ok(choices.length >= 2 && choices.length <= 3, field("Header"))
+    for (const [, label, description] of choices) {
+      assert.ok(label.split(/\s+/).length <= 5, label)
+      assert.ok(description.length > 0 && !/`/.test(`${label}${description}`), label)
+    }
+    assert.match(choices[0][1], /\((Recommended)\)$/, field("Header"))
+  }
+  assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
+  assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
+  assert.match(questions[2], /Save both\?/)
+  assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
+})
+
+test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
+  const { skills } = await fixture(t)
+  const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
+  for (const phrase of ["Two short questions, then one confirmation", "Saved in the main checkout", "project_root_unavailable",
+    "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Pull requests: Off —", "Pull requests: On · I merge —",
+    "Pull requests: On · Agents merge —", "Pull requests: not saved.", "reminders registered", "Run onboarding again to change them",
+    "Nothing to change"]) {
     assert.ok(text.includes(phrase), phrase)
   }
-  const labels = ["I merge them (Recommended)", "Agents merge their own", "Skip pull request guidance"]
-  for (const label of labels) assert.ok(label.split(/\s+/).length <= 5, label)
-  assert.ok("Pull request merging".length <= 30)
-  assert.doesNotMatch(text.slice(text.indexOf("3. Call")), /`\[(READY|BLOCKED)\]`/)
 })

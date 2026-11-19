@@ -133,6 +133,7 @@ test("case 5 names the branch once, stays silent on main, another repository, fa
   const note = await advise("git switch -c feat/x")
   assert.match(note, /feat\/x/)
   assert.match(note, /worktree/)
+  assert.match(note, /Never touch the primary checkout; tell the user/)
   assert.equal(await advise("git checkout feat/x"), null)
   info = { top: "/repo", branch: "other" }
   assert.match(await advise("git checkout other"), /other/)

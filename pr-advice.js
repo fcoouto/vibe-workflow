@@ -230,7 +230,7 @@ export function createAdvisor({ settings, primary, checkout }) {
               remember(branches, sessionID, seen)
               notes.push(`vibe-workflow: the primary checkout (${home}) is now ` +
                 (info.branch === "HEAD" ? "detached" : `on ${info.branch}`) +
-                "; keep it on main and do task work in a worktree.")
+                ". Never touch the primary checkout; tell the user, and do task work in a worktree.")
             }
           }
         }

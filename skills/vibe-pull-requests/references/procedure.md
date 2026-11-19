@@ -47,9 +47,13 @@ makes affected evidence stale.
 
 ## The primary checkout
 
-Keep the primary checkout on `main`. Never switch, detach, rename or rebase it;
-do task work in a worktree. After an agent merge, if the primary checkout is clean
-and on `main`, run `git fetch origin main` and then `git merge --ff-only
-origin/main` there. A change to `.vibe-workflow/settings.json` alone does not make
-it unclean for this rule. If it is dirty, diverged, detached or uncertain, or the
-fast-forward is refused, report that and change nothing.
+Never touch the primary checkout. Do not edit files, commit, switch, detach,
+rename or rebase there; do all task work in a worktree. If it has left `main`, or
+something else changed it, tell the user and change nothing.
+
+The one exception is the user's decision to keep it current. After an agent
+merge, if the primary checkout is clean and on `main`, run `git fetch origin main`
+and then `git merge --ff-only origin/main` there. A change to
+`.vibe-workflow/settings.json` alone does not make it unclean for this rule. If it
+is dirty, diverged, detached or uncertain, or the fast-forward is refused, report
+that and change nothing.
