@@ -45,8 +45,8 @@ overlapping behavior.
   template, primary checkout) and advisory notes after matching shell commands.
   Onboarding asks who merges `[READY]` PRs; the choice is saved as booleans in
   `.vibe-workflow/settings.json` at the main project path. The notes are
-  reminders, never enforcement, and the host hook they rely on is unverified on
-  the installed OpenCode until observed.
+  reminders, never enforcement. A note was observed reaching the model on
+  OpenCode 2.2.6 (19 November 2026); other versions are unverified.
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
