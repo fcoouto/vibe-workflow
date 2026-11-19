@@ -44,7 +44,8 @@ Nothing deletes a worktree or branch because its pull request merged.
   after a yes.
 - Client-neutral instructions with a per-client mapping, so other clients can be
   added by adding a row.
-- Never lose work: git's own refusals are the safety net, plus explicit checks.
+- Never lose work: the explicit merge checks decide, and git's safe delete is a
+  backstop that refuses a branch holding commits that exist nowhere else.
 
 ## Non-goals
 
@@ -132,10 +133,12 @@ starting with the project path, labels of one to five words with descriptions,
   claimed. Because that edit changes the whole repository and cancelling afterwards
   cannot undo it, the one-line "Saving:" statement before applying names it ("GitHub:
   turn on auto-delete of merged branches for <owner/repo>"), and a cancel at any
-  question stops everything before any change. The edit runs after the settings apply,
-  independent of its outcome (the yes is the user's own consent), and the report gives
-  each outcome on its own line, so a blocked settings save does not hide a changed
-  GitHub setting.
+  question, or a denied native file-edit permission, stops everything before any
+  change. The "Saving:" line comes before the settings apply. The edit runs after the
+  settings apply and independent of a technical failure there (busy, changed or lossy
+  settings), and the report gives each outcome on its own line, so a blocked settings
+  save does not hide a changed GitHub setting. A yes to this question counts as a
+  change, so "Nothing to change." applies only when no GitHub change is pending.
 - When the setting is already on, or `gh` is missing, not logged in, not admin, or
   the remote is not on GitHub, question 4 is skipped and the report says why in one
   line (for example "GitHub auto-delete: already on.").
@@ -151,13 +154,17 @@ A new reference `references/worktree-cleanup.md`, linked from the procedure's
 "Merging" section. Client-neutral wording; the mapping table below carries the
 client-specific part, like Superpowers' "native tool first, git fallback".
 
-**When.** Only when `worktree_cleanup` is `true` at the main project path (read with
-the onboarding tool's `git_workflow` preview), and only after the merge is confirmed.
+**When.** Only when the saved choice is on at the main project path: the onboarding
+tool's `git_workflow` preview has `previous_enabled` **and** `previous_worktree_cleanup`
+both `true` (the preview's proposed values are defaults, not the saved choice), and only
+after the merge is confirmed.
 
 **Merge confirmation** (by observation, never memory): the agent's own `gh pr merge`
 result, or the user saying it merged, or finding it merged. Then verify all of:
 1. `gh pr view <n> --json state,headRefName,headRefOid,baseRefName` says `MERGED`,
-   the base is the repository's default branch, and `headRefName` is the worktree's
+   the base is the repository's default branch (`baseRefName` matches
+   `gh repo view --json defaultBranchRef`, or `git symbolic-ref --short
+   refs/remotes/origin/HEAD` without GitHub), and `headRefName` is the worktree's
    branch; or, without GitHub, `git merge-base --is-ancestor HEAD origin/main` after
    `git fetch origin main`.
 2. The worktree's `HEAD` equals `headRefOid` or is an ancestor of `origin/main`, so no
@@ -171,23 +178,29 @@ result, or the user saying it merged, or finding it merged. Then verify all of:
 If any check fails or cannot be run, report which and change nothing.
 
 **Order** (verified in scratch repositories on 2026-11-19: git refuses to delete a
-branch that a worktree has checked out, and refuses to remove a dirty worktree; and
-with `--git-dir=<common git dir>`, `branch -d` checks "merged" against the primary's
-HEAD, not the detached worktree's, so it refuses an unmerged branch and a
-squash-merged one and deletes a merge-commit one):
+branch that a worktree has checked out, and refuses to remove a dirty worktree; with
+`--git-dir=<common git dir>`, `branch -d` checks against the primary's HEAD, not the
+detached worktree's. Its behavior depends on the branch's upstream: with none it refuses
+anything not merged into the primary's HEAD; with an upstream that still exists it
+deletes a branch whose commits are all on the upstream or in the primary's HEAD (with
+a warning if not yet merged to HEAD); with the upstream gone it falls back to HEAD; and
+it always refuses a branch with a local commit that is on neither. So `-d` guarantees
+that no commit lives only in the deleted branch, and says nothing about whether the
+pull request merged: the four checks above decide that.):
 1. Before touching anything, tell the user what is about to happen and that the
    session's directory will disappear: "Merge confirmed. Cleaning up now: branch
    <name> and worktree <path>. I will verify from the primary checkout's path
    afterwards."
 2. Capture the common git dir (`git rev-parse --git-common-dir`, absolute) and the
-   branch name. Check that the primary checkout is on the default branch
-   (`git --git-dir=<common git dir> symbolic-ref --short HEAD`); if not, stop, because
-   the safe delete would check against the wrong branch.
+   branch name. Check that the primary checkout is on the default branch (defined in
+   check 1; `git --git-dir=<common git dir> symbolic-ref --short HEAD`); if not, stop,
+   because the safe delete would check against the wrong branch.
 3. In the worktree: `git switch --detach`.
-4. `git --git-dir=<common git dir> branch -d <branch>`. If git refuses (an unmerged
-   branch, or a squash or rebase merge, which looks unmerged by design), switch back
-   to the branch, report, and stop. Squash and rebase merges are therefore not
-   cleaned up; never use `-D` to get around it.
+4. `git --git-dir=<common git dir> branch -d <branch>`. If git refuses (for example a
+   local commit that is on neither the upstream nor the default branch, or a squash or
+   rebase merge whose remote branch was already deleted and pruned), switch back to the
+   branch, report, and stop. A squash or rebase merge is therefore cleaned up only while
+   the branch's remote branch still exists; never use `-D` to get around a refusal.
 5. Remove the worktree as the **last action that changes anything**, with the client's
    own mechanism, never with force: the table below.
 6. Verify with read-only commands that name the primary checkout's path explicitly,
@@ -254,9 +267,13 @@ completes". Nothing else changes; the settings read already happens per match.
 - Hook: the case 4 note carries the cleanup sentence only when `worktree_cleanup` is
   `true`; the `--auto` wording; silent when off or absent.
 - A test runs the documented git sequence (detach, `--git-dir` safe delete, worktree
-  remove) in a temporary repository: an unmerged and a squash-merged branch are
-  refused, a merge-commit branch is deleted, the primary's HEAD is unchanged, and a
-  dirty worktree is refused.
+  remove) in a temporary repository with a local bare `origin`, with global and system
+  git config ignored: a never-pushed unmerged branch is refused; a pushed unmerged
+  branch is deleted with a warning (its commits are on the upstream); a squash-merged
+  branch is deleted while its upstream exists and refused once the remote branch is
+  deleted and pruned; a branch with a local commit beyond its upstream is refused; a
+  merge-commit branch is deleted; the primary's HEAD is unchanged in every case; and a
+  dirty worktree is refused by `git worktree remove`.
 - Live observation (not unit proof) of a real cleanup and of Question 4 is reported
   separately and only if the user asks for a live run.
 
@@ -276,7 +293,9 @@ completes". Nothing else changes; the settings read already happens per match.
   agent verifies the merge.
 - No sweep of existing worktrees or branches.
 - Only the session's own worktree (or one created in this session) is eligible.
-- Squash and rebase merges are not cleaned up: no `-D`, ever.
+- Never `-D`. A squash or rebase merge is cleaned up only while the branch's remote
+  branch still exists; after it is deleted and pruned, git refuses and the agent reports
+  and stops (this repository uses merge commits).
 - The final report comes before cleanup, and a read-only check from the primary's
   explicit path follows it.
 - Question 4's GitHub change is named in the one-line "Saving:" statement and runs
