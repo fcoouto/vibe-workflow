@@ -49,7 +49,9 @@ live run of the hook:
   go into `content`; text added to `output` is never shown. (Found when the first
   live `gh pr create` produced no note: the handler had appended to `output`.)
 
-Still not observed: a note reaching the model in a live session. To observe it,
-run one `gh pr create`, `gh pr ready` or `gh pr merge` after updating the plugin
-and look for a `vibe-workflow:` line in its result. Do this in a normal OpenCode
-session; no extra inference is needed beyond the command itself.
+Observed live (OpenCode 2.2.6, 19 November 2026, plugin at `77274f2`): after the
+fix, `gh pr edit <n> --title "[READY] ..."` returned its normal output followed by
+the case 3 `vibe-workflow:` note, so a note does reach the model. Cases 1, 2, 4 and
+5 share the same append path but have not each been observed. Other OpenCode
+versions are unverified. To repeat the check, run one matching command and look for
+a `vibe-workflow:` line in its result.
