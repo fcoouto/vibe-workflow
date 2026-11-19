@@ -40,7 +40,7 @@ workflow choices are saved in the main checkout.
 
 Reminders are advisory, not enforced. Agents open PRs as `[BLOCKED]` drafts, mark
 them `[READY]`, keep the main checkout on a current `main`, and clean up only
-after a verified merge.
+when chosen and after a verified merge.
 
 ## Prepare your workspace
 

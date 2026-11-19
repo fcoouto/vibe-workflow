@@ -275,7 +275,7 @@ test("the procedure pins the cleanup questions, the GitHub conditions, the apply
     "`viewerPermission` is `ADMIN`", "gh repo edit", "--delete-branch-on-merge", "the same `gh repo view` call",
     "GitHub auto-delete: already on.", "GitHub auto-delete: not changed (admin access is needed).",
     "GitHub auto-delete: not available (gh is missing or not logged in).",
-    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: turned on.",
+    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: not available (could not be read).", "ignored files", "GitHub auto-delete: turned on.",
     "GitHub: turn on auto-delete of merged branches", "previous_worktree_cleanup", '"worktree_cleanup"',
     "A yes to question 4 counts as a change", "the Saving line comes before anything is applied",
     "a cancel at any question or a denied native file-edit permission means no GitHub change",

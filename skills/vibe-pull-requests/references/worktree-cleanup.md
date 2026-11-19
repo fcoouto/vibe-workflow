@@ -22,20 +22,27 @@ nothing if any does:
    base is the default branch, and `headRefName` is this worktree's branch. The default
    branch comes from `gh repo view --json defaultBranchRef`, or from
    `git symbolic-ref --short refs/remotes/origin/HEAD` without GitHub. Without GitHub, use
-   `git merge-base --is-ancestor HEAD origin/main` after `git fetch origin main`.
-2. `HEAD` equals `headRefOid` or is an ancestor of `origin/main`, so nothing was added
-   after the merge.
+   `git merge-base --is-ancestor HEAD origin/<default branch>` after
+   `git fetch origin <default branch>`.
+2. `HEAD` equals `headRefOid` or is an ancestor of `origin/<default branch>`, so nothing
+   was added after the merge.
 3. This is a linked worktree (its git dir differs from the common git dir), not the
    primary checkout, and it is your session's own working directory or one you created
    in this session. Never another worktree, and never one found only by listing worktrees.
-4. `git status --porcelain` is empty.
+4. `git status --porcelain --ignored` is empty. Plain `git status` hides ignored files
+   (local notes, `.env`, private evidence folders), yet removing the worktree deletes them
+   without force. If it lists any, show the paths, stop, and leave the worktree for the
+   user to decide; never delete them silently.
+5. The worktree is not locked (`git worktree list --porcelain` shows no `locked` line for
+   it) and has no submodules (no `.gitmodules`), because git would refuse to remove it
+   after the branch is already deleted.
 
 ## Order
 
 1. Tell the user first: "Merge confirmed. Cleaning up now: branch <name> and worktree
    <path>. I will verify from the primary checkout's path afterwards." The session's own
    directory disappears at the end.
-2. Capture the absolute common git dir (`git rev-parse --git-common-dir`) and the branch
+2. Capture the absolute common git dir (`git rev-parse --path-format=absolute --git-common-dir`) and the branch
    name. Check that the primary checkout is on the default branch with
    `git --git-dir=<common git dir> symbolic-ref --short HEAD`; if it is not, stop.
 3. In the worktree, run `git switch --detach`.
@@ -60,7 +67,7 @@ do not count as touching it.
 
 | Client | How |
 |---|---|
-| OpenCode | `worktree_remove` with the worktree's directory (it needs `edit` permission on it). No `force` unless the user confirms. Its docs describe removing the worktree only; step 6 verifies the result. |
+| OpenCode | `worktree_remove` with the worktree's directory (it needs `edit` permission on it). Never `force`. Its docs describe removing the worktree only; step 6 verifies the result. |
 | Claude Code | `ExitWorktree` with the remove action. It may already have removed a clean worktree on exit; then there is nothing to do. |
 | Codex | Codex removes its own managed worktrees past a limit. Do not remove Codex-managed worktrees yourself. This row is unverified. |
 | Any other client, or no tool | `git worktree remove <path>`, run from outside the worktree and without `--force`. |

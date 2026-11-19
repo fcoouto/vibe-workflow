@@ -43,7 +43,7 @@ the user never has to learn a new layout:
 
 - Header: Worktree cleanup
 - Question: Clean up after a pull request is merged in this project?
-- Context: Project: <project path>. A worktree is the separate folder an agent works in for one task. Cleanup runs only after a merge is confirmed, and never removes unmerged or uncommitted work.
+- Context: Project: <project path>. A worktree is the separate folder an agent works in for one task. Cleanup runs only after a merge is confirmed, and never removes unmerged work, uncommitted work or ignored files; it stops and tells you instead.
 - Choices:
   - Clean up (Recommended) — Removes the task's worktree and its local branch after a confirmed merge.
   - Keep them — Leaves worktrees and branches in place. You can remove them yourself.
@@ -77,13 +77,14 @@ the user never has to learn a new layout:
 4. Ask question 3, unless question 2 was skipped. In an existing project, show a saved
    `previous_worktree_cleanup` of `true` or `false` as the current choice; `null` means
    it was never asked, so ask without a current marker.
-5. Before question 4, run `gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission`.
-   Ask question 4 only when question 2 was not skipped, the call succeeds, `deleteBranchOnMerge` is `false` and `viewerPermission` is `ADMIN`.
+5. Unless question 2 was skipped, run `gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission`
+   before question 4. Ask question 4 only when the call succeeds, `deleteBranchOnMerge` is `false` and `viewerPermission` is `ADMIN`.
    Otherwise skip it and report one line:
    - `GitHub auto-delete: already on.` when `deleteBranchOnMerge` is `true`.
    - `GitHub auto-delete: not changed (admin access is needed).` when it is `false` and the user is not an admin.
    - `GitHub auto-delete: not available (gh is missing or not logged in).` when the call fails because `gh` is missing or not logged in.
    - `GitHub auto-delete: not available (this remote is not on GitHub).` when there is no GitHub remote.
+   - `GitHub auto-delete: not available (could not be read).` for any other failure.
 6. If an answer changes a proposal, preview that feature again with the selected
    booleans (`enabled`, `agent_merge` and `worktree_cleanup` for git workflow;
    **Skip** is all three `false`). If every preview says `change: "none"` and no

@@ -55,7 +55,7 @@ test("the cleanup reference states the checks, the order, the mapping and the no
   const text = await read("references/worktree-cleanup.md")
   for (const phrase of ["worktree_cleanup", "previous_enabled", "previous_worktree_cleanup", "gh pr view", "defaultBranchRef",
     "merge-base --is-ancestor", "git switch --detach", "--git-dir", "branch -d", "last action that changes anything",
-    "git -C", "worktree_remove", "ExitWorktree", "git worktree remove", "--delete-branch", "backstop"]) {
+    "git -C", "status --porcelain --ignored", "--path-format=absolute", "worktree list --porcelain", ".gitmodules", "origin/<default branch>", "worktree_remove", "ExitWorktree", "git worktree remove", "--delete-branch", "backstop"]) {
     assert.ok(text.includes(phrase), phrase)
   }
   for (const line of text.split("\n").filter((line) => line.includes("-D"))) assert.match(line, /never/i, line)
