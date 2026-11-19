@@ -261,7 +261,7 @@ function appendNote(event, note) {
       const { content, output } = result
       if (typeof content === "string") event.result = { ...result, content: `${content}${text}` }
       else if (Array.isArray(content) && content.length) {
-        event.result = { ...result, content: [...content, { type: "text", text: note }] }
+        event.result = { ...result, content: [...content, { type: "text", text }] }
       } else if (output !== undefined) {
         const base = typeof output === "string" ? output : JSON.stringify(output)
         if (base !== undefined) event.result = { ...result, content: [{ type: "text", text: `${base}${text}` }] }

@@ -56,7 +56,7 @@ test("appends the note where the model reads it, following the host's result sha
   assert.equal(real.content.length, 2)
   assert.deepEqual(real.content[0], { type: "text", text: "x" })
   assert.equal(real.content[1].type, "text")
-  assert.match(real.content[1].text, note)
+  assert.match(real.content[1].text, /^\n\nvibe-workflow:/)
   assert.equal(real.output, "x")
   assert.deepEqual(real.metadata, { a: 1 })
   const objectOutput = (await fire(create, { result: { output: { stdout: "u" }, content: [{ type: "text", text: "u" }] } })).result
@@ -150,4 +150,16 @@ test("cleanup clears state and later events do nothing", async (t) => {
   assert.match((await fire(create)).result, /vibe-workflow:/)
   await cleanup()
   assert.equal((await fire(create)).result, "done")
+})
+
+test("odd results never throw and are left unchanged", async (t) => {
+  const { fire } = await fixture(t)
+  const circular = {}
+  circular.self = circular
+  for (const result of [{ output: circular }, { output: () => 1 }, { output: Symbol("s") }, { content: { length: 5 } }]) {
+    const event = await fire(create, { result })
+    assert.strictEqual(event.result, result)
+  }
+  const objectContent = (await fire(create, { result: { content: {}, output: "o" } })).result
+  assert.match(objectContent.content[0].text, /^o\n\nvibe-workflow:/)
 })

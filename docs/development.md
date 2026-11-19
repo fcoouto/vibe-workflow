@@ -35,8 +35,8 @@ Read from the installed OpenCode's own code (2.2.6) and its database, not from a
 live run of the hook:
 
 - `execute.before` and `execute.after` run in one pipeline, for every tool call the
-  session makes. rtk's `execute.before` rewriting is active on shell calls today,
-  which is how its `rtk ...` commands and `[+N hidden: rtk recall ...]` lines appear.
+  session makes. Shell commands can arrive rewritten by rtk's own `execute.before`
+  hook (for example `rtk gh pr ...`), so the classifier accepts an `rtk ` prefix.
 - `execute.after` receives `{ tool, sessionID, agent, messageID, id, input, status,
   result }`. `input` is the input after earlier hooks, so commands arrive as
   `rtk gh pr ...` and `rtk git ...`.
