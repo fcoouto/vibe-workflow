@@ -44,6 +44,10 @@ makes affected evidence stale.
   awaits their merge.
 - If agents may merge, merge only a `[READY]` pull request whose evidence is still
   current, then check the result before reporting it.
+- Do not pass `--delete-branch` to `gh pr merge` unless the user asks: GitHub's own
+  setting deletes merged branches, and remote branches are not yours to delete.
+- After a confirmed merge, follow [worktree cleanup](worktree-cleanup.md) when the
+  project chose it.
 
 ## The primary checkout
 
