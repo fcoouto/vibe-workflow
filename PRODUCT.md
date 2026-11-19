@@ -41,6 +41,12 @@ overlapping behavior.
 - Isolated native-loading and lifecycle checks; see `docs/native-verification.md`.
 - Existing native credentials are reused, never copied into project setup.
 - Selection launches nothing and grants no admission, reservation or spend permit.
+- Pull request guidance: the `vibe-pull-requests` skill (lifecycle, readiness,
+  template, primary checkout) and advisory notes after matching shell commands.
+  Onboarding asks who merges `[READY]` PRs; the choice is saved as booleans in
+  `.vibe-workflow/settings.json` at the main project path. The notes are
+  reminders, never enforcement, and the host hook they rely on is unverified on
+  the installed OpenCode until observed.
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
@@ -61,11 +67,12 @@ different from the approved future onboarding default below.
 
 ### Planned evaluations, not available capabilities
 
-- GitHub PR handling: [issue #328](https://github.com/fcoouto/vibe-workflow/issues/328).
-  Compare the earlier plugin's behavior with existing Superpowers and other
-  tools before deciding what belongs here.
-- Templates: [issue #329](https://github.com/fcoouto/vibe-workflow/issues/329).
+- Templates beyond the pull request template:
+  [issue #329](https://github.com/fcoouto/vibe-workflow/issues/329).
   Evaluate existing structures and opportunities to improve or standardize them.
+- Further GitHub PR handling beyond the shipped guidance, such as a `[READY]`
+  lookup before agent merges or post-merge branch cleanup:
+  [issue #328](https://github.com/fcoouto/vibe-workflow/issues/328).
 - Tests and builds, plus code and security review: apply the same partnership
   principle. Their exact feature boundaries remain open.
 
