@@ -80,6 +80,7 @@ class PackageTest(unittest.TestCase):
             "subscription_billing", "selector", "storage", "processes", "continuity",
             "native_catalog", "claude_usage", "opencode_account"]}
         self.assertEqual(files, expected)
+        self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
         for path in output.rglob("*"):
             if path.suffix in (".py", ".js", ".json", ".md"):
@@ -93,6 +94,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 const plugin = (await import(pathToFileURL(process.argv[1]))).default
+assert.equal(plugin.id, 'vibe-workflow')
 const tools = [], skills = []
 await plugin.setup({
   location: { directory: process.cwd() }, options: {},

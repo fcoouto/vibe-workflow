@@ -16,7 +16,7 @@ await mkdir(bin, { mode: 0o700 })
 await mkdir(state, { mode: 0o700 })
 await mkdir(join(root, ".vibe-workflow"), { mode: 0o700 })
 await writeFile(join(root, ".vibe-workflow", "settings.json"),
-  '{"version":1,"smart_router":{"enabled":true}}', { mode: 0o600 })
+  '{"version":1,"features":[{"smart_router":{"enabled":true}}]}', { mode: 0o600 })
 const python = spawnSync("python3", ["-I", "-B", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" })
 assert.equal(python.status, 0)
 const executable = python.stdout.trim()

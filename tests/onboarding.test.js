@@ -62,7 +62,7 @@ test("preview registers bundled onboarding, defaults on and writes nothing", asy
 test("native edit denial never applies", async (t) => {
   const denial = new Error("fixture native edit denied")
   const { execute, write, path, tool, subagent, assertCalls } = await fixture(t, async () => { throw denial })
-  await write({ version: 1, smart_router: { enabled: false } })
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }] })
   const original = await readFile(path, "utf8"), preview = await execute({ op: "preview", enabled: true })
   await assert.rejects(execute({ op: "apply", enabled: true, expected_snapshot: preview.snapshot }), denial)
   assert.equal(await readFile(path, "utf8"), original)
@@ -73,14 +73,14 @@ test("native edit denial never applies", async (t) => {
 
 test("apply checks snapshot and keeps existing opt-out and unknown fields", async (t) => {
   const { execute, write, path, assertCalls } = await fixture(t)
-  await write({ version: 1, smart_router: { enabled: false }, future: "PRIVATE-SENTINEL" })
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }], future: "PRIVATE-SENTINEL" })
   const current = await execute({ op: "preview" })
   assert.equal(current.enabled, false)
   assert.equal(current.readiness.state, "off")
   assert.ok(!JSON.stringify(current).includes("PRIVATE-SENTINEL"))
   assert.equal(assertCalls.length, 0)
   const preview = await execute({ op: "preview", enabled: true })
-  await write({ version: 1, smart_router: { enabled: false }, future: "new" })
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }], future: "new" })
   assert.equal((await execute({ op: "apply", enabled: true, expected_snapshot: preview.snapshot })).reason,
     "project_settings_changed")
   const fresh = await execute({ op: "preview", enabled: true })
@@ -88,6 +88,6 @@ test("apply checks snapshot and keeps existing opt-out and unknown fields", asyn
   assert.equal(saved.state, "saved")
   assert.equal(saved.readiness.state, "setup_needed")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-    version: 1, smart_router: { enabled: true }, future: "new",
+    version: 1, features: [{ smart_router: { enabled: true } }], future: "new",
   })
 })

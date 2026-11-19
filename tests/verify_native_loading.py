@@ -83,7 +83,7 @@ def inspect_result(response, version, export):
     plugins = value.get("plugins", [])
     if isinstance(plugins, dict):
         plugins = plugins.get("data", [])
-    target = [plugin for plugin in plugins if plugin.get("id") == "vibe-workflow.smart-router"]
+    target = [plugin for plugin in plugins if plugin.get("id") == "vibe-workflow"]
     if not {"smart_router_select", "vibe_workflow_onboard"} <= set(tools) or len(target) != 1 \
             or target[0].get("state", {}).get("status") != "active":
         return dict(state="failed", reason="tools_not_registered", version=version,

@@ -12,7 +12,7 @@ class LoadingProofTest(unittest.TestCase):
         return {"output": {
             "tools": ["smart_router_select", "vibe_workflow_onboard"] if tools is None else tools,
             "plugins": {"data": [{
-                "id": "vibe-workflow.smart-router",
+                "id": "vibe-workflow",
                 "state": {"status": status},
                 "source": {"type": "local", "path": "/synthetic/export"},
             }]},

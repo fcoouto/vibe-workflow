@@ -27,15 +27,20 @@ test("preview defaults on without writing; confirmed apply is idempotent", async
   assert.equal(preview.change, "create")
   await assert.rejects(stat(folder), { code: "ENOENT" })
   assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { version: 1, smart_router: { enabled: true } })
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    version: 1, features: [{ smart_router: { enabled: true } }],
+  })
   const repeat = await project.preview()
   assert.equal(repeat.change, "none")
   assert.equal((await project.apply(true, repeat.snapshot)).state, "unchanged")
 })
 
-test("repeat onboarding preserves off and unknown fields", async (t) => {
+test("repeat onboarding preserves off, unknown fields and feature order", async (t) => {
   const { path, project, write } = await fixture(t)
-  await write({ version: 1, future: "PRIVATE-SENTINEL", smart_router: { enabled: false, future: 3 } })
+  const before = { future_a: { enabled: true, label: "PRIVATE-SENTINEL" } }
+  const after = { future_b: { arbitrary: [null, 4] } }
+  await write({ version: 1, future: "PRIVATE-SENTINEL",
+    features: [before, { smart_router: { enabled: false, future: 3 } }, after] })
   assert.equal((await project.inspect()).state, "off")
   assert.equal((await project.preview()).enabled, false)
   const preview = await project.preview(true)
@@ -43,21 +48,58 @@ test("repeat onboarding preserves off and unknown fields", async (t) => {
   assert.equal(preview.change, "update")
   assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-    version: 1, future: "PRIVATE-SENTINEL", smart_router: { enabled: true, future: 3 },
+    version: 1, future: "PRIVATE-SENTINEL",
+    features: [before, { smart_router: { enabled: true, future: 3 } }, after],
   })
+})
+
+test("an existing feature array without Smart Router gets one appended entry", async (t) => {
+  const { path, project, write } = await fixture(t)
+  for (const features of [[], [{ another_feature: { enabled: true } }]]) {
+    await write({ version: 1, features })
+    assert.equal((await project.inspect()).state, "not_onboarded")
+    const preview = await project.preview(false)
+    assert.equal(preview.change, "update")
+    assert.equal((await project.apply(false, preview.snapshot)).state, "saved")
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+      version: 1, features: [...features, { smart_router: { enabled: false } }],
+    })
+  }
+})
+
+test("unsupported settings layouts never read or overwrite a project choice", async (t) => {
+  const { path, project, write } = await fixture(t)
+  for (const data of [
+    { smart_router: { enabled: true } },
+    { smart_router: { enabled: false }, features: [{ smart_router: { enabled: true } }] },
+    {}, { features: {} }, { features: [null] }, { features: [{}] },
+    { features: [{ "": {} }] }, { features: [{ another: true }] },
+    { features: [{ first: {}, second: {} }] },
+    { features: [{ another: {} }, { another: {} }] },
+    { features: [{ smart_router: { enabled: true } }, { smart_router: { enabled: false } }] },
+    { features: [{ smart_router: { enabled: 1 } }] },
+  ]) {
+    const original = JSON.stringify({ version: 1, ...data })
+    await write(original)
+    for (const answer of [await project.inspect(), await project.preview(),
+      await project.apply(true, "0".repeat(64))]) {
+      assert.equal(answer.reason, "project_settings_invalid", original)
+    }
+    assert.equal(await readFile(path, "utf8"), original)
+  }
 })
 
 test("apply refuses numbers that cannot round-trip without changing existing settings", async (t) => {
   const { path, project, write } = await fixture(t)
   for (const number of ["9007199254740993", "1e400", "0.1234567890123456789", "1e-400", "-0"]) {
-    const original = `{"version":1,"smart_router":{"enabled":false},"future":{"value":${number}}}\n`
+    const original = `{"version":1,"features":[{"smart_router":{"enabled":false}},{"future":{"value":${number}}}]}\n`
     await write(original)
     const preview = await project.preview(true)
     assert.equal(await project.apply(true, preview.snapshot).then(result => result.reason),
       "project_settings_lossy", number)
     assert.equal(await readFile(path, "utf8"), original)
   }
-  await write('{"version":1,"future":[1.2500e+2,0.1000,"escaped \\"1e400\\""]}')
+  await write('{"version":1,"features":[],"future":[1.2500e+2,0.1000,"escaped \\"1e400\\""]}')
   const preview = await project.preview()
   assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")).future, [125, 0.1, 'escaped "1e400"'])
@@ -72,7 +114,7 @@ test("nested locations, separate repositories and worktrees resolve to their own
   git("init", "-q")
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
     "commit", "--allow-empty", "-qm", "fixture")
-  await write({ version: 1, smart_router: { enabled: false } })
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }] })
   const before = await readFile(path, "utf8")
   const sub = join(root, "sub"), linked = join(root, "linked")
   await mkdir(sub)
@@ -89,8 +131,8 @@ test("nested locations, separate repositories and worktrees resolve to their own
 test("duplicate settings keys block without overwriting, even when escaped", async (t) => {
   const { path, project, write } = await fixture(t)
   for (const original of [
-    '{"version":1,"smart_router":{"enabled":false,"enabled":true}}',
-    String.raw`{"version":1,"future":[{"keep":1,"\u006beep":2}]}`,
+    '{"version":1,"features":[{"smart_router":{"enabled":false,"enabled":true}}]}',
+    String.raw`{"version":1,"features":[{"future":{"keep":1,"\u006beep":2}}]}`,
   ]) {
     await write(original)
     assert.equal((await project.inspect()).reason, "project_settings_invalid")
@@ -102,7 +144,7 @@ test("duplicate settings keys block without overwriting, even when escaped", asy
 test("invalid, oversized and future settings block without overwriting", async (t) => {
   const { path, project, write } = await fixture(t)
   for (const value of ["PRIVATE-SENTINEL", "x".repeat(65537), { version: 2 },
-    { version: 1, smart_router: { enabled: 1 } }]) {
+     { version: 1, features: [{ smart_router: { enabled: 1 } }] }]) {
     await write(value)
     const original = await readFile(path, "utf8"), preview = await project.preview()
     assert.equal(preview.state, "blocked")
@@ -115,7 +157,7 @@ test("invalid, oversized and future settings block without overwriting", async (
 test("link and unsafe-mode targets are refused", async (t) => {
   const { root, folder, path, project, write } = await fixture(t)
   const original = join(root, "original")
-  await writeFile(original, '{"version":1}')
+  await writeFile(original, '{"version":1,"features":[]}')
   await symlink(root, folder)
   assert.equal((await project.inspect()).state, "blocked")
   await rm(folder)
@@ -125,17 +167,17 @@ test("link and unsafe-mode targets are refused", async (t) => {
     assert.equal((await project.inspect()).state, "blocked")
     await rm(path)
   }
-  await write({ version: 1 })
+  await write({ version: 1, features: [] })
   await chmod(path, 0o666)
   assert.equal((await project.inspect()).state, "blocked")
-  assert.equal(await readFile(original, "utf8"), '{"version":1}')
+  assert.equal(await readFile(original, "utf8"), '{"version":1,"features":[]}')
 })
 
 test("stale previews, held locks and failed replacement preserve existing bytes", async (t) => {
   const { folder, path, project, write } = await fixture(t)
-  await write({ version: 1 })
+  await write({ version: 1, features: [] })
   const stale = await project.preview()
-  await write({ version: 1, future: 2 })
+  await write({ version: 1, features: [], future: 2 })
   const before = await readFile(path, "utf8"), latest = await project.preview()
   assert.equal((await project.apply(true, stale.snapshot)).reason, "project_settings_changed")
   const lock = join(folder, ".settings.lock")
