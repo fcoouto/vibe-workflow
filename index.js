@@ -140,12 +140,14 @@ export default {
         return { content: JSON.stringify({ ...answer, notice }) }
       },
     }))
-    await registerOnboarding(ctx, { ...project, async apply(...args) {
+    const pullRequests = createProjectSettings(directory, "pull_requests", { atProject: true })
+    await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) notices.clear()
       return result
-    } }, (signal) =>
-      runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }))
+    } }, pull_requests: pullRequests }, (signal) =>
+      runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }),
+    () => ({ state: "setup_needed", reason: "guard_unavailable" }))
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await ctx.session.hook("context", async (event) => {
       if (closed) return
