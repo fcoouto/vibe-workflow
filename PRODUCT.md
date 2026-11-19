@@ -48,6 +48,11 @@ overlapping behavior.
   path (named `pull_requests` in 0.5.0 and 0.5.1; the old name is no longer read). The notes are
   reminders, never enforcement. A note was observed reaching the model on
   OpenCode 2.2.6 (19 November 2026); other versions are unverified.
+- Post-merge cleanup: opt-in under `git_workflow` (`worktree_cleanup`). After a
+  verified merge, agents remove the task's worktree and its local branch with the
+  client's own tool, never forcing and never touching the primary checkout. Remote
+  branch deletion is GitHub's own setting; onboarding reads it and offers to turn it
+  on when it is off and the user is an admin. Advisory, and not yet observed live.
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
@@ -74,7 +79,8 @@ different from the approved future onboarding default below.
   [issue #329](https://github.com/fcoouto/vibe-workflow/issues/329).
   Evaluate existing structures and opportunities to improve or standardize them.
 - Further GitHub PR handling beyond the shipped guidance, such as a `[READY]`
-  lookup before agent merges or post-merge branch cleanup:
+  lookup before agent merges, or cleaning up stale worktrees and branches that
+  already exist:
   [issue #328](https://github.com/fcoouto/vibe-workflow/issues/328).
 - Tests and builds, plus code and security review: apply the same partnership
   principle. Their exact feature boundaries remain open.
