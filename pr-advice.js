@@ -250,13 +250,21 @@ async function defaultCheckout(directory) {
   } catch { return null }
 }
 
+// The host gives the model `result.content` (a string, or text parts) and falls back to `result.output` only when
+// `content` is empty, so the note goes into `content`. Any shape not listed here is left alone.
 function appendNote(event, note) {
   try {
     const result = event.result
-    if (typeof result === "string") event.result = `${result}\n\n${note}`
+    const text = `\n\n${note}`
+    if (typeof result === "string") event.result = `${result}${text}`
     else if (result && typeof result === "object") {
-      for (const key of ["output", "content"]) {
-        if (typeof result[key] === "string") { result[key] = `${result[key]}\n\n${note}`; return }
+      const { content, output } = result
+      if (typeof content === "string") event.result = { ...result, content: `${content}${text}` }
+      else if (Array.isArray(content) && content.length) {
+        event.result = { ...result, content: [...content, { type: "text", text: note }] }
+      } else if (output !== undefined) {
+        const base = typeof output === "string" ? output : JSON.stringify(output)
+        if (base !== undefined) event.result = { ...result, content: [{ type: "text", text: `${base}${text}` }] }
       }
     }
   } catch {}

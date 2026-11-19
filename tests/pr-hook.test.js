@@ -48,11 +48,26 @@ test("registers only when the host provides tool.hook", async (t) => {
   assert.equal(without.hooks.size, 0)
 })
 
-test("appends a note to a string result and to output or content objects", async (t) => {
+test("appends the note where the model reads it, following the host's result shape", async (t) => {
   const { fire } = await fixture(t)
-  assert.match((await fire(create)).result, /^done\n\nvibe-workflow:/)
-  assert.match((await fire(create, { result: { output: "out" } })).result.output, /^out\n\nvibe-workflow:/)
+  const note = /vibe-workflow:/
+  // Real shape (OpenCode 2.2.6): the model is given `content`; `output` is only a fallback for empty content.
+  const real = (await fire(create, { result: { output: "x", content: [{ type: "text", text: "x" }], metadata: { a: 1 } } })).result
+  assert.equal(real.content.length, 2)
+  assert.deepEqual(real.content[0], { type: "text", text: "x" })
+  assert.equal(real.content[1].type, "text")
+  assert.match(real.content[1].text, note)
+  assert.equal(real.output, "x")
+  assert.deepEqual(real.metadata, { a: 1 })
+  const objectOutput = (await fire(create, { result: { output: { stdout: "u" }, content: [{ type: "text", text: "u" }] } })).result
+  assert.match(objectOutput.content.at(-1).text, note)
+  assert.deepEqual(objectOutput.output, { stdout: "u" })
   assert.match((await fire(create, { result: { content: "c" } })).result.content, /^c\n\nvibe-workflow:/)
+  const empty = (await fire(create, { result: { output: "out", content: [] } })).result
+  assert.deepEqual([empty.content.length, empty.content[0].type], [1, "text"])
+  assert.match(empty.content[0].text, /^out\n\nvibe-workflow:/)
+  assert.match((await fire(create, { result: { output: { k: 1 } } })).result.content[0].text, /^\{"k":1\}\n\nvibe-workflow:/)
+  assert.match((await fire(create)).result, /^done\n\nvibe-workflow:/)
 })
 
 test("leaves failed calls, other tools, missing commands and unknown shapes unchanged", async (t) => {

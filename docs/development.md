@@ -29,14 +29,27 @@ The extraction plan and design retain the task's explicit local-only delivery
 and authorization. Its original workflow policy remains pinned for that task;
 removing old product instructions does not waive its completion gates.
 
-## Observing the pull request hook once
+## The pull request hook: what is known
 
-The pull request notes use `ctx.tool.hook("execute.after")`, which is documented
-for OpenCode V2 but has not been observed on the installed version, and no
-inference may run without authorization. To observe it once, add a throwaway
-plugin that registers the same hook and appends each event's keys and
-`input` keys to a file under `$TMPDIR`, load it in a disposable OpenCode home, run
-one trivial shell command in a session you start, and read the file. Check the
-event has `tool`, `status`, `sessionID`, `input.command`, an `input.workdir` or
-`cwd`, a `result` that can be appended to, and any exit field. Remove the plugin
-afterwards. Until then the hook stays reported as unverified.
+Read from the installed OpenCode's own code (2.2.6) and its database, not from a
+live run of the hook:
+
+- `execute.before` and `execute.after` run in one pipeline, for every tool call the
+  session makes. rtk's `execute.before` rewriting is active on shell calls today,
+  which is how its `rtk ...` commands and `[+N hidden: rtk recall ...]` lines appear.
+- `execute.after` receives `{ tool, sessionID, agent, messageID, id, input, status,
+  result }`. `input` is the input after earlier hooks, so commands arrive as
+  `rtk gh pr ...` and `rtk git ...`.
+- For the shell tool `result` is `{ content, output?, metadata }`, where `content`
+  is an array of `{ type: "text", text }` parts and `metadata` is
+  `{ status, truncated, exit }`. A failing command still has `status: "completed"`
+  with a nonzero `exit`.
+- The model is given `content` unchanged when it is a non-empty array or a string,
+  and the stringified `output` only when `content` is empty. A note therefore has to
+  go into `content`; text added to `output` is never shown. (Found when the first
+  live `gh pr create` produced no note: the handler had appended to `output`.)
+
+Still not observed: a note reaching the model in a live session. To observe it,
+run one `gh pr create`, `gh pr ready` or `gh pr merge` after updating the plugin
+and look for a `vibe-workflow:` line in its result. Do this in a normal OpenCode
+session; no extra inference is needed beyond the command itself.
