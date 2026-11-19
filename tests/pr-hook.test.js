@@ -164,7 +164,7 @@ test("odd results never throw and are left unchanged", async (t) => {
   assert.match(objectContent.content[0].text, /^o\n\nvibe-workflow:/)
 })
 
-test("a legacy pull_requests entry still drives the hook", async (t) => {
+test("an old pull_requests entry no longer drives the hook", async (t) => {
   const { fire } = await fixture(t, { settings: JSON.stringify({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] }) })
-  assert.match((await fire(create)).result, /vibe-workflow:/)
+  assert.equal((await fire(create)).result, "done")
 })

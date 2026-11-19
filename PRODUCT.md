@@ -45,8 +45,7 @@ overlapping behavior.
   template, primary checkout) and advisory notes after matching shell commands.
   Onboarding asks who merges `[READY]` PRs; the choice is saved as booleans in
   the `git_workflow` entry of `.vibe-workflow/settings.json` at the main project
-  path (named `pull_requests` in 0.5.0 and 0.5.1; that entry is still read and
-  is migrated when saved). The notes are
+  path (named `pull_requests` in 0.5.0 and 0.5.1; the old name is no longer read). The notes are
   reminders, never enforcement. A note was observed reaching the model on
   OpenCode 2.2.6 (19 November 2026); other versions are unverified.
 

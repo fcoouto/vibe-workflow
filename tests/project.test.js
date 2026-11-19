@@ -382,75 +382,12 @@ test("atProject is blocked when the worktree listing fails in a linked worktree"
   assert.equal((await create(root, "git_workflow", { atProject: true }).inspect()).state, "not_onboarded")
 })
 
-const legacy = (entry) => ({ version: 1, features: [{ pull_requests: entry }] })
-
-test("a legacy pull_requests entry is read as the git_workflow choice", async (t) => {
-  const { create, root, write } = await fixture(t)
-  await write(legacy({ enabled: true, agent_merge: true }))
-  const state = await create(root, "git_workflow").inspect()
-  assert.deepEqual([state.state, state.enabled, state.agent_merge], ["on", true, true])
-  assert.equal((await create(root).inspect()).state, "not_onboarded")
-})
-
-test("saving migrates the legacy entry in place, keeping order and unknown keys", async (t) => {
-  const { path, create, root, write } = await fixture(t)
-  await write({ version: 1, features: [{ smart_router: { enabled: false } }, { other: { x: 1 } },
-    { pull_requests: { enabled: true, agent_merge: false, note: "keep" } }] })
-  const project = create(root, "git_workflow"), preview = await project.preview({ agent_merge: true })
-  assert.equal((await project.apply({ enabled: true, agent_merge: true }, preview.snapshot)).state, "saved")
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ smart_router: { enabled: false } },
-    { other: { x: 1 } }, { git_workflow: { enabled: true, agent_merge: true, note: "keep" } }])
-})
-
-test("an unchanged legacy entry previews and applies as an update so it is migrated", async (t) => {
-  const { path, create, root, write } = await fixture(t)
-  await write(legacy({ enabled: true, agent_merge: true }))
-  const project = create(root, "git_workflow"), preview = await project.preview()
-  assert.equal(preview.change, "update")
-  assert.equal((await project.apply({ enabled: true, agent_merge: true }, preview.snapshot)).state, "saved")
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ git_workflow: { enabled: true, agent_merge: true } }])
-  assert.equal((await project.preview()).change, "none")
-})
-
-test("a git_workflow entry wins over a legacy one, and an invalid legacy entry blocks only git_workflow", async (t) => {
-  const { create, root, write } = await fixture(t)
-  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } },
-    { git_workflow: { enabled: true, agent_merge: false } }] })
-  assert.equal((await create(root, "git_workflow").inspect()).agent_merge, false)
-  await write(legacy({ enabled: "yes" }))
-  assert.equal((await create(root, "git_workflow").inspect()).reason, "project_settings_invalid")
-  assert.equal((await create(root).inspect()).state, "not_onboarded")
-})
-
-test("saving removes a stale legacy entry that sits beside a git_workflow entry", async (t) => {
-  const { path, create, root, write } = await fixture(t)
-  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }, { other: { x: 1 } },
-    { git_workflow: { enabled: true, agent_merge: false } }] })
-  const project = create(root, "git_workflow"), preview = await project.preview({ agent_merge: false, enabled: false })
-  assert.equal((await project.apply({ enabled: false, agent_merge: false }, preview.snapshot)).state, "saved")
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ other: { x: 1 } }, { git_workflow: { enabled: false, agent_merge: false } }])
-})
-
-test("a Smart Router save leaves a legacy git_workflow entry untouched", async (t) => {
+test("an old pull_requests entry is only an unknown entry: ignored, and kept when git_workflow is saved", async (t) => {
   const { path, create, root, write } = await fixture(t)
   await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }] })
-  const project = create(root), preview = await project.preview(true)
-  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
-    [{ pull_requests: { enabled: true, agent_merge: true } }, { smart_router: { enabled: true } }])
-})
-
-test("a legacy worktree entry never grants merge when read at the project path", async (t) => {
-  const { root, create, write } = await fixture(t)
-  gitIn(root, "init", "-q")
-  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
-  await write({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: false } }] })
-  const linked = join(root, "linked")
-  gitIn(root, "worktree", "add", "--detach", linked)
-  await mkdir(join(linked, ".vibe-workflow"))
-  await writeFile(join(linked, ".vibe-workflow", "settings.json"),
-    JSON.stringify({ version: 1, features: [{ pull_requests: { enabled: true, agent_merge: true } }] }))
-  const main = await create(linked, "git_workflow", { atProject: true }).inspect()
-  assert.deepEqual([main.root, main.agent_merge], [root, false])
+  const project = create(root, "git_workflow"), preview = await project.preview()
+  assert.deepEqual([preview.state, preview.previous_enabled, preview.agent_merge, preview.change], ["preview", null, false, "update"])
+  assert.equal((await project.apply({ enabled: true, agent_merge: false }, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ pull_requests: { enabled: true, agent_merge: true } },
+    { git_workflow: { enabled: true, agent_merge: false } }])
 })
