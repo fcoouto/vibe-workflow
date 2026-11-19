@@ -6,5 +6,5 @@
   "exports": { ".": "./index.js" },
   "private": true,
   "license": "MIT",
-  "files": ["index.js", "project.js", "onboarding.js", "skills/vibe-onboard-project", "skills/vibe-prepare-my-workspace", "runtime", "scripts/select.py", "config", "README.md", "LICENSE", "assets/logo.png"]
+  "files": ["index.js", "project.js", "onboarding.js", "skills/vibe-onboard-project", "skills/vibe-prepare-my-workspace", "skills/vibe-pull-requests", "runtime", "scripts/select.py", "config", "README.md", "LICENSE", "assets/logo.png"]
 }

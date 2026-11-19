@@ -75,6 +75,8 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/scripts/check.py", "skills/vibe-prepare-my-workspace/partners.json",
+                    "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
+                    "skills/vibe-pull-requests/references/pull-request-template.md",
                     "scripts/select.py", "config/routes.json", "config/router.example.json",
                     "config/strategy-table.example.json"}
         expected |= {"runtime/" + name + ".py" for name in [
@@ -106,7 +108,7 @@ await plugin.setup({
 })
 assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_workflow_onboard'])
 assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project'],
-  ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace']])
+  ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace'], ['vibe-pull-requests', 'vibe-pull-requests']])
 assert.match(await readFile(new URL('./references/procedure.md', pathToFileURL(skills[0].path)), 'utf8'),
   /Use Smart Router for this project\\?/)
 """, str(output / "index.js")], env=self.env, cwd=self.root, capture_output=True, text=True, timeout=10)

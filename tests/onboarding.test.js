@@ -46,7 +46,7 @@ test("preview registers bundled onboarding, defaults on and writes nothing", asy
   assert.equal(preview.client, "opencode")
   assert.equal(preview.enabled, true)
   assert.equal(preview.readiness.state, "setup_needed")
-  assert.deepEqual([...skills.keys()], ["vibe-onboard-project", "vibe-prepare-my-workspace"])
+  assert.deepEqual([...skills.keys()], ["vibe-onboard-project", "vibe-prepare-my-workspace", "vibe-pull-requests"])
   const skill = skills.get("vibe-onboard-project")
   assert.equal(skill.id, "vibe-onboard-project")
   assert.match(tool.get("vibe_workflow_onboard").description, /\bvibe-onboard-project\b/)

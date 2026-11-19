@@ -149,6 +149,7 @@ export default {
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }),
     () => ({ state: "setup_needed", reason: "guard_unavailable" }))
     await registerSkill(ctx, "vibe-prepare-my-workspace")
+    await registerSkill(ctx, "vibe-pull-requests")
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       const preference = await project.inspect()

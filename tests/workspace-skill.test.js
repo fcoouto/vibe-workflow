@@ -19,6 +19,7 @@ test("registers the workspace skill after onboarding with its bundled files", as
   assert.deepEqual(skills.map(({ id, name }) => [id, name]), [
     ["vibe-onboard-project", "vibe-onboard-project"],
     ["vibe-prepare-my-workspace", "vibe-prepare-my-workspace"],
+    ["vibe-pull-requests", "vibe-pull-requests"],
   ])
   const skill = skills[1]
   assert.match(skill.path, /skills\/vibe-prepare-my-workspace\/SKILL\.md$/)
