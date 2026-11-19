@@ -39,7 +39,7 @@ test("registers onboarding and keeps the native tool and existing context untouc
   const h = host(root)
   const original = h.tools.get("subagent")
   await plugin.setup(h.ctx)
-  assert.equal(plugin.id, "vibe-workflow.smart-router")
+  assert.equal(plugin.id, "vibe-workflow")
   assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "vibe_workflow_onboard"])
   assert.equal(h.tools.get("subagent"), original)
   assert.deepEqual([...h.hooks.keys()], ["context"])

@@ -45,7 +45,7 @@ const input = {
 }
 
 export default {
-  id: "vibe-workflow.smart-router",
+  id: "vibe-workflow",
   async setup(ctx) {
     const directory = ctx.location.directory
     const state = ctx.options?.state_dir ?? join(
