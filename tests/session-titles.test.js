@@ -286,6 +286,24 @@ test("a turn start during a slow evaluation ends without WAITING", async (t) => 
   assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ Fix login flow")
 })
 
+test("a rename during slow fact reads is kept", async (t) => {
+  for (const [renamed, expected] of [["Plain title", "Plain title"], ["￻▰▱▱▱▱ My words", "￻▰▱▱▱▱ WAITING · My words"]]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    await h.end()
+    await h.start()
+    let release
+    h.facts.gate = new Promise((done) => { release = done })
+    h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+    await settle()
+    assert.ok(h.calls.run.some(([command]) => command === "gh"))
+    h.titles.set("ses_1", renamed)
+    release()
+    await settle()
+    assert.equal(h.titles.get("ses_1"), expected)
+  }
+})
+
 test("another branch's merge never advances the meter", async (t) => {
   const h = await host(t)
   h.facts.prs = { "feat/other": [{ state: "MERGED", title: "y" }] }
@@ -317,8 +335,16 @@ test("close aborts the subscription and hosts without events register nothing", 
 
 test("the tool result is never modified", async (t) => {
   const h = await host(t)
-  const result = Object.freeze({ output: "ok", content: [{ type: "text", text: "ok" }] })
+  const writes = []
+  const record = (target) => new Proxy(target, {
+    get: (object, key) => typeof object[key] === "object" && object[key] !== null ? record(object[key]) : object[key],
+    set: (object, key, value) => { writes.push(key); object[key] = value; return true },
+    defineProperty: (object, key, descriptor) => { writes.push(key); return Reflect.defineProperty(object, key, descriptor) },
+    deleteProperty: (object, key) => { writes.push(key); return delete object[key] },
+  })
+  const result = record({ output: "ok", content: [{ type: "text", text: "ok" }] })
   const event = await h.write(SPEC, "ses_1", { result })
+  await h.end()
   assert.equal(event.result, result)
-  assert.deepEqual(result, { output: "ok", content: [{ type: "text", text: "ok" }] })
+  assert.deepEqual(writes, [])
 })

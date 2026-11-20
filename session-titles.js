@@ -60,8 +60,6 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   async function evaluate(sessionID, ended) {
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
-    const title = (await ctx.session.get({ sessionID })).title ?? ""
-    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; return }
     let cells = task.cells
     if (ended) {
       const { project = null, worktree_cleanup } = await gitWorkflow.inspect()
@@ -71,6 +69,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: worktree_cleanup === true, primary: task.top === project }))
     }
+    const title = (await ctx.session.get({ sessionID })).title ?? ""
+    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
     const next = compose(topic, cells, ended && cells < 5)
