@@ -70,11 +70,26 @@ class ScoresTest(unittest.TestCase):
     def test_family_borrow_keeps_own_price_and_honors_creator(self):
         cache = parse(model('openai/gpt-6.2-sol', 57, created=20),
                       model('openai/gpt-6.3-sol', None, prompt='0.000004', completion='0.00002', created=30),
-                      model('someone/gpt-9-sol', 90, created=40))
+                      model('someone/gpt-6.2.1-sol', 90, created=40))
         found = scores.lookup(cache, 'gpt-6-3-sol', 'openai')
         self.assertEqual((found['score'], found['price']), (57, scores_price(4, 20)))
         self.assertEqual(scores.lookup(cache, 'gpt-6-3-sol', None)['score'], 90)
         self.assertIsNone(scores.lookup(cache, 'unrelated', 'openai'))
+
+    def test_family_borrow_never_uses_a_newer_version(self):
+        # Live: old Haiku 4.5 borrowed Haiku 5.5's score and tied the real Haiku.
+        cache = parse(model('anthropic/claude-haiku-5.5', 36.5, created=50),
+                      model('anthropic/claude-haiku-4-5-20251001', None, prompt=None, completion=None, created=10))
+        self.assertIsNone(scores.lookup(cache, 'claude-haiku-4-5-20251001', 'anthropic'))
+        self.assertEqual(scores.lookup(cache, 'claude-haiku-5-5', 'anthropic')['score_source'], 'openrouter')
+        cache = parse(model('openai/gpt-6.2-sol', 57, created=20))
+        self.assertEqual(scores.lookup(cache, 'gpt-6-3-sol', 'openai')['score'], 57)
+        self.assertEqual(scores.lookup(cache, 'gpt-6-2-sol-20261117', 'openai')['score'], 57)
+        cache = parse(model('openai/gpt-6.1-sol', 50, created=10), model('openai/gpt-6.2-sol', 57, created=20),
+                      model('openai/gpt-6.4-sol', 70, created=40))
+        found = scores.lookup(cache, 'gpt-6-3-sol', 'openai')
+        self.assertEqual((found['score'], found['score_source'], found['released']), (57, 'family', 20))
+        self.assertIsNone(scores.lookup(cache, 'gpt-6-0-sol', 'openai'))
 
     def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
@@ -94,7 +109,7 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(list(cache['models']), ['a/ok'])
 
     def test_same_creator_collision_is_dropped_and_lends_nothing(self):
-        cache = parse(model('openai/gpt-5.1', 50), model('openai/gpt-5-1', 60), model('openai/gpt-5.2', 40))
+        cache = parse(model('openai/gpt-5.1', 50), model('openai/gpt-5-1', 60), model('openai/gpt-5.0', 40))
         self.assertNotIn('openai/gpt-5-1', cache['models'])
         self.assertEqual(scores.lookup(cache, 'gpt-5-1', 'openai')['score_source'], 'family')
         self.assertEqual(scores.lookup(cache, 'gpt-5-1', 'openai')['score'], 40)

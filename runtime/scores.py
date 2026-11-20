@@ -35,6 +35,10 @@ def family_key(key):
     return '-'.join(part for part in key.split('-') if not part.isdigit())
 
 
+def version(key):
+    return tuple(int(part) for part in key.split('-') if part.isdigit())
+
+
 def _price(value):
     if value is None:
         return None
@@ -114,11 +118,13 @@ def lookup(cache, key, creator):
         own = matches[0] if matches else None
     if own is not None and own['score'] is not None:
         return _result(own, 'openrouter', own)
+    # A model never borrows from a newer version of itself.
     members = [entry for entry in models.values() if entry['family'] == family_key(key)
-               and entry['score'] is not None and creator in (None, entry['creator'])]
+               and entry['score'] is not None and creator in (None, entry['creator'])
+               and version(entry['key']) <= version(key)]
     if not members:
         return None
-    newest = max(members, key=lambda entry: (entry['released'], entry['key'], entry['creator']))
+    newest = max(members, key=lambda entry: (version(entry['key']), entry['released'], entry['key'], entry['creator']))
     entry = dict(newest, input=own['input'] if own else None, output=own['output'] if own else None,
                  released=newest['released'])
     return _result(entry, 'family', newest)

@@ -163,6 +163,19 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual((result["route"]["model"], result["route"]["score"], result["route"]["score_source"]),
                          ("sonnet", 76.0, "openrouter"))
 
+    def test_old_haiku_never_borrows_from_the_newer_one(self):
+        # Live: both report released 0 and tied on borrowed score and price; route order picked the old one.
+        native_catalog.store_snapshot(self.root / "router.json", "claude-code", dict(
+            binding=dict(client_version="1", connection="c", controls="x"),
+            models=[dict(alias="haiku", resolved="claude-haiku-5-5", efforts=[])]))
+        result = self.run_select(self.request(work_kind="implementation", models=[
+            model("claude-agent", "haiku", released=0), model("claude-agent", "claude-haiku-4-5-20251001", released=0)]))
+        self.assertEqual((result["state"], result["level"], result["route"]["model"], result["route"]["score_source"]),
+                         ("selected", 1, "haiku", "openrouter"))
+        self.assertEqual(result["alternatives"], [])
+        self.assertIn(dict(route="opencode-claude-subscription:claude-haiku-4-5-20251001", reason="unscored"),
+                      result["excluded"])
+
     def test_unscored_without_family_is_excluded(self):
         self.models.append(model("opencode-go", "mystery-model"))
         result = self.run_select()
