@@ -85,7 +85,8 @@ def _exchange(command, env, timeout):
 
 def read_reset(*, now, timeout=TIMEOUT, environ=None, command=None):
     """The `resetsAt` (unix seconds) of the Codex window with the highest `usedPercent` that resets after `now`,
-    else None. Never under the test runner's private home unless an explicit environ and command are given."""
+    else None. Every failure is None; it refuses whenever the given environ sets `VCW_TEST_HOME` (tests pass an
+    explicit environ without it, with a fake command)."""
     environ = os.environ if environ is None else environ
     try:
         if environ.get('VCW_TEST_HOME'):
@@ -96,5 +97,5 @@ def read_reset(*, now, timeout=TIMEOUT, environ=None, command=None):
                  if type(item) is dict and type(item.get('usedPercent')) in (int, float)
                  and type(item.get('resetsAt')) is int and item['resetsAt'] > now]
         return max(found)[1] if found else None
-    except (lifecycle.ReadError, OSError, ValueError, subprocess.SubprocessError):
+    except (lifecycle.ReadError, OSError, ValueError, RecursionError, subprocess.SubprocessError):
         return None

@@ -59,6 +59,18 @@ class ChatgptLimitTest(unittest.TestCase):
             record = chatgpt_limit.mark(self.state, NOW, reader=lambda reset=reset, **kw: reset)
             self.assertEqual((record['until'], record['source']), (NOW + 3600, 'fallback'))
 
+    def test_mark_bounds_the_reset(self):
+        for reset in (NOW + 9 * 86400, (NOW + 7200) * 1000):
+            record = chatgpt_limit.mark(self.state, NOW, reader=lambda reset=reset, **kw: reset)
+            self.assertEqual((record['until'], record['source']), (NOW + 3600, 'fallback'))
+
+    def test_limited_refuses_an_unbounded_file(self):
+        path = self.state / chatgpt_limit.FILE
+        path.write_text(json.dumps(dict(version=1, marked_at=NOW, until=NOW + 9 * 86400, source='codex')))
+        path.chmod(0o600)
+        self.assertFalse(chatgpt_limit.limited(self.state, NOW))
+        self.assertIsNone(chatgpt_limit.remaining(self.state, NOW))
+
     def test_limited_window(self):
         self.assertFalse(chatgpt_limit.limited(self.state, NOW))
         chatgpt_limit.mark(self.state, NOW, reader=lambda **kw: NOW + 100)
@@ -93,6 +105,10 @@ class ChatgptLimitTest(unittest.TestCase):
         body = 'read(); out({"id": 1, "result": {}})\nread(); read()\nout({"id": 2, "error": {"code": -32600, "message": "x"}})\n'
         self.assertIsNone(self.read(body))
         self.assertIsNone(self.read('print("not json", flush=True)\ntime.sleep(5)\n'))
+
+    def test_read_reset_deeply_nested_answer_is_none(self):
+        body = 'read(); out({"id": 1, "result": {}})\nread(); read()\nprint(\'{"id": 2, "result": \' + "[" * 100000 + "]" * 100000 + "}", flush=True)\n'
+        self.assertIsNone(self.read(body))
 
     def test_read_reset_refuses_under_test_home_and_never_reads_auth(self):
         marker = self.dir / 'spawned'

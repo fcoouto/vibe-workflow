@@ -4,11 +4,12 @@ from runtime import codex_reset, storage
 
 FILE = 'chatgpt-limit.json'
 FALLBACK = 3600
+MAX_PAUSE = 8 * 86400  # the longest Codex window plus a margin; a longer reset is a corrupt answer
 
 
 def mark(state_dir, now, *, reader=codex_reset.read_reset):
     reset = reader(now=now)
-    found = type(reset) is int and reset > now
+    found = type(reset) is int and now < reset <= now + MAX_PAUSE
     record = dict(version=1, marked_at=now, until=reset if found else now + FALLBACK,
                   source='codex' if found else 'fallback')
     with storage._locked(state_dir / FILE, lock='.chatgpt-limit.lock') as path:
@@ -16,16 +17,23 @@ def mark(state_dir, now, *, reader=codex_reset.read_reset):
     return record
 
 
-def limited(state_dir, now):
-    """Whether a valid mark has `marked_at <= now < until`; a missing, unsafe or malformed file is false."""
+def _valid(state_dir, now):
+    """The stored record while `marked_at <= now < until` and its span is within MAX_PAUSE, else None (a missing,
+    unsafe or malformed file included)."""
     try:
         value = storage._read(state_dir / FILE)
     except (OSError, ValueError):
-        return False
-    return type(value.get('marked_at')) is int and type(value.get('until')) is int \
-        and value['marked_at'] <= now < value['until']
+        return None
+    start, end = value.get('marked_at'), value.get('until')
+    return value if type(start) is int and type(end) is int and start <= now < end and end - start <= MAX_PAUSE \
+        else None
+
+
+def limited(state_dir, now):
+    return _valid(state_dir, now) is not None
 
 
 def remaining(state_dir, now):
     """Seconds the mark still lasts, or None."""
-    return storage._read(state_dir / FILE)['until'] - now if limited(state_dir, now) else None
+    value = _valid(state_dir, now)
+    return value['until'] - now if value else None
