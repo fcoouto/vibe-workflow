@@ -232,15 +232,24 @@ test("every onboarding question has the same control-shaped form", async (t) => 
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
     assert.match(field("Question"), /\?$/)
-    assert.ok(field("Context")?.startsWith("Project: <project path>."), field("Header"))
-    const choices = [...block.matchAll(/^ {2,}- (.+?) — (.+)$/gm)]
-    assert.ok(choices.length >= 2 && choices.length <= 3, field("Header"))
-    for (const [, label, description] of choices) {
-      assert.ok(label.split(/\s+/).length <= 5, label)
-      assert.ok(description.length > 0 && !/`/.test(`${label}${description}`), label)
+    if (block === questions[0]) assert.doesNotMatch(field("Context"), /<project path>/)
+    else assert.ok(field("Context")?.startsWith("Project: <project path>."), field("Header"))
+    const groups = block.split(/^- Choices/m).slice(1).map((group) => [...group.matchAll(/^ {2,}- (.+?) — (.+)$/gm)])
+    for (const choices of groups) {
+      assert.ok(choices.length >= 2 && choices.length <= 3, field("Header"))
+      for (const [, label, description] of choices) {
+        assert.ok(label.split(/\s+/).length <= 5, label)
+        assert.ok(description.length > 0 && !/`/.test(`${label}${description}`), label)
+      }
     }
-    assert.match(choices[0][1], /\((Recommended)\)$/, field("Header"))
+    assert.match(groups[0][0][1], /\((Recommended)\)$/, field("Header"))
   }
+  const [smartRouter] = questions
+  for (const phrase of ["Turn it on (Recommended)", "Leave it off", "Keep it on (Current, Recommended)", "Turn it off",
+    "It is on, but not set up yet.", "Leave it off (Current)"]) {
+    assert.ok(smartRouter.includes(phrase) || text.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(smartRouter, /Use Smart Router \(Recommended\)|Keep existing model selection/)
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
   assert.equal(questions[2].match(/^- Question: (.+)$/m)[1], "Clean up after a pull request is merged in this project?")

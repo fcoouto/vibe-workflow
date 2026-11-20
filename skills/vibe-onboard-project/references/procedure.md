@@ -9,12 +9,15 @@ the user never has to learn a new layout:
 - **Question** that ends with a question mark and names one decision.
 - **Context** shown before the choices. It starts with the project path and
   defines every term the choices use, once. In a worktree, say where the
-  setting is saved.
+  setting is saved. Question 1 leaves the path and the worktree note to the
+  opening line.
 - **Two or three choices**, each with a label of one to five words and a
   one-line description of what happens.
 - **Order and markers:** the recommended choice first, labeled "(Recommended)".
   In an existing project, put the saved choice first and label it "(Current)"
-  instead, and keep it unless the user chooses otherwise.
+  instead, and keep it unless the user chooses otherwise. Question 1 keeps both
+  markers: "(Current, Recommended)" when they are the same choice, otherwise
+  "(Recommended)" stays on its own choice.
 - **Plain text:** no backticks or emoji in anything the user sees.
 - **Consent:** no answer is not consent. Stop on cancel.
 
@@ -24,10 +27,13 @@ the user never has to learn a new layout:
 
 - Header: Smart Router
 - Question: Use Smart Router for this project?
-- Context: Project: <project path>. Smart Router recommends a provider, model and effort before work is delegated. It only advises.
+- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. When it is saved on and its readiness is setup_needed, add: It is on, but not set up yet.
 - Choices:
-  - Use Smart Router (Recommended) — Automatically get provider, model, and effort recommendations before delegating work. Your client still launches and controls the tasks.
-  - Keep existing model selection — Continue with your current model-selection workflow. You can enable Smart Router later.
+  - Turn it on (Recommended) — Get a suggestion before each delegated task.
+  - Leave it off — Keep choosing models yourself.
+- Choices when it is saved on:
+  - Keep it on (Current, Recommended) — Suggestions continue, or start once it is set up.
+  - Turn it off — You choose models yourself. Run onboarding again to undo.
 
 ### 2. Pull request merging
 
@@ -74,8 +80,10 @@ the user never has to learn a new layout:
    worktree. Tell the user what is coming in one line: **Up to five short questions.**
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
-2. Ask question 1. In an existing project, show the saved Smart Router choice as
-   the current one.
+2. Ask question 1. With no saved choice, use its first choices. When the preview's
+   `previous_enabled` is `true`, use the saved-on choices. When it is `false`, use
+   the first choices with Leave it off (Current) first and Turn it on (Recommended)
+   second.
 3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
    If that preview is blocked, explain the fixed reason, skip questions 2, 3 and 4 and
    leave git workflow guidance off; for `project_root_unavailable`, say the main
