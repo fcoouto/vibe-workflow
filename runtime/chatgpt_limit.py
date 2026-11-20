@@ -1,5 +1,6 @@
 """The ChatGPT limit mark: OpenCode reported a usage limit, so ChatGPT routes pause until the Codex reset (read
-once from the Codex login, assumed to be the same ChatGPT account) or, without it, one hour."""
+once from the Codex login, assumed to be the same ChatGPT account) or, without it, one hour. A new mark never
+shortens a still-valid pause."""
 from runtime import codex_reset, storage
 
 FILE = 'chatgpt-limit.json'
@@ -13,6 +14,9 @@ def mark(state_dir, now, *, reader=codex_reset.read_reset):
     record = dict(version=1, marked_at=now, until=reset if found else now + FALLBACK,
                   source='codex' if found else 'fallback')
     with storage._locked(state_dir / FILE, lock='.chatgpt-limit.lock') as path:
+        old = _valid(state_dir, now)
+        if old is not None and old['until'] > record['until']:
+            return old  # never shorten a still-valid pause
         storage._write(path, record)
     return record
 

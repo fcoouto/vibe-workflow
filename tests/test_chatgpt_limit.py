@@ -64,6 +64,26 @@ class ChatgptLimitTest(unittest.TestCase):
             record = chatgpt_limit.mark(self.state, NOW, reader=lambda reset=reset, **kw: reset)
             self.assertEqual((record['until'], record['source']), (NOW + 3600, 'fallback'))
 
+    def test_mark_never_shortens_a_valid_pause(self):
+        codex = chatgpt_limit.mark(self.state, NOW, reader=lambda **kw: NOW + 2 * 86400)
+        kept = chatgpt_limit.mark(self.state, NOW + 10, reader=lambda **kw: None)
+        self.assertEqual(kept, codex)
+        self.assertEqual(chatgpt_limit.remaining(self.state, NOW + 10), 2 * 86400 - 10)
+        later = chatgpt_limit.mark(self.state, NOW + 20, reader=lambda **kw: NOW + 3 * 86400)
+        self.assertEqual(later, dict(version=1, marked_at=NOW + 20, until=NOW + 3 * 86400, source='codex'))
+        self.assertEqual(chatgpt_limit.remaining(self.state, NOW + 20), 3 * 86400 - 20)
+
+    def test_mark_replaces_an_expired_or_invalid_pause(self):
+        path = self.state / chatgpt_limit.FILE
+        for old in (dict(version=1, marked_at=NOW - 7200, until=NOW - 1, source='codex'),
+                    dict(version=1, marked_at=NOW, until=NOW + 9 * 86400, source='codex'), '{bad'):
+            with self.subTest(old=old):
+                path.write_text(old if type(old) is str else json.dumps(old))
+                path.chmod(0o600)
+                record = chatgpt_limit.mark(self.state, NOW, reader=lambda **kw: None)
+                self.assertEqual(record, dict(version=1, marked_at=NOW, until=NOW + 3600, source='fallback'))
+                self.assertEqual(json.loads(path.read_text()), record)
+
     def test_limited_refuses_an_unbounded_file(self):
         path = self.state / chatgpt_limit.FILE
         path.write_text(json.dumps(dict(version=1, marked_at=NOW, until=NOW + 9 * 86400, source='codex')))
