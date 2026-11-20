@@ -94,3 +94,47 @@ Not observed:
   during the child's run was inferred from the turn-end title.
 
 Other versions are unverified.
+
+## Smart Router automatic selection: what is known
+
+The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
+the ChatGPT findings are in `docs/chatgpt-quota-spike.md`.
+
+Verified by tests only (synthetic hosts, fetchers and stub processes): the model
+list reduction and its coercion of odd host fields, route building, task levels
+and ranking, score mapping and family borrowing, the private score cache, its
+refresh schedule and fetch bounds (size, same-host redirects, total deadline),
+the first-fetch disclosure, the caller-mistake versus `selector_unavailable`
+split, the ChatGPT limit mark and its one-minute throttle, the Codex reset reader
+against a stub `codex`, and the notices.
+
+Observed live on 20 November 2026:
+
+- OpenRouter's public `GET /api/v1/models` list shape, including the Artificial
+  Analysis score field and `-1` prices on meta-models (routers, not models).
+  A refresh downloads about 0.9 MB uncompressed: the fetch sends no
+  `Accept-Encoding`, so the design's 88 KB gzip figure does not apply.
+- OpenCode's ChatGPT provider uses WebSocket by default. Its requests carried
+  `codex.response.metadata` and `responsesapi.websocket_timing` events with no
+  usage fields.
+- Codex `account/rateLimits/read` on a Codex login answered with the weekly
+  window through the new reader in 0.71 s, with no model call.
+- Codex refused rate-limit reads with OpenCode's token-sharing credential.
+- `provider.chatgpt-limit` is defined in OpenCode 2.2.6's code.
+
+Not observed live:
+
+- `ctx.model.list()` in a real host: the reduction and the `Model.Info` field
+  types (for example whether `time.released` is an integer; a non-integer
+  becomes null and the OpenRouter release date is used instead).
+- The Claude alias mapping through the stored native catalog in a real run.
+- The first fetch and its disclosure inside OpenCode.
+- Which of `session.step.failed` and `session.error` reaches the public event
+  stream, and in which envelope; whether subscribing to `session.error` logs an
+  unknown-type warning.
+- Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
+
+Ruling: both event types stay subscribed. Both are defined in OpenCode 2.2.6, and
+a possible log warning costs less than a missed limit. The event stream is not
+re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
+Other OpenCode versions are unverified.

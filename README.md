@@ -57,6 +57,9 @@ only what you approve, and backs up your OpenCode config first.
 There is nothing to configure. Smart Router ranks models by public scores from
 Artificial Analysis via OpenRouter, refreshed about weekly with no credentials.
 Routes use your existing native logins, such as the Claude CLI.
+When ChatGPT reports its usage limit, Smart Router pauses ChatGPT routes until
+the reset time, read once from your Codex sign-in if Codex is installed (no
+model call); otherwise it pauses them for one hour.
 
 ## Pause or remove
 
