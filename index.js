@@ -81,12 +81,16 @@ export default {
     const amount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null
     async function models() {
       try {
-        const list = await ctx.model.list()
+        // OpenCode 2.2.6 answers { location, data }; a bare array is still accepted.
+        const raw = await ctx.model.list()
+        const list = Array.isArray(raw) ? raw : raw?.data
         return list.filter((m) => m?.enabled && m.status !== "deprecated" && m.capabilities?.tools !== false
           && providers.has(m.providerID) && text(m.id)).slice(0, 512).map((m) => ({ provider: m.providerID, id: m.id,
           model: text(m.modelID) ? m.modelID : null, family: text(m.family) ? m.family : null,
           variants: (Array.isArray(m.variants) ? m.variants : []).map((v) => v?.id).filter(text).slice(0, 32),
-          context: amount(m.limit?.context), released: amount(m.time?.released) }))
+          // The host's release time is in milliseconds; OpenRouter's, used beside it, is in seconds.
+          context: amount(m.limit?.context), released: amount(m.time?.released) === null ? null
+            : Math.floor(m.time.released / 1000) }))
       } catch { return [] }
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
@@ -159,15 +163,13 @@ export default {
       } catch {} finally { marking = false }
     }
     const subscription = new AbortController()
-    // One subscription per type, so a host that rejects one type still delivers the other.
-    for (const type of ctx.event?.subscribe ? ["session.step.failed", "session.error"] : []) {
-      ;(async () => {
-        for await (const event of await ctx.event.subscribe({ types: [type], signal: subscription.signal })) {
-          const error = event?.error ?? event?.data?.error ?? event?.properties?.error
-          if (error?.type === "provider.chatgpt-limit") markLimit()
-        }
-      })().catch(() => {})
-    }
+    // OpenCode 2.2.6 ignores session.error with a warning; the step failure carries the error in data.
+    if (ctx.event?.subscribe) (async () => {
+      for await (const event of await ctx.event.subscribe({ types: ["session.step.failed"], signal: subscription.signal })) {
+        const error = event?.data?.error ?? event?.error ?? event?.properties?.error
+        if (error?.type === "provider.chatgpt-limit") markLimit()
+      }
+    })().catch(() => {})
     await ctx.tool.transform((editor) => editor.add({
       name: "smart_router_select",
       description,

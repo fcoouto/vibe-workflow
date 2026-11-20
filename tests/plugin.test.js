@@ -9,9 +9,12 @@ import { pathToFileURL } from "node:url"
 // Spawned selectors inherit this, so a real CLI can never reach the network.
 process.env.VCW_TEST_HOME = mkdtempSync(join(tmpdir(), "vcw-test-home-"))
 
-const info = (over = {}) => ({ id: "openai/gpt-x", modelID: "gpt-x", providerID: "openai", family: "gpt",
-  variants: [{ id: "high" }], limit: { context: 100000 }, time: { released: "2026-01-01" },
-  capabilities: { tools: true }, enabled: true, status: "active", ...over })
+// Shapes as OpenCode 2.2.6 returns them: Model.Info with ms timestamps, inside a { location, data } envelope.
+const info = (over = {}) => ({ id: "gpt-x", modelID: "gpt-x", providerID: "openai", type: "chat", family: "gpt",
+  name: "GPT X", package: "@ai-sdk/openai", settings: {}, headers: {}, capabilities: { tools: true },
+  variants: [{ id: "high" }], time: { released: 1767225600000 }, cost: { input: 0, output: 0 },
+  status: "active", enabled: true, limit: { context: 100000, output: 32000 }, ...over })
+const listed = (...data) => ({ location: { directory: "/project" }, data })
 
 async function load() {
   const module = await import("../index.js").catch(() => null)
@@ -88,7 +91,7 @@ test("a host without models returns no authority without creating state", async 
 
 const task = { files: "1-2", spec: "exact", risk: "reversible" }
 
-async function fixture(body, models = [info()], extra = {}) {
+async function fixture(body, models = listed(info()), extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
@@ -111,7 +114,7 @@ test("passes actual location and exact provider/model/effort, without native dis
   await load()
   const f = await fixture(`import json, os, sys
 req = json.load(sys.stdin)
-assert req.pop("models")[0]["id"] == "openai/gpt-x"
+assert req.pop("models")[0]["id"] == "gpt-x"
 assert req == dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="reversible"))
 assert os.getcwd() == os.path.dirname(os.path.dirname(__file__))
 print(json.dumps(dict(state="selected", route=dict(provider="invented", model="invented-model", effort="high"),
@@ -243,17 +246,43 @@ print(Path("answer.json").read_text())
 test("passes the reduced model list and drops a caller-supplied one", async () => {
   const f = await fixture(`import json, sys
 req = json.load(sys.stdin)
-assert req["models"] == [dict(provider="openai", id="openai/gpt-x", model="gpt-x", family="gpt", variants=["high"],
-    context=100000, released=None), dict(provider="claude-agent", id="bare", model=None, family=None,
+assert req["models"] == [dict(provider="openai", id="gpt-x", model="gpt-x", family="gpt", variants=["high"],
+    context=100000, released=1767225600), dict(provider="claude-agent", id="bare", model=None, family=None,
     variants=[], context=None, released=None)], req["models"]
 print(json.dumps(dict(state="no_selection", route=None, reason="no_recommendation", excluded=[],
     admission=False, reservation=False, spend_permit=False)))
-`, [info(), info({ id: "bare", modelID: undefined, providerID: "claude-agent", family: undefined, variants: [],
+`, listed(info(), info({ id: "bare", modelID: undefined, providerID: "claude-agent", family: undefined, variants: [],
     limit: undefined, time: undefined }), info({ id: "off", enabled: false }), info({ id: "old", status: "deprecated" }),
-    info({ id: "notools", capabilities: { tools: false } }), info({ id: "or/x", providerID: "openrouter" })])
+    info({ id: "notools", capabilities: { tools: false } }), info({ id: "or/x", providerID: "openrouter" })))
   try {
     const answer = JSON.parse((await f.execute(undefined, "ses_a", { models: [{ id: "evil" }] })).content)
     assert.equal(answer.reason, "no_recommendation")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+const selected = `import json, sys
+from pathlib import Path
+Path("models.json").write_text(json.dumps(json.load(sys.stdin)["models"]))
+print(json.dumps(dict(state="selected", route=dict(provider="openai", model="gpt-x", effort="high"),
+    admission=False, reservation=False, spend_permit=False)))
+`
+
+test("live 2.2.6: the { location, data } model-list envelope reaches the selector", async () => {
+  const f = await fixture(selected, async () => listed(info(), info({ id: "qwen4-max", modelID: "qwen4-max",
+    family: "qwen4-max", variants: [], time: { released: 1794787200000 } })))
+  try {
+    assert.equal(JSON.parse((await f.execute()).content).state, "selected")
+    const models = JSON.parse(await readFile(join(f.root, "models.json"), "utf8"))
+    assert.deepEqual(models.map((m) => [m.id, m.variants, m.released]),
+      [["gpt-x", ["high"], 1767225600], ["qwen4-max", [], 1794787200]])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a bare model array still reaches the selector", async () => {
+  const f = await fixture(selected, [info()])
+  try {
+    assert.equal(JSON.parse((await f.execute()).content).state, "selected")
+    assert.equal(JSON.parse(await readFile(join(f.root, "models.json"), "utf8"))[0].id, "gpt-x")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -262,15 +291,17 @@ test("coerces unexpected model fields and skips unsafe ids", async () => {
 req = json.load(sys.stdin)
 expected = [dict(provider="openai", id="float", model="gpt-x", family="gpt", variants=["v%d" % n for n in range(32)],
     context=None, released=1700000000), dict(provider="openai", id="mixed", model="gpt-x", family="gpt",
-    variants=["high"], context=None, released=None)]
+    variants=["high"], context=None, released=None), dict(provider="openai", id="text", model="gpt-x", family="gpt",
+    variants=["high"], context=100000, released=None)]
 assert req["models"] == expected, req["models"]
 print(json.dumps(dict(state="no_selection", route=None, reason="no_recommendation", excluded=[],
     admission=False, reservation=False, spend_permit=False)))
-`, [info({ id: "float", limit: { context: 1.5 }, time: { released: 1700000000 },
+`, listed(info({ id: "float", limit: { context: 1.5 }, time: { released: 1700000000999 },
     variants: Array.from({ length: 40 }, (_, n) => ({ id: `v${n}` })) }),
     info({ id: "mixed", limit: { context: -1 }, time: { released: 2 ** 60 }, variants: [{ id: 7 }, { id: "high" }, null] }),
+    info({ id: "text", time: { released: "2026-01-01" } }),
     info({ id: "x".repeat(257) }), info({ id: "" }), info({ id: "bad\nid" }), info({ id: 7 }),
-    info({ id: "noprovider", providerID: { evil: true } })])
+    info({ id: "noprovider", providerID: { evil: true } })))
   try {
     const answer = JSON.parse((await f.execute()).content)
     assert.equal(answer.reason, "no_recommendation")
@@ -328,7 +359,8 @@ test("first fetch shows the disclosure once", async () => {
 })
 
 test("empty or failing model list never spawns", async () => {
-  for (const models of [[], async () => { throw new Error("boom") }, [info({ providerID: "openrouter" })]]) {
+  for (const models of [listed(), [], { location: {} }, async () => { throw new Error("boom") },
+    listed(info({ providerID: "openrouter" }))]) {
     const f = await fixture(`from pathlib import Path
 Path("spawned").touch()
 print("{}")
@@ -373,7 +405,7 @@ Path("spawned").touch()
     for (const body of ["not json", '{"paths":"x"}']) {
       await writeFile(join(f.root, "config", "routes.json"), body)
       const plugin = (await import(pathToFileURL(join(f.root, "index.js")) + "?" + encodeURIComponent(body))).default
-      const h = host(f.root, { state_dir: join(f.root, "state") }, [info()])
+      const h = host(f.root, { state_dir: join(f.root, "state") }, listed(info()))
       const cleanup = await plugin.setup(h.ctx)
       assert.ok(h.tools.has("vibe_workflow_onboard"))
       const answer = JSON.parse((await h.tools.get("smart_router_select").execute(
@@ -415,16 +447,19 @@ function feed(reject = []) {
   return out
 }
 const limit = { type: "provider.chatgpt-limit", message: "limit" }
+// The session.step.failed envelope OpenCode 2.2.6 publishes.
+const failed = (error) => ({ id: "evt_1", created: 1795132800000, type: "session.step.failed", durable: true,
+  location: { directory: "/project" }, data: { sessionID: "ses_1", assistantMessageID: "msg_1", ...error && { error } } })
 
 test("a chatgpt-limit step failure marks once", async () => {
   const events = feed()
-  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
   try {
-    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"], ["session.error"]])
-    events.push({ type: "session.step.failed", error: limit })
+    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"]])
+    events.push(failed(limit))
     for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
     await pause(300) // the first run has finished, so only the 60 s window can stop the next one
-    events.push({ type: "session.error", properties: { error: limit } })
+    events.push(failed(limit))
     await pause(300)
     const log = await runs(f.root)
     assert.equal(log.length, 1)
@@ -433,19 +468,19 @@ test("a chatgpt-limit step failure marks once", async () => {
     const real = Date.now
     Date.now = () => real() + 61000
     try {
-      events.push({ type: "session.error", error: limit })
+      events.push(failed(limit))
       for (let i = 0; i < 50 && (await runs(f.root)).length < 2; i++) await pause(50)
     } finally { Date.now = real }
     assert.equal((await runs(f.root)).length, 2)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
-test("the error is found in data and properties envelopes", async () => {
-  for (const envelope of [{ data: { error: limit } }, { properties: { error: limit } }]) {
+test("the error is also found at the top level or in properties", async () => {
+  for (const envelope of [{ error: limit }, { properties: { error: limit } }]) {
     const events = feed()
-    const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+    const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
     try {
-      events.push({ type: "session.error", ...envelope })
+      events.push({ type: "session.step.failed", ...envelope })
       for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
       assert.equal((await runs(f.root)).length, 1)
     } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
@@ -454,11 +489,11 @@ test("the error is found in data and properties envelopes", async () => {
 
 test("other failures and other providers never mark", async () => {
   const events = feed()
-  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
   try {
-    events.push({ type: "session.step.failed", error: { type: "provider.rate-limit", message: "x" } })
-    events.push({ type: "session.error", error: { type: "provider.auth", message: "x" } })
-    events.push({ type: "session.error" })
+    events.push(failed({ type: "provider.rate-limit", message: "x" }))
+    events.push(failed({ type: "provider.auth", message: "x", status: 401 }))
+    events.push(failed())
     await f.h.hooks.get("http.response")({ providerID: "anthropic", response: new Response("subscription_sharing_usage_limit_exceeded", { status: 429 }) })
     await f.h.hooks.get("http.response")({ response: new Response("subscription_sharing_usage_limit_exceeded", { status: 500 }) })
     await pause(400)
@@ -480,10 +515,10 @@ test("http 429 fallback reads a clone", async () => {
 
 test("opted-out projects never mark", async () => {
   const events = feed()
-  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
   try {
     await preference(f.root, false)
-    events.push({ type: "session.error", error: limit })
+    events.push(failed(limit))
     let pulled = false, cancelled = false
     const body = new ReadableStream({
       pull(controller) { pulled = true; controller.enqueue(Buffer.from("subscription_sharing_usage_limit_exceeded")); controller.close() },
@@ -511,15 +546,12 @@ test("http 429 fallback still marks when the host reads the body at once", async
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
-test("a rejected event type does not silence the other", async () => {
-  const events = feed(["session.error"])
-  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+test("a rejected subscription leaves the plugin loaded", async () => {
+  const events = feed(["session.step.failed"])
+  const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
   try {
-    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"], ["session.error"]])
-    events.push({ type: "session.step.failed", error: limit })
-    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
-    await pause(200)
-    assert.equal((await runs(f.root)).length, 1)
+    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"]])
+    assert.ok(f.h.tools.has("smart_router_select"))
     await f.cleanup()
     assert.ok(events.calls.every((opts) => opts.signal.aborted))
   } finally { await rm(f.root, { recursive: true }) }
@@ -527,9 +559,9 @@ test("a rejected event type does not silence the other", async () => {
 
 test("cleanup aborts the subscription", async () => {
   const events = feed()
-  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  const f = await fixture(mark, listed(info()), { event: { subscribe: events.subscribe } })
   try {
-    assert.equal(events.calls.length, 2)
+    assert.equal(events.calls.length, 1)
     assert.ok(events.calls.every((opts) => !opts.signal.aborted))
     await f.cleanup()
     assert.ok(events.calls.every((opts) => opts.signal.aborted))
