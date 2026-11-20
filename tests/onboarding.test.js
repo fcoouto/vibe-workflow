@@ -232,7 +232,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
   const questions = text.split(/^### \d+\. /m).slice(1).map((block) => block.split(/^## /m)[0])
-  assert.equal(questions.length, 4)
+  assert.equal(questions.length, 5)
   for (const block of questions) {
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
@@ -250,6 +250,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
   assert.equal(questions[2].match(/^- Question: (.+)$/m)[1], "Clean up after a pull request is merged in this project?")
   assert.equal(questions[3].match(/^- Question: (.+)$/m)[1], "Delete merged branches on GitHub automatically?")
+  assert.equal(questions[4].match(/^- Question: (.+)$/m)[1], "Show task progress in the session title?")
   assert.match(questions[1], /Skip git workflow guidance — Saves all of this as off, including cleanup\./)
   assert.doesNotMatch(text, /Save both\?|Save onboarding choices|one confirmation/)
   assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
@@ -258,7 +259,10 @@ test("every onboarding question has the same control-shaped form", async (t) => 
 test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Up to four short questions.", "Saved in the main checkout", "project_root_unavailable",
+  for (const phrase of ["Up to five short questions.", "Session titles: not saved.", "Unless question 5 was skipped, apply session titles last",
+    "Session titles: Off — titles are left alone.",
+    "Session titles: On — updated at the end of each turn.",
+    "Session titles: On · Setup needed — this OpenCode does not deliver session events.", "Saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Scores loaded —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
     "Nothing to change", "Saving:", "native file-edit permission",
@@ -287,7 +291,54 @@ test("the procedure pins the cleanup questions, the GitHub conditions, the apply
     "runs after the settings apply", "independent of a technical failure"]) {
     assert.ok(text.includes(phrase), phrase)
   }
-  assert.doesNotMatch(text, /Two short questions\./)
+  assert.doesNotMatch(text, /Two short questions\.|Up to four/)
+})
+
+const titles = (execute, input) => execute({ feature: "session_titles", ...input })
+
+test("session_titles preview defaults on, writes nothing and takes readiness from titlesGuard", async (t) => {
+  const { execute, path } = await fixture(t)
+  const preview = await titles(execute, { op: "preview" })
+  assert.deepEqual([preview.state, preview.enabled, preview.change], ["preview", true, "create"])
+  assert.ok(!("agent_merge" in preview))
+  assert.deepEqual(preview.readiness, { state: "setup_needed", reason: "events_unavailable" })
+  assert.deepEqual((await titles(execute, { op: "preview", enabled: false })).readiness, { state: "off", reason: null })
+  await assert.rejects(stat(path), { code: "ENOENT" })
+})
+
+test("session_titles apply saves only its entry after edit permission", async (t) => {
+  const { execute, write, path, assertCalls } = await fixture(t)
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }] })
+  const preview = await titles(execute, { op: "preview" })
+  const saved = await titles(execute, { op: "apply", enabled: true, expected_snapshot: preview.snapshot })
+  assert.deepEqual([saved.state, saved.enabled], ["saved", true])
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features,
+    [{ smart_router: { enabled: false } }, { session_titles: { enabled: true } }])
+  assert.deepEqual(assertCalls.map(({ action, resources }) => ({ action, resources })),
+    [{ action: "edit", resources: ["../.vibe-workflow/settings.json"] }])
+})
+
+test("session_titles rejects git workflow booleans", async (t) => {
+  const { execute } = await fixture(t)
+  assert.equal((await titles(execute, { op: "preview", agent_merge: true })).reason, "invalid_request")
+  assert.equal((await titles(execute, { op: "preview", worktree_cleanup: true })).reason, "invalid_request")
+})
+
+test("session_titles never runs the Smart Router setup check", async (t) => {
+  const { mkdtemp } = await import("node:fs/promises")
+  const bin = await mkdtemp(join(tmpdir(), "vibe-spy-")), log = join(bin, "calls")
+  t.after(() => rm(bin, { recursive: true }))
+  await writeFile(join(bin, "python3"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 1\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => { process.env.PATH = path })
+  const { execute } = await fixture(t)
+  const calls = async () => (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean)
+  const preview = await titles(execute, { op: "preview" })
+  await titles(execute, { op: "apply", enabled: true, expected_snapshot: preview.snapshot })
+  assert.deepEqual(await calls(), [])
+  await execute({ op: "preview" })
+  assert.equal((await calls()).length, 1, "the spy sees the Smart Router check")
 })
 
 test("only apply with enabled true lets the setup check fetch scores", async (t) => {
@@ -295,7 +346,7 @@ test("only apply with enabled true lets the setup check fetch scores", async (t)
   t.after(() => rm(root, { recursive: true }))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["index.js", "project.js", "onboarding.js", "pr-advice.js", "skills/vibe-onboard-project/SKILL.md",
+  for (const name of ["index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md"]) {
     await mkdir(join(root, name, ".."), { recursive: true })
     await copyFile(new URL(`../${name}`, import.meta.url), join(root, name))

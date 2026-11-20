@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { registerOnboarding, registerSkill } from "./onboarding.js"
 import { registerPrAdvice } from "./pr-advice.js"
 import { createProjectSettings } from "./project.js"
+import { registerSessionTitles } from "./session-titles.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
@@ -209,13 +210,16 @@ export default {
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
     const prAdvice = await registerPrAdvice(ctx, { settings: () => gitWorkflow.inspect(),
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
+    const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
+    const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) notices.clear()
       return result
-    } }, git_workflow: gitWorkflow }, (signal, allowFetch) =>
+    } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
-    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" })
+    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
+    () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await ctx.session.hook("context", async (event) => {
@@ -257,6 +261,7 @@ export default {
       closed = true
       subscription.abort()
       prAdvice.close()
+      titles.close()
       notices.clear()
       for (const stop of active) stop()
     }

@@ -92,7 +92,7 @@ async function fixture(body, models = [info()], extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["config/routes.json", "index.js", "project.js", "onboarding.js", "pr-advice.js", "skills/vibe-onboard-project/SKILL.md",
+  for (const name of ["config/routes.json", "index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })

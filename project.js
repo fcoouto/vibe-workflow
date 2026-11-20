@@ -76,7 +76,7 @@ function uniqueKeys(text) {
   return true
 }
 
-const FEATURES = { smart_router: ["enabled"], git_workflow: ["enabled", "agent_merge", "worktree_cleanup"] }
+const FEATURES = { smart_router: ["enabled"], session_titles: ["enabled"], git_workflow: ["enabled", "agent_merge", "worktree_cleanup"] }
 
 async function readSettings(folder, path, feature) {
   const parent = await maybeStat(folder)

@@ -56,3 +56,41 @@ and after `gh pr create` (case 1). Cases 4 (`gh pr merge`) and 5 (checkout in th
 primary) share the same append path but have not been observed. Other OpenCode
 versions are unverified. To repeat the check, run one matching command and look for
 a `vibe-workflow:` line in its result.
+
+## Session titles: what is known
+
+The opt-in `session_titles` setting is described in
+`docs/superpowers/specs/2026-11-20-session-titles-design.md`. Its "Evidence
+(2026-11-20)" section records the session timelines and the throwaway-plugin probe it rests on, and its
+"Known gaps (documented, not closed)" section lists what is not verified. Read
+those two sections before changing `session-facts.js` or `session-titles.js`; this
+file does not copy them.
+
+Observed live (OpenCode 2.3.2, 20 November 2026): the packaged plugin, exported
+from branch commit `04a0104`, was loaded as a project-local copy in a throwaway
+local clone, with one API-created session and no push. Each quoted title starts
+with the invisible U+FFFB marker. The title was empty at creation; the first turn
+end wrote `▰▱▱▱▱ WAITING · live probe`, and it stayed unchanged 20 seconds later.
+Mid-turn the `WAITING` label was removed, and later turn ends showed `▰▰▰▱▱` and
+`▰▰▰▰▱` with `WAITING`. A background child kept its own title, and the root title
+was unchanged after the child's report woke it. After the checkout moved to a
+branch whose pull request #346 was already merged on GitHub, the turn end showed
+`▰▰▰▰▰` (cell 5) through a real `gh pr list` call from the plugin process.
+
+Not observed:
+
+- OpenCode's own title generation: the API-created session never got a generated
+  title, so the first-turn race was not exercised. Desktop and terminal sessions
+  are unverified for that race.
+- Cell 2 on its own: turn 2 wrote the plan and the first declared file in one turn,
+  so the meter went from 1 to 3 cells.
+- The cleanup-on path: the clone's `git_workflow` had no `worktree_cleanup`, so
+  cleanup counted as satisfied; worktree removal holding or releasing cell 5 was
+  not exercised.
+- A real merge: cell 5 came from a branch whose pull request #346 was already merged
+  on GitHub, reached through a local-only upstream ref; no task was taken through
+  to a merge.
+- A sample taken while the background child was still running: the root's `WAITING`
+  during the child's run was inferred from the turn-end title.
+
+Other versions are unverified.
