@@ -4,8 +4,7 @@
 
 Every question uses the client's native question control, in the same form, so
 the user never has to learn a new layout. Use each Header, Question and choice label
-exactly as written. When the control has no context field, as in OpenCode, put the
-context, then the question, in the control's question text.
+exactly as written, apart from the markers and the saved choice's place.
 
 - **Header** of at most 30 characters.
 - **Question** that ends with a question mark and names one decision. In OpenCode, the control's question text is the Context followed by the Question; the control has no other field for it.
@@ -84,13 +83,13 @@ context, then the question, in the control's question text.
 
 ## Steps
 
-1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Before question 1,
-   write the opening line with the preview's `project` and `client`:
+1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. If blocked, explain
+   the fixed reason and stop. Otherwise, before question 1, write the opening line
+   with the preview's `project` and `client`:
    **Project: <project>. Client: <client>. Up to five short questions.** When `root`
    differs, the session is in a worktree; add that Smart Router is saved in this
    worktree and the git workflow and session title choices in the main checkout.
-   Their answers are the consent to save. If blocked, explain the fixed reason
-   and stop.
+   Their answers are the consent to save.
 2. Ask question 1. The preview's `previous_enabled` is the saved value; `null`
    means nothing is saved. For `false`, that gives Leave it off (Current) first and
    Turn it on (Recommended) second.
@@ -147,7 +146,7 @@ context, then the question, in the control's question text.
    otherwise ask the affected question again and say why. The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
    client's. If edit is denied, permission is unavailable or apply fails for any
-   reason, do not write another way: never run the plugin's code or write the settings file yourself.
+   reason, do not write another way: never import or run the plugin's files outside the tool, and never write the settings file yourself.
    Unless question 5 was skipped, apply session titles last, the same way: preview `session_titles` again with the
    answered `enabled` and apply it with that fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.

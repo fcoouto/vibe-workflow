@@ -255,19 +255,21 @@ test("every onboarding question has the same control-shaped form", async (t) => 
     [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
     assert.ok(questions[index].includes(phrase), phrase)
   }
-  for (const phrase of ["add that Smart Router is saved in this",
+  const flat = text.replace(/\s+/g, " ")
+  for (const phrase of ["add that Smart Router is saved in this worktree",
     "`previous_agent_merge` `true` is Agents merge their own and `false` is I merge them",
-    "then the question, in the control's question text",
     "In OpenCode, the control's question text is the Context followed by the Question",
     "For `false`, that gives Keep them (Current) first and Clean up (Recommended) second.",
     "For `false`, that gives Leave titles alone (Current) first and Show progress (Recommended) second.",
-    "Use each Header, Question and choice label",
+    "Use each Header, Question and choice label exactly as written, apart from the markers and the saved choice's place.",
+    "If blocked, explain the fixed reason and stop. Otherwise, before question 1, write the opening line",
     "**Project: <project>. Client: <client>. Up to five short questions.**",
-    "never run the plugin's code or write the settings file yourself",
+    "never import or run the plugin's files outside the tool, and never write the settings file yourself",
     "\"feature\":\"git_workflow\",\"enabled\":true,\"agent_merge\":false,\"worktree_cleanup\":false",
     "\"feature\":\"session_titles\",\"enabled\":true"]) {
-    assert.ok(text.includes(phrase), phrase)
+    assert.ok(flat.includes(phrase), phrase)
   }
+  assert.equal(flat.split("the control's question text").length, 2)
   assert.doesNotMatch(text, /Question 1 (leaves|keeps)|Skip git workflow guidance|\*\*Skip\*\*|Remote branch cleanup/)
   const [smartRouter] = questions
   for (const phrase of ["Turn it on (Recommended)", "Leave it off", "Keep it on (Current, Recommended)", "Turn it off",
