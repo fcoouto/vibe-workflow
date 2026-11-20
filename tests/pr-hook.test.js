@@ -190,12 +190,28 @@ test("a finishing-skill load gets the onboarding decision; failed loads, other s
   const { hooks } = await fixture(t, { settings: { enabled: true, agent_merge: true } })
   const array = await skill(hooks, "superpowers:finishing-a-development-branch", { content: [{ type: "text", text: "menu" }] })
   assert.equal(array.content.length, 2)
-  assert.match(array.content[1].text, /^\n\nvibe-workflow: your human partner already decided during onboarding/)
-  assert.match(array.content[1].text, /Agents merge their own \[READY\] pull requests/)
-  assert.match(await skill(hooks, "finishing-a-development-branch", "menu"), /^menu\n\nvibe-workflow: your human partner/)
+  assert.match(array.content[1].text, /^\n\nvibe-workflow: your human partner's declared integration choice/)
+  assert.match(array.content[1].text, /You may merge it yourself once it is \[READY\]/)
+  assert.match(await skill(hooks, "finishing-a-development-branch", "menu"), /^menu\n\nvibe-workflow: your human partner's declared integration choice/)
   const untouched = () => ({ content: [{ type: "text", text: "menu" }] })
   assert.deepEqual(await skill(hooks, "superpowers:finishing-a-development-branch", untouched(), "error"), untouched())
   assert.deepEqual(await skill(hooks, "superpowers:brainstorming", untouched()), untouched())
   const off = await fixture(t, { settings: { enabled: false, agent_merge: false } })
   assert.deepEqual(await skill(off.hooks, "superpowers:finishing-a-development-branch", untouched()), untouched())
+})
+
+test("a worktree-skill load gets the declared worktree preference only when the git workflow is on", async (t) => {
+  const load = async (hooks, status = "completed") => {
+    const event = { tool: "skill", status, sessionID: "ses_1", input: { id: "superpowers:using-git-worktrees" },
+      result: { content: [{ type: "text", text: "consent?" }] } }
+    await hooks.get("execute.after")(event)
+    return event.result
+  }
+  const { hooks } = await fixture(t, { settings: { enabled: true, agent_merge: false } })
+  const result = await load(hooks)
+  assert.match(result.content[1].text, /^\n\nvibe-workflow: your human partner's declared worktree preference/)
+  assert.match(result.content[1].text, /Do not ask for consent\./)
+  assert.equal((await load(hooks, "error")).content.length, 1)
+  const off = await fixture(t, { settings: { enabled: false, agent_merge: false } })
+  assert.equal((await load(off.hooks)).content.length, 1)
 })

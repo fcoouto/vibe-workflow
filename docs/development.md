@@ -67,6 +67,16 @@ Not observed: the user-merges wording, the cleanup-on wording, a session started
 the desktop or terminal client, and a skill attached to a prompt by the user (no tool
 call, so no note).
 
+The note table also covers `using-git-worktrees`, and the finishing note was reworded
+(declared choice first). Observed live (OpenCode 2.3.2, 20 November 2026, package
+exported from `c0146d9`, throwaway clone with git workflow on, agents merging and cleanup
+on): after loading `using-git-worktrees` the agent planned to create a worktree and move
+the session into it without asking for consent (it would only ask for the task name);
+after loading `finishing-a-development-branch` it planned to verify tests, push, open a
+[BLOCKED] draft, mark it [READY], merge it and clean up, without the options menu (it
+would ask for the base branch only if unclear). Not observed: the user-merges and
+cleanup-off wordings, and sessions started from the desktop or terminal client.
+
 ## Session titles: what is known
 
 The opt-in `session_titles` setting is described in

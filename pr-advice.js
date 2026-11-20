@@ -177,10 +177,18 @@ const NOTES = {
     "merge only a [READY] pull request whose evidence is current.",
 }
 
-const FINISHING = "finishing-a-development-branch"
-const FINISH = "vibe-workflow: your human partner already decided during onboarding how finished work is integrated " +
-  "in this project, so do not present the integration options or ask. Push the branch and open a pull request, " +
-  "following the vibe-pull-requests skill ([BLOCKED] draft, then [READY]). "
+const OVERRIDE = "An explicit request from your human partner in this session overrides this."
+const SKILL_NOTES = {
+  "finishing-a-development-branch": (state) => "vibe-workflow: your human partner's declared integration choice, set " +
+    "during onboarding: push the branch and open a pull request, following the vibe-pull-requests skill ([BLOCKED] " +
+    "draft, then [READY]). Skip the options menu and do not ask; the skill's other steps still apply. " +
+    (state.agent_merge === true ? "You may merge it yourself once it is [READY] and its evidence is current. "
+      : "Stop at [READY] and tell your human partner it awaits their merge. ") +
+    (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps in vibe-pull-requests. "
+      : "Keep the worktree after the merge. ") + OVERRIDE,
+  "using-git-worktrees": () => "vibe-workflow: your human partner's declared worktree preference, set during " +
+    "onboarding: always work in a worktree, never in the primary checkout. Do not ask for consent. " + OVERRIDE,
+}
 
 function mergeNote(auto, agentMerge, primaryPath, cleanup) {
   const where = primaryPath ? ` (${primaryPath})` : ""
@@ -204,17 +212,13 @@ export function createAdvisor({ settings, primary, checkout }) {
   const branches = new Map()
   return {
     clear() { armed.clear(); branches.clear() },
-    async finish(skill) {
+    async skillNote(skill) {
       try {
-        if (typeof skill !== "string" || skill.split(/[:/]/).pop() !== FINISHING) return null
+        const note = typeof skill === "string" && Object.hasOwn(SKILL_NOTES, skill.split(/[:/]/).pop()) &&
+          SKILL_NOTES[skill.split(/[:/]/).pop()]
+        if (!note) return null
         const state = await settings()
-        if (state?.state !== "on") return null
-        return FINISH + (state.agent_merge === true
-          ? "Agents merge their own [READY] pull requests once the evidence is current. "
-          : "Stop at [READY] and tell your human partner it awaits their merge. ") +
-          (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps. " :
-            "Keep the worktree after the merge. ") +
-          "An explicit request from your human partner in this session still wins."
+        return state?.state === "on" ? note(state) : null
       } catch { return null }
     },
     async advise(event, sessionID) {
@@ -302,7 +306,7 @@ export async function registerPrAdvice(ctx, { settings, primary, checkout = defa
         if (closed) return
         const input = event?.input ?? event?.args
         if (event?.tool === "skill") {
-          const note = event.status === "completed" ? await advisor.finish(input?.id ?? input?.name) : null
+          const note = event.status === "completed" ? await advisor.skillNote(input?.id ?? input?.name) : null
           if (note) appendNote(event, note)
           return
         }
