@@ -41,17 +41,17 @@ the user never has to learn a new layout:
 
 - Header: Pull request merging
 - Question: Who merges ready pull requests in this project?
-- Context: Agents open each pull request as a draft and mark it ready once checks and review pass. These are reminders to the agent, not hard rules. When the git workflow preview's readiness.reason is guard_unavailable, add: Reminders are not available in this OpenCode, so this is guidance only.
+- Context: Agents open each pull request as a [BLOCKED] draft and mark it [READY] only when its checks and review are current for the latest commit. These are reminders to the agent, not hard rules. When the git workflow status preview in step 3 reports readiness.reason guard_unavailable, add: Reminders are not available in this OpenCode, so this is guidance only.
 - Choices:
-  - I merge them (Recommended) — Agents mark the PR ready and wait for you.
-  - Agents merge their own — Agents merge once the PR is ready, without asking.
+  - I merge them (Recommended) — Agents mark the PR [READY] and wait for you.
+  - Agents merge their own — Agents merge once the PR is [READY], without asking.
   - Turn off git guidance — No PR reminders, and no cleanup. Run onboarding again to change it.
 
 ### 3. Worktree cleanup
 
 - Header: Worktree cleanup
 - Question: Clean up after a pull request is merged in this project?
-- Context: Agents work on each task in a separate folder, called a worktree. After a confirmed merge, cleanup removes that folder and its local branch. It never removes unmerged, uncommitted or ignored files; it stops and tells you.
+- Context: Agents work on each task in a separate folder, called a worktree. After a confirmed merge, cleanup removes that folder and its local branch. It never removes unmerged work, uncommitted work or ignored files; it stops and tells you.
 - Choices:
   - Clean up (Recommended) — Remove the folder and branch after each merge.
   - Keep them — You remove worktrees and branches yourself.
@@ -72,7 +72,7 @@ the user never has to learn a new layout:
 
 - Header: Session titles
 - Question: Show task progress in the session title?
-- Context: Adds a five-step progress bar to each chat's name in the session list, and WAITING when the chat needs you. The rest of the name is left alone. Delete the bar and that chat stops updating. When the session titles preview's readiness.reason is events_unavailable, add: This OpenCode does not send session events, so titles will not update yet.
+- Context: Adds a five-step progress bar to the session title, the chat's name in the session list, and WAITING when the chat needs you. The rest of the title is left alone. Delete the bar and that chat stops updating. When the session titles status preview in step 6 reports readiness.reason events_unavailable, add: This OpenCode does not send session events, so titles will not update yet.
 - Choices:
   - Show progress (Recommended) — Updates at the end of each turn.
   - Leave titles alone — Chat names stay as they are.
@@ -85,7 +85,7 @@ the user never has to learn a new layout:
 1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the
    preview's `project` path as the project, and the client. When `root` differs,
    the session is in a worktree; say Smart Router is saved in this worktree and
-   the other choices are saved in the main checkout. Tell the user what is coming in one line: **Up to five short questions.**
+   the git workflow and session title choices in the main checkout. Tell the user what is coming in one line: **Up to five short questions.**
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
 2. Ask question 1. The preview's `previous_enabled` is the saved value; `null`
@@ -98,7 +98,10 @@ the user never has to learn a new layout:
    Otherwise ask question 2. The preview's `previous_enabled` and
    `previous_agent_merge` hold the saved choice: `false` enabled is Turn off git
    guidance, otherwise `previous_agent_merge` picks the merge choice; `null` means
-   nothing is saved. Choosing **Turn off git guidance** skips questions 3 and 4.
+   nothing is saved. The status preview is this preview, except when
+   `previous_enabled` is `false`: then preview again with
+   `{"v":1,"op":"preview","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":false}`
+   and use only its readiness. Choosing **Turn off git guidance** skips questions 3 and 4.
 4. Ask question 3, unless question 2 was skipped or turned git guidance off. The
    preview's `previous_worktree_cleanup` is the saved value; `null` means it was
    never asked.
@@ -112,7 +115,10 @@ the user never has to learn a new layout:
    - `GitHub auto-delete: not available (could not be read).` for any other failure.
 6. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"session_titles"}`.
    Ask question 5, also when git guidance was turned off or skipped. The preview's
-   `previous_enabled` is the saved value; `null` means it was never asked. If that preview is
+   `previous_enabled` is the saved value; `null` means it was never asked. The status
+   preview is this preview, except when `previous_enabled` is `false`: then preview
+   again with `{"v":1,"op":"preview","feature":"session_titles","enabled":true}` and use
+   only its readiness. If the first session titles preview is
    blocked, skip question 5, leave session titles off and report
    **Session titles: not saved.** followed by the fixed reason; for
    `project_root_unavailable`, say onboarding must run from the main checkout.

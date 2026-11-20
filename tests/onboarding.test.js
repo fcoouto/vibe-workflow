@@ -248,9 +248,16 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   assert.equal(questions.filter((block) => /^- Choices when it is saved on:/m.test(block)).length, 3)
   assert.equal(questions[3].match(/^- Header: (.+)$/m)[1], "GitHub branch cleanup")
   assert.match(questions[1], /Turn off git guidance — No PR reminders, and no cleanup\./)
-  for (const phrase of ["Reminders are not available in this OpenCode, so this is guidance only.",
-    "This OpenCode does not send session events, so titles will not update yet.",
-    "not only agents'", "Keep cleaning up (Current, Recommended)", "Keep showing it (Current, Recommended)"]) {
+  for (const [index, phrase] of [[1, "Reminders are not available in this OpenCode, so this is guidance only."],
+    [1, "current for the latest commit"], [1, "[BLOCKED]"],
+    [2, "never removes unmerged work, uncommitted work or ignored files"],
+    [4, "This OpenCode does not send session events, so titles will not update yet."],
+    [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
+    assert.ok(questions[index].includes(phrase), phrase)
+  }
+  for (const phrase of ["say Smart Router is saved in this worktree",
+    "\"feature\":\"git_workflow\",\"enabled\":true,\"agent_merge\":false,\"worktree_cleanup\":false",
+    "\"feature\":\"session_titles\",\"enabled\":true"]) {
     assert.ok(text.includes(phrase), phrase)
   }
   assert.doesNotMatch(text, /Question 1 (leaves|keeps)|Skip git workflow guidance|\*\*Skip\*\*|Remote branch cleanup/)
