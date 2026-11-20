@@ -8,7 +8,7 @@ exactly as written. When the control has no context field, as in OpenCode, put t
 context, then the question, in the control's question text.
 
 - **Header** of at most 30 characters.
-- **Question** that ends with a question mark and names one decision.
+- **Question** that ends with a question mark and names one decision. In OpenCode, the control's question text is the Context followed by the Question; the control has no other field for it.
 - **Context** shown before the choices. It defines every term the choices use,
   once, and adds the status sentence its question names, when that applies. The
   project path and where settings are saved belong to the opening line only.
@@ -107,7 +107,7 @@ context, then the question, in the control's question text.
    and use only its readiness. Choosing **Turn off git guidance** skips questions 3 and 4.
 4. Ask question 3, unless question 2 was skipped or turned git guidance off. The
    preview's `previous_worktree_cleanup` is the saved value; `null` means it was
-   never asked.
+   never asked. For `false`, that gives Keep them (Current) first and Clean up (Recommended) second.
 5. Unless question 2 was skipped or turned git guidance off, run `gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission`
    before question 4. Ask question 4 only when the call succeeds, `deleteBranchOnMerge` is `false` and `viewerPermission` is `ADMIN`.
    Otherwise skip it and report one line:
@@ -118,7 +118,7 @@ context, then the question, in the control's question text.
    - `GitHub auto-delete: not available (could not be read).` for any other failure.
 6. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"session_titles"}`.
    Ask question 5, also when git guidance was turned off or skipped. The preview's
-   `previous_enabled` is the saved value; `null` means it was never asked. The status
+   `previous_enabled` is the saved value; `null` means it was never asked. For `false`, that gives Leave titles alone (Current) first and Show progress (Recommended) second. The status
    preview is this preview, except when `previous_enabled` is `false`: then preview
    again with `{"v":1,"op":"preview","feature":"session_titles","enabled":true}` and use
    only its readiness. If the first session titles preview is
