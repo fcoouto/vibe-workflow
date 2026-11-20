@@ -43,9 +43,9 @@ class PackageTest(unittest.TestCase):
         for key in ("admission", "reservation", "spend_permit"):
             self.assertIs(answer[key], False)
 
-    def test_cli_without_cache_reports_scores_unavailable(self):
+    def test_cli_without_account_evidence_has_no_eligible_route(self):
         answer = json.loads(self.cli(self.request()).stdout)
-        self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "scores_unavailable", None))
+        self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "no_eligible_route", None))
         self.assertFalse(answer["admission"])
 
     def test_cli_refresh_skips_a_fresh_cache_without_echo(self):
