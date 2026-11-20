@@ -131,21 +131,32 @@ Observed live on 20 November 2026:
   window through the new reader in 0.71 s, with no model call.
 - Codex refused rate-limit reads with OpenCode's token-sharing credential.
 - `provider.chatgpt-limit` is defined in OpenCode 2.2.6's code.
+- OpenCode 2.2.6's `ctx.model.list()` answers an envelope `{ location, data }`,
+  not an array; `data` held 468 `Model.Info` objects. Each has `id`, `modelID`,
+  `providerID`, `type`, `family`, `name`, `package`, `settings`, `headers`,
+  `capabilities`, `variants`, `time`, `cost`, `status`, `enabled` and `limit`,
+  sometimes `compatibility`. `variants` is a list of `{ id }` objects and can be
+  empty. `limit.context` is an integer. `time.released` is an integer in
+  milliseconds; the plugin converts it to whole seconds, the unit of
+  OpenRouter's `created`, because the selector uses either as a tie-break.
+  The plugin still accepts a bare array.
+- Subscribing to `session.error` makes the host log `ignoring unknown event
+  types` on every load; only `session.step.failed` is a valid type.
+- A step event arrives as `{ id, created, type, durable, location, data }`;
+  `session.step.ended` carried `data: { sessionID, assistantMessageID, finish,
+  rawFinish, cost, tokens, snapshot, files }`. By OpenCode's schema,
+  `session.step.failed` carries `data.error` as `{ type, message, status?,
+  response?: { body }, retryAfterMs? }`.
 
 Not observed live:
 
-- `ctx.model.list()` in a real host: the reduction and the `Model.Info` field
-  types (for example whether `time.released` is an integer; a non-integer
-  becomes null and the OpenRouter release date is used instead).
+- A `provider.chatgpt-limit` step failure itself, so the mark through the event
+  stream is verified by tests only.
+- Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
 - The Claude alias mapping through the stored native catalog in a real run.
 - The first fetch and its disclosure inside OpenCode.
-- Which of `session.step.failed` and `session.error` reaches the public event
-  stream, and in which envelope; whether subscribing to `session.error` logs an
-  unknown-type warning.
-- Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
 
-Ruling: both event types stay subscribed, each through its own subscription so a
-host that rejects one type still delivers the other. Both are defined in OpenCode
-2.2.6, and a possible log warning costs less than a missed limit. An event stream
+Ruling: the plugin subscribes only to `session.step.failed` and reads the error
+at `data.error`, keeping the top-level and `properties` fallbacks. An event stream
 is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
 Other OpenCode versions are unverified.
