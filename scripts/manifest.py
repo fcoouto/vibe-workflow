@@ -1,6 +1,6 @@
 """Exact runtime export boundary. Development tools never enter the package."""
 RUNTIME = (
-    "__init__", "routing", "routing_paths", "routing_observations", "routing_funding",
+    "__init__", "routing", "routing_paths", "routing_observations",
     "subscription_billing", "selector", "storage", "processes", "continuity",
     "native_catalog", "claude_usage", "opencode_account", "scores",
 )

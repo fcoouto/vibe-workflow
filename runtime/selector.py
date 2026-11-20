@@ -1,94 +1,134 @@
 """Compose the tested advisory flow; never dispatch, admit, reserve or retry."""
-import hashlib
-import os
 from pathlib import Path
 import time
 
-from runtime import routing, routing_paths, routing_observations, subscription_billing
-from runtime import storage
+from runtime import native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
+
+CLAUDE = 'opencode-claude-subscription'
 
 
 def result(state, reason=None, **extra):
-    return dict(state=state, reason=reason, route=None, excluded=[], admission=False,
-                reservation=False, spend_permit=False, **extra)
+    return dict(dict(state=state, reason=reason, route=None, alternatives=[], excluded=[], level=None,
+                     attribution=scores.ATTRIBUTION), **extra, admission=False, reservation=False,
+                spend_permit=False)
 
 
-def _configuration(state_dir):
-    state_dir = Path(state_dir)
-    if not state_dir.is_absolute() or state_dir.is_symlink():
-        raise ValueError('configuration_invalid')
-    config = storage.read_json(state_dir / 'router.json')
-    if config is None:
-        return 'unconfigured', None, []
-    if type(config) is not dict or set(config) != {'version', 'enabled', 'paths'} \
-            or type(config['version']) is not int or config['version'] != 1 \
-            or type(config['enabled']) is not bool:
-        raise ValueError('configuration_invalid')
-    if not config['enabled']:
-        return 'disabled', None, []
-    table = storage.read_json(state_dir / 'strategy-table.json')
-    if table is None:
-        return 'table_empty', None, []
-    if type(table) is not dict or set(table) != {'schema', 'version', 'rows'} \
-            or type(table['schema']) is not int or table['schema'] != 2 \
-            or type(table['version']) is not int or not 1 <= table['version'] <= 2**31 - 1:
-        raise ValueError('configuration_invalid')
-    return None, table, routing_paths.generate(config['paths'], table)
+def _has_scores(cache):
+    return cache is not None and any(entry['score'] is not None for entry in cache['models'].values())
 
 
-def check_setup(*, state_dir):
-    """Check local configuration only; never acquire account or quota data."""
+def _fetch_first(state_dir, wanted, now, fetch):
     try:
-        reason, table, routes = _configuration(state_dir)
-        if reason is None:
-            if not table['rows']:
-                reason = 'table_empty'
-            else:
-                eligible = {route['strategy_id'] for route in routes}
-                valid_keys = {f'{kind}|{complexity}|{risk}' for kind in routing.WORK_KINDS
-                              for complexity in routing.COMPLEXITY_BANDS for risk in routing.RISK_BANDS}
-                if not any(item['strategy_id'] in eligible for key in valid_keys
-                           for item in table['rows'].get(key, ())):
-                    reason = 'no_recommendation'
+        scores.refresh(state_dir, wanted, now, fetch=fetch, timeout=scores.FIRST_TIMEOUT)
+    except (OSError, ValueError):
+        pass  # Unwritable state is the same as no scores.
+    return scores.load(state_dir)
+
+
+def check_setup(*, state_dir, allow_fetch=False, fetch=None):
+    """Local readiness only; the optional fetch is public scores, never an account or quota read."""
+    try:
+        state_dir = Path(state_dir)
+        if not state_dir.is_absolute() or state_dir.is_symlink():
+            raise ValueError('invalid_request')
+        cache = scores.load(state_dir)
+        if allow_fetch and not _has_scores(cache):
+            cache = _fetch_first(state_dir, [], int(time.time()), fetch)
+        reason = None if _has_scores(cache) else 'scores_unavailable'
     except (ValueError, TypeError, KeyError, OSError, RecursionError):
-        reason = 'configuration_invalid'
+        reason = 'selector_unavailable'
     return dict(state='ready' if reason is None else 'setup_needed', reason=reason)
 
 
-def select(request, *, state_dir, source=None):
+def refresh(request, *, state_dir, fetch=None):
     try:
-        if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 1 \
-                or not {'v', 'work_kind'} <= set(request) <= {'v', 'work_kind', 'profile', 'constraints'}:
+        wanted = request['wanted']
+        if type(request) is not dict or set(request) != {'wanted'} or type(wanted) is not list \
+                or len(wanted) > 512 or not all(routing._text(key) for key in wanted):
             raise ValueError('invalid_request')
-        scope = 'project:' + hashlib.sha256(os.fsencode(os.path.realpath(Path.cwd()))).hexdigest()[:32]
-        profile = routing.ensure_profile(dict(work_kind=request['work_kind'], profile=request.get('profile', {}),
-                                             scope_ref=scope))
-        # Validate constraints before any acquisition, even when configuration is absent.
-        constraints = request.get('constraints', {})
-        routing.rank(profile, dict(schema=2, rows={}), constraints)
-        reason, table, routes = _configuration(state_dir)
-        if reason is not None:
-            return result('no_selection', reason)
-        ranking = routing.rank(profile, table, constraints)
-        routes = [item for item in routes if item['strategy_id'] in ranking['strategy_ids']]
-        if not routes:
-            return result('no_selection', 'no_recommendation', profile=profile, ranking=ranking)
-        source = source if source is not None else routing_observations.LocalSource(Path(state_dir) / 'router.json')
-        source.acquire_billing(routes, int(time.time()))
-        kept, excluded = routing_observations.shortlist(routes, ranking['strategy_ids'], source)
-        chosen = None
-        for route in kept:
-            now = int(time.time())
-            found = subscription_billing.fact(source, route, now)
-            if subscription_billing.marker(found, route, now) != route['account_marker']:
-                excluded.append(dict(route=route['route'], reason='account_changed'))
-            elif found['paid_crossover'] != subscription_billing.BLOCKED:
-                excluded.append(dict(route=route['route'], reason='overflow_not_blocked'))
-            elif chosen is None:
-                chosen = route
-        answer = result('selected' if chosen else 'no_selection',
-                        None if chosen else 'no_eligible_route', profile=profile, ranking=ranking)
-        answer.update(route=chosen, excluded=excluded)
+        state_dir = Path(state_dir)
+        if not state_dir.is_absolute() or state_dir.is_symlink():
+            raise ValueError('invalid_request')
+        return dict(state=scores.refresh(state_dir, wanted, int(time.time()), fetch=fetch))
+    except (ValueError, TypeError, KeyError, OSError, RecursionError):
+        return dict(state='failed')
+
+
+def _key(route, catalog):
+    if route['path'] == CLAUDE:
+        for item in (catalog or {}).get('models', []):
+            if item['alias'] == route['model'] and item['resolved']:
+                return scores.normalize(item['resolved'])
+    return scores.normalize(route['model_id'] or route['model'])
+
+
+def _constrained(item, effort, constraints):
+    values = dict(allowed_models=item['model'], allowed_efforts=effort, allowed_harnesses=item['harness'])
+    return item['model'] in constraints.get('excluded_models', []) \
+        or any(value not in constraints[key] for key, value in values.items() if key in constraints)
+
+
+def select(request, *, state_dir, source=None, fetch=None, now=None):
+    try:
+        if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 2 \
+                or not {'v', 'work_kind', 'task', 'models'} <= set(request) \
+                <= {'v', 'work_kind', 'task', 'models', 'constraints'}:
+            raise ValueError('invalid_request')
+        state_dir, fixed = Path(state_dir), now
+        now = int(time.time()) if fixed is None else fixed
+        if not state_dir.is_absolute() or state_dir.is_symlink():
+            raise ValueError('invalid_request')
+        level = routing.task_level(request['work_kind'], request['task'])
+        constraints = routing.check_constraints(request.get('constraints', {}))
+        unique = {}
+        for item in routing_paths.routes(request['models']):
+            unique.setdefault(item['route'], item)
+        if not unique:
+            return result('no_selection', 'no_models', level=level)
+        anchor = state_dir / 'router.json'
+        source = source if source is not None else routing_observations.LocalSource(anchor)
+        source.acquire_billing(list(unique.values()), now)
+        kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
+        catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
+        keys = {item['route']: _key(item, catalog) for item in kept}
+        cache = scores.load(state_dir)
+        had = _has_scores(cache)
+        if kept and not had:
+            cache = _fetch_first(state_dir, sorted(set(keys.values())), now, fetch)
+        if not _has_scores(cache):
+            return result('no_selection', 'scores_unavailable', level=level, excluded=excluded)
+        tokens = request['task'].get('context_tokens', 0)
+        candidates, wanted = [], set()
+        for item in kept:
+            key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
+            own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
+            if own is None or own['score_source'] != 'openrouter':
+                wanted.add(key)
+            if own is None or own['price'] is None:
+                excluded.append(dict(route=item['route'], reason='unscored'))
+            elif item['context_limit'] is not None and item['context_limit'] < tokens:
+                excluded.append(dict(route=item['route'], reason='context_limit'))
+            elif _constrained(item, effort, constraints):
+                excluded.append(dict(route=item['route'], reason='constraint'))
+            else:
+                candidates.append(dict(item, effort=effort,
+                                       score=own['score'], score_source=own['score_source'], price=own['price'],
+                                       released=item['released'] or own['released']))
+        chosen = []
+        for item in routing.order(candidates, level):
+            current = int(time.time()) if fixed is None else fixed
+            fact = subscription_billing.fact(source, item, current)
+            if subscription_billing.marker(fact, item, current) != item['account_marker']:
+                excluded.append(dict(route=item['route'], reason='account_changed'))
+            else:
+                chosen.append(item)
+            if len(chosen) == 3:
+                break
+        reason = None if chosen else 'no_recommendation' if kept and not candidates else 'no_eligible_route'
+        answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
+                        route=chosen[0] if chosen else None, alternatives=chosen[1:], first_fetch=not had)
+        if had and scores.due(cache, sorted(wanted), now):
+            answer['refresh'] = dict(wanted=sorted(wanted))
         return answer
     except (ValueError, TypeError, KeyError, OSError, RecursionError):
         return result('blocked', 'invalid_request')

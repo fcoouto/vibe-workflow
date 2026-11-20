@@ -65,7 +65,8 @@ test("unconfigured execution returns no authority without creating state", async
     await (await load()).setup(h.ctx)
     const answer = JSON.parse((await h.tools.get("smart_router_select").execute(
       { v: 1, work_kind: "review" }, { signal: new AbortController().signal })).content)
-    assert.equal(answer.state, "no_selection")
+    assert.equal(answer.state, "blocked")
+    assert.equal(answer.reason, "invalid_request")
     assert.equal(answer.route, null)
     for (const key of ["admission", "reservation", "spend_permit"]) assert.equal(answer[key], false)
     await assert.rejects(readFile(join(root, "absent", "router.json")))
