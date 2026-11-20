@@ -293,12 +293,66 @@ Run this only when implementation reaches this point, as the user asked. It foll
 - [ ] **Step 3:** Write the finding to `docs/chatgpt-quota-spike.md` and commit it: what was checked, what was found, and whether any source meets the adoption rule.
 - [ ] **Step 4:** If a source is adopted, update the spec and stop for the user's approval. Otherwise continue to Task 9 as specified.
 
-### Task 9: ChatGPT limit signal (planned after Task 8)
+### Task 9: ChatGPT limit signal
 
-Deliberately not planned in detail yet, at the user's request: its plan depends on the spike. Without an adopted source, it implements the spec's "ChatGPT limit signal" section:
-- the 429 mark and its two detection surfaces;
-- the Codex reset read trimmed from the previous version's `runtime/codex_rate_limits.py`;
-- the one-hour fallback and the persistent mark;
-- the spec's ChatGPT tests.
+Planned after Task 8 (`docs/chatgpt-quota-spike.md`): no new source was adopted, so this builds the spec's "ChatGPT limit signal" section, with one correction from the spike. OpenCode's ChatGPT provider uses WebSocket by default, so the primary detection surface is OpenCode's own structured error; `http.response` is only a fallback for HTTP transport. Split into 9a (Python) and 9b (plugin).
 
-Write its tasks in this file, in this plan's format, before starting it.
+Verified shapes (OpenCode 2.2.6):
+- OpenCode raises `{type: "provider.chatgpt-limit", message, status?, response?: {body}, retryAfterMs?}` (`Session.StructuredError`) when a provider error body contains `subscription_sharing_usage_limit_exceeded`.
+- It is published on `session.step.failed` (field `error`) and `session.error` (field `error`).
+- Codex `account/rateLimits/read` answers `{rateLimits: {primary, secondary, ...}, rateLimitsByLimitId: {...}}`; each window is `{usedPercent, windowDurationMins, resetsAt}` (unix seconds) or `null`.
+
+### Task 9a: ChatGPT limit mark and Codex reset reader
+
+**Files:**
+- Create: `runtime/codex_reset.py`, `runtime/chatgpt_limit.py`
+- Modify: `runtime/opencode_account.py` (`_quota_gate`: the `chatgpt` family consults the mark), `scripts/select.py` (`--chatgpt-limit`), `scripts/manifest.py` and `tests/test_package.py` (add both modules to the runtime list)
+- Test: `tests/test_chatgpt_limit.py` (new)
+
+**Interfaces:**
+- Produces:
+  - `codex_reset.read_reset(*, now: int, timeout: float = 5.0, environ=None, command=None) -> int | None`. One bounded `codex app-server` (absolute `codex` from absolute `PATH` entries, like `opencode_account.default_command`). It sends only `initialize`, `initialized` and `account/rateLimits/read`, never answers a server request, and never opens Codex's auth file. It returns the `resetsAt` of the window (primary or secondary) with the highest `usedPercent` whose `resetsAt > now`, else `None`. Every failure returns `None`: missing `codex`, an error answer, timeout, malformed output, or `VCW_TEST_HOME` set. It reuses `runtime/processes.py` for the bounded child and the group stop.
+  - `chatgpt_limit.FILE = 'chatgpt-limit.json'`, `FALLBACK = 3600`.
+  - `chatgpt_limit.mark(state_dir: Path, now: int, *, reader=codex_reset.read_reset) -> dict` writes `{'version': 1, 'marked_at': now, 'until': reset or now + FALLBACK, 'source': 'codex' | 'fallback'}` through `storage._locked(..., lock='.chatgpt-limit.lock')` and `storage._write` (`0600`). It returns that record.
+  - `chatgpt_limit.limited(state_dir: Path, now: int) -> bool`: true while a valid mark has `marked_at <= now < until`. A missing, unsafe or malformed file counts as false.
+  - `opencode_account._quota_gate`: for the `chatgpt` family, return `('quota_exhausted', until - now)` when `chatgpt_limit.limited(anchor_dir, now)`. The anchor dir is the parent of `settings_path`.
+  - CLI: `select.py --state-dir DIR --chatgpt-limit` ignores stdin and prints `{"state": "marked", "until": <int>, "source": "codex"|"fallback"}`, or `{"state": "failed"}`.
+
+- [ ] **Step 1: Write the failing tests** (fake reader and synthetic Codex transport only):
+  - `test_mark_uses_codex_reset`: a reader returning `now + 7200` gives `until == now + 7200` and `source == 'codex'`.
+  - `test_mark_falls_back_to_one_hour`: a reader returning `None`, or a reset in the past, gives `until == now + 3600` and `source == 'fallback'`.
+  - `test_limited_window`: true at `now`, false at `until`, false with no file, false with a malformed or `0644` file.
+  - `test_quota_gate_excludes_only_chatgpt`: with a mark, a `chatgpt`-family route gets `quota_exhausted`; Claude and Go routes are unaffected.
+  - `test_read_reset_picks_highest_used_window`: a fake process prints the handshake answer, then a rateLimits answer with primary 40% resetting at t1 and secondary 90% at t2; the result is `t2`. Primary only gives `t1`. An error answer gives `None`.
+  - `test_read_reset_refuses_under_test_home_and_never_reads_auth`: with `VCW_TEST_HOME` set, no process is spawned and the result is `None`. An audit of opened paths during a fake run shows no `auth.json`.
+  - `test_read_reset_times_out`: a fake process that never answers returns `None` within `timeout + 1` s, and its group is stopped.
+  - `test_cli_chatgpt_limit` in `tests/test_package.py`: under `VCW_TEST_HOME`, it prints `marked` with `source == 'fallback'` and creates the `0600` file.
+- [ ] **Step 2: Run and confirm failure.** `python3 -B -m unittest tests.test_chatgpt_limit -v`
+- [ ] **Step 3: Implement.** Use the previous version's reader only as a reference for the handshake: `runtime/codex_rate_limits.py` in `~/.local/state/vibe-workflow/preparation/opus-0140-20261114/source-0.1.39/`. Do not copy its window bookkeeping or its store.
+- [ ] **Step 4: Run and confirm pass**, then the full Python suite and `python3 -B scripts/validate.py`.
+- [ ] **Step 5: Commit.** `git commit -m "feat: pause ChatGPT routes on a limit mark until the Codex reset"`
+
+### Task 9b: Plugin detection of the ChatGPT limit
+
+**Files:**
+- Modify: `index.js`
+- Test: `tests/plugin.test.js`
+
+**Interfaces:**
+- Consumes: CLI `--chatgpt-limit` from Task 9a.
+- Produces:
+  - At setup, when `ctx.event?.subscribe` exists, subscribe with `{types: ["session.step.failed", "session.error"], signal}`. For each event, find the structured error at `event.error`, `event.data?.error` or `event.properties?.error`; when its `type === "provider.chatgpt-limit"`, run `--chatgpt-limit`. Abort the subscription on cleanup.
+  - Fallback, for HTTP transport: `ctx.session.hook("http.response", ...)` scoped with `{ providerID: "openai" }` when the host accepts that option. On status `429`, read a clone of the body (at most 64 KB); if it contains `subscription_sharing_usage_limit_exceeded`, run the same mark. Never consume or alter the original response.
+  - Mark runs are bounded (10 s), registered in the shared `active` set, one at a time, and at most one per 60 s per plugin instance. Their output is ignored.
+  - No mark runs when the project preference is not `on`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `test("a chatgpt-limit step failure marks once")`: a stub `ctx.event.subscribe` yields two `session.step.failed` events with `error.type: "provider.chatgpt-limit"` within 60 s. The fixture `select.py` records argv; exactly one `--chatgpt-limit` run happens.
+  - `test("other failures and other providers never mark")`: events with `provider.rate-limit` and `provider.auth` cause no run.
+  - `test("http 429 fallback reads a clone")`: the hook receives a `Response` with status 429 and the code in the body. One run happens, and the original response body is still readable afterwards.
+  - `test("opted-out projects never mark")`.
+  - `test("cleanup aborts the subscription")`: the stub iterator observes the abort signal.
+- [ ] **Step 2: Run and confirm failure.** `node --test tests/plugin.test.js`
+- [ ] **Step 3: Implement** in `index.js`, reusing `runRouter`'s spawn path.
+- [ ] **Step 4: Run and confirm pass**, then `node --test tests/*.test.js` and the full Python suite.
+- [ ] **Step 5: Commit.** `git commit -m "feat: mark the ChatGPT plan when OpenCode reports its usage limit"`
