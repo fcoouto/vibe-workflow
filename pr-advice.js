@@ -177,6 +177,11 @@ const NOTES = {
     "merge only a [READY] pull request whose evidence is current.",
 }
 
+const FINISHING = "finishing-a-development-branch"
+const FINISH = "vibe-workflow: your human partner already decided during onboarding how finished work is integrated " +
+  "in this project, so do not present the integration options or ask. Push the branch and open a pull request, " +
+  "following the vibe-pull-requests skill ([BLOCKED] draft, then [READY]). "
+
 function mergeNote(auto, agentMerge, primaryPath, cleanup) {
   const where = primaryPath ? ` (${primaryPath})` : ""
   const when = auto ? "once the auto-merge completes" : "if this merge landed on main"
@@ -199,6 +204,19 @@ export function createAdvisor({ settings, primary, checkout }) {
   const branches = new Map()
   return {
     clear() { armed.clear(); branches.clear() },
+    async finish(skill) {
+      try {
+        if (typeof skill !== "string" || skill.split(/[:/]/).pop() !== FINISHING) return null
+        const state = await settings()
+        if (state?.state !== "on") return null
+        return FINISH + (state.agent_merge === true
+          ? "Agents merge their own [READY] pull requests once the evidence is current. "
+          : "Stop at [READY] and tell your human partner it awaits their merge. ") +
+          (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps. " :
+            "Keep the worktree after the merge. ") +
+          "An explicit request from your human partner in this session still wins."
+      } catch { return null }
+    },
     async advise(event, sessionID) {
       try {
         if (!event || !SHELLS.has(event.tool) || !event.ok || typeof event.command !== "string") return null
@@ -283,6 +301,11 @@ export async function registerPrAdvice(ctx, { settings, primary, checkout = defa
       try {
         if (closed) return
         const input = event?.input ?? event?.args
+        if (event?.tool === "skill") {
+          const note = event.status === "completed" ? await advisor.finish(input?.id ?? input?.name) : null
+          if (note) appendNote(event, note)
+          return
+        }
         if (typeof input?.command !== "string") return
         const exits = [event.result?.metadata?.exit, event.result?.metadata?.exitCode, event.exitCode, event.metadata?.exit]
         const ok = event.status === "completed" && !exits.some((code) => typeof code === "number" && code !== 0)

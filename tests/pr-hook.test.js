@@ -180,3 +180,22 @@ test("a settings file without the worktree_cleanup key adds no cleanup sentence"
   assert.match(result, /vibe-workflow:/)
   assert.doesNotMatch(result, /Cleanup is on/)
 })
+
+test("a finishing-skill load gets the onboarding decision; failed loads, other skills and off settings do not", async (t) => {
+  const skill = async (hooks, id, result, status = "completed") => {
+    const event = { tool: "skill", status, sessionID: "ses_1", input: { id }, result }
+    await hooks.get("execute.after")(event)
+    return event.result
+  }
+  const { hooks } = await fixture(t, { settings: { enabled: true, agent_merge: true } })
+  const array = await skill(hooks, "superpowers:finishing-a-development-branch", { content: [{ type: "text", text: "menu" }] })
+  assert.equal(array.content.length, 2)
+  assert.match(array.content[1].text, /^\n\nvibe-workflow: your human partner already decided during onboarding/)
+  assert.match(array.content[1].text, /Agents merge their own \[READY\] pull requests/)
+  assert.match(await skill(hooks, "finishing-a-development-branch", "menu"), /^menu\n\nvibe-workflow: your human partner/)
+  const untouched = () => ({ content: [{ type: "text", text: "menu" }] })
+  assert.deepEqual(await skill(hooks, "superpowers:finishing-a-development-branch", untouched(), "error"), untouched())
+  assert.deepEqual(await skill(hooks, "superpowers:brainstorming", untouched()), untouched())
+  const off = await fixture(t, { settings: { enabled: false, agent_merge: false } })
+  assert.deepEqual(await skill(off.hooks, "superpowers:finishing-a-development-branch", untouched()), untouched())
+})
