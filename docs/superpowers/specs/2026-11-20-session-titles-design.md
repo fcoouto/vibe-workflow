@@ -39,7 +39,7 @@ rename. Nothing else.
 
 - A session's name starts with its stage while superpowers work is under way:
   a three-step meter, and the words `WAITING` only while the user owes an
-  approval: `▰▱▱▱▱ WAITING · session titles` (design written), `▰▰▱▱▱ WAITING · session titles` (plan written), `▰▰▰▱▱ session titles` (plan executing).
+  approval: `▰▱▱▱▱ WAITING · session titles` (design written), `▰▰▱▱▱ WAITING · session titles` (plan written), `▰▰▰▱▱ session titles` (plan executing), each with the invisible `U+FFFB` in front.
 - The name changes **only** at these events, as the user specified:
   1. a design is generated (a spec file is written) -> `▰▱▱▱▱ WAITING ·` (superpowers now asks the user to approve it)
   2. an implementation plan is generated (a plan file is written) -> `▰▰▱▱▱ WAITING ·` (the user picks how to execute)
@@ -65,8 +65,10 @@ rename. Nothing else.
 
 ## Behavior
 
-Title format (as in the earlier plugin, minus its `U+FFFB` Codex font workaround):
-`<5 meter cells> <topic>`, or `<5 meter cells> WAITING · <topic>`. Text appears only for
+Title format (as in the earlier plugin, including its leading `U+FFFB`, an invisible
+character that keeps the meter at a stable width; corrected after the user pointed out
+an earlier draft had dropped it): `<U+FFFB><5 meter cells> <topic>`, or
+`<U+FFFB><5 meter cells> WAITING · <topic>`. Reading accepts titles without the mark. Text appears only for
 `WAITING` (and `BLOCKED`, still undecided); everything else is the meter alone. The
 stage is the count of filled cells. `WAITING` here means "the user owes the next
 action", which is true by construction after a design (approval) and a plan (execution

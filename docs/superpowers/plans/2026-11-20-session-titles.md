@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Title format: five cells, a space, an optional label, the topic: `▰▱▱▱▱ WAITING · <topic>` after a design, `▰▰▱▱▱ WAITING · <topic>` after a plan, `▰▰▰▱▱ <topic>` once a plan executes. Text appears **only** as `WAITING · ` (or `BLOCKED · `, see Open point in the spec); otherwise the meter alone. Prefix regex `^[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?`; a user title that already starts with a meter is re-prefixed, never nested. No `U+FFFB` (that was a Codex font workaround). The stage is the count of `▰`; cells 4 and 5 stay unused (reserved for review and merge, not built).
+- Title format: one `U+FFFB` (interlinear annotation terminator, invisible; it keeps the meter at a stable width, as in the earlier plugin's `METER_PREFIX`), five cells, a space, an optional label, the topic: `▰▱▱▱▱ WAITING · <topic>` after a design, `▰▰▱▱▱ WAITING · <topic>` after a plan, `▰▰▰▱▱ <topic>` once a plan executes. Text appears **only** as `WAITING · ` (or `BLOCKED · `, see Open point in the spec); otherwise the meter alone. Prefix regex `^\uFFFB?[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?` (the character is optional when reading, always written); a title that already starts with a meter is re-prefixed, never nested. The stage is the count of `▰`; cells 4 and 5 stay unused (reserved for review and merge, not built).
 - Only completed `write` calls of paths matching `(?:^|/)docs/superpowers/(specs|plans)/[^/]+\.md$` and completed `skill` calls whose `input.id`, after its last `:` or `/`, is `subagent-driven-development` or `executing-plans` are events (so `superpowers:executing-plans` counts). `edit`, `patch`, shell writes and every other tool are ignored.
 - Rename only root sessions (no `parentID`). A plan (2 cells) never replaces a 3-cell meter (a plan rewrite mid-build is a fix); a design (1 cell) always replaces it (new design, new cycle). Never rename when `settings().state !== "on"`.
 - Topic is whatever follows an existing stage prefix; an empty or OpenCode-default title (`(?:New|Child) session - <ISO time>`) takes the file-name topic (date and trailing `-design` removed, dashes to spaces); with no topic, write nothing.
@@ -56,12 +56,13 @@ If a fact differs from the spec, amend the spec and this plan first.
 **Interfaces:**
 - Produces: `classify(event) -> { stage, slug? } | null` and `retitle(title, { stage, slug }) -> string | null`.
 
-- [ ] **Step 1: Write failing tests** in `tests/session-titles.test.js`: `classify` returns `{stage: "DESIGN"}` with slug `session titles` for `write` of `/x/docs/superpowers/specs/2026-11-20-session-titles-design.md`; `PLAN` with the same slug for `.../plans/2026-11-20-session-titles.md`; relative `docs/superpowers/plans/a.md`; `filePath` instead of `path`; Windows separators; `BUILD` for `skill` with each executor id, bare and namespaced (`superpowers:executing-plans`); `null` for `edit`, other skills, `status: "error"`, `docs/superpowers/other/a.md`, `notes-docs/superpowers/specs/a.md` without the separator, missing or non-string input, and `undefined`. `retitle("Fix auth", {stage:"PLAN", slug:"x"})` is `▰▰▱▱▱ WAITING · Fix auth`; `retitle("▰▰▱▱▱ WAITING · Fix auth", {stage:"BUILD"})` is `▰▰▰▱▱ Fix auth` (label gone); a `DESIGN` result is `▰▱▱▱▱ WAITING · ...`; `retitle("New session - 2026-11-20T10:00:00.000Z", {stage:"DESIGN", slug:"session titles"})` is `▰▱▱▱▱ WAITING · session titles`; the same default title with no slug, and `""` with no slug, give `null`; `retitle("▰▰▱▱▱ WAITING · x", {stage:"PLAN"})` equals its input; a title that is only a meter with no topic and a slug gives the slug as topic.
+- [ ] **Step 1: Write failing tests** in `tests/session-titles.test.js`: `classify` returns `{stage: "DESIGN"}` with slug `session titles` for `write` of `/x/docs/superpowers/specs/2026-11-20-session-titles-design.md`; `PLAN` with the same slug for `.../plans/2026-11-20-session-titles.md`; relative `docs/superpowers/plans/a.md`; `filePath` instead of `path`; Windows separators; `BUILD` for `skill` with each executor id, bare and namespaced (`superpowers:executing-plans`); `null` for `edit`, other skills, `status: "error"`, `docs/superpowers/other/a.md`, `notes-docs/superpowers/specs/a.md` without the separator, missing or non-string input, and `undefined`. `retitle("Fix auth", {stage:"PLAN", slug:"x"})` is `\uFFFB▰▰▱▱▱ WAITING · Fix auth`; `retitle("\uFFFB▰▰▱▱▱ WAITING · Fix auth", {stage:"BUILD"})` is `\uFFFB▰▰▰▱▱ Fix auth` (label gone); a `DESIGN` result is `\uFFFB▰▱▱▱▱ WAITING · ...`; a title without the mark is read the same; `retitle("New session - 2026-11-20T10:00:00.000Z", {stage:"DESIGN", slug:"session titles"})` is `\uFFFB▰▱▱▱▱ WAITING · session titles`; the same default title with no slug, and `""` with no slug, give `null`; `retitle("\uFFFB▰▰▱▱▱ WAITING · x", {stage:"PLAN"})` equals its input; a title that is only a meter with no topic and a slug gives the slug as topic.
 - [ ] **Step 2: Run** `node --test tests/session-titles.test.js`. Expected: fail (module missing).
 - [ ] **Step 3: Implement** in `session-titles.js`:
 
 ```js
-const PREFIX = /^[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?/
+const MARK = "\uFFFB" // invisible; keeps the five cells at a stable width
+const PREFIX = /^\uFFFB?[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?/
 const STAGES = { DESIGN: [1, true], PLAN: [2, true], BUILD: [3, false] } // [filled cells, user owes approval]
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(specs|plans)\/([^/]+)\.md$/
 const EXECUTORS = new Set(["subagent-driven-development", "executing-plans"])
@@ -84,7 +85,7 @@ export function retitle(title, { stage, slug }) {
   const topic = bare && !DEFAULT_TITLE.test(bare) ? bare : slug
   if (!topic) return null
   const [cells, waiting] = STAGES[stage]
-  return `${"▰".repeat(cells)}${"▱".repeat(5 - cells)} ${waiting ? "WAITING · " : ""}${topic}`
+  return `${MARK}${"▰".repeat(cells)}${"▱".repeat(5 - cells)} ${waiting ? "WAITING · " : ""}${topic}`
 }
 ```
 
@@ -135,7 +136,7 @@ export async function registerSessionTitles(ctx, { settings }) {
         const session = await within(ctx.session.get({ sessionID: id }))
         const title = typeof session?.title === "string" ? session.title : ""
         if (session?.parentID || (written.has(id) && !PREFIX.test(title))) return
-        if (change.stage === "PLAN" && (title.match(/^▰*/)[0].length >= 3)) return
+        if (change.stage === "PLAN" && (title.replace(/^\uFFFB/, "").match(/^▰*/)[0].length >= 3)) return
         const next = retitle(title, change)
         if (!next || next === title) return
         await within(ctx.session.update({ sessionID: id, title: next }))
