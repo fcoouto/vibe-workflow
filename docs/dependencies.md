@@ -36,9 +36,9 @@ The selected behavior is an advisory shortlist, not the legacy admission bridge.
 
 | New module | Extracted source and responsibility |
 | --- | --- |
-| `routing.py` | `routing.ensure_profile`, `resolve_row`, `rank`, scalar bounds; caller supplies work kind instead of a roster lookup |
+| `routing.py` | Task level and ranking; caller supplies work kind instead of a roster lookup |
 | `routing_paths.py` | `routing_paths.strategy_route`, `_strategies`, `generate`; only three OpenCode subscription paths |
-| `routing_funding.py` | `subscription_shortlist` only |
+| `scores.py` | OpenRouter score mapping (Artificial Analysis Intelligence Index), private cache and on-demand refresh |
 | `routing_observations.py` | Subscription-only `LocalSource` and shortlist checks; no gateway, task or ledger reads |
 | `subscription_billing.py` | `scope`, `problem`, `fact`, `marker`; marker hashing no longer imports workflow gates |
 | `opencode_account.py` | Existing bounded selected-account and Go usage reader, without native Codex recovery |

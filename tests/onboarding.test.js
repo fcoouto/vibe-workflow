@@ -259,7 +259,7 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
   for (const phrase of ["Up to four short questions.", "Saved in the main checkout", "project_root_unavailable",
-    "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Git workflow: Off —", "Git workflow: On · I merge —",
+    "Smart Router: Off —", "Smart Router: On · Scores loaded —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
     "Nothing to change", "Saving:", "native file-edit permission",
     "Git workflow: On · I merge, cleanup on —", "Git workflow: On · Agents merge, cleanup on —"]) {
