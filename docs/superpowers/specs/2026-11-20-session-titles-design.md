@@ -120,8 +120,9 @@ project, removed afterwards:
 - Facts, all read-only, each call bounded (git 2 s, gh 5 s), errors leave the cells as
   they were:
   1. `git -C <top> status --porcelain=v2 --branch -uall`: branch name, upstream,
-     untracked files. Remember the last named branch other than the default branch,
-     because cleanup detaches or removes the checkout.
+     untracked files. Remember the last branch seen with an upstream (never the
+     default branch), because cleanup detaches or removes the checkout; with no such
+     branch, no `gh` call is made.
   2. `git -C <top> diff --name-only --merge-base origin/main`: committed and uncommitted
      changes since the merge-base.
   3. `gh pr list --head <branch> --state all --json state,title --limit 1`, run only
