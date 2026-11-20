@@ -22,6 +22,8 @@ plugin for every user.
   so the skill's own skip applies.
 - Off, skipped, not onboarded or invalid settings: no note; the skill asks as today.
 - Reuse the finishing-note mechanism (PR #348) instead of adding a second one.
+- Reword the shipped finishing note into the same direct shape (declared choice, action,
+  override), so both notes read alike to an agent (approved by the user 2026-11-20).
 
 ## Non-goals
 
@@ -37,13 +39,29 @@ plugin for every user.
   or `/`; a completed `skill` load whose id is in the table, in a project whose
   `git_workflow` state is `on`, gets that entry's note through the existing `appendNote`.
 - Entries:
-  - `finishing-a-development-branch`: the existing note, unchanged.
+  - `finishing-a-development-branch`, exactly (replaces the 0.6.0 wording):
+
+    > vibe-workflow: your human partner's declared integration choice, set during
+    > onboarding: push the branch and open a pull request, following the
+    > vibe-pull-requests skill ([BLOCKED] draft, then [READY]). Skip the options menu and
+    > do not ask; the skill's other steps still apply. {merge} {cleanup} An explicit
+    > request from your human partner in this session overrides this.
+
+    `{merge}`: `agent_merge: true` → "You may merge it yourself once it is [READY] and
+    its evidence is current."; otherwise "Stop at [READY] and tell your human partner it
+    awaits their merge." `{cleanup}`: `worktree_cleanup: true` → "After a confirmed
+    merge, follow the worktree cleanup steps in vibe-pull-requests."; otherwise "Keep
+    the worktree after the merge."
   - `using-git-worktrees`, exactly:
 
-    > vibe-workflow: the git workflow is on, so your human partner already chose during
-    > onboarding to do task work in a worktree and never in the primary checkout. Treat
-    > this as their declared worktree preference: use a worktree without asking for
-    > consent. An explicit request from your human partner in this session still wins.
+    > vibe-workflow: your human partner's declared worktree preference, set during
+    > onboarding: always work in a worktree, never in the primary checkout. Do not ask
+    > for consent. An explicit request from your human partner in this session overrides
+    > this.
+
+  Wording rules (both notes): the declared choice and the action come first; no plugin
+  setting names; the agent is addressed as "you"; the menu is never referred to by
+  number.
 
 - The id check comes before the settings read; any error gives no note; the hook never
   throws; shell-command notes are unchanged.
@@ -68,8 +86,8 @@ plugin for every user.
 
 ## Unverified until checked live
 
-Whether an agent that receives the note in the primary checkout creates a worktree
-without asking. Plan: one live check in a throwaway project, as for the finishing note.
+Whether an agent that receives the worktree note in the primary checkout creates a
+worktree without asking, and whether the reworded finishing note is still followed. Plan: one live check in a throwaway project, as for the finishing note.
 
 ## Left to the builder
 
