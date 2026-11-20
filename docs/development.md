@@ -190,9 +190,10 @@ data:
 
 A version is the key's ASCII all-digit segments, compared as integers; segments
 of 8 or more digits are dates and are ignored, so `claude-sonnet-4-20250514`
-borrows from Sonnet 4, not Sonnet 4.6. This date refinement is verified by tests
-only.
-<!-- Live level-1 check after the date refinement: pending. -->
+borrows from Sonnet 4, not Sonnet 4.6. The date rule itself is verified by tests;
+a live level-1 call after it (commit 3c17042) again chose
+`opencode-claude-subscription:haiku` with its own score 36.5, the same
+alternatives and 25 unscored models.
 
 Not observed live:
 
