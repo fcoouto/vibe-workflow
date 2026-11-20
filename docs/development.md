@@ -56,3 +56,14 @@ and after `gh pr create` (case 1). Cases 4 (`gh pr merge`) and 5 (checkout in th
 primary) share the same append path but have not been observed. Other OpenCode
 versions are unverified. To repeat the check, run one matching command and look for
 a `vibe-workflow:` line in its result.
+
+## Session titles: what is known
+
+The opt-in `session_titles` setting is described in
+`docs/superpowers/specs/2026-11-20-session-titles-design.md`. Its "Evidence
+(2026-11-20)" section records what was read from OpenCode's own code, and its
+"Known gaps (documented, not closed)" section lists what is not verified. Read
+those two sections before changing `session-facts.js` or `session-titles.js`; this
+file does not copy them.
+
+Live check (Task 6): pending. No result is claimed until it has run.
