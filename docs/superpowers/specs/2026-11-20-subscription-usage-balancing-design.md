@@ -46,8 +46,10 @@ Per plan `p` and each of its windows `w` that has a reset time:
 - `elapsed[w]`: fraction of the window already passed, from its length and
   reset time.
 
-All of these already exist in the automatic-selection design's readers, except
-ChatGPT, which depends on the decision recorded there.
+Claude and Go readings already exist in the automatic-selection design's
+readers. For ChatGPT, that design reads Codex only after a 429. Balancing would
+need Codex read on demand like the others (zero tokens, one short process,
+under the same account assumption), which is a decision for the revisit.
 
 ## The rule
 

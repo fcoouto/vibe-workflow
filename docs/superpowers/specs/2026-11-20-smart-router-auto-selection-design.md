@@ -217,10 +217,44 @@ be used. The only capacity rule is quota: when a plan's quota reading shows 100%
   and `selector.py:85`) is removed. The overflow state is still read and is
   returned on each route as `paid_overflow` (`blocked`, `enabled` or `unknown`),
   for information only.
-- Known gap: ChatGPT has no quota reading in this codebase, so it never reaches
-  the 100% stop. If its plan runs out, the provider refuses (or uses credits if
-  the user opted in), and the caller excludes it with `excluded_models` as
-  today.
+- ChatGPT uses its own stop signal; see *ChatGPT limit signal*.
+
+### ChatGPT limit signal
+
+Decided by the user: the 429 is the only stop signal for ChatGPT, and the Codex
+login is assumed to be the same ChatGPT account as OpenCode's.
+
+Why: OpenCode's ChatGPT connection exposes no quota data and no account
+identity. Verified on 20 November 2026 with two real requests and the model
+list. The response headers have no usage fields, the stream has only
+moderation metadata and token counts, the stored credential holds only
+encrypted tokens and a client ID, and the identity endpoint rejects the token
+(HTTP 401). The 429 is documented by OpenAI for partner apps, is exact for
+OpenCode's own connection, and also fires when the user has capped OpenCode's
+share of the plan (for example at 50%).
+
+- **Stop.** When a ChatGPT request through OpenCode fails with
+  `subscription_sharing_usage_limit_exceeded` (HTTP 429), the plugin marks the
+  ChatGPT plan as limited, and its routes are excluded as `quota_exhausted`.
+  The error can arrive as an HTTP 429 before the stream opens, or as
+  `response.failed` after streaming has begun. Detect the first through the
+  `http.response` hook for the `openai` provider (clone the body before
+  reading it), and the second through OpenCode's own session error, which
+  already recognizes this code (the string is present in the OpenCode 2.2.6
+  program). The builder verifies which surface carries the code in each case.
+- **Resume.** After a 429, the selector reads Codex once with
+  `account/rateLimits/read` (zero tokens, one short process, the read the
+  previous version shipped as `runtime/codex_rate_limits.py`). The mark lasts
+  until the reset of the Codex window with the highest `usedPercent`. If Codex
+  is missing, signed out or the read fails, the mark lasts one hour. After
+  either, the next ChatGPT request decides: another 429 sets a new mark.
+- **No other Codex reads.** Codex is not read on normal requests, and its
+  percentages never stop routing on their own.
+- **The mark is shared and persistent.** It is stored in the state directory,
+  so every project and session sees it, and a restart does not forget it.
+- **Assumption, stated.** If Codex is signed in to a different account, the
+  only effect is a wrong resume time; the next request's 429 or success
+  corrects it.
 
 Research behind the decision (20 November 2026):
 
@@ -325,6 +359,11 @@ the `impeccable` skill, per AGENTS.md).
 Kept: `config/routes.json`, all account, billing, overflow and quota readers,
 the advisory invariants, the fallback notices and the context hook.
 
+Added: the ChatGPT limit mark, and a Codex reset reader trimmed from the previous
+version's `runtime/codex_rate_limits.py` (handshake plus
+`account/rateLimits/read` only, bounded process, no auth-file reads), reusing
+`runtime/processes.py`.
+
 ## Testing
 
 - Golden ranking test on a synthetic fixture holding today's scores and
@@ -341,6 +380,11 @@ the advisory invariants, the fallback notices and the context hook.
   or missing reading excludes nothing.
 - Removed models: a model absent from the live list is never recommended, even
   with a cached score, and its retry entry is pruned.
+- ChatGPT limit: a synthetic 429 with `subscription_sharing_usage_limit_exceeded`
+  (both the HTTP and the `response.failed` form) marks the plan; its routes are
+  excluded until the Codex reset time, or for one hour when Codex is
+  unavailable; other 429s and other providers set no mark; Codex is never
+  read without a mark. Codex is faked; no test touches a real account.
 - Onboarding: preview never fetches; apply may; the one-time notice appears
   only on the first fetch on a machine.
 - Contract tests: `v: 1` and missing facts are rejected; the caller cannot
