@@ -187,6 +187,14 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(scores.due(capped, ['new'], scores.BACKOFF[1] - 1))
         self.assertTrue(scores.due(capped, ['new'], scores.BACKOFF[1]))
 
+    def test_backoff_doubles_between_the_floor_and_the_cap(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        cache = scores.load(self.dir)
+        for failures, wait in ((3, 1200), (4, 2400)):
+            failed = dict(cache, attempt_at=10000, failures=failures)
+            self.assertFalse(scores.due(failed, ['new'], 10000 + wait - 1))
+            self.assertTrue(scores.due(failed, ['new'], 10000 + wait))
+
     def test_nested_payload_fails_without_raising(self):
         self.refresh([], 0, self.fetcher(model('a/known', 1)))
         before = scores.load(self.dir)['models']
