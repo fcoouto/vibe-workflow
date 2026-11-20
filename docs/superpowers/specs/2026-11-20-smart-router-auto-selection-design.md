@@ -35,7 +35,8 @@ one wins. New models are included automatically. Users never edit a file.
 
 ## Anti-goals
 
-- Any recommendation that could cause paid spending.
+- Recommending a route with positive evidence that it bills paid overflow
+  (for example Claude with extra usage enabled).
 - Blocking the caller on the network during normal use.
 - Fuzzy model-name guessing. A wrong match is worse than no score.
 - Bundling or redistributing benchmark data in the package.
@@ -122,16 +123,12 @@ Astra and Claude Fable 5.2, and the user's choices in conversation.
    under a key the tool's input schema does not accept. The caller can never
    supply or alter the model list.
 3. Python keeps only models whose provider matches one of the three paths in
-   `config/routes.json`. There is no path configuration. A path whose account
-   reader can never prove paid overflow is blocked (today ChatGPT and Go; see
-   *Open decision*) is skipped before any account read, with the fixed exclusion
-   reason `overflow_unprovable`, so it costs nothing. Paths without a signed-in
-   account drop out through the existing `billing_unverified` check.
-   (Builder's call, from the lightweight rule: without the skip, every request
-   would read ChatGPT and Go accounts that can never be picked.)
-4. The existing billing, overflow and quota checks run first, unchanged, and
-   drop routes that cannot be used now. They run before ranking so the floor
-   comes from the best model the user can actually use.
+   `config/routes.json`. There is no path configuration. Paths without a
+   signed-in account drop out through the existing `billing_unverified` check.
+4. The existing billing and quota checks run first and drop routes that cannot
+   be used now. They run before ranking so the floor comes from the best model
+   the user can actually use. The overflow check changes as described in
+   *Paid overflow*.
 5. Each remaining model gets a score and a price from the cached OpenRouter data
    (see *Mapping* and *Refresh*), then the context and caller constraints apply.
 6. The ranking rule orders the candidates. The first is the pick; the next two
@@ -191,13 +188,40 @@ effort   = ("low", "medium", "high")[level - 1], clamped to the model's variants
 
 The floor is relative to the best runnable model, so level 3 means "close to the
 most capable model you have", matching superpowers' wording. The ratios are
-starting values, pinned by a golden test on today's scores. With all three plans
-eligible, that test expects: level 1 → Haiku 5.5; level 2 → GPT-6.2 Sol (ties
-Sonnet 5.5 on price, scores higher); level 3 → GPT-6.2 Sol through the
-cost-benefit clause (57.3 against a floor of 58.1, at half of Opus 5.5's price).
-With only the Claude plan eligible, which is today's reality: level 1 → Haiku 5.5,
-level 2 → Sonnet 5.5, level 3 → Opus 5.5. The builder may tune the ratios to meet
-these expectations; the expectations are the contract.
+starting values, pinned by a golden test on today's scores. With the Claude and
+ChatGPT plans both usable, that test expects: level 1 → Haiku 5.5; level 2 →
+GPT-6.2 Sol (ties Sonnet 5.5 on price, scores higher); level 3 → GPT-6.2 Sol
+through the cost-benefit clause (57.3 against a floor of 58.1, at half of Opus
+5.5's price). With only the Claude plan usable: level 1 → Haiku 5.5, level 2 →
+Sonnet 5.5, level 3 → Opus 5.5. The builder may tune the ratios to meet these
+expectations; the expectations are the contract.
+
+### Paid overflow
+
+Decided by the user: accept `unknown`. A route is excluded only on positive
+evidence that it bills paid overflow (`paid_crossover: provider_managed`, which
+today only Claude can report, when extra usage is enabled). `provider_blocked`
+and `unknown` are both eligible. Each returned route carries its
+`paid_overflow` state (`blocked` or `unknown`) so the caller can see it.
+Research behind the decision (20 November 2026):
+
+- **ChatGPT.** OpenCode signs in through ChatGPT's partner plan sharing (the
+  reader checks `chatgpt-token-sharing`). For a partner app on a personal plan,
+  using credits after the plan limit needs an explicit opt-in that is off by
+  default, plus the app's limit set to 100%; automatic reload is a separate
+  setting (help.openai.com articles 20001542 and 12642688). No API exposes these
+  switches, so the state stays `unknown`.
+- **OpenCode Go.** Extra Usage is off by default on Go and Go Plus and on by
+  default on Go Teams; it draws on the Console balance
+  (opencode.ai/docs/console/go). A live, zero-token read of
+  `/api/experimental/usage/limits` on this machine returned only `workspace`,
+  the three meters and an empty `budgets` list: no Extra Usage field. The state
+  stays `unknown`.
+- **Claude.** Unchanged: the native reader reports extra usage as enabled,
+  disabled or unknown.
+
+The `overflow_not_blocked` exclusion is renamed `overflow_enabled` and applies
+only to `provider_managed`.
 
 ### Refresh of the OpenRouter data
 
@@ -214,7 +238,7 @@ normalized id, family key, score, prices and `created`, plus `fetched_at`,
    answer is `no_selection: scores_unavailable` and the client keeps its model.
 3. **A new usable model triggers a fetch.** If a model that passed step 4 of the
    data flow (a usable path and account) has no entry in the cache, a refresh is
-   due. Models on skipped or unusable paths never trigger one.
+   due. Models on unusable paths never trigger one.
 4. **Unscored usable models retry on a widening interval:** 1 hour, 4 hours,
    12 hours, then 24 hours. After that they wait for the weekly ceiling like
    everything else, so a model that is never scored cannot cause daily fetches.
@@ -231,12 +255,17 @@ normalized id, family key, score, prices and `created`, plus `fetched_at`,
 Cost, per the lightweight rule: one GET of about 88 KB, typically once a week
 plus a few times in the first day after a new usable model appears, never more
 than once per 15 minutes, and one extra short-lived process only when a refresh
-is due. No model calls. Account reads stay as they are today for usable paths
-and drop to none for skipped paths.
+is due. No model calls. Account reads stay as they are today: at most one
+credential read per 15 minutes of use, shared by all three plans, plus Go's
+provider and usage reads when Go is connected. A plan that is not connected
+fails fast without extra calls.
 
-Change from the conversation: a model disappearing from OpenCode does not
-trigger a fetch, because removal needs no new data. (Builder's call; the user
-can reverse it.)
+**Removed models.** A model that disappears from OpenCode is out of the routing
+engine on the very next request, because candidates come from the live model
+list every time; it can never be recommended again. No fetch is needed for
+that. Its retry-schedule entry is dropped from the cache at the next cache write.
+Its OpenRouter score stays only as long as OpenRouter lists it, so it can still
+lend its score to its family.
 
 ### State and setup
 
@@ -277,17 +306,6 @@ the `impeccable` skill, per AGENTS.md).
 Kept: `config/routes.json`, all account, billing, overflow and quota readers,
 the advisory invariants, the fallback notices and the context hook.
 
-## Open decision for the user
-
-**Paid-overflow rule.** Today only routes that prove paid overflow is blocked
-can be picked, which in practice means Claude only. Under that rule the
-cross-plan cost comparison (GPT-6.2 Sol against Opus 5.5) never happens.
-Default in this design: keep the rule, so recommendations stay Claude-only
-until ChatGPT and Go can prove overflow is blocked, and those paths are skipped
-without account reads. The alternative is to treat `unknown` as acceptable for
-ChatGPT and Go, which risks recommending a route that could bill extra usage;
-it would also bring their account reads back and drop `overflow_unprovable`.
-
 ## Testing
 
 - Golden ranking test on a synthetic fixture holding today's scores and
@@ -298,8 +316,11 @@ it would also bring their account reads back and drop `overflow_unprovable`.
 - Refresh tests with a fake clock and fake fetcher for every rule above,
   including the first-run wait, the 15-minute gap, backoff, the sanity
   rejection, and a never-scored model falling back to the weekly ceiling.
-- Skipped paths: no account reader is called for ChatGPT or Go, and their
-  models appear in `excluded` as `overflow_unprovable`.
+- Paid overflow: `unknown` and `provider_blocked` routes are eligible and carry
+  their `paid_overflow` state; `provider_managed` routes are excluded as
+  `overflow_enabled`.
+- Removed models: a model absent from the live list is never recommended, even
+  with a cached score, and its retry entry is pruned.
 - Onboarding: preview never fetches; apply may; the one-time notice appears
   only on the first fetch on a machine.
 - Contract tests: `v: 1` and missing facts are rejected; the caller cannot
