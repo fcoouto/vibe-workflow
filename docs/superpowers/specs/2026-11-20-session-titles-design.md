@@ -38,21 +38,23 @@ rename. Nothing else.
 ## Goals
 
 - A session's name starts with its stage while superpowers work is under way:
-  `[DESIGN] session titles`, `[PLAN] session titles`, `[BUILD] session titles`.
+  a three-step meter, and the words `WAITING` only while the user owes an
+  approval: `▰▱▱▱▱ WAITING · session titles` (design written), `▰▰▱▱▱ WAITING · session titles` (plan written), `▰▰▰▱▱ session titles` (plan executing).
 - The name changes **only** at these events, as the user specified:
-  1. a design is generated (a spec file is written) -> `[DESIGN]`
-  2. an implementation plan is generated (a plan file is written) -> `[PLAN]`
-  3. implementation of the plan starts (an executor skill is loaded) -> `[BUILD]`
+  1. a design is generated (a spec file is written) -> `▰▱▱▱▱ WAITING ·` (superpowers now asks the user to approve it)
+  2. an implementation plan is generated (a plan file is written) -> `▰▰▱▱▱ WAITING ·` (the user picks how to execute)
+  3. implementation of the plan starts (an executor skill is loaded) -> `▰▰▰▱▱`, no label
 - The latest event wins, with one exception: a plan written while the session shows
-  `[BUILD]` keeps `[BUILD]` (usually a fix mid-build). A new design in a building
-  session shows `[DESIGN]` again, which is correct: that session is designing again.
+  a 3-cell meter keeps it (usually a fix mid-build). A new design in a building
+  session shows one cell again, which is correct: that session is designing again.
 - No model calls, no polling, no database, no new runtime process, no new
   dependency.
 
 ## Non-goals and anti-goals
 
-- No progress meter, percentage, milestones, review/waiting/attention labels. Not even
-  `DONE`: a merge is the pull request feature's event, and the user did not ask for it
+- No percentage, milestones or weights: the meter is three fixed steps, not measured
+  progress, and cells 4 and 5 stay empty (room for review and merge later). No
+  review/paused/done labels. Not even `DONE`: a merge is the pull request feature's event, and the user did not ask for it
   here. A later request can add it by observing the existing `gh pr merge` signal.
 - No naming for work that never passes through these superpowers traces (for example
   "fix this bug" with no plan). The earlier plugin's "automatic implementation naming"
@@ -63,7 +65,12 @@ rename. Nothing else.
 
 ## Behavior
 
-Title format: `[STAGE] topic`, with STAGE one of `DESIGN`, `PLAN`, `BUILD`.
+Title format (as in the earlier plugin, minus its `U+FFFB` Codex font workaround):
+`<5 meter cells> <topic>`, or `<5 meter cells> WAITING · <topic>`. Text appears only for
+`WAITING` (and `BLOCKED`, still undecided); everything else is the meter alone. The
+stage is the count of filled cells. `WAITING` here means "the user owes the next
+action", which is true by construction after a design (approval) and a plan (execution
+choice) and clears when the next event arrives.
 
 | Event (tool, completed) | Stage |
 |---|---|
@@ -121,8 +128,10 @@ follows from it. Choice recorded as the author's call; open to correction.
 
 ## Open points for the reviewer (author's calls, not user decisions)
 
-- Stage words and brackets (`[DESIGN]`, `[PLAN]`, `[BUILD]`) echo the existing
-  `[BLOCKED]`/`[READY]` pull request convention. The user may prefer other words.
+- **`BLOCKED`:** no deterministic trace exists for it (it needs the agent to say it is
+  blocked, which is model cooperation). v1 builds `WAITING` only; the user is asked
+  what should mean `BLOCKED`.
+- Meter steps 1/2/3 of 5 per stage (author's call).
 - Opt-in through onboarding (default off) rather than on by default.
 - Latest event wins, except that a plan does not replace `BUILD` (added after review).
 - Gate: onboarding feature (recommended default here, one question) or a plugin option `ctx.options.session_titles` (about 60 fewer changed lines, but no per-project choice and no in-chat control).
