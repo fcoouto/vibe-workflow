@@ -29,6 +29,8 @@ one wins. New models are included automatically. Users never edit a file.
 ## Non-goals
 
 - Learning from task outcomes (failures, review rounds). Possible later.
+- Balancing usage across subscriptions. Recorded separately as a deferred
+  design: `2026-11-20-subscription-usage-balancing-design.md`.
 - Pay-per-use API providers. Only the three subscription paths stay.
 - User-editable weights, floors or overrides.
 - Changing who launches work: the router stays advisory.
