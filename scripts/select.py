@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 import signal
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime.selector import check_setup, result, select
+from runtime import chatgpt_limit
+from runtime.selector import check_setup, refresh, result, select
 
 MAX_BYTES = 65536
 
@@ -23,23 +25,33 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--check-setup", action="store_true")
+    parser.add_argument("--allow-fetch", action="store_true")
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--chatgpt-limit", action="store_true")
     args = parser.parse_args()
+    if args.allow_fetch and not args.check_setup:
+        parser.error("--allow-fetch needs --check-setup")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
-        if args.check_setup:
-            answer = check_setup(state_dir=Path(args.state_dir))
+        if args.chatgpt_limit:
+            record = chatgpt_limit.mark(Path(args.state_dir), int(time.time()))
+            answer = dict(state="marked", until=record["until"], source=record["source"])
+        elif args.check_setup:
+            answer = check_setup(state_dir=Path(args.state_dir), allow_fetch=args.allow_fetch)
         else:
             raw = sys.stdin.buffer.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise ValueError()
-            answer = select(json.loads(raw), state_dir=Path(args.state_dir))
+            call = refresh if args.refresh else select
+            answer = call(json.loads(raw), state_dir=Path(args.state_dir))
         encoded = json.dumps(answer, separators=(",", ":"), allow_nan=False)
         if len(encoded.encode()) + 1 > MAX_BYTES:
             raise ValueError()
     except (Exception, KeyboardInterrupt):
-        answer = dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
-            else result("blocked", "invalid_request")
+        answer = dict(state="failed") if args.chatgpt_limit else \
+            dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
+            else result("blocked", "selector_unavailable")
         encoded = json.dumps(answer, separators=(",", ":"))
     print(encoded)
     return 0

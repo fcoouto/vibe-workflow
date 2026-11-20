@@ -2,12 +2,14 @@
 import copy
 import json
 from pathlib import Path
+import stat
 import tempfile
 import time
 import unittest
 
 from runtime import routing
-from runtime import selector
+from runtime import routing_paths
+from runtime import native_catalog, scores, selector
 from unittest import mock
 try:
     from runtime.selector import select
@@ -41,185 +43,347 @@ class Facts:
         return "quota_exhausted" if route["path"] in self.exhausted else None
 
 
+NOW = 2_000_000
+TASK = dict(files="1-2", spec="exact", risk="reversible")
+
+
+def body(*rows):
+    data = [dict(id=name, created=made, pricing=dict(prompt=str(i * 1e-6), completion=str(o * 1e-6)),
+                 benchmarks=dict(artificial_analysis=dict(intelligence_index=score)))
+            for name, made, i, o, score in rows]
+    return json.dumps(dict(data=data)).encode()
+
+
+BODY = body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("anthropic/claude-sonnet-5-5", 20, 3, 15, 76),
+            ("anthropic/claude-haiku-5-5", 30, 1, 5, 50), ("openai/gpt-6-2-sol", 40, 3, 15, 78),
+            ("openai/gpt-6-3-sol", 50, 3, 15, None))
+
+
+def model(provider, name, **extra):
+    return dict(dict(provider=provider, id=name, model=None, family=None, variants=["low", "high"],
+                     context=None, released=5), **extra)
+
+
+class StampedFacts(Facts):
+    """Like the real readers: acquisition takes time and stamps facts with the clock after it."""
+    def __init__(self, clock):
+        super().__init__()
+        self.clock, self.acquired = clock, None
+
+    def acquire_billing(self, routes, now):
+        super().acquire_billing(routes, now)
+        self.clock[0] += 5
+        self.acquired = int(time.time())
+
+    def billing(self, route, now):
+        # opencode_account._account's check: facts from after `now` are not fresh.
+        return super().billing(route, self.acquired) if 0 <= now - self.acquired <= 900 else None
+
+
+class Fetch:
+    def __init__(self, raw=BODY):
+        self.raw, self.calls = raw, []
+
+    def __call__(self, timeout):
+        self.calls.append(timeout)
+        if self.raw is None:
+            raise OSError("down")
+        return self.raw
+
+
 class SelectionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.source = Facts()
-        self.strategies = [
-            dict(strategy_id="first", provider="claude-agent", model="invented-small", effort="medium",
-                 harness="claude-agent-sdk via opencode", context_limit=500),
-            dict(strategy_id="second", provider="openai", model="invented-other", effort="high",
-                 harness="opencode provider openai", context_limit=1000),
-            dict(strategy_id="third", provider="opencode-go", model="invented-go", effort="low",
-                 harness="opencode provider opencode-go", context_limit=2000)]
-        self.config = dict(version=1, enabled=True, paths=PATHS)
-        self.table = dict(schema=2, version=1, rows={"review|high|high": self.strategies})
+        self.fetch = Fetch()
+        self.models = [model("claude-agent", "claude-opus-5-5"), model("claude-agent", "claude-sonnet-5-5"),
+                       model("openai", "gpt-6-2-sol")]
 
-    def write(self):
-        for name, value in [("router.json", self.config), ("strategy-table.json", self.table)]:
-            path = self.root / name
-            path.write_text(json.dumps(value))
-            path.chmod(0o600)
+    def request(self, **extra):
+        return dict(dict(v=2, work_kind="review", task=dict(TASK), models=self.models), **extra)
 
-    def run_select(self, request=None):
-        self.assertIsNotNone(select, "standalone advisory selector is missing")
-        return select(request or dict(v=1, work_kind="review"), state_dir=self.root, source=self.source)
+    def run_select(self, request=None, now=NOW, fetch=None):
+        return select(request or self.request(), state_dir=self.root, source=self.source,
+                      fetch=fetch or self.fetch, now=now)
 
-    def test_standalone_selector_exists(self):
-        self.assertIsNotNone(select, "standalone advisory selector is missing")
+    def warm(self):
+        self.assertEqual(scores.refresh(self.root, [], NOW, fetch=self.fetch), "stored")
+        self.fetch.calls.clear()
 
-    def test_unconfigured_selection_has_no_effects(self):
-        absent = self.root / "does-not-exist"
-        self.assertIsNotNone(select)
-        result = select(dict(v=1, work_kind="review"), state_dir=absent, source=self.source)
-        self.assertEqual(result["state"], "no_selection")
-        self.assertIsNone(result["route"])
-        self.assertFalse(absent.exists())
-        self.assertEqual(self.source.calls, [])
-
-    def test_local_readiness_validates_configuration_without_native_acquisition(self):
-        with mock.patch("runtime.opencode_account.refresh", side_effect=AssertionError("reader started")):
-            absent = self.root / "does-not-exist"
-            self.assertEqual(selector.check_setup(state_dir=absent),
-                             dict(state="setup_needed", reason="unconfigured"))
-            self.assertFalse(absent.exists())
-            self.write()
-            self.assertEqual(selector.check_setup(state_dir=self.root), dict(state="ready", reason=None))
-            self.config["enabled"] = False
-            self.write()
-            self.assertEqual(selector.check_setup(state_dir=self.root)["reason"], "disabled")
-            self.config["enabled"] = True
-            self.table["rows"] = {}
-            self.write()
-            self.assertEqual(selector.check_setup(state_dir=self.root)["reason"], "table_empty")
-            self.table["rows"] = {"unusable-key": self.strategies}
-            self.write()
-            self.assertEqual(selector.check_setup(state_dir=self.root)["state"], "setup_needed")
-            self.table["schema"] = 77
-            self.write()
-            self.assertEqual(selector.check_setup(state_dir=self.root)["reason"], "configuration_invalid")
-            (self.root / "router.json").chmod(0o644)
-            self.assertEqual(selector.check_setup(state_dir=self.root)["state"], "setup_needed")
-
-    def test_disabled_or_empty_configuration_does_not_acquire(self):
-        for enabled, rows in [(False, self.table["rows"]), (True, {})]:
-            with self.subTest(enabled=enabled):
-                self.config["enabled"], self.table["rows"] = enabled, rows
-                self.write()
-                self.assertEqual(self.run_select()["state"], "no_selection")
-                self.assertEqual(self.source.calls, [])
-
-    def test_invalid_table_version_blocks_readiness_and_selection(self):
-        for version in ({"note": "synthetic metadata"}, "1", True, 0, 2**31):
-            with self.subTest(version=version):
-                self.table["version"] = version
-                self.write()
-                self.assertEqual(selector.check_setup(state_dir=self.root),
-                                 dict(state="setup_needed", reason="configuration_invalid"))
-                answer = self.run_select()
-                self.assertEqual(answer["state"], "blocked")
-                self.assertIsNone(answer["route"])
-                self.assertNotIn("ranking", answer)
-                self.assertEqual(self.source.calls, [])
-
-    def test_first_ranked_route_and_authority_boundary(self):
-        self.write()
+    def test_selects_cheapest_qualifying_and_two_alternatives(self):
         result = self.run_select()
         self.assertEqual(result["state"], "selected")
-        self.assertEqual((result["route"]["provider"], result["route"]["model"], result["route"]["effort"]),
-                         ("claude-agent", "invented-small", "medium"))
+        self.assertEqual(result["level"], 2)
+        self.assertEqual(result["route"]["model"], "gpt-6-2-sol")
+        self.assertEqual((result["route"]["effort"], result["route"]["score"], result["route"]["price"],
+                          result["route"]["score_source"], result["route"]["paid_overflow"]),
+                         ("high", 78.0, 6.0, "openrouter", "blocked"))
+        self.assertEqual([item["model"] for item in result["alternatives"]],
+                         ["claude-sonnet-5-5", "claude-opus-5-5"])
+        self.assertEqual(result["attribution"], "Scores: Artificial Analysis via OpenRouter")
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
-        self.assertEqual(result["profile"]["complexity_band"], "high")
-        self.assertEqual(result["profile"]["risk_band"], "high")
-        self.assertEqual(result["profile"]["review_policy"], "independent")
-        self.assertEqual(self.strategies[0]["model"], "invented-small")
 
-    def test_overflow_states_are_excluded_not_relabeled(self):
-        self.write()
-        original = self.source.billing
-        for state in ("provider_managed", "unknown"):
-            with self.subTest(state=state):
-                self.source.billing = lambda route, now, state=state: dict(
-                    original(route, now), paid_crossover=state)
-                result = self.run_select()
-                self.assertEqual(result["state"], "no_selection")
-                self.assertIsNone(result["route"])
-                self.assertTrue(result["excluded"])
-        self.source.billing = original
+    def test_live_facts_stamped_after_the_clock_was_first_read_stay_eligible(self):
+        clock = [NOW]
+        self.source = StampedFacts(clock)
+        with mock.patch.object(selector.time, "time", lambda: clock[0]):
+            result = self.run_select(now=None)
+        self.assertEqual((result["state"], result["reason"]), ("selected", None), result.get("excluded"))
 
-    def test_exhausted_route_is_not_selected(self):
-        self.write()
-        self.source.exhausted.add(PATHS[0])
-        self.assertEqual(self.run_select()["route"]["provider"], "openai")
+    def test_first_run_fetches_once_without_a_first_fetch_flag(self):
+        first = self.run_select()
+        self.assertEqual(self.fetch.calls, [scores.FIRST_TIMEOUT])
+        self.assertNotIn("refresh", first)
+        self.assertNotIn("first_fetch", first)
+        second = self.run_select()
+        self.assertEqual(len(self.fetch.calls), 1)
+        self.assertNotIn("first_fetch", second)
 
-    def test_overflow_ineligible_rows_do_not_hide_a_later_eligible_route(self):
-        unknown = [dict(self.strategies[1], strategy_id="unknown-" + str(i)) for i in range(10)]
-        self.table["rows"]["review|high|high"] = unknown + [self.strategies[0]]
-        original = self.source.billing
-        self.source.billing = lambda route, now: dict(
-            original(route, now), paid_crossover="unknown" if route["provider"] == "openai" else "provider_blocked")
-        self.write()
-        result = self.run_select()
+    def test_first_run_failure_is_scores_unavailable(self):
+        self.fetch.raw = None
+        for _ in range(2):
+            result = self.run_select()
+            self.assertEqual((result["state"], result["reason"], result["route"]),
+                             ("no_selection", "scores_unavailable", None))
+        self.assertEqual(len(self.fetch.calls), 1)
+
+    def test_refresh_due_is_reported_not_performed(self):
+        self.warm()
+        result = self.run_select(now=NOW + 8 * 86400)
         self.assertEqual(result["state"], "selected")
-        self.assertEqual(result["route"]["provider"], "claude-agent")
-        self.assertEqual(len(result["excluded"]), 10)
-        self.assertEqual({item["reason"] for item in result["excluded"]}, {"overflow_not_blocked"})
+        self.assertEqual(result["refresh"], dict(wanted=[]))
+        self.assertEqual(self.fetch.calls, [])
 
-    def test_bad_or_stale_facts_never_select(self):
-        self.write()
-        original = self.source.billing
-        for change in (dict(account="another-account"), dict(observed_at=int(time.time()) - 1000),
-                       dict(valid_until=0), dict(pool="another-pool")):
-            with self.subTest(change=change):
-                self.source.billing = lambda route, now, change=change: dict(original(route, now), **change)
-                self.assertEqual(self.run_select()["state"], "no_selection")
-        self.source.billing = original
+    def test_claude_alias_maps_through_native_catalog(self):
+        native_catalog.store_snapshot(self.root / "router.json", "claude-code", dict(
+            binding=dict(client_version="1", connection="c", controls="x"),
+            models=[dict(alias="sonnet", resolved="claude-sonnet-5-5", efforts=[])]))
+        result = self.run_select(self.request(models=[model("claude-agent", "sonnet")]))
+        self.assertEqual((result["route"]["model"], result["route"]["score"], result["route"]["score_source"]),
+                         ("sonnet", 76.0, "openrouter"))
 
-    def test_changed_identity_is_refused_on_final_recheck(self):
-        self.write()
-        self.source.change = True
-        self.assertEqual(self.run_select()["state"], "no_selection")
+    def test_old_haiku_never_borrows_from_the_newer_one(self):
+        # Live: both report released 0 and tied on borrowed score and price; route order picked the old one.
+        native_catalog.store_snapshot(self.root / "router.json", "claude-code", dict(
+            binding=dict(client_version="1", connection="c", controls="x"),
+            models=[dict(alias="haiku", resolved="claude-haiku-5-5", efforts=[])]))
+        result = self.run_select(self.request(work_kind="implementation", models=[
+            model("claude-agent", "haiku", released=0), model("claude-agent", "claude-haiku-4-5-20251001", released=0)]))
+        self.assertEqual((result["state"], result["level"], result["route"]["model"], result["route"]["score_source"]),
+                         ("selected", 1, "haiku", "openrouter"))
+        self.assertEqual(result["alternatives"], [])
+        self.assertIn(dict(route="opencode-claude-subscription:claude-haiku-4-5-20251001", reason="unscored"),
+                      result["excluded"])
+
+    def test_unscored_without_family_is_excluded(self):
+        self.models.append(model("opencode-go", "mystery-model"))
+        result = self.run_select()
+        self.assertIn(dict(route="opencode-go-subscription:mystery-model", reason="unscored"), result["excluded"])
+        self.assertEqual(result["state"], "selected")
+
+    def test_family_score_is_borrowed(self):
+        result = self.run_select(self.request(models=[model("openai", "gpt-6-3-sol")]))
+        self.assertEqual((result["route"]["score"], result["route"]["score_source"]), (78.0, "family"))
+
+    def test_duplicate_routes_appear_once(self):
+        self.models.append(dict(self.models[0]))
+        result = self.run_select()
+        routes = [result["route"]] + result["alternatives"]
+        self.assertEqual(len({item["route"] for item in routes}), len(routes))
 
     def test_context_and_constraints_only_narrow(self):
-        self.write()
-        result = self.run_select(dict(v=1, work_kind="review", profile=dict(context_tokens=600)))
-        self.assertEqual(result["route"]["model"], "invented-other")
-        result = self.run_select(dict(v=1, work_kind="review", constraints=dict(allowed_models=["missing"])))
-        self.assertEqual(result["state"], "no_selection")
-        result = self.run_select(dict(v=1, work_kind="review", constraints=dict(allowed_models=["invented-go"])))
-        self.assertEqual(result["route"]["provider"], "opencode-go")
+        self.models[2] = model("openai", "gpt-6-2-sol", context=500)
+        result = self.run_select(self.request(task=dict(TASK, context_tokens=600)))
+        self.assertIn(dict(route="opencode-chatgpt-subscription:gpt-6-2-sol", reason="context_limit"),
+                      result["excluded"])
+        self.assertEqual(result["route"]["model"], "claude-sonnet-5-5")
+        result = self.run_select(self.request(constraints=dict(excluded_models=["claude-sonnet-5-5"])))
+        self.assertIn(dict(route="opencode-claude-subscription:claude-sonnet-5-5", reason="constraint"),
+                      result["excluded"])
+        result = self.run_select(self.request(constraints=dict(allowed_efforts=["low"])))
+        self.assertEqual((result["state"], result["reason"], {e["reason"] for e in result["excluded"]}),
+                         ("no_selection", "no_recommendation", {"constraint"}))
 
-    def test_foreign_paths_and_gateway_routes_cannot_enter(self):
-        self.config["paths"] = ["claude-native-subscription"]
-        self.write()
-        self.assertEqual(self.run_select()["state"], "blocked")
-        self.assertEqual(self.source.calls, [])
+    def test_exhausted_route_is_not_selected(self):
+        self.source.exhausted.add("opencode-chatgpt-subscription")
+        result = self.run_select()
+        self.assertEqual(result["route"]["model"], "claude-sonnet-5-5")
+        self.assertEqual(result["excluded"], [dict(route="opencode-chatgpt-subscription:gpt-6-2-sol",
+                                                   reason="quota_exhausted")])
+
+    def test_changed_identity_is_refused_on_final_recheck(self):
+        self.source.change = True
+        result = self.run_select(self.request(models=[model("claude-agent", "claude-opus-5-5"),
+                                                      model("openai", "gpt-6-2-sol")]))
+        self.assertEqual(result["state"], "no_selection")
+        self.assertEqual({item["reason"] for item in result["excluded"]}, {"account_changed"})
+
+    def test_all_routes_failing_billing_is_no_eligible_route_before_scores(self):
+        self.source.billing = lambda route, now: None
+        result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("no_selection", "no_eligible_route"))
+        self.assertEqual({item["reason"] for item in result["excluded"]}, {"billing_unverified"})
+        self.assertEqual(len(result["excluded"]), 3)
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_empty_model_list_has_no_effects(self):
+        absent = self.root / "absent"
+        result = select(self.request(models=[]), state_dir=absent, source=self.source, fetch=self.fetch, now=NOW)
+        self.assertEqual((result["state"], result["reason"]), ("no_selection", "no_models"))
+        self.assertEqual((self.source.calls, self.fetch.calls, absent.exists()), ([], [], False))
 
     def test_invalid_requests_do_not_echo_or_acquire(self):
-        self.write()
-        for request in (dict(v=True, work_kind="review"), dict(v=1, work_kind="unknown"),
-                        dict(v=1, work_kind="review", credentials="PRIVATE-SENTINEL"),
-                        dict(v=1, work_kind="review", profile=dict(context_tokens=True)),
-                        dict(v=1, work_kind="review", profile=dict(risk_band=[]))):
+        for request in (self.request(v=1), dict(v=2, work_kind="review", models=self.models),
+                        self.request(task=dict(TASK, files="PRIVATE-SENTINEL")),
+                        self.request(credentials="PRIVATE-SENTINEL"),
+                        self.request(constraints=dict(PRIVATE_SENTINEL=["x"])),
+                        self.request(constraints=dict(allowed_models="PRIVATE-SENTINEL"))):
             with self.subTest(request=request):
                 result = self.run_select(request)
-                self.assertEqual(result["state"], "blocked")
+                self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
                 self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
-        self.assertEqual(self.source.calls, [])
+        self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
 
-    def test_classification_needs_no_agent_roster(self):
-        self.write()
-        for kind in ("implementation", "review", "investigation", "planning", "testing", "writing"):
-            with self.subTest(kind=kind):
-                self.table["rows"] = {kind + "|critical|critical": self.strategies}
-                self.write()
-                result = self.run_select(dict(v=1, work_kind=kind))
+    def test_plugin_supplied_models_failing_checks_are_selector_unavailable(self):
+        for bad in (dict(variants="PRIVATE-SENTINEL"), dict(context=1.5), dict(released="PRIVATE-SENTINEL"),
+                    dict(variants=["v%d" % n for n in range(40)]), dict(id="PRIVATE-SENTINEL" * 30)):
+            with self.subTest(bad=bad):
+                result = self.run_select(self.request(models=[dict(self.models[0], **bad)]))
+                self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+                self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+        self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
+
+    def test_unsafe_cache_is_never_overwritten(self):
+        self.warm()
+        cache = self.root / scores.CACHE
+        cache.chmod(0o644)
+        before = cache.read_bytes()
+        for _ in range(2):
+            result = self.run_select(now=NOW + 8 * 86400)
+            self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+            self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch),
+                             dict(state="setup_needed", reason="selector_unavailable"))
+            self.assertEqual(selector.refresh(dict(wanted=["x"]), state_dir=self.root, fetch=self.fetch),
+                             dict(state="failed"))
+        self.assertEqual((cache.read_bytes(), stat.S_IMODE(cache.stat().st_mode)), (before, 0o644))
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_malformed_cache_is_replaced_by_the_next_fetch(self):
+        self.warm()
+        cache = self.root / scores.CACHE
+        for bad in ("{bad", json.dumps(dict(version=1, models=["PRIVATE-SENTINEL"])), "[]",
+                    json.dumps(dict(version=2, models={}, unscored={}, failures=0, fetched_at=0, attempt_at=0)),
+                    json.dumps(dict(version=1, models={}, failures=0, fetched_at=NOW, attempt_at=NOW)),
+                    json.dumps(dict(version=1, models={}, unscored={}, failures="0", fetched_at=0, attempt_at=0))):
+            with self.subTest(bad=bad):
+                cache.write_text(bad)
+                cache.chmod(0o600)
+                self.assertIsNone(scores.load(self.root))
+                result = self.run_select()
                 self.assertEqual(result["state"], "selected")
-                self.assertEqual(result["profile"]["work_kind"], kind)
-                self.assertIn("ranking_stricter_band", result["ranking"]["reason_codes"])
+                self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+                self.assertEqual(scores.load(self.root)["failures"], 0)
+                cache.write_text(bad)
+                self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch),
+                                 dict(state="ready", reason=None))
+                cache.write_text(bad)
+                self.assertEqual(selector.refresh(dict(wanted=["x"]), state_dir=self.root, fetch=self.fetch),
+                                 dict(state="stored"))
+                self.assertEqual(stat.S_IMODE(cache.stat().st_mode), 0o600)
+
+    def test_unexpected_internal_error_is_selector_unavailable(self):
+        with mock.patch("runtime.routing_observations.eligible", side_effect=RuntimeError("PRIVATE-SENTINEL")):
+            result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+
+    def test_all_unscored_is_reported_as_unscored(self):
+        result = self.run_select(self.request(models=[model("opencode-go", "mystery-model")]))
+        self.assertEqual((result["state"], result["reason"]), ("no_selection", "unscored"))
+        self.assertEqual(result["excluded"], [dict(route="opencode-go-subscription:mystery-model", reason="unscored")])
+
+    def test_check_setup(self):
+        with mock.patch("runtime.opencode_account.refresh", side_effect=AssertionError("reader started")):
+            self.assertEqual(selector.check_setup(state_dir=self.root, fetch=self.fetch),
+                             dict(state="setup_needed", reason="scores_unavailable"))
+            self.assertEqual(self.fetch.calls, [])
+            self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch),
+                             dict(state="ready", reason=None))
+            self.assertEqual(len(self.fetch.calls), 1)
+            self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch)["state"],
+                             "ready")
+            self.assertEqual(len(self.fetch.calls), 1)
+
+    def test_failed_first_fetch_is_not_ready(self):
+        self.fetch.raw = None
+        self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch)["reason"],
+                         "scores_unavailable")
+
+    def test_refresh_reports_the_outcome(self):
+        self.assertEqual(selector.refresh(dict(wanted=["x"]), state_dir=self.root, fetch=self.fetch),
+                         dict(state="stored"))
+        self.assertEqual(selector.refresh(dict(wanted="x"), state_dir=self.root, fetch=self.fetch),
+                         dict(state="failed"))
+
+
+class RoutesTest(unittest.TestCase):
+    def models(self):
+        return [dict(provider=p, id=i, model=None, family=None, variants=["high"], context=1000, released=5)
+                for p, i in [("claude-agent", "opus"), ("openai", "gpt"), ("opencode-go", "glm"), ("anthropic", "x")]]
+
+    def eligible(self, source, routes=None, now=1000):
+        from runtime import routing_observations
+        return routing_observations.eligible(routes or routing_paths.routes(self.models()), source, now)
+
+    def test_routes_come_from_models_per_path(self):
+        routes = routing_paths.routes(self.models())
+        self.assertEqual([(r["path"], r["route"], r["model"]) for r in routes],
+                         [(PATHS[0], PATHS[0] + ":opus", "opus"), (PATHS[1], PATHS[1] + ":gpt", "gpt"),
+                          (PATHS[2], PATHS[2] + ":glm", "glm")])
+        self.assertTrue(all(r["pool"] and r["harness"] and r["variants"] == ["high"] for r in routes))
+        with self.assertRaises(ValueError):
+            routing_paths.routes([dict(self.models()[0], variants="high")])
+        with self.assertRaises(ValueError):
+            routing_paths.routes(self.models()[:1] * 513)
+
+    def test_model_fields_are_validated(self):
+        base = self.models()[0]
+        for bad in (dict(provider=None), dict(provider=7), dict(id=None), dict(id=7), dict(id="x" * 257),
+                    dict(model=7), dict(family=7), dict(context=1.5), dict(context=-1), dict(context="1"),
+                    dict(released="2026-01-01"), dict(released=-1), dict(released=True),
+                    dict(variants=["v%d" % n for n in range(33)]), dict(variants=[7])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                routing_paths.routes([dict(base, **bad)])
+        self.assertEqual(len(routing_paths.routes([dict(base, variants=["v%d" % n for n in range(32)])])[0]
+                             ["variants"]), 32)
+
+    def test_overflow_never_excludes(self):
+        for crossover, label in [("provider_blocked", "blocked"), ("provider_managed", "enabled"), ("unknown", "unknown")]:
+            source = Facts()
+            source.billing = lambda route, now, c=crossover, f=source.billing: dict(f(route, now), paid_crossover=c)
+            kept, excluded = self.eligible(source)
+            self.assertEqual((len(kept), excluded), (3, []))
+            self.assertEqual({r["paid_overflow"] for r in kept}, {label})
+            self.assertTrue(all(r["account_marker"] for r in kept))
+
+    def test_quota_and_billing_still_exclude(self):
+        source = Facts()
+        source.exhausted.add(PATHS[0])
+        kept, excluded = self.eligible(source)
+        self.assertEqual(excluded, [dict(route=PATHS[0] + ":opus", reason="quota_exhausted")])
+        self.assertEqual(len(kept), 2)
+        stale = Facts()
+        stale.billing = lambda route, now, f=stale.billing: dict(f(route, now), valid_until=now - 1)
+        kept, excluded = self.eligible(stale)
+        self.assertEqual((kept, {e["reason"] for e in excluded}), ([], {"billing_unverified"}))
+
+    def test_no_ten_route_cap(self):
+        models = [dict(self.models()[0], id="m%d" % n) for n in range(30)]
+        kept, excluded = self.eligible(Facts(), routing_paths.routes(models))
+        self.assertEqual((len(kept), excluded), (30, []))
 
 
 if __name__ == "__main__":

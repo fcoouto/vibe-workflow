@@ -9,7 +9,13 @@
     {
       "git_workflow": {
         "enabled": true,
-        "agent_merge": true
+        "agent_merge": true,
+        "worktree_cleanup": true
+      }
+    },
+    {
+      "session_titles": {
+        "enabled": true
       }
     }
   ]

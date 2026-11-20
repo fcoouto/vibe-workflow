@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,47 +21,61 @@ class PackageTest(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.root), VCW_TEST_HOME=str(self.root),
                         XDG_STATE_HOME=str(self.root / "fresh-state"))
 
-    def cli(self, data, state=None, cwd=None):
+    def cli(self, data, state=None, cwd=None, extra=()):
         self.assertTrue((ROOT / "scripts/select.py").is_file(), "standalone JSON CLI is missing")
         return subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/select.py"),
-                               "--state-dir", str(state or self.root / "state")],
+                               "--state-dir", str(state or self.root / "state"), *extra],
                               input=data, cwd=cwd or self.root, env=self.env, capture_output=True, timeout=5)
 
-    def test_cli_missing_configuration_has_no_effects(self):
-        run = self.cli(b'{"v":1,"work_kind":"review"}')
+    def request(self, **extra):
+        models = [dict(provider="openai", id="gpt-6-2-sol", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        return json.dumps(dict(dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="reversible"),
+                                    models=models), **extra)).encode()
+
+    def test_cli_empty_model_list_has_no_effects(self):
+        run = self.cli(self.request(models=[]))
         self.assertEqual(run.returncode, 0, run.stderr)
         answer = json.loads(run.stdout)
-        self.assertEqual(answer["state"], "no_selection")
+        self.assertEqual((answer["state"], answer["reason"]), ("no_selection", "no_models"))
         self.assertFalse((self.root / "state").exists())
         self.assertFalse((self.root / "fresh-state").exists())
         for key in ("admission", "reservation", "spend_permit"):
             self.assertIs(answer[key], False)
 
+    def test_cli_without_account_evidence_has_no_eligible_route(self):
+        answer = json.loads(self.cli(self.request()).stdout)
+        self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "no_eligible_route", None))
+        self.assertFalse(answer["admission"])
+
+    def test_cli_chatgpt_limit(self):
+        run = self.cli(b"ignored", extra=["--chatgpt-limit"])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        answer = json.loads(run.stdout)
+        self.assertEqual((answer["state"], answer["source"]), ("marked", "fallback"))
+        self.assertGreater(answer["until"], int(time.time()))
+        self.assertEqual((self.root / "state/chatgpt-limit.json").stat().st_mode & 0o777, 0o600)
+
+    def test_cli_refresh_skips_a_fresh_cache_without_echo(self):
+        state = self.root / "state"
+        state.mkdir(mode=0o700)
+        now = int(time.time())
+        (state / "openrouter-models.json").write_text(json.dumps(dict(
+            version=1, fetched_at=now, attempt_at=now, failures=0, models={}, unscored={})))
+        (state / "openrouter-models.json").chmod(0o600)
+        run = self.cli(b'{"wanted":["PRIVATE-SENTINEL"]}', extra=["--refresh"])
+        self.assertEqual(run.stdout.strip(), b'{"state":"skipped"}')
+        self.assertNotIn(b"PRIVATE-SENTINEL", run.stdout + run.stderr)
+
     def test_cli_refuses_invalid_oversized_non_json_and_relative_paths_without_echo(self):
         for raw, state in [(b"PRIVATE-SENTINEL", None), (b"x" * 65537, None),
-                           (b'{"v":1,"work_kind":"review","command":"PRIVATE-SENTINEL"}', None),
-                           (b'{"v":1,"work_kind":"review"}', Path("relative"))]:
+                           (self.request(command="PRIVATE-SENTINEL"), None),
+                           (self.request(), Path("relative"))]:
             with self.subTest(state=state, size=len(raw)):
                 run = self.cli(raw, state)
                 self.assertEqual(json.loads(run.stdout)["state"], "blocked")
                 self.assertNotIn(b"PRIVATE-SENTINEL", run.stdout + run.stderr)
                 self.assertLess(len(run.stdout), 65536)
-
-    def test_failed_reader_produces_no_selection_not_a_launch(self):
-        state = self.root / "state"
-        state.mkdir(mode=0o700)
-        for name, value in [
-            ("router.json", dict(version=1, enabled=True, paths=["opencode-chatgpt-subscription"])),
-            ("strategy-table.json", dict(schema=2, version=1, rows={"review|high|high": [
-                dict(strategy_id="invented", provider="openai", model="invented-model",
-                     effort="high", harness="opencode provider openai")]})),
-        ]:
-            (state / name).write_text(json.dumps(value))
-            (state / name).chmod(0o600)
-        answer = json.loads(self.cli(b'{"v":1,"work_kind":"review"}').stdout)
-        self.assertEqual(answer["state"], "no_selection")
-        self.assertIsNone(answer["route"])
-        self.assertFalse(answer["admission"])
 
     def build(self, output):
         return subprocess.run([sys.executable, "-B", str(ROOT / "scripts/package.py"),
@@ -79,12 +94,11 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
                     "skills/vibe-pull-requests/references/pull-request-template.md",
                     "skills/vibe-pull-requests/references/worktree-cleanup.md",
-                    "scripts/select.py", "config/routes.json", "config/router.example.json",
-                    "config/strategy-table.example.json"}
+                    "scripts/select.py", "config/routes.json"}
         expected |= {"runtime/" + name + ".py" for name in [
-            "__init__", "routing", "routing_paths", "routing_observations", "routing_funding",
+            "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
@@ -92,9 +106,9 @@ class PackageTest(unittest.TestCase):
             if path.suffix in (".py", ".js", ".json", ".md"):
                 self.assertNotIn(os.fsencode(self.root), path.read_bytes())
         check = subprocess.run([sys.executable, "-I", "-B", str(output / "scripts/select.py"),
-                                "--state-dir", str(self.root / "absent")], input=b'{"v":1,"work_kind":"testing"}',
+                                "--state-dir", str(self.root / "absent")], input=self.request(models=[]),
                                env=self.env, cwd=self.root, capture_output=True, timeout=5)
-        self.assertEqual(json.loads(check.stdout)["state"], "no_selection")
+        self.assertEqual(json.loads(check.stdout)["reason"], "no_models")
         node = subprocess.run(["node", "--input-type=module", "-e", """
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'

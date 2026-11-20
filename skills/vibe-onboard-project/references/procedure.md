@@ -30,12 +30,12 @@ exactly as written, apart from the markers and the saved choice's place.
 
 - Header: Smart Router
 - Question: Use Smart Router for this project?
-- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. When it is saved on and the step 1 preview's readiness.state is setup_needed, add: It is on, but not set up yet.
+- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. It downloads public model scores from openrouter.ai about weekly and sends no credentials. When it is saved on and the step 1 preview's readiness.state is setup_needed, add: It is on, but not ready yet.
 - Choices:
   - Turn it on (Recommended) — Get a suggestion before each delegated task.
   - Leave it off — Keep choosing models yourself.
 - Choices when it is saved on:
-  - Keep it on (Current, Recommended) — Suggestions continue, or start once it is set up.
+  - Keep it on (Current, Recommended) — Suggestions continue, or start once it is ready.
   - Turn it off — You choose models yourself. Run onboarding again to undo.
 
 ### 2. Pull request merging
@@ -165,7 +165,7 @@ exactly as written, apart from the markers and the saved choice's place.
 10. Report actual readiness, one line per feature, in the form
    **<Feature>: <state> — <detail>.** Use these lines, exactly:
    - Smart Router, `off`: Smart Router: Off — existing model selection.
-   - Smart Router, `ready`: Smart Router: On · Configuration checked — route eligibility is checked when work is delegated.
+   - Smart Router, `ready`: Smart Router: On · Scores loaded — route eligibility is checked when work is delegated.
    - Smart Router, `setup_needed`: Smart Router: On · Setup needed — followed by the reported reason.
    - Git workflow, `off`: Git workflow: Off — no git workflow guidance.
    - Git workflow, `ready`: Git workflow: On · I merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
