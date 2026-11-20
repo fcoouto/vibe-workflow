@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import chatgpt_limit
+from runtime import chatgpt_limit, council
 from runtime.selector import check_setup, refresh, result, select
 
 MAX_BYTES = 65536
@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--allow-fetch", action="store_true")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--chatgpt-limit", action="store_true")
+    parser.add_argument("--council-roster", action="store_true")
     args = parser.parse_args()
     if args.allow_fetch and not args.check_setup:
         parser.error("--allow-fetch needs --check-setup")
@@ -43,13 +44,13 @@ def main():
             raw = sys.stdin.buffer.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise ValueError()
-            call = refresh if args.refresh else select
+            call = council.roster if args.council_roster else refresh if args.refresh else select
             answer = call(json.loads(raw), state_dir=Path(args.state_dir))
         encoded = json.dumps(answer, separators=(",", ":"), allow_nan=False)
         if len(encoded.encode()) + 1 > MAX_BYTES:
             raise ValueError()
     except (Exception, KeyboardInterrupt):
-        answer = dict(state="failed") if args.chatgpt_limit else \
+        answer = dict(state="failed") if args.chatgpt_limit or args.council_roster else \
             dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
             else result("blocked", "selector_unavailable")
         encoded = json.dumps(answer, separators=(",", ":"))

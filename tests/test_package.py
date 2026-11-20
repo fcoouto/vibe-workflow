@@ -48,6 +48,20 @@ class PackageTest(unittest.TestCase):
         self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "no_eligible_route", None))
         self.assertFalse(answer["admission"])
 
+    def test_cli_council_roster_without_account_evidence(self):
+        models = [dict(provider="openai", id="gpt-6-2-sol", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        run = self.cli(json.dumps(dict(v=1, models=models)).encode(), extra=["--council-roster"])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        answer = json.loads(run.stdout)
+        self.assertEqual(answer["state"], "checked")
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["billing_unverified"])
+
+    def test_cli_council_roster_refuses_invalid_input(self):
+        run = self.cli(b"PRIVATE-SENTINEL", extra=["--council-roster"])
+        self.assertEqual(run.stdout.strip(), b'{"state":"failed"}')
+        self.assertNotIn(b"PRIVATE-SENTINEL", run.stdout + run.stderr)
+
     def test_cli_chatgpt_limit(self):
         run = self.cli(b"ignored", extra=["--chatgpt-limit"])
         self.assertEqual(run.returncode, 0, run.stderr)
@@ -98,7 +112,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
