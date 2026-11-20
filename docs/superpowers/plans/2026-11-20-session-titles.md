@@ -12,12 +12,12 @@
 
 ## Global Constraints
 
-- Title format: one `U+FFFB` (interlinear annotation terminator, invisible; it keeps the meter at a stable width, as in the earlier plugin's `METER_PREFIX`), five cells, a space, an optional label, the topic: `▰▱▱▱▱ WAITING · <topic>` after a design, `▰▰▱▱▱ WAITING · <topic>` after a plan, `▰▰▰▱▱ <topic>` once a plan executes. Text appears **only** as `WAITING · ` (or `BLOCKED · `, see Open point in the spec); otherwise the meter alone. Prefix regex `^\uFFFB?[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?` (the character is optional when reading, always written); a title that already starts with a meter is re-prefixed, never nested. The stage is the count of `▰`; cells 4 and 5 stay unused (reserved for review and merge, not built).
+- Title format: one `U+FFFB` (interlinear annotation terminator, invisible; it keeps the meter at a stable width, as in the earlier plugin's `METER_PREFIX`), five cells, a space, an optional label, the topic: `▰▱▱▱▱ WAITING · <topic>` after a design, `▰▰▱▱▱ WAITING · <topic>` after a plan, `▰▰▰▱▱ <topic>` once a plan executes. Text appears **only** as `WAITING · `; otherwise the meter alone. There is no `BLOCKED` anywhere (council decision, see spec). Prefix regex `^\uFFFB?[▰▱]{5} (?:WAITING · )?` (the character is optional when reading, always written); a title that already starts with a meter is re-prefixed, never nested. The stage is the count of `▰`; cells 4 and 5 stay unused (reserved for review and merge, not built).
 - Only completed `write` calls of paths matching `(?:^|/)docs/superpowers/(specs|plans)/[^/]+\.md$` and completed `skill` calls whose `input.id`, after its last `:` or `/`, is `subagent-driven-development` or `executing-plans` are events (so `superpowers:executing-plans` counts). `edit`, `patch`, shell writes and every other tool are ignored.
 - Rename only root sessions (no `parentID`). A plan (2 cells) never replaces a 3-cell meter (a plan rewrite mid-build is a fix); a design (1 cell) always replaces it (new design, new cycle). Never rename when `settings().state !== "on"`.
 - Topic is whatever follows an existing stage prefix; an empty or OpenCode-default title (`(?:New|Child) session - <ISO time>`) takes the file-name topic (date and trailing `-design` removed, dashes to spaces); with no topic, write nothing.
 - If the plugin renamed a session earlier and its title now has no stage prefix, never rename it again (in-memory `Set`, capped at 128 sessions like `notices` in `index.js`; lost on server restart, so a removed prefix can return once after a restart, and the onboarding text says so).
-- Equal result means no `session.update` call. `session.get` and `session.update` are raced against a 2 s timeout so naming never holds up a tool result; the read-then-write gap is not atomic and a rename inside it can be overwritten (accepted, documented). Every error is swallowed; the hook never throws, never edits `event.result`, never starts a model turn.
+- Equal result means no `session.update` call. `session.get` and `session.update` are raced against a 2 s timeout so naming never holds up a tool result; the read-then-write gap is not atomic (the host has no compare-and-set title update) and a rename inside that millisecond window can be overwritten: accepted and documented, no readback. The label means "the last handoff this session made to you", not a live request, and can stay stale until the next plan event: documented in the README line and the onboarding question; clearing it on the next user prompt is a named later add-on, not built. Every error is swallowed; the hook never throws, never edits `event.result`, never starts a model turn.
 - Settings file shape: `{"version":1,"features":[{"session_titles":{"enabled":<bool>}}]}`, read at the main project path (`atProject: true`, like `git_workflow`) so a linked worktree needs no copy of the file; not onboarded or off means no work. Smart Router and `git_workflow` results stay byte-identical; existing tests are not edited except to add the feature name where a list is asserted.
 - A new exported file goes in `scripts/manifest.py`, `package.json` `files` and `tests/test_package.py`. Python 3.11+ standard library and Node ES modules only.
 - README edits go through the `impeccable` skill and stay short. No install, activation, publish or inference during development.
@@ -25,6 +25,7 @@
 ## Review Focus
 
 - `edit` of a plan while building, and a plan rewrite while building, never move the meter back (Task 1, Task 3).
+- No `BLOCKED` anywhere: not written, not in the regex, not in the docs except as the retired word (Task 1, Task 4).
 - Registering a second `execute.after` hook must not break the pull request hook: its test fixture keeps one handler per hook name, so Task 3 changes that fixture to keep a list and fire all of them; Task 0 confirms the host runs both.
 - A child session (`parentID` set) and a default-titled session with a skill event are never renamed (Task 3).
 - A user who removes or replaces the prefix is never overridden again; a user-edited topic after the prefix is kept (Task 3).
@@ -62,7 +63,7 @@ If a fact differs from the spec, amend the spec and this plan first.
 
 ```js
 const MARK = "\uFFFB" // invisible; keeps the five cells at a stable width
-const PREFIX = /^\uFFFB?[▰▱]{5} (?:(?:WAITING|BLOCKED) · )?/
+const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
 const STAGES = { DESIGN: [1, true], PLAN: [2, true], BUILD: [3, false] } // [filled cells, user owes approval]
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(specs|plans)\/([^/]+)\.md$/
 const EXECUTORS = new Set(["subagent-driven-development", "executing-plans"])

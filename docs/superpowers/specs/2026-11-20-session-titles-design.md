@@ -69,7 +69,8 @@ Title format (as in the earlier plugin, including its leading `U+FFFB`, an invis
 character that keeps the meter at a stable width; corrected after the user pointed out
 an earlier draft had dropped it): `<U+FFFB><5 meter cells> <topic>`, or
 `<U+FFFB><5 meter cells> WAITING · <topic>`. Reading accepts titles without the mark. Text appears only for
-`WAITING` (and `BLOCKED`, still undecided); everything else is the meter alone. The
+`WAITING`; everything else is the meter alone. `BLOCKED` is not a title state (see
+"Decisions"). The
 stage is the count of filled cells. `WAITING` here means "the user owes the next
 action", which is true by construction after a design (approval) and a plan (execution
 choice) and clears when the next event arrives.
@@ -128,11 +129,30 @@ follows from it. Choice recorded as the author's call; open to correction.
   `tests/test_package.py`.
 - Preserve credentials, native configuration and other plugins.
 
+## Decisions (LLM Council, 2026-11-20: Astra, Fable 5.2, Opus 5; unanimous on 1 and 2)
+
+1. **No `BLOCKED`.** The earlier plugin retired it on 9 November 2026 (it became
+   `WAITING`) because it collided with the `[BLOCKED]` pull request prefix, where it is
+   the normal in-progress state. "User must act" is already `WAITING`. No host signal
+   observes an external block; only the model knows, which is the cooperation protocol
+   this repository dropped. The title never shows it and the read regex does not accept it.
+2. **No extra triggers.** Permission requests, pending questions and session idle are
+   rejected: transient states written into a persistent title give stale labels, rename
+   pairs and flicker, and they break the rule to rename only on plan events. `WAITING`
+   is set by the design and plan writes and cleared by the executor skill, nothing else.
+3. **Stale `WAITING` is accepted and documented** as "the last handoff this session made
+   to you" (2 of 3 for accept-only now; Fable and Opus add: clearing on the next user
+   prompt is the known later remedy, built only if the label proves annoying, since a
+   reply can be a question and not an approval).
+4. **The read-then-write rename race is accepted and documented** (Fable: accept; Opus:
+   accept plus a readback; Astra: refuse to rename without an atomic update). The host has
+   no compare-and-set title update, the window is milliseconds, and renames happen a few
+   times per session at plan events. **Astra's dissent matters because you said never to
+   overwrite user titles; this is yours to overrule.**
+
 ## Open points for the reviewer (author's calls, not user decisions)
 
-- **`BLOCKED`:** no deterministic trace exists for it (it needs the agent to say it is
-  blocked, which is model cooperation). v1 builds `WAITING` only; the user is asked
-  what should mean `BLOCKED`.
+- **Race and stale label:** see Decisions; Astra dissented on the race.
 - Meter steps 1/2/3 of 5 per stage (author's call).
 - Opt-in through onboarding (default off) rather than on by default.
 - Latest event wins, except that a plan does not replace `BUILD` (added after review).
