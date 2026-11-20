@@ -1,14 +1,27 @@
-"""Pure mapping of runnable models to OpenRouter's public Artificial Analysis scores."""
+"""Map runnable models to OpenRouter's public Artificial Analysis scores, cached privately on disk."""
+import http.client
 import json
 import math
+import os
+from pathlib import Path
 import re
+import urllib.parse
+import urllib.request
 
-from runtime import routing
+from runtime import routing, storage
 
 URL = 'https://openrouter.ai/api/v1/models'
+HOST = 'openrouter.ai'
 ATTRIBUTION = 'Scores: Artificial Analysis via OpenRouter'
 CREATOR = {'opencode-claude-subscription': 'anthropic', 'opencode-chatgpt-subscription': 'openai'}
 MAX_MODELS = 5000
+CACHE = 'openrouter-models.json'
+GAP = 900
+CEILING = 7 * 86400
+RETRY = (3600, 14400, 43200, 86400)
+BACKOFF = (300, 3600)
+FIRST_TIMEOUT = 5.0
+MAX_BYTES = 5 << 20
 
 
 def normalize(model_id):
@@ -106,3 +119,83 @@ def lookup(cache, key, creator):
     entry = dict(newest, input=own['input'] if own else None, output=own['output'] if own else None,
                  released=newest['released'])
     return _result(entry, 'family', newest)
+
+
+def load(state_dir):
+    return storage._read(Path(state_dir) / CACHE) or None
+
+
+def _scored(cache, key):
+    return any(entry['key'] == key and entry['score'] is not None for entry in cache['models'].values())
+
+
+def due(cache, wanted, now):
+    if cache is None:
+        return True
+    failures = cache['failures']
+    wait = max(GAP, min(BACKOFF[0] << (failures - 1), BACKOFF[1]) if failures else 0)
+    if 0 <= now - cache['attempt_at'] < wait:
+        return False
+    if not 0 <= now - cache['fetched_at'] <= CEILING:
+        return True
+    for key in wanted:
+        if _scored(cache, key):
+            continue
+        retry = cache['unscored'].get(key)
+        if retry is None or retry['next_at'] <= now:
+            return True
+    return False
+
+
+def _unscored(cache, parsed, wanted, now):
+    unscored = {}
+    for key in wanted:
+        if _scored(parsed, key):
+            continue
+        old = (cache or {}).get('unscored', {}).get(key)
+        if old is not None and old['next_at'] > now:
+            unscored[key] = old
+            continue
+        step = min(old['step'] + 1 if old else 0, len(RETRY))
+        unscored[key] = dict(step=step, next_at=now + (RETRY[step] if step < len(RETRY) else CEILING))
+    return unscored
+
+
+def refresh(state_dir, wanted, now, *, fetch=None, timeout=15.0):
+    with storage._locked(Path(state_dir) / CACHE, block=False) as path:
+        if path is None:
+            return 'busy'
+        cache = load(state_dir)
+        if not due(cache, wanted, now):
+            return 'skipped'
+        base = dict(cache or dict(version=1, fetched_at=0, failures=0, models={}, unscored={}), attempt_at=now)
+        storage._write(path, base)
+        previous = sum(entry['score'] is not None for entry in base['models'].values())
+        try:
+            parsed = parse_openrouter((fetch or fetch_openrouter)(timeout), previous)
+        except (OSError, ValueError, http.client.HTTPException):
+            storage._write(path, dict(base, failures=base['failures'] + 1))
+            return 'failed'
+        storage._write(path, dict(
+            version=1, fetched_at=now, attempt_at=now, failures=0, models=parsed['models'],
+            unscored=_unscored(cache, parsed, wanted, now)))
+        return 'stored'
+
+
+class _SameHost(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl)
+        if target.scheme != 'https' or target.hostname != HOST:
+            raise OSError('redirect_refused')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def fetch_openrouter(timeout, environ=None, opener=None):
+    if (os.environ if environ is None else environ).get('VCW_TEST_HOME'):
+        raise OSError('network_disabled')
+    request = urllib.request.Request(URL, headers={'User-Agent': 'vibe-workflow-smart-router'})
+    with (opener or urllib.request.build_opener(_SameHost)).open(request, timeout=timeout) as response:
+        raw = response.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise OSError('scores_too_large')
+    return raw

@@ -1,7 +1,14 @@
+import email
+import io
 import json
+from pathlib import Path
+import stat
+import tempfile
 import unittest
+import urllib.request
+import urllib.response
 
-from runtime import scores
+from runtime import scores, storage
 
 
 def model(id_, score=None, prompt='0.000002', completion='0.00001', created=1000, **extra):
@@ -98,6 +105,152 @@ class ScoresTest(unittest.TestCase):
 
 def scores_price(inp, out):
     return (3 * inp + out) / 4
+
+
+def payload(*models):
+    return json.dumps(dict(data=list(models))).encode()
+
+
+def failing(timeout):
+    raise OSError('down')
+
+
+class RefreshTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.dir = Path(temporary.name).resolve() / 'state'
+        self.calls = 0
+
+    def fetcher(self, *models):
+        def fetch(timeout):
+            self.calls += 1
+            return payload(*models)
+        return fetch
+
+    def refresh(self, wanted, now, fetch):
+        return scores.refresh(self.dir, wanted, now, fetch=fetch)
+
+    def test_due_rules(self):
+        self.assertTrue(scores.due(None, [], 5))
+        self.assertEqual(self.refresh([], 1000, self.fetcher(model('a/known', 1))), 'stored')
+        cache = scores.load(self.dir)
+        self.assertFalse(scores.due(cache, ['known'], 1000))
+        self.assertFalse(scores.due(cache, ['new'], 1000 + scores.GAP - 1))
+        self.assertTrue(scores.due(cache, ['new'], 1000 + scores.GAP))
+        self.assertFalse(scores.due(cache, [], 1000 + scores.CEILING))
+        self.assertTrue(scores.due(cache, [], 1001 + scores.CEILING))
+        failed = dict(cache, attempt_at=4900, failures=1)
+        self.assertFalse(scores.due(failed, ['new'], 5000))
+        future = dict(cache, fetched_at=9999, attempt_at=0)
+        self.assertTrue(scores.due(future, [], 5000))
+
+    def test_unscored_retry_schedule_then_weekly(self):
+        fetch = self.fetcher(model('a/other', 1))
+        now = 0
+        self.assertEqual(self.refresh(['k'], now, fetch), 'stored')
+        for wait in scores.RETRY:
+            cache = scores.load(self.dir)
+            self.assertFalse(scores.due(cache, ['k'], now + wait - 1))
+            self.assertTrue(scores.due(cache, ['k'], now + wait))
+            now += wait
+            self.assertEqual(self.refresh(['k'], now, fetch), 'stored')
+        cache = scores.load(self.dir)
+        self.assertFalse(scores.due(cache, ['k'], now + scores.CEILING - 1))
+        self.assertTrue(scores.due(cache, ['k'], now + scores.CEILING + 1))
+
+    def test_removed_models_are_pruned(self):
+        fetch = self.fetcher(model('a/other', 1))
+        self.refresh(['gone', 'kept'], 0, fetch)
+        self.assertEqual(sorted(scores.load(self.dir)['unscored']), ['gone', 'kept'])
+        self.assertEqual(self.refresh([], scores.CEILING + 1, fetch), 'stored')
+        self.assertEqual(scores.load(self.dir)['unscored'], {})
+
+    def test_failure_keeps_last_good_copy_and_backs_off(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        before = scores.load(self.dir)['models']
+        now = 1000
+        for failures in (1, 2):
+            self.assertEqual(self.refresh(['new'], now, failing), 'failed')
+            cache = scores.load(self.dir)
+            self.assertEqual(cache['models'], before)
+            self.assertEqual(cache['failures'], failures)
+            self.assertFalse(scores.due(cache, ['new'], now + 299))
+            now += scores.GAP
+        self.assertEqual(self.refresh(['new'], now, lambda timeout: b'not json'), 'failed')
+        self.assertEqual(scores.load(self.dir)['models'], before)
+        capped = dict(scores.load(self.dir), attempt_at=0, failures=9)
+        self.assertFalse(scores.due(capped, ['new'], scores.BACKOFF[1] - 1))
+        self.assertTrue(scores.due(capped, ['new'], scores.BACKOFF[1]))
+
+    def test_first_failure_is_remembered(self):
+        self.assertEqual(self.refresh([], 50, failing), 'failed')
+        cache = scores.load(self.dir)
+        self.assertEqual((cache['models'], cache['failures']), ({}, 1))
+        self.assertFalse(scores.due(cache, [], 60))
+
+    def test_single_fetcher(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        calls = self.calls
+        with storage._locked(self.dir / scores.CACHE):
+            self.assertEqual(self.refresh(['new'], 5000, self.fetcher()), 'busy')
+        self.assertEqual(self.calls, calls)
+
+    def test_late_caller_is_skipped(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        self.assertEqual(self.refresh(['known'], 10, self.fetcher()), 'skipped')
+        self.assertEqual(self.calls, 1)
+
+    def test_cache_file_is_private(self):
+        self.refresh([], 0, self.fetcher())
+        self.assertEqual(stat.S_IMODE((self.dir / scores.CACHE).stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.dir.stat().st_mode), 0o700)
+
+    def test_small_response_is_rejected(self):
+        self.refresh([], 0, self.fetcher(model('a/x', 1), model('a/y', 2), model('a/z', 3)))
+        before = scores.load(self.dir)['models']
+        self.assertEqual(self.refresh(['new'], 2000, self.fetcher(model('a/x', 1))), 'failed')
+        self.assertEqual(scores.load(self.dir)['models'], before)
+
+
+class FetchTest(unittest.TestCase):
+    def test_fetch_refuses_cross_host_redirect(self):
+        seen = []
+        test = self
+
+        class Fake(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                seen.append(request.full_url)
+                headers = email.message_from_string('Location: https://evil.example/x\n')
+                response = urllib.response.addinfourl(io.BytesIO(b''), headers, request.full_url, 302)
+                response.msg = 'Found'
+                test.addCleanup(response.close)
+                return response
+
+        opener = urllib.request.build_opener(scores._SameHost, Fake)
+        with self.assertRaises(OSError):
+            scores.fetch_openrouter(1, environ={}, opener=opener)
+        self.assertEqual(seen, [scores.URL])
+
+    def test_fetch_is_disabled_under_test_home(self):
+        class Boom:
+            def open(self, *args, **kwargs):
+                raise AssertionError('opened')
+
+        with self.assertRaises(OSError):
+            scores.fetch_openrouter(1, environ={'VCW_TEST_HOME': '/x'}, opener=Boom())
+
+    def test_fetch_caps_size_and_sends_user_agent(self):
+        requests = []
+
+        class Opener:
+            def open(self, request, timeout):
+                requests.append(request)
+                return io.BytesIO(b'x' * (scores.MAX_BYTES + 5))
+
+        with self.assertRaises(OSError):
+            scores.fetch_openrouter(1, environ={}, opener=Opener())
+        self.assertEqual(requests[0].get_header('User-agent'), 'vibe-workflow-smart-router')
 
 
 if __name__ == '__main__':
