@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+import stat
 import tempfile
 import time
 import unittest
@@ -217,17 +218,43 @@ class SelectionTest(unittest.TestCase):
                 self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
         self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
 
-    def test_unsafe_or_malformed_cache_is_selector_unavailable(self):
+    def test_unsafe_cache_is_never_overwritten(self):
         self.warm()
         cache = self.root / scores.CACHE
         cache.chmod(0o644)
-        result = self.run_select()
-        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
-        cache.chmod(0o600)
-        cache.write_text(json.dumps(dict(version=1, models=["PRIVATE-SENTINEL"])))
-        result = self.run_select()
-        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
-        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+        before = cache.read_bytes()
+        for _ in range(2):
+            result = self.run_select(now=NOW + 8 * 86400)
+            self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+            self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch),
+                             dict(state="setup_needed", reason="selector_unavailable"))
+            self.assertEqual(selector.refresh(dict(wanted=["x"]), state_dir=self.root, fetch=self.fetch),
+                             dict(state="failed"))
+        self.assertEqual((cache.read_bytes(), stat.S_IMODE(cache.stat().st_mode)), (before, 0o644))
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_malformed_cache_is_replaced_by_the_next_fetch(self):
+        self.warm()
+        cache = self.root / scores.CACHE
+        for bad in ("{bad", json.dumps(dict(version=1, models=["PRIVATE-SENTINEL"])), "[]",
+                    json.dumps(dict(version=2, models={}, unscored={}, failures=0, fetched_at=0, attempt_at=0)),
+                    json.dumps(dict(version=1, models={}, failures=0, fetched_at=NOW, attempt_at=NOW)),
+                    json.dumps(dict(version=1, models={}, unscored={}, failures="0", fetched_at=0, attempt_at=0))):
+            with self.subTest(bad=bad):
+                cache.write_text(bad)
+                cache.chmod(0o600)
+                self.assertIsNone(scores.load(self.root))
+                result = self.run_select()
+                self.assertEqual(result["state"], "selected")
+                self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+                self.assertEqual(scores.load(self.root)["failures"], 0)
+                cache.write_text(bad)
+                self.assertEqual(selector.check_setup(state_dir=self.root, allow_fetch=True, fetch=self.fetch),
+                                 dict(state="ready", reason=None))
+                cache.write_text(bad)
+                self.assertEqual(selector.refresh(dict(wanted=["x"]), state_dir=self.root, fetch=self.fetch),
+                                 dict(state="stored"))
+                self.assertEqual(stat.S_IMODE(cache.stat().st_mode), 0o600)
 
     def test_unexpected_internal_error_is_selector_unavailable(self):
         with mock.patch("runtime.routing_observations.eligible", side_effect=RuntimeError("PRIVATE-SENTINEL")):

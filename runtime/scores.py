@@ -125,7 +125,20 @@ def lookup(cache, key, creator):
 
 
 def load(state_dir):
-    return storage._read(Path(state_dir) / CACHE) or None
+    """The cache, or None when it is missing or its content is malformed (the next fetch replaces it).
+    An unsafe file still raises, so it is never overwritten."""
+    try:
+        value = storage.read_json(Path(state_dir) / CACHE)
+    except storage.StorageError:
+        raise
+    except (ValueError, RecursionError):
+        return None
+    if type(value) is not dict or type(value.get('version')) is not int or value['version'] != 1 \
+            or type(value.get('models')) is not dict or type(value.get('unscored')) is not dict \
+            or not all(type(value.get(key)) is int for key in ('failures', 'fetched_at', 'attempt_at')) \
+            or value['failures'] < 0:
+        return None
+    return value
 
 
 def _scored(cache, key):
