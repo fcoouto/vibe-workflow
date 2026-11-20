@@ -38,12 +38,19 @@ rename. Nothing else.
 ## Goals
 
 - A session's name starts with its stage while superpowers work is under way:
-  a three-step meter, and the words `WAITING` only while the user owes an
-  approval: `▰▱▱▱▱ WAITING · session titles` (design written), `▰▰▱▱▱ WAITING · session titles` (plan written), `▰▰▰▱▱ session titles` (plan executing), each with the invisible `U+FFFB` in front.
-- The name changes **only** at these events, as the user specified:
-  1. a design is generated (a spec file is written) -> `▰▱▱▱▱ WAITING ·` (superpowers now asks the user to approve it)
-  2. an implementation plan is generated (a plan file is written) -> `▰▰▱▱▱ WAITING ·` (the user picks how to execute)
-  3. implementation of the plan starts (an executor skill is loaded) -> `▰▰▰▱▱`, no label
+  a three-step meter, and the words `WAITING` only while the session is idle with a hand-off outstanding:
+  `▰▱▱▱▱ session titles` (design written), `▰▰▱▱▱ session titles` (plan written), `▰▰▰▱▱ session titles` (plan executing); when the session goes idle at one or two cells it reads
+  `▰▱▱▱▱ WAITING · session titles`. Each title has the invisible `U+FFFB` in front.
+- The meter changes **only** at these events, as the user specified:
+  1. a design is generated (a spec file is written) -> `▰▱▱▱▱`
+  2. an implementation plan is generated (a plan file is written) -> `▰▰▱▱▱`
+  3. implementation of the plan starts (an executor skill is loaded) -> `▰▰▰▱▱`
+- The `WAITING · ` label is **not** tied to those writes: the user may have said
+  "once validated, proceed with implementation", in which case nobody owes an approval
+  (correction from the user). It is derived from the session's own state: shown when the
+  session goes idle (`session.idle`) with the meter at one or two cells, because then
+  the hand-off is outstanding and only a user prompt can move it; removed when the next
+  turn starts (`session.execution.started`) or the executor loads.
 - The latest event wins, with one exception: a plan written while the session shows
   a 3-cell meter keeps it (usually a fix mid-build). A new design in a building
   session shows one cell again, which is correct: that session is designing again.
@@ -70,10 +77,8 @@ character that keeps the meter at a stable width; corrected after the user point
 an earlier draft had dropped it): `<U+FFFB><5 meter cells> <topic>`, or
 `<U+FFFB><5 meter cells> WAITING · <topic>`. Reading accepts titles without the mark. Text appears only for
 `WAITING`; everything else is the meter alone. `BLOCKED` is not a title state (see
-"Decisions"). The
-stage is the count of filled cells. `WAITING` here means "the user owes the next
-action", which is true by construction after a design (approval) and a plan (execution
-choice) and clears when the next event arrives.
+"Decisions"). The stage is the count of filled cells. `WAITING` means "idle with a
+design or plan hand-off outstanding"; it is never written by the artifact events.
 
 | Event (tool, completed) | Stage |
 |---|---|
@@ -95,6 +100,10 @@ choice) and clears when the next event arrives.
   a prefix, the user removed or replaced it: the plugin leaves that session alone
   until the server restarts (the record is in memory; after a restart the prefix can
   return once, and onboarding says so).
+- **Label events.** `session.idle` adds the label when the session already carries our
+  meter at 1 or 2 cells; `session.execution.started` removes it. A session without our
+  meter is never labeled. Both events are filtered by the same guards as the meter
+  (opt-in, root session, user-removed prefix).
 - **Same title, no write.** An event that produces the current title does nothing.
 - **Failure is silent.** Any error (missing field, failed call) is swallowed; the
   tool result and the chat are never touched or delayed by naming.
@@ -136,28 +145,54 @@ follows from it. Choice recorded as the author's call; open to correction.
    the normal in-progress state. "User must act" is already `WAITING`. No host signal
    observes an external block; only the model knows, which is the cooperation protocol
    this repository dropped. The title never shows it and the read regex does not accept it.
-2. **No extra triggers.** Permission requests, pending questions and session idle are
-   rejected: transient states written into a persistent title give stale labels, rename
-   pairs and flicker, and they break the rule to rename only on plan events. `WAITING`
-   is set by the design and plan writes and cleared by the executor skill, nothing else.
-3. **Stale `WAITING` is accepted and documented** as "the last handoff this session made
-   to you" (2 of 3 for accept-only now; Fable and Opus add: clearing on the next user
-   prompt is the known later remedy, built only if the label proves annoying, since a
-   reply can be a question and not an approval).
-4. **The read-then-write rename race is accepted and documented** (Fable: accept; Opus:
-   accept plus a readback; Astra: refuse to rename without an atomic update). The host has
-   no compare-and-set title update, the window is milliseconds, and renames happen a few
-   times per session at plan events. **Astra's dissent matters because you said never to
-   overwrite user titles; this is yours to overrule.**
+2. **No permission or question triggers.** Pending permissions and forms are transient
+   and noisy; rejected by all three members.
+3. **Superseded by the user's correction (council round 1, 2): `WAITING` is not set by
+   the design and plan writes.** The council had it set by the writes and accepted a
+   stale label; the user pointed out that a pre-authorized "validate, then proceed"
+   flow owes no approval at all. The label is now derived from idle state and stage (see
+   Goals). This reintroduces `session.idle` as a trigger, which the council had
+   rejected only as a stand-alone signal; combined with "the meter shows an outstanding
+   hand-off" it is accurate, and it adds two events, no storage and no polling.
+   Awaiting the user's approval of that change.
+4. **The read-then-write rename race is accepted** by the user (the council split:
+   Fable accept, Opus accept plus a readback, Astra refuse without an atomic update).
+   The host has no compare-and-set title update and the window is milliseconds. No
+   readback is built.
+
+## Keeping the title current (best effort, no guarantee)
+
+A strict guarantee is not possible: the plugin only sees what the host emits, and
+subscriptions are live only. These mechanisms give best effort, in order of how much
+they carry:
+
+1. **Trace events** (`execute.after`): the meter moves at the design write, the plan
+   write and the executor load.
+2. **The title is the state.** Each update is recomputed from the current title plus the
+   event, so it is idempotent and nothing can drift out of sync with a stored copy; a
+   server restart loses only the in-memory "we renamed this" record.
+3. **Turn boundaries** (`session.idle`, `session.execution.started`): the `WAITING`
+   label is reconciled once per turn, which also repairs a label left wrong by a
+   missed event.
+4. **Self-repair, no queue.** A failed or timed-out rename is dropped silently; the next
+   event recomputes and applies it. Nothing retries in the background.
+5. **Guards** keep it honest: root sessions only, opt-in, a removed prefix stops
+   renaming of that session, an unchanged title writes nothing.
+
+Known gaps, documented rather than closed: plans written by shell redirect or
+`apply_patch`; skills the user invokes directly may leave no tool call; sessions that
+never pass through superpowers; a finished build keeps `▰▰▰▱▱` because there is no
+`DONE`; an idle session with a 3-cell meter shows no label even if it stopped
+mid-build; the rename race; events dropped while the plugin reloads.
 
 ## Open points for the reviewer (author's calls, not user decisions)
 
-- **Race and stale label:** see Decisions; Astra dissented on the race.
+- **`WAITING` from idle:** see Decisions 3, awaiting the user's approval.
 - Meter steps 1/2/3 of 5 per stage (author's call).
 - Opt-in through onboarding (default off) rather than on by default.
 - Latest event wins, except that a plan does not replace `BUILD` (added after review).
 - Gate: onboarding feature (recommended default here, one question) or a plugin option `ctx.options.session_titles` (about 60 fewer changed lines, but no per-project choice and no in-chat control).
-- Unverified on the installed host: the `skill` tool's name and input shape in
+- Unverified on the installed host: whether `session.idle` and `session.execution.started` carry a session id and fire as the API reference lists them,  the `skill` tool's name and input shape in
   `execute.after`, the `write` input field (`path` or `filePath`), the `parentID` and
   `title` fields of `ctx.session.get`, whether OpenCode's own title generation can
   overwrite a plugin-set title, and whether the sidebar refreshes at once. The plan
