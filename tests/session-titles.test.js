@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
-import { DEFAULT_TITLE, cellsFor, compose, strip } from "../session-titles.js"
+import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, strip } from "../session-titles.js"
 
 test("compose and strip", () => {
   assert.equal(compose("Fix auth", 2, true), "￻▰▰▱▱▱ WAITING · Fix auth")
@@ -30,4 +33,292 @@ test("cellsFor takes the highest fact that holds", () => {
 test("DEFAULT_TITLE matches generated titles only", () => {
   assert.match("New session - 2026-11-20T10:11:12.345Z", DEFAULT_TITLE)
   assert.doesNotMatch("New session - later", DEFAULT_TITLE)
+})
+
+const SPEC = "docs/superpowers/specs/2026-11-20-fix-auth-design.md"
+const OTHER = "docs/superpowers/specs/2026-11-21-add-cache-design.md"
+const PLAN = "docs/superpowers/plans/2026-11-20-fix-auth.md"
+const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((done) => setTimeout(done, 2)) }
+
+function pushable(signal) {
+  const queue = [], waiters = []
+  signal.addEventListener("abort", () => { for (const wake of waiters.splice(0)) wake({ done: true }) })
+  return {
+    push(value) { const wake = waiters.shift(); if (wake) wake({ value, done: false }); else queue.push(value) },
+    [Symbol.asyncIterator]: () => ({ next: () => queue.length ? Promise.resolve({ value: queue.shift(), done: false })
+      : signal.aborted ? Promise.resolve({ done: true }) : new Promise((wake) => waiters.push(wake)) }),
+  }
+}
+
+async function host(t, { state = "on", cleanup = false, events = true, directory, project } = {}) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  directory ??= root
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [] }
+  const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
+  const preference = { state }
+  let stream, subscribed
+  const ctx = {
+    tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
+    session: {
+      get: async ({ sessionID }) => {
+        calls.get.push(sessionID)
+        if (facts.failGet) throw Error("get")
+        return { id: sessionID, title: titles.get(sessionID) ?? "Fix login flow", location: { directory },
+          ...(sessionID.startsWith("child") && { parentID: "ses_1" }) }
+      },
+      update: async ({ sessionID, title }) => {
+        calls.update.push([sessionID, title])
+        if (facts.failUpdate) throw Error("update")
+        titles.set(sessionID, title)
+      },
+    },
+    ...(events && { event: { subscribe: ({ types, signal }) => { subscribed = { types, signal }; return stream = pushable(signal) } } }),
+  }
+  const run = async (command, args) => {
+    calls.run.push([command, ...args])
+    if (facts.fail) throw Error("run")
+    if (command === "gh") {
+      await facts.gate
+      return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
+    }
+    if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` +
+      (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+    if (args[0] === "rev-parse") return "origin/main\n"
+    return facts.changed.join("\n")
+  }
+  const titlesFor = await registerSessionTitles(ctx, { run, settings: { inspect: async () => preference },
+    gitWorkflow: { inspect: async () => ({ state: "on", project: project ?? root, worktree_cleanup: cleanup }) } })
+  t.after(() => titlesFor.close())
+  const write = async (path, sessionID = "ses_1", more = {}) => {
+    const event = { tool: "write", status: "completed", sessionID, input: { path }, ...more }
+    for (const [name, handler] of calls.hook) if (name === "execute.after") await handler(event)
+    return event
+  }
+  const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
+  return { root, ctx, calls, facts, titles, preference, write, emit, registered: titlesFor, subscribed: () => subscribed,
+    push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
+    start: (sessionID) => emit("session.execution.started", sessionID) }
+}
+
+test("a spec write binds without renaming; turn boundaries write the meter and label", async (t) => {
+  const h = await host(t)
+  assert.equal(h.registered.registered, true)
+  assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
+    "session.execution.failed", "session.execution.interrupted"])
+  await h.write(SPEC)
+  assert.deepEqual(h.calls.update, [])
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
+  await h.start()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ Fix login flow")
+  assert.equal(h.calls.update.length, 2)
+})
+
+test("default or empty titles take the spec slug; topic switches only when untouched", async (t) => {
+  for (const initial of ["New session - 2026-11-20T10:11:12.345Z", ""]) {
+    const h = await host(t)
+    h.titles.set("ses_1", initial)
+    await h.write(SPEC)
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · fix auth")
+  }
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.changed = ["z.js"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  await h.write(SPEC)
+  h.facts.changed = []
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  await h.write(OTHER)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · add cache")
+  h.titles.set("ses_1", "￻▰▱▱▱▱ WAITING · My words")
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · My words")
+})
+
+test("facts drive cells 2 to 5, never decrease, and cell 5 releases the session", async (t) => {
+  const h = await host(t)
+  mkdirSync(join(h.root, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(join(h.root, PLAN), "**Files:**\n- Modify: `a.js`, `b.js`\n")
+  await h.write(SPEC)
+  await h.write(PLAN)
+  const meter = async () => { await h.end(); return h.titles.get("ses_1") }
+  h.facts.changed = ["z.js"]
+  assert.equal(await meter(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  h.facts.changed = ["a.js"]
+  assert.equal(await meter(), "￻▰▰▰▱▱ WAITING · Fix login flow")
+  h.facts.changed = []
+  assert.equal(await meter(), "￻▰▰▰▱▱ WAITING · Fix login flow")
+  h.facts.changed = ["a.js", "b.js"]
+  assert.equal(await meter(), "￻▰▰▰▰▱ WAITING · Fix login flow")
+  h.facts.prs = { "feat/x": [{ state: "MERGED", title: null }] }
+  assert.equal(await meter(), "￻▰▰▰▰▰ Fix login flow")
+  const counts = [h.calls.get.length, h.calls.run.length, h.calls.update.length]
+  await h.start()
+  await h.end()
+  assert.deepEqual([h.calls.get.length, h.calls.run.length, h.calls.update.length], counts)
+  Object.assign(h.facts, { prs: {}, changed: [] })
+  await h.write(OTHER)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · add cache")
+})
+
+test("plans set declared paths under the same checkout, bind when unbound, and are ignored elsewhere", async (t) => {
+  const h = await host(t)
+  mkdirSync(join(h.root, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(join(h.root, PLAN), "**Files:**\n- Modify: `a.js`, `b.js`\n")
+  h.facts.changed = ["a.js"]
+  await h.write(PLAN)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▱▱ WAITING · Fix login flow")
+  const elsewhere = await host(t)
+  mkdirSync(join(elsewhere.root, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(join(elsewhere.root, PLAN), "**Files:**\n- Modify: `a.js`, `b.js`\n")
+  const other = await host(t)
+  other.facts.changed = ["a.js"]
+  await other.write(SPEC)
+  await other.write(join(elsewhere.root, PLAN))
+  await other.end()
+  assert.equal(other.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
+test("a symlinked session directory reaches cell 5 through the primary checkout", async (t) => {
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "session-real-")))
+  const link = join(tmpdir(), `session-link-${process.pid}-${Date.now()}`)
+  symlinkSync(real, link)
+  t.after(() => { rmSync(link, { force: true }); rmSync(real, { recursive: true, force: true }) })
+  const h = await host(t, { cleanup: true, directory: link, project: real })
+  h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▰ Fix login flow")
+})
+
+test("children, events without a session and unbound sessions write nothing; failed and interrupted evaluate", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC, "child_1")
+  await h.end("child_1")
+  h.push({ type: "session.execution.succeeded", data: {} })
+  h.push({ type: "session.execution.succeeded" })
+  await h.end("ses_2")
+  assert.deepEqual(h.calls.update, [])
+  await h.write(SPEC)
+  await h.emit("session.execution.failed")
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
+  h.facts.changed = ["z.js"]
+  await h.emit("session.execution.interrupted")
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
+test("a removed prefix silences the session and an unchanged title is not rewritten", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.end()
+  assert.equal(h.calls.update.length, 1)
+  h.titles.set("ses_1", "Plain title")
+  h.facts.changed = ["z.js"]
+  await h.end()
+  await h.write(OTHER)
+  await h.end()
+  await h.start()
+  assert.equal(h.calls.update.length, 1)
+  assert.equal(h.titles.get("ses_1"), "Plain title")
+})
+
+test("settings off, not onboarded or invalid do no work", async (t) => {
+  for (const state of ["off", "not_onboarded", "blocked"]) {
+    const h = await host(t, { state })
+    await h.write(SPEC)
+    await h.end()
+    await h.start()
+    assert.deepEqual([h.calls.get, h.calls.run, h.calls.update], [[], [], []], state)
+  }
+  const h = await host(t)
+  await h.write(SPEC)
+  h.preference.state = "off"
+  await h.end()
+  await h.start()
+  assert.deepEqual([h.calls.get.length, h.calls.run, h.calls.update], [1, [], []])
+})
+
+test("failing reads and writes keep the cells and the next turn end repairs", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.changed = ["z.js"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  h.facts.fail = true
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  h.facts.fail = false
+  h.facts.failGet = true
+  h.facts.changed = ["a.js"]
+  h.facts.prs = { "feat/x": [{ state: "OPEN", title: "[BLOCKED] x" }] }
+  await h.end()
+  h.facts.failGet = false
+  h.facts.failUpdate = true
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  h.facts.failUpdate = false
+  await h.start()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ Fix login flow")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▱ WAITING · Fix login flow")
+})
+
+test("a turn start during a slow evaluation ends without WAITING", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  let release
+  h.facts.gate = new Promise((done) => { release = done })
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  h.push({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+  await settle()
+  assert.ok(h.calls.run.some(([command]) => command === "gh"))
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ Fix login flow")
+})
+
+test("another branch's merge never advances the meter", async (t) => {
+  const h = await host(t)
+  h.facts.prs = { "feat/other": [{ state: "MERGED", title: "y" }] }
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
+})
+
+test("the 129th session evicts the oldest", async (t) => {
+  const h = await host(t)
+  for (let i = 1; i <= 129; i++) await h.write(SPEC, `ses_${i}`)
+  await h.end("ses_1")
+  await h.end("ses_2")
+  await h.end("ses_129")
+  assert.deepEqual(h.calls.update.map(([id]) => id), ["ses_2", "ses_129"])
+})
+
+test("close aborts the subscription and hosts without events register nothing", async (t) => {
+  const h = await host(t)
+  h.registered.close()
+  assert.equal(h.subscribed().signal.aborted, true)
+  await h.write(SPEC)
+  await h.end()
+  assert.deepEqual(h.calls.update, [])
+  const bare = await host(t, { events: false })
+  assert.equal(bare.registered.registered, false)
+  assert.deepEqual(bare.calls.hook, [])
+})
+
+test("the tool result is never modified", async (t) => {
+  const h = await host(t)
+  const result = Object.freeze({ output: "ok", content: [{ type: "text", text: "ok" }] })
+  const event = await h.write(SPEC, "ses_1", { result })
+  assert.equal(event.result, result)
+  assert.deepEqual(result, { output: "ok", content: [{ type: "text", text: "ok" }] })
 })
