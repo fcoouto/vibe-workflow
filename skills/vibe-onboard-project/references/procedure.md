@@ -3,7 +3,9 @@
 ## Question style
 
 Every question uses the client's native question control, in the same form, so
-the user never has to learn a new layout:
+the user never has to learn a new layout. Use each Header, Question and choice label
+exactly as written. When the control has no context field, as in OpenCode, put the
+context, then the question, in the control's question text.
 
 - **Header** of at most 30 characters.
 - **Question** that ends with a question mark and names one decision.
@@ -82,10 +84,11 @@ the user never has to learn a new layout:
 
 ## Steps
 
-1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the
-   preview's `project` path as the project, and the client. When `root` differs,
-   the session is in a worktree; say Smart Router is saved in this worktree and
-   the git workflow and session title choices in the main checkout. Tell the user what is coming in one line: **Up to five short questions.**
+1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Before question 1,
+   write the opening line with the preview's `project` and `client`:
+   **Project: <project>. Client: <client>. Up to five short questions.** When `root`
+   differs, the session is in a worktree; add that Smart Router is saved in this
+   worktree and the git workflow and session title choices in the main checkout.
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
 2. Ask question 1. The preview's `previous_enabled` is the saved value; `null`
@@ -96,9 +99,9 @@ the user never has to learn a new layout:
    leave git workflow guidance off; for `project_root_unavailable`, say the main
    checkout could not be found from this worktree and onboarding must run there.
    Otherwise ask question 2. The preview's `previous_enabled` and
-   `previous_agent_merge` hold the saved choice: `false` enabled is Turn off git
-   guidance, otherwise `previous_agent_merge` picks the merge choice; `null` means
-   nothing is saved. The status preview is this preview, except when
+   `previous_agent_merge` hold the saved choice: `previous_enabled` `false` is Turn
+   off git guidance; otherwise `previous_agent_merge` `true` is Agents merge their own and `false` is I merge them;
+   `null` means nothing is saved. The status preview is this preview, except when
    `previous_enabled` is `false`: then preview again with
    `{"v":1,"op":"preview","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":false}`
    and use only its readiness. Choosing **Turn off git guidance** skips questions 3 and 4.
@@ -143,7 +146,8 @@ the user never has to learn a new layout:
    `{"v":1,"op":"apply","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":true,"expected_snapshot":"<snapshot>"}`;
    otherwise ask the affected question again and say why. The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
-   client's. If edit is denied or permission is unavailable, do not write another way.
+   client's. If edit is denied, permission is unavailable or apply fails for any
+   reason, do not write another way: never run the plugin's code or write the settings file yourself.
    Unless question 5 was skipped, apply session titles last, the same way: preview `session_titles` again with the
    answered `enabled` and apply it with that fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.

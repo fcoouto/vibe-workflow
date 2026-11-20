@@ -255,7 +255,12 @@ test("every onboarding question has the same control-shaped form", async (t) => 
     [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
     assert.ok(questions[index].includes(phrase), phrase)
   }
-  for (const phrase of ["say Smart Router is saved in this worktree",
+  for (const phrase of ["add that Smart Router is saved in this",
+    "`previous_agent_merge` `true` is Agents merge their own and `false` is I merge them",
+    "then the question, in the control's question text",
+    "Use each Header, Question and choice label",
+    "**Project: <project>. Client: <client>. Up to five short questions.**",
+    "never run the plugin's code or write the settings file yourself",
     "\"feature\":\"git_workflow\",\"enabled\":true,\"agent_merge\":false,\"worktree_cleanup\":false",
     "\"feature\":\"session_titles\",\"enabled\":true"]) {
     assert.ok(text.includes(phrase), phrase)
