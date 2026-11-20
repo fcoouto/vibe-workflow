@@ -63,6 +63,9 @@ Never touch the primary checkout. Do not edit files, commit, switch, detach,
 rename or rebase there; do all task work in a worktree. If it has left `main`, or
 something else changed it, tell the user and change nothing.
 
+When the git workflow is on, working in a worktree is the user's
+declared choice from onboarding: do not ask for consent to create one.
+
 The one exception is the user's decision to keep it current. After an agent
 merge, if the primary checkout is clean and on `main`, run `git fetch origin main`
 and then `git merge --ff-only origin/main` there. A change to
