@@ -392,18 +392,24 @@ print('{"state":"marked"}')
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 const runs = async (root) => (await readFile(join(root, "argv.log"), "utf8").catch(() => "")).split("\n").filter(Boolean)
 
-function feed() {
-  const queue = [], waiters = []
-  const out = { finished: false, opts: null, push(event) { queue.push(event); waiters.splice(0).forEach((r) => r()) } }
+function feed(reject = []) {
+  const subscribers = []
+  const out = { calls: [], push(event) {
+    for (const s of subscribers) if (s.types.includes(event.type)) { s.queue.push(event); s.waiters.splice(0).forEach((r) => r()) }
+  } }
   out.subscribe = (opts) => {
-    out.opts = opts
+    out.calls.push(opts)
+    if (opts.types.some((type) => reject.includes(type))) throw Error("unknown event type")
+    const s = { types: opts.types, queue: [], waiters: [], finished: false }
+    subscribers.push(s)
+    out.finished = () => subscribers.every((each) => each.finished)
     return (async function* () {
       try {
         while (!opts.signal.aborted) {
-          if (!queue.length) await new Promise((r) => { waiters.push(r); opts.signal.addEventListener("abort", r, { once: true }) })
-          while (queue.length) yield queue.shift()
+          if (!s.queue.length) await new Promise((r) => { s.waiters.push(r); opts.signal.addEventListener("abort", r, { once: true }) })
+          while (s.queue.length) yield s.queue.shift()
         }
-      } finally { out.finished = true }
+      } finally { s.finished = true }
     })()
   }
   return out
@@ -414,7 +420,7 @@ test("a chatgpt-limit step failure marks once", async () => {
   const events = feed()
   const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
   try {
-    assert.deepEqual(events.opts.types, ["session.step.failed", "session.error"])
+    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"], ["session.error"]])
     events.push({ type: "session.step.failed", error: limit })
     for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
     await pause(300) // the first run has finished, so only the 60 s window can stop the next one
@@ -478,23 +484,56 @@ test("opted-out projects never mark", async () => {
   try {
     await preference(f.root, false)
     events.push({ type: "session.error", error: limit })
-    let cloned = false
-    const response = new Response("subscription_sharing_usage_limit_exceeded", { status: 429 })
-    await f.h.hooks.get("http.response")({ response: { status: 429, clone: () => { cloned = true; return response.clone() } } })
+    let pulled = false, cancelled = false
+    const body = new ReadableStream({
+      pull(controller) { pulled = true; controller.enqueue(Buffer.from("subscription_sharing_usage_limit_exceeded")); controller.close() },
+      cancel() { cancelled = true },
+    }, { highWaterMark: 0 })
+    await f.h.hooks.get("http.response")({ response: { status: 429, clone: () => ({ body }) } })
     await pause(400)
     assert.deepEqual(await runs(f.root), [])
-    assert.equal(cloned, false)
+    assert.equal(pulled, false)
+    assert.equal(cancelled, true)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("http 429 fallback still marks when the host reads the body at once", async () => {
+  const f = await fixture(mark)
+  try {
+    const body = '{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}'
+    const response = new Response(body, { status: 429 })
+    const pending = f.h.hooks.get("http.response")({ providerID: "openai", response })
+    assert.equal(await response.text(), body)
+    await pending
+    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    await pause(200)
+    assert.equal((await runs(f.root)).length, 1)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a rejected event type does not silence the other", async () => {
+  const events = feed(["session.error"])
+  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  try {
+    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"], ["session.error"]])
+    events.push({ type: "session.step.failed", error: limit })
+    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    await pause(200)
+    assert.equal((await runs(f.root)).length, 1)
+    await f.cleanup()
+    assert.ok(events.calls.every((opts) => opts.signal.aborted))
+  } finally { await rm(f.root, { recursive: true }) }
 })
 
 test("cleanup aborts the subscription", async () => {
   const events = feed()
   const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
   try {
-    assert.equal(events.opts.signal.aborted, false)
+    assert.equal(events.calls.length, 2)
+    assert.ok(events.calls.every((opts) => !opts.signal.aborted))
     await f.cleanup()
-    assert.equal(events.opts.signal.aborted, true)
-    for (let i = 0; i < 20 && !events.finished; i++) await pause(25)
-    assert.equal(events.finished, true)
+    assert.ok(events.calls.every((opts) => opts.signal.aborted))
+    for (let i = 0; i < 20 && !events.finished(); i++) await pause(25)
+    assert.equal(events.finished(), true)
   } finally { await rm(f.root, { recursive: true }) }
 })

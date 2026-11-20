@@ -159,10 +159,10 @@ export default {
       } catch {} finally { marking = false }
     }
     const subscription = new AbortController()
-    if (ctx.event?.subscribe) {
+    // One subscription per type, so a host that rejects one type still delivers the other.
+    for (const type of ctx.event?.subscribe ? ["session.step.failed", "session.error"] : []) {
       ;(async () => {
-        for await (const event of await ctx.event.subscribe({
-          types: ["session.step.failed", "session.error"], signal: subscription.signal })) {
+        for await (const event of await ctx.event.subscribe({ types: [type], signal: subscription.signal })) {
           const error = event?.error ?? event?.data?.error ?? event?.properties?.error
           if (error?.type === "provider.chatgpt-limit") markLimit()
         }
@@ -248,10 +248,18 @@ export default {
     await ctx.session.hook("http.response", async (event) => {
       const provider = event?.providerID ?? event?.model?.providerID
       if (closed || event?.response?.status !== 429 || (provider && provider !== "openai")) return
+      // Clone before any await: the host may read the original body as soon as this hook yields.
+      let body, reader
+      try { body = event.response.clone().body } catch {}
+      if (!body) return
       try {
-        if ((await project.inspect()).state !== "on" || closed) return
-        const reader = event.response.clone().body?.getReader()
-        if (!reader) return
+        if ((await project.inspect()).state === "on" && !closed) reader = body.getReader()
+      } catch {}
+      if (!reader) {
+        try { body.cancel().catch(() => {}) } catch {}
+        return
+      }
+      try {
         const parts = []
         for (let size = 0; size < MAX_BYTES;) {
           const { done, value } = await reader.read()
@@ -259,9 +267,8 @@ export default {
           parts.push(value)
           size += value.length
         }
-        reader.cancel().catch(() => {})
         if (Buffer.concat(parts).toString("utf8").includes("subscription_sharing_usage_limit_exceeded")) markLimit()
-      } catch {}
+      } catch {} finally { reader.cancel().catch(() => {}) }
     }, { providerID: "openai" })
     return () => {
       closed = true
