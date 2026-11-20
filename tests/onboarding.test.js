@@ -246,9 +246,12 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   }
   const [smartRouter] = questions
   for (const phrase of ["Turn it on (Recommended)", "Leave it off", "Keep it on (Current, Recommended)", "Turn it off",
-    "It is on, but not set up yet.", "Leave it off (Current)"]) {
-    assert.ok(smartRouter.includes(phrase) || text.includes(phrase), phrase)
+    "It is on, but not set up yet."]) {
+    assert.ok(smartRouter.includes(phrase), phrase)
   }
+  assert.ok(text.includes("Leave it off (Current)"))
+  const savedOn = smartRouter.split(/^- Choices/m)[2]
+  assert.match(savedOn.match(/^ {2,}- (.+?) — /m)[1], /\(Current, Recommended\)$/)
   assert.doesNotMatch(smartRouter, /Use Smart Router \(Recommended\)|Keep existing model selection/)
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")

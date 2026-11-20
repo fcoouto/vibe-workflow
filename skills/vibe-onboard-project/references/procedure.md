@@ -27,7 +27,7 @@ the user never has to learn a new layout:
 
 - Header: Smart Router
 - Question: Use Smart Router for this project?
-- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. When it is saved on and its readiness is setup_needed, add: It is on, but not set up yet.
+- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. When it is saved on and the step 1 preview's readiness.state is setup_needed, add: It is on, but not set up yet.
 - Choices:
   - Turn it on (Recommended) — Get a suggestion before each delegated task.
   - Leave it off — Keep choosing models yourself.
@@ -80,9 +80,9 @@ the user never has to learn a new layout:
    worktree. Tell the user what is coming in one line: **Up to five short questions.**
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
-2. Ask question 1. With no saved choice, use its first choices. When the preview's
-   `previous_enabled` is `true`, use the saved-on choices. When it is `false`, use
-   the first choices with Leave it off (Current) first and Turn it on (Recommended)
+2. Ask question 1. With no saved choice, use its default choices (the plain
+   Choices list). When the preview's `previous_enabled` is `true`, use the saved-on
+   choices. When it is `false`, use the default choices with Leave it off (Current) first and Turn it on (Recommended)
    second.
 3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
    If that preview is blocked, explain the fixed reason, skip questions 2, 3 and 4 and
