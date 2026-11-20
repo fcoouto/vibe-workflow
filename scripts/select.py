@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 import signal
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from runtime import chatgpt_limit
 from runtime.selector import check_setup, refresh, result, select
 
 MAX_BYTES = 65536
@@ -25,13 +27,17 @@ def main():
     parser.add_argument("--check-setup", action="store_true")
     parser.add_argument("--allow-fetch", action="store_true")
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--chatgpt-limit", action="store_true")
     args = parser.parse_args()
     if args.allow_fetch and not args.check_setup:
         parser.error("--allow-fetch needs --check-setup")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
-        if args.check_setup:
+        if args.chatgpt_limit:
+            record = chatgpt_limit.mark(Path(args.state_dir), int(time.time()))
+            answer = dict(state="marked", until=record["until"], source=record["source"])
+        elif args.check_setup:
             answer = check_setup(state_dir=Path(args.state_dir), allow_fetch=args.allow_fetch)
         else:
             raw = sys.stdin.buffer.read(MAX_BYTES + 1)
@@ -43,7 +49,8 @@ def main():
         if len(encoded.encode()) + 1 > MAX_BYTES:
             raise ValueError()
     except (Exception, KeyboardInterrupt):
-        answer = dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
+        answer = dict(state="failed") if args.chatgpt_limit else \
+            dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
             else result("blocked", "invalid_request")
         encoded = json.dumps(answer, separators=(",", ":"))
     print(encoded)

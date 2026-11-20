@@ -48,6 +48,14 @@ class PackageTest(unittest.TestCase):
         self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "no_eligible_route", None))
         self.assertFalse(answer["admission"])
 
+    def test_cli_chatgpt_limit(self):
+        run = self.cli(b"ignored", extra=["--chatgpt-limit"])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        answer = json.loads(run.stdout)
+        self.assertEqual((answer["state"], answer["source"]), ("marked", "fallback"))
+        self.assertGreater(answer["until"], int(time.time()))
+        self.assertEqual((self.root / "state/chatgpt-limit.json").stat().st_mode & 0o777, 0o600)
+
     def test_cli_refresh_skips_a_fresh_cache_without_echo(self):
         state = self.root / "state"
         state.mkdir(mode=0o700)
@@ -89,7 +97,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account", "scores"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())

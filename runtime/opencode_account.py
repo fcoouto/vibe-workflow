@@ -26,13 +26,14 @@ import base64
 import hashlib
 import json
 import os
+from pathlib import Path
 import selectors
 import shutil
 import subprocess
 import tempfile
 import time
 
-from runtime import claude_usage, continuity, processes as lifecycle, routing, \
+from runtime import chatgpt_limit, claude_usage, continuity, processes as lifecycle, routing, \
     routing_observations as observations, routing_paths, subscription_billing
 
 PATHS = dict(claude='opencode-claude-subscription', chatgpt='opencode-chatgpt-subscription',
@@ -314,7 +315,7 @@ def _quota_gate(settings_path, route, now):
     """(`quota_exhausted`, seconds it may still last) on positive evidence only, never headroom: a provider quota-limit
     error on this pool within PROVIDER_LIMIT_SECONDS (E2); Go, this acquisition's bound meters (one limited or at 100%
     with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago; Claude, the native login's model-scoped limits
-    while it is this fact's login. ChatGPT has no reading (its link to Codex is deferred).
+    while it is this fact's login. ChatGPT: only its limit mark (`chatgpt_limit`), never a reading.
     Current-generation account-wide Claude windows also refuse while positively fresh and exhausted."""
     name = family(route)
     if name == 'claude':
@@ -330,6 +331,9 @@ def _quota_gate(settings_path, route, now):
                 return EXHAUSTED, max(left)
         return (claude_usage.quota_problem(settings_path, route, now, native=True),
                 claude_usage.quota_retry_after(settings_path, route, now, native=True)) if native else (None, None)
+    if name == 'chatgpt':
+        left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None
+        return (EXHAUSTED, left) if left else (None, None)
     found = _account(settings_path, name, now) if name == 'go' else None
     usage = (found or {}).get('usage')
     if type(usage) is not dict or route.get('pool') != POOLS['go'] or not any(
