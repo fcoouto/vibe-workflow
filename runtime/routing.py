@@ -78,4 +78,6 @@ def order(candidates, level):
     near = [item for item in candidates if item['score'] >= NEAR_SCORE * floor
             and item['price'] <= NEAR_PRICE * cheapest]
     picked = {item['route']: item for item in ok + near}.values()
-    return sorted(picked, key=lambda item: (item['price'], -item['score'], -item['released'], item['route']))
+    # At equal price and score, an own score ranks before a family-borrowed one.
+    return sorted(picked, key=lambda item: (item['price'], -item['score'], item.get('score_source') == 'family',
+                                            -item['released'], item['route']))

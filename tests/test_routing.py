@@ -67,6 +67,11 @@ class RoutingTest(unittest.TestCase):
         c = dict(route='c', score=60, price=1, released=5)
         self.assertEqual(routing.order([b, c], 1)[0]['route'], 'c')
 
+    def test_own_score_beats_a_borrowed_one_at_equal_price_and_score(self):
+        borrowed = dict(route='a', score=60, price=1, released=9, score_source='family')
+        own = dict(route='b', score=60, price=1, released=0, score_source='openrouter')
+        self.assertEqual([c['route'] for c in routing.order([borrowed, own], 1)], ['b', 'a'])
+
     def test_effort_clamps_to_variants(self):
         self.assertEqual(routing.effort_for(2, ['low', 'medium', 'high']), 'medium')
         self.assertEqual(routing.effort_for(3, ['low', 'medium']), 'medium')
