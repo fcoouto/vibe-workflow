@@ -1,6 +1,7 @@
 # Smart Router automatic selection
 
-Status: draft for review, 20 November 2026.
+Status: approved by the user, 20 November 2026. The ChatGPT limit signal is
+gated on the spike described in its section.
 
 ## Intent
 
@@ -255,6 +256,33 @@ share of the plan (for example at 50%).
 - **Assumption, stated.** If Codex is signed in to a different account, the
   only effect is a wrong resume time; the next request's 429 or success
   corrects it.
+
+#### Spike before building the ChatGPT limit signal
+
+Requested by the user: before this part is planned in detail or built, run one
+bounded spike to look for something better than the 429 plus Codex resume. It
+runs when implementation reaches this part, not before.
+
+- **Questions.** Is there any source of ChatGPT plan usage, or of account
+  identity, for OpenCode's ChatGPT connection, so the router could stop before a
+  429 or drop the same-account assumption?
+- **Leads to check.** OpenAI's Sign in with ChatGPT documentation for usage or
+  identity endpoints added since 20 November 2026. The WebSocket transport (the
+  account model list reports `prefer_websockets`, and `http.response` never sees
+  WebSocket traffic) and whether its events carry rate limits. What OpenCode
+  emits, in its session errors and events, when it handles
+  `subscription_sharing_usage_limit_exceeded`. Whether Codex app-server,
+  started with OpenCode's access token as documented (`env_key`), answers
+  `account/rateLimits/read` for that token's account. Open-source OpenCode
+  plugins or other partner tools that already show ChatGPT plan usage.
+- **Bounds.** At most half a day of agent work and at most 10 tiny ChatGPT
+  requests. Read-only: never refresh or rewrite OpenCode's tokens, never call
+  ChatGPT's internal `backend-api` (OpenAI's partner docs say not to), and
+  install nothing without the user's approval.
+- **Exit.** A short written finding in this repository. Adopt a source only if
+  it is documented, or observed consistently in at least two separate checks;
+  then update this design and ask the user before planning it. Otherwise build
+  the 429 plus Codex resume exactly as written above.
 
 Research behind the decision (20 November 2026):
 
