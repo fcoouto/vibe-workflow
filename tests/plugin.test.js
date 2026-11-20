@@ -19,19 +19,21 @@ async function load() {
   return module.default
 }
 
-function host(directory, options = {}, models) {
+function host(directory, options = {}, models, extra = {}) {
   const tools = new Map([["subagent", Object.freeze({ native: true })]])
   const hooks = new Map()
+  const hookOptions = new Map()
   const ctx = {
     location: { directory }, options,
     tool: { transform: async (callback) => callback({
       add: (tool) => tools.set(tool.name, tool),
     }) },
     skill: { transform: async (callback) => callback({ add: () => {} }) },
-    session: { hook: async (name, callback) => hooks.set(name, callback) },
+    session: { hook: async (name, callback, opts) => { hooks.set(name, callback); hookOptions.set(name, opts) } },
     ...(models && { model: { list: typeof models === "function" ? models : async () => models } }),
+    ...extra,
   }
-  return { ctx, tools, hooks }
+  return { ctx, tools, hooks, hookOptions }
 }
 
 async function preference(root, enabled) {
@@ -51,7 +53,8 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.equal(plugin.id, "vibe-workflow")
   assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "vibe_workflow_onboard"])
   assert.equal(h.tools.get("subagent"), original)
-  assert.deepEqual([...h.hooks.keys()], ["context"])
+  assert.deepEqual([...h.hooks.keys()], ["context", "http.response"])
+  assert.deepEqual(h.hookOptions.get("http.response"), { providerID: "openai" })
   const system = [{ type: "text", text: "Other plugin instructions" }]
   const permissions = Object.freeze({ edit: "ask" })
   const event = { system, tools: h.tools, permissions, options: {} }
@@ -85,7 +88,7 @@ test("a host without models returns no authority without creating state", async 
 
 const task = { files: "1-2", spec: "exact", risk: "reversible" }
 
-async function fixture(body, models = [info()]) {
+async function fixture(body, models = [info()], extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
@@ -98,7 +101,7 @@ async function fixture(body, models = [info()]) {
   await writeFile(join(root, "scripts", "select.py"), body)
   await preference(root, true)
   const plugin = (await import(pathToFileURL(join(root, "index.js")))).default
-  const h = host(root, { state_dir: join(root, "state") }, models)
+  const h = host(root, { state_dir: join(root, "state") }, models, extra)
   const cleanup = await plugin.setup(h.ctx)
   return { root, h, cleanup, execute: (signal = new AbortController().signal, sessionID = "ses_test", extra = {}) =>
     h.tools.get("smart_router_select").execute({ v: 2, work_kind: "review", task, ...extra }, { signal, sessionID }) }
@@ -358,5 +361,107 @@ Path("spawned").touch()
       await assert.rejects(readFile(join(f.root, "spawned")), { code: "ENOENT" })
       await cleanup()
     }
+  } finally { await rm(f.root, { recursive: true }) }
+})
+
+const mark = `import sys
+open("argv.log", "a").write(" ".join(sys.argv[1:]) + "\\n")
+print('{"state":"marked"}')
+`
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+const runs = async (root) => (await readFile(join(root, "argv.log"), "utf8").catch(() => "")).split("\n").filter(Boolean)
+
+function feed() {
+  const queue = [], waiters = []
+  const out = { finished: false, opts: null, push(event) { queue.push(event); waiters.splice(0).forEach((r) => r()) } }
+  out.subscribe = (opts) => {
+    out.opts = opts
+    return (async function* () {
+      try {
+        while (!opts.signal.aborted) {
+          if (!queue.length) await new Promise((r) => { waiters.push(r); opts.signal.addEventListener("abort", r, { once: true }) })
+          while (queue.length) yield queue.shift()
+        }
+      } finally { out.finished = true }
+    })()
+  }
+  return out
+}
+const limit = { type: "provider.chatgpt-limit", message: "limit" }
+
+test("a chatgpt-limit step failure marks once", async () => {
+  const events = feed()
+  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  try {
+    assert.deepEqual(events.opts.types, ["session.step.failed", "session.error"])
+    events.push({ type: "session.step.failed", error: limit })
+    events.push({ type: "session.error", properties: { error: limit } })
+    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    await pause(300)
+    const log = await runs(f.root)
+    assert.equal(log.length, 1)
+    assert.match(log[0], /--state-dir .* --chatgpt-limit/)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("the error is found in data and properties envelopes", async () => {
+  for (const envelope of [{ data: { error: limit } }, { properties: { error: limit } }]) {
+    const events = feed()
+    const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+    try {
+      events.push({ type: "session.error", ...envelope })
+      for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+      assert.equal((await runs(f.root)).length, 1)
+    } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+  }
+})
+
+test("other failures and other providers never mark", async () => {
+  const events = feed()
+  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  try {
+    events.push({ type: "session.step.failed", error: { type: "provider.rate-limit", message: "x" } })
+    events.push({ type: "session.error", error: { type: "provider.auth", message: "x" } })
+    events.push({ type: "session.error" })
+    await f.h.hooks.get("http.response")({ providerID: "anthropic", response: new Response("subscription_sharing_usage_limit_exceeded", { status: 429 }) })
+    await f.h.hooks.get("http.response")({ response: new Response("subscription_sharing_usage_limit_exceeded", { status: 500 }) })
+    await pause(400)
+    assert.deepEqual(await runs(f.root), [])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("http 429 fallback reads a clone", async () => {
+  const f = await fixture(mark)
+  try {
+    const body = '{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}'
+    const response = new Response(body, { status: 429 })
+    await f.h.hooks.get("http.response")({ providerID: "openai", response })
+    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    assert.equal((await runs(f.root)).length, 1)
+    assert.equal(await response.text(), body)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("opted-out projects never mark", async () => {
+  const events = feed()
+  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  try {
+    await preference(f.root, false)
+    events.push({ type: "session.error", error: limit })
+    await f.h.hooks.get("http.response")({ response: new Response("subscription_sharing_usage_limit_exceeded", { status: 429 }) })
+    await pause(400)
+    assert.deepEqual(await runs(f.root), [])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("cleanup aborts the subscription", async () => {
+  const events = feed()
+  const f = await fixture(mark, [info()], { event: { subscribe: events.subscribe } })
+  try {
+    assert.equal(events.opts.signal.aborted, false)
+    await f.cleanup()
+    assert.equal(events.opts.signal.aborted, true)
+    for (let i = 0; i < 20 && !events.finished; i++) await pause(25)
+    assert.equal(events.finished, true)
   } finally { await rm(f.root, { recursive: true }) }
 })

@@ -84,7 +84,7 @@ export default {
       } catch { return [] }
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
-      const setup = operation === "check_setup", refresh = operation === "refresh"
+      const setup = operation === "check_setup", refresh = operation === "refresh", mark = operation === "mark"
       const fallback = () => setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
@@ -103,11 +103,12 @@ export default {
           const args = ["-I", "-B", join(ROOT, "scripts", "select.py"), "--state-dir", stateDir]
           if (setup) args.push("--check-setup", ...allowFetch ? ["--allow-fetch"] : [])
           if (refresh) args.push("--refresh")
+          if (mark) args.push("--chatgpt-limit")
           child = spawn("python3", args, { cwd: directory, stdio: ["pipe", "pipe", "ignore"] })
         } catch { resolve(fallback()); return }
         active.add(stop)
         signal?.addEventListener("abort", stop, { once: true })
-        timer = setTimeout(stop, refresh ? 15000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
+        timer = setTimeout(stop, refresh ? 15000 : mark ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
         child.stdin.on("error", stop)
         child.stdout.on("data", (chunk) => {
           size += chunk.length
@@ -122,7 +123,7 @@ export default {
           signal?.removeEventListener("abort", stop)
           try {
             if (failed || code !== 0) throw Error()
-            if (refresh) return resolve(null)
+            if (refresh || mark) return resolve(null)
             const value = JSON.parse(Buffer.concat(chunks).toString("utf8"))
             if (setup) {
               if (value.state === "ready" && value.reason === null) return resolve({ state: "ready", reason: null })
@@ -139,6 +140,27 @@ export default {
         child.stdin.end(raw)
         if (signal?.aborted) stop()
       })
+    }
+    // Pause ChatGPT routes when OpenCode reports its usage limit: one run at a time, one per minute.
+    let marking = false, lastMark = 0
+    async function markLimit() {
+      if (closed || marking || Date.now() - lastMark < 60000) return
+      marking = true
+      try {
+        if ((await project.inspect()).state !== "on" || closed) return
+        lastMark = Date.now()
+        await runRouter(null, { directory, stateDir: state, operation: "mark" })
+      } catch {} finally { marking = false }
+    }
+    const subscription = new AbortController()
+    if (ctx.event?.subscribe) {
+      ;(async () => {
+        for await (const event of await ctx.event.subscribe({
+          types: ["session.step.failed", "session.error"], signal: subscription.signal })) {
+          const error = event?.error ?? event?.data?.error ?? event?.properties?.error
+          if (error?.type === "provider.chatgpt-limit") markLimit()
+        }
+      })().catch(() => {})
     }
     await ctx.tool.transform((editor) => editor.add({
       name: "smart_router_select",
@@ -213,8 +235,27 @@ export default {
         "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
         "The caller retains task ownership, native execution, reviews, permissions, continuation, and results." })
     })
+    // HTTP transport fallback; the websocket transport only reports through the event above.
+    await ctx.session.hook("http.response", async (event) => {
+      const provider = event?.providerID ?? event?.model?.providerID
+      if (closed || event?.response?.status !== 429 || (provider && provider !== "openai")) return
+      try {
+        const reader = event.response.clone().body?.getReader()
+        if (!reader) return
+        const parts = []
+        for (let size = 0; size < MAX_BYTES;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          parts.push(value)
+          size += value.length
+        }
+        reader.cancel().catch(() => {})
+        if (Buffer.concat(parts).toString("utf8").includes("subscription_sharing_usage_limit_exceeded")) markLimit()
+      } catch {}
+    }, { providerID: "openai" })
     return () => {
       closed = true
+      subscription.abort()
       prAdvice.close()
       notices.clear()
       for (const stop of active) stop()
