@@ -395,12 +395,21 @@ test("a chatgpt-limit step failure marks once", async () => {
   try {
     assert.deepEqual(events.opts.types, ["session.step.failed", "session.error"])
     events.push({ type: "session.step.failed", error: limit })
-    events.push({ type: "session.error", properties: { error: limit } })
     for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    await pause(300) // the first run has finished, so only the 60 s window can stop the next one
+    events.push({ type: "session.error", properties: { error: limit } })
     await pause(300)
     const log = await runs(f.root)
     assert.equal(log.length, 1)
     assert.match(log[0], /--state-dir .* --chatgpt-limit/)
+    // After the window it re-arms.
+    const real = Date.now
+    Date.now = () => real() + 61000
+    try {
+      events.push({ type: "session.error", error: limit })
+      for (let i = 0; i < 50 && (await runs(f.root)).length < 2; i++) await pause(50)
+    } finally { Date.now = real }
+    assert.equal((await runs(f.root)).length, 2)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
