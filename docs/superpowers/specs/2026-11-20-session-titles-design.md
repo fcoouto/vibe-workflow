@@ -71,8 +71,13 @@ project, removed afterwards:
   | 1 | Planning | a spec was written in this session |
   | 2 | Executing | any changed path outside `docs/` on the task's checkout |
   | 3 | Executing | at least half of the plan's declared paths changed |
-  | 4 | Executing | all declared paths changed; if the plan declares none (or there is no plan), a PR exists for the branch |
-  | 5 | Review + closure | the branch's PR is merged (or closed as `[SUPERSEDED]`) and cleanup is satisfied |
+  | 4 | Executing | all declared paths changed, or a PR exists for the branch |
+  | 5 | Review + closure | the branch's PR is merged, or closed as `[SUPERSEDED]`, and cleanup is satisfied |
+
+  The meter shows the highest cell whose fact holds; facts are not prerequisites of
+  each other, so a merged PR closes the task even if one declared file was never
+  touched or the task changed only `docs/` *(author's call: the user defined the end
+  of a task as delivery plus cleanup)*.
 
 - A task starts when a spec is written; a new spec in the same session becomes the task,
   done or not. A task ends at cell 5.
@@ -125,12 +130,22 @@ project, removed afterwards:
   4. Whether `top` still exists (one `stat`).
 - Declared paths: backticked tokens on the lines of each `**Files:**` block of the plan,
   read once per evaluation, `:line` suffixes stripped, deduplicated. A plan with no
-  usable paths skips cell 3 and reaches 4 when a PR exists.
+  usable paths skips cell 3.
 - Cells never go down within a task: `max(previous, computed)`.
 - Cleanup is satisfied when `git_workflow.worktree_cleanup` is not `true`, or `top` is
-  the primary checkout, or `top` no longer exists.
+  the primary checkout, or `top` no longer exists, or the PR was closed as
+  `[SUPERSEDED]` (the PR procedure keeps that branch on purpose) *(author's call)*.
 - At cell 5 the binding is released and nothing is evaluated for that session until the
   next spec write.
+
+### When the title is written
+
+- Only at turn boundaries: the meter and label at the end of a turn, the label's removal
+  at the start of the next. A spec write records the binding but does not rename; the
+  first rename happens at the end of that turn *(author's call)*. Reason: OpenCode
+  generates its own title with a model during the first turn; writing at the turn end
+  keeps us from racing it and from mistaking its rename for the user removing our
+  prefix.
 
 ### The `WAITING` label
 
@@ -142,9 +157,13 @@ project, removed afterwards:
 
 ### Topic and guards
 
-- Keep whatever follows our prefix, so a topic the user edited survives. An empty or
-  OpenCode-default title takes the topic from the spec file name (date and trailing
-  `-design` removed, dashes to spaces).
+- Keep whatever follows our prefix, so a topic the user edited survives. On the first
+  binding that is usually OpenCode's own generated title. An empty or OpenCode-default
+  title (`New session - <time>`) takes the topic from the spec file name (date and
+  trailing `-design` removed, dashes to spaces).
+- On a new task in the same session, the topic switches to the new spec's name only if
+  the title is still exactly what the plugin last wrote; if anyone changed it since,
+  keep it. The binding stores that last written title *(author's call)*.
 - Root sessions only. Opt-in only. If the plugin renamed a session and the title has
   lost its prefix, the user removed it: never rename that session again until restart.
 - An unchanged title writes nothing. Failures are silent and never touch tool results or
@@ -167,6 +186,12 @@ project, removed afterwards:
 - A `session_titles` feature, `{"session_titles": {"enabled": true}}`, written by
   onboarding at the main project path, like `git_workflow`. Not onboarded or off means
   no hooks do any work.
+- Onboarding asks one more question, always (not tied to the git workflow answers),
+  after the existing ones; the procedure's "up to four questions" becomes five. It
+  recommends "on" (the setting itself stays off until answered). Its copy follows the
+  existing question rules and goes through the `impeccable` skill. Readiness reports
+  `setup_needed` when the host lacks `ctx.event.subscribe` or `ctx.tool.hook`
+  *(author's call)*.
 - Reads `git_workflow.worktree_cleanup` for the cleanup rule.
 
 ## Constraints
@@ -177,6 +202,12 @@ project, removed afterwards:
   `tests/test_package.py`. README edits only through the `impeccable` skill.
 
 ## Known gaps (documented, not closed)
+
+- The `opencode` CLI on this machine's PATH is 2.2.6; the server that loads plugins is
+  2.3.2, where the facts above were verified. Older servers are unverified.
+- If OpenCode's title generation finishes after the first turn ends, it can replace our
+  first title and the session is then treated as user-renamed. Check during
+  implementation, against a real first-turn spec write.
 
 - A web merge after the session's last turn stays invisible until the session runs
   again; the title stays `▰▰▰▰▱ WAITING`.
