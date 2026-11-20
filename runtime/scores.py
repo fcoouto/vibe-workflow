@@ -149,7 +149,7 @@ def due(cache, wanted, now):
     if cache is None:
         return True
     failures = cache['failures']
-    wait = max(GAP, min(BACKOFF[0] << (failures - 1), BACKOFF[1]) if failures else 0)
+    wait = max(GAP, min(BACKOFF[0] << min(failures - 1, 8), BACKOFF[1]) if failures else 0)
     if 0 <= now - cache['attempt_at'] < wait:
         return False
     if not 0 <= now - cache['fetched_at'] <= CEILING:

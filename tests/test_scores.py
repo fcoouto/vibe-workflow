@@ -149,6 +149,11 @@ class RefreshTest(unittest.TestCase):
         future = dict(cache, fetched_at=9999, attempt_at=0)
         self.assertTrue(scores.due(future, [], 5000))
 
+    def test_huge_failure_count_waits_the_capped_backoff(self):
+        cache = dict(attempt_at=0, fetched_at=-2 * scores.CEILING, failures=10**18, unscored={}, models={})
+        self.assertFalse(scores.due(cache, [], scores.BACKOFF[1] - 1))
+        self.assertTrue(scores.due(cache, [], scores.BACKOFF[1]))
+
     def test_unscored_retry_schedule_then_weekly(self):
         fetch = self.fetcher(model('a/other', 1))
         now = 0
