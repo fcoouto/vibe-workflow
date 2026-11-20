@@ -69,8 +69,10 @@ export default {
     let closed = false
     const project = createProjectSettings(directory)
     // Only models on a path the router knows can be routed; this also keeps the request under MAX_BYTES.
-    const providers = new Set(JSON.parse(await readFile(join(ROOT, "config", "routes.json"), "utf8").catch(() => "{}"))
-      .paths?.map((path) => path.provider))
+    let providers = new Set()
+    try {
+      providers = new Set(JSON.parse(await readFile(join(ROOT, "config", "routes.json"), "utf8")).paths.map((path) => path.provider))
+    } catch {}
     let refreshing = false
     async function models() {
       try {
@@ -178,7 +180,7 @@ export default {
             if (notices.size > MAX_NOTICE_SESSIONS) notices.delete(notices.keys().next().value)
           }
         }
-        if (firstFetch && !closed) notice = disclosure
+        if (firstFetch && !closed) notice = [notice, disclosure].filter(Boolean).join(" ")
         return { content: JSON.stringify({ ...answer, notice }) }
       },
     }))

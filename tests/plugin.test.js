@@ -259,8 +259,9 @@ from pathlib import Path
 if "--refresh" in sys.argv:
     Path("refresh-stdin").write_text(sys.stdin.read())
     Path("refresh-argv").write_text(" ".join(sys.argv))
-    sys.stdin.close()
-    import time; time.sleep(30)
+    import os, time
+    Path("refresh-pid").write_text(str(os.getpid()))
+    time.sleep(30)
 else:
     sys.stdin.read()
     print(Path("answer.json").read_text())
@@ -274,9 +275,13 @@ else:
     }
     assert.equal(await readFile(join(f.root, "refresh-stdin"), "utf8"), '{"wanted":["x"]}')
     assert.match(await readFile(join(f.root, "refresh-argv"), "utf8"), /--state-dir .* --refresh/)
-    const started = Date.now()
+    const pid = Number(await readFile(join(f.root, "refresh-pid"), "utf8"))
     await f.cleanup()
-    assert.ok(Date.now() - started < 2000)
+    let alive = true
+    for (let i = 0; i < 40 && alive; i++) {
+      try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 50)) } catch { alive = false }
+    }
+    assert.equal(alive, false, "cleanup left the refresh child running")
   } finally { await rm(f.root, { recursive: true }) }
 })
 
@@ -288,8 +293,9 @@ test("first fetch shows the disclosure once", async () => {
     assert.match(first.notice, /openrouter\.ai/)
     assert.match(first.notice, /sends no credentials/)
     assert.ok(!("first_fetch" in first))
+    assert.match(first.notice, /No model clears this task's level/)
     await writeFile(join(f.root, "answer.json"), answerWith({}))
-    assert.doesNotMatch(JSON.parse((await f.execute()).content).notice ?? "", /openrouter/)
+    assert.equal(JSON.parse((await f.execute()).content).notice, null)
     await writeFile(join(f.root, "answer.json"), JSON.stringify({ state: "selected", reason: null, excluded: [],
       route: { provider: "p", model: "m", effort: "high" }, admission: false, reservation: false, spend_permit: false,
       first_fetch: true }))
@@ -332,4 +338,25 @@ test("the tool describes its input and rubric", async () => {
   assert.equal(tool.input.properties.task.additionalProperties, false)
   assert.equal(tool.input.properties.task.properties.context_tokens.minimum, 0)
   assert.match(tool.description, /files: 1-2 \| 3\+ \| cross-system/)
+})
+
+test("a malformed routes.json leaves the plugin loaded and routing empty", async () => {
+  const f = await fixture(`from pathlib import Path
+Path("spawned").touch()
+`)
+  try {
+    await f.cleanup()
+    for (const body of ["not json", '{"paths":"x"}']) {
+      await writeFile(join(f.root, "config", "routes.json"), body)
+      const plugin = (await import(pathToFileURL(join(f.root, "index.js")) + "?" + encodeURIComponent(body))).default
+      const h = host(f.root, { state_dir: join(f.root, "state") }, [info()])
+      const cleanup = await plugin.setup(h.ctx)
+      assert.ok(h.tools.has("vibe_workflow_onboard"))
+      const answer = JSON.parse((await h.tools.get("smart_router_select").execute(
+        { v: 2, work_kind: "review", task }, { signal: new AbortController().signal, sessionID: "s" })).content)
+      assert.equal(answer.reason, "no_models")
+      await assert.rejects(readFile(join(f.root, "spawned")), { code: "ENOENT" })
+      await cleanup()
+    }
+  } finally { await rm(f.root, { recursive: true }) }
 })
