@@ -51,7 +51,7 @@ def main():
     except (Exception, KeyboardInterrupt):
         answer = dict(state="failed") if args.chatgpt_limit else \
             dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
-            else result("blocked", "invalid_request")
+            else result("blocked", "selector_unavailable")
         encoded = json.dumps(answer, separators=(",", ":"))
     print(encoded)
     return 0

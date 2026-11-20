@@ -69,68 +69,78 @@ def _constrained(item, effort, constraints):
 
 
 def select(request, *, state_dir, source=None, fetch=None, now=None):
+    # Only the caller's own fields are its mistake; everything after them is the selector's.
     try:
         if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 2 \
-                or not {'v', 'work_kind', 'task', 'models'} <= set(request) \
+                or not {'v', 'work_kind', 'task'} <= set(request) \
                 <= {'v', 'work_kind', 'task', 'models', 'constraints'}:
-            raise ValueError('invalid_request')
-        state_dir, fixed = Path(state_dir), now
-        now = int(time.time()) if fixed is None else fixed
-        if not state_dir.is_absolute() or state_dir.is_symlink():
             raise ValueError('invalid_request')
         level = routing.task_level(request['work_kind'], request['task'])
         constraints = routing.check_constraints(request.get('constraints', {}))
-        unique = {}
-        for item in routing_paths.routes(request['models']):
-            unique.setdefault(item['route'], item)
-        if not unique:
-            return result('no_selection', 'no_models', level=level)
-        anchor = state_dir / 'router.json'
-        source = source if source is not None else routing_observations.LocalSource(anchor)
-        source.acquire_billing(list(unique.values()), now)
-        kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
-        catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
-        if not kept:
-            return result('no_selection', 'no_eligible_route', level=level, excluded=excluded)
-        keys = {item['route']: _key(item, catalog) for item in kept}
-        cache = scores.load(state_dir)
-        had = _has_scores(cache)
-        if not had:
-            cache = _fetch_first(state_dir, sorted(set(keys.values())), now, fetch)
-        if not _has_scores(cache):
-            return result('no_selection', 'scores_unavailable', level=level, excluded=excluded)
-        tokens = request['task'].get('context_tokens', 0)
-        candidates, wanted = [], set()
-        for item in kept:
-            key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
-            own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
-            if own is None or own['score_source'] != 'openrouter':
-                wanted.add(key)
-            if own is None or own['price'] is None:
-                excluded.append(dict(route=item['route'], reason='unscored'))
-            elif item['context_limit'] is not None and item['context_limit'] < tokens:
-                excluded.append(dict(route=item['route'], reason='context_limit'))
-            elif _constrained(item, effort, constraints):
-                excluded.append(dict(route=item['route'], reason='constraint'))
-            else:
-                candidates.append(dict(item, effort=effort,
-                                       score=own['score'], score_source=own['score_source'], price=own['price'],
-                                       released=item['released'] or own['released']))
-        chosen = []
-        for item in routing.order(candidates, level):
-            current = int(time.time()) if fixed is None else fixed
-            fact = subscription_billing.fact(source, item, current)
-            if subscription_billing.marker(fact, item, current) != item['account_marker']:
-                excluded.append(dict(route=item['route'], reason='account_changed'))
-            else:
-                chosen.append(item)
-            if len(chosen) == 3:
-                break
-        reason = None if chosen else 'no_recommendation' if not candidates else 'no_eligible_route'
-        answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
-                        route=chosen[0] if chosen else None, alternatives=chosen[1:], first_fetch=not had)
-        if had and scores.due(cache, sorted(wanted), now):
-            answer['refresh'] = dict(wanted=sorted(wanted))
-        return answer
-    except (ValueError, TypeError, KeyError, OSError, RecursionError):
+    except (ValueError, TypeError, KeyError, RecursionError):
         return result('blocked', 'invalid_request')
+    try:
+        return _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now)
+    except Exception:
+        return result('blocked', 'selector_unavailable')
+
+
+def _select(request, level, constraints, *, state_dir, source, fetch, now):
+    state_dir, fixed = Path(state_dir), now
+    now = int(time.time()) if fixed is None else fixed
+    if not state_dir.is_absolute() or state_dir.is_symlink():
+        raise ValueError('selector_unavailable')
+    unique = {}
+    for item in routing_paths.routes(request['models']):
+        unique.setdefault(item['route'], item)
+    if not unique:
+        return result('no_selection', 'no_models', level=level)
+    anchor = state_dir / 'router.json'
+    source = source if source is not None else routing_observations.LocalSource(anchor)
+    source.acquire_billing(list(unique.values()), now)
+    kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
+    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
+    if not kept:
+        return result('no_selection', 'no_eligible_route', level=level, excluded=excluded)
+    keys = {item['route']: _key(item, catalog) for item in kept}
+    cache = scores.load(state_dir)
+    had = _has_scores(cache)
+    if not had:
+        cache = _fetch_first(state_dir, sorted(set(keys.values())), now, fetch)
+    if not _has_scores(cache):
+        return result('no_selection', 'scores_unavailable', level=level, excluded=excluded)
+    tokens = request['task'].get('context_tokens', 0)
+    candidates, wanted, unscored = [], set(), 0
+    for item in kept:
+        key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
+        own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
+        if own is None or own['score_source'] != 'openrouter':
+            wanted.add(key)
+        if own is None or own['price'] is None:
+            unscored += 1
+            excluded.append(dict(route=item['route'], reason='unscored'))
+        elif item['context_limit'] is not None and item['context_limit'] < tokens:
+            excluded.append(dict(route=item['route'], reason='context_limit'))
+        elif _constrained(item, effort, constraints):
+            excluded.append(dict(route=item['route'], reason='constraint'))
+        else:
+            candidates.append(dict(item, effort=effort,
+                                   score=own['score'], score_source=own['score_source'], price=own['price'],
+                                   released=item['released'] or own['released']))
+    chosen = []
+    for item in routing.order(candidates, level):
+        current = int(time.time()) if fixed is None else fixed
+        fact = subscription_billing.fact(source, item, current)
+        if subscription_billing.marker(fact, item, current) != item['account_marker']:
+            excluded.append(dict(route=item['route'], reason='account_changed'))
+        else:
+            chosen.append(item)
+        if len(chosen) == 3:
+            break
+    reason = None if chosen else 'no_eligible_route' if candidates \
+        else 'unscored' if unscored == len(kept) else 'no_recommendation'
+    answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:], first_fetch=not had)
+    if had and scores.due(cache, sorted(wanted), now):
+        answer['refresh'] = dict(wanted=sorted(wanted))
+    return answer

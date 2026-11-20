@@ -201,13 +201,16 @@ def fetch_openrouter(timeout, environ=None, opener=None):
     deadline = time.monotonic() + timeout
     raw = b''
     with (opener or urllib.request.build_opener(_SameHost)).open(request, timeout=timeout) as response:
+        # read1 returns what has arrived, so a slow drip cannot hold one call past the deadline;
+        # the socket timeout bounds a single stalled read.
+        read = getattr(response, 'read1', response.read)
         while len(raw) <= MAX_BYTES:
-            chunk = response.read(min(CHUNK, MAX_BYTES + 1 - len(raw)))
+            chunk = read(min(CHUNK, MAX_BYTES + 1 - len(raw)))
+            if time.monotonic() > deadline:
+                raise OSError('scores_timeout')
             if not chunk:
                 break
             raw += chunk
-            if time.monotonic() > deadline:
-                raise OSError('scores_timeout')
     if len(raw) > MAX_BYTES:
         raise OSError('scores_too_large')
     return raw

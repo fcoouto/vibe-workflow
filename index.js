@@ -75,13 +75,18 @@ export default {
       providers = new Set(JSON.parse(await readFile(join(ROOT, "config", "routes.json"), "utf8")).paths.map((path) => path.provider))
     } catch {}
     let refreshing = false
+    // Host fields are coerced, not trusted: one odd model must not fail the whole request.
+    const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 256
+      && !/[\p{C}\p{Z}]/u.test(value.replaceAll(" ", ""))
+    const amount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null
     async function models() {
       try {
         const list = await ctx.model.list()
-        return list.filter((m) => m.enabled && m.status !== "deprecated" && m.capabilities?.tools !== false
-          && providers.has(m.providerID)).slice(0, 512).map((m) => ({ provider: m.providerID, id: m.id,
-          model: m.modelID ?? null, family: m.family ?? null, variants: (m.variants ?? []).map((v) => v.id),
-          context: m.limit?.context ?? null, released: m.time?.released ?? null }))
+        return list.filter((m) => m?.enabled && m.status !== "deprecated" && m.capabilities?.tools !== false
+          && providers.has(m.providerID) && text(m.id)).slice(0, 512).map((m) => ({ provider: m.providerID, id: m.id,
+          model: text(m.modelID) ? m.modelID : null, family: text(m.family) ? m.family : null,
+          variants: (Array.isArray(m.variants) ? m.variants : []).map((v) => v?.id).filter(text).slice(0, 32),
+          context: amount(m.limit?.context), released: amount(m.time?.released) }))
       } catch { return [] }
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
@@ -186,7 +191,7 @@ export default {
           if (Array.isArray(refresh?.wanted) && !refreshing && !closed) {
             refreshing = true
             runRouter({ wanted: refresh.wanted }, { directory, stateDir: state, operation: "refresh" })
-              .finally(() => { refreshing = false })
+              .catch(() => {}).finally(() => { refreshing = false })
           }
         }
         let notice = null
@@ -244,6 +249,7 @@ export default {
       const provider = event?.providerID ?? event?.model?.providerID
       if (closed || event?.response?.status !== 429 || (provider && provider !== "openai")) return
       try {
+        if ((await project.inspect()).state !== "on" || closed) return
         const reader = event.response.clone().body?.getReader()
         if (!reader) return
         const parts = []
