@@ -19,7 +19,7 @@ async function registered() {
 
 test("registers the pull request skill third, with its procedure linked", async () => {
   const skills = await registered()
-  assert.deepEqual(skills.map(({ id }) => id), ["vibe-onboard-project", "vibe-prepare-my-workspace", "vibe-pull-requests"])
+  assert.deepEqual(skills.map(({ id }) => id), ["vibe-onboard-project", "vibe-prepare-my-workspace", "vibe-pull-requests", "vibe-council"])
   const skill = skills[2]
   assert.match(skill.path, /skills\/vibe-pull-requests\/SKILL\.md$/)
   assert.ok(skill.description.length > 0 && !/\n/.test(skill.description))

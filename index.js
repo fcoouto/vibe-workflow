@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createRoster, registerCouncil } from "./council.js"
 import { registerOnboarding, registerSkill } from "./onboarding.js"
 import { registerPrAdvice } from "./pr-advice.js"
 import { createProjectSettings } from "./project.js"
@@ -84,7 +85,7 @@ export default {
         const list = Array.isArray(raw) ? raw : raw?.data
         return list.filter((m) => m?.enabled && m.status !== "deprecated" && m.capabilities?.tools !== false
           && providers.has(m.providerID) && text(m.id)).slice(0, 512).map((m) => ({ provider: m.providerID, id: m.id,
-          model: text(m.modelID) ? m.modelID : null, family: text(m.family) ? m.family : null,
+          model: text(m.modelID) ? m.modelID : null, name: text(m.name) ? m.name : null, family: text(m.family) ? m.family : null,
           variants: (Array.isArray(m.variants) ? m.variants : []).map((v) => v?.id).filter(text).slice(0, 32),
           // The host's release time is in milliseconds; OpenRouter's, used beside it, is in seconds.
           context: amount(m.limit?.context), released: amount(m.time?.released) === null ? null
@@ -92,8 +93,8 @@ export default {
       } catch { return [] }
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
-      const setup = operation === "check_setup", refresh = operation === "refresh", mark = operation === "mark"
-      const fallback = () => setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
+      const setup = operation === "check_setup", council = operation === "council", refresh = operation === "refresh", mark = operation === "mark"
+      const fallback = () => council ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
       if (closed || signal?.aborted || typeof directory !== "string" || !isAbsolute(directory)
@@ -112,6 +113,7 @@ export default {
           if (setup) args.push("--check-setup", ...allowFetch ? ["--allow-fetch"] : [])
           if (refresh) args.push("--refresh")
           if (mark) args.push("--chatgpt-limit")
+          if (council) args.push("--council-roster")
           child = spawn("python3", args, { cwd: directory, stdio: ["pipe", "pipe", "ignore"] })
         } catch { resolve(fallback()); return }
         active.add(stop)
@@ -137,6 +139,11 @@ export default {
               if (value.state === "ready" && value.reason === null) return resolve({ state: "ready", reason: null })
               if (value.state !== "setup_needed" || !["scores_unavailable", "selector_unavailable"].includes(value.reason)) throw Error()
               return resolve({ state: value.state, reason: value.reason })
+            }
+            if (council) {
+              if (value.state !== "checked" || !Array.isArray(value.seats)
+                || ["admission", "reservation", "spend_permit"].some((key) => value[key] !== false)) throw Error()
+              return resolve(value)
             }
             if (!["selected", "no_selection", "blocked"].includes(value.state)
               || ["admission", "reservation", "spend_permit"].some((key) => value[key] !== false)
@@ -184,7 +191,7 @@ export default {
         const list = ctx.model ? await models() : []
         let answer = noModels()
         if (list.length) {
-          const { refresh, ...rest } = await runRouter({ ...own, models: list },
+          const { refresh, ...rest } = await runRouter({ ...own, models: list.map(({ name, ...entry }) => entry) },
             { directory, stateDir: state, signal, operation: "select" })
           answer = rest
           if (Array.isArray(refresh?.wanted) && !refreshing && !closed) {
@@ -225,6 +232,8 @@ export default {
     () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
+    await registerCouncil(ctx, { roster: createRoster({ models: ctx.model ? models : async () => [], providers,
+      check: (entries, signal) => runRouter({ v: 1, models: entries }, { directory, stateDir: state, signal, operation: "council" }) }) })
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {

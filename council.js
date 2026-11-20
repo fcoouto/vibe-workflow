@@ -1,3 +1,5 @@
+import { registerSkill } from "./onboarding.js"
+
 const NO_AUTHORITY = { admission: false, reservation: false, spend_permit: false }
 const SEAT = /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/
 const VARIANT = /^[a-z0-9_-]{1,32}$/
@@ -78,4 +80,50 @@ export function createRoster({ models, check, providers }) {
     }
     return answer(rowsOnly.every((r) => r.status === "ok"), null, rowsOnly)
   }
+}
+
+const SEAT_PATTERN = SEAT.source
+const VARIANT_PATTERN = VARIANT.source
+
+// Registers the skill, the roster tool and, when the host has a command API, the command that starts the skill.
+export async function registerCouncil(ctx, { roster }) {
+  await registerSkill(ctx, "vibe-council")
+  await ctx.tool.transform((editor) => editor.add({
+    name: "vibe_council_roster",
+    description: "Check council seats before dispatch: exact model, plan provider, subscription billing, quota and paid overflow. " +
+      "Never substitutes a model and launches nothing. Follow the vibe-council skill.",
+    input: {
+      type: "object", additionalProperties: false, required: ["v", "seats"],
+      properties: {
+        v: { type: "integer", const: 1 },
+        seats: {
+          type: "array", minItems: 1, maxItems: 5,
+          items: {
+            type: "object", additionalProperties: false, required: ["seat", "model", "variant"],
+            properties: {
+              seat: { type: "string", pattern: SEAT_PATTERN },
+              model: { type: "string", minLength: 3, maxLength: 256 },
+              variant: { anyOf: [{ type: "null" }, { type: "string", pattern: VARIANT_PATTERN }] },
+            },
+          },
+        },
+      },
+    },
+    execute: async (request, { signal } = {}) => ({ content: JSON.stringify(await roster(request, signal)) }),
+  }))
+  if (typeof ctx.command?.transform !== "function") return
+  const withoutMentions = (items) => items?.map(({ mention, ...item }) => item)
+  await ctx.command.transform((editor) => editor.add({
+    name: "vibe-council",
+    description: "Run the council on a set of decisions.",
+    execute: async ({ sessionID, prompt, delivery }) => {
+      const extra = typeof prompt?.text === "string" ? prompt.text.trim() : ""
+      await ctx.session.prompt({
+        ...prompt, sessionID,
+        text: extra ? `Use the vibe-council skill. ${prompt.text}` : "Use the vibe-council skill.",
+        files: withoutMentions(prompt?.files), agents: withoutMentions(prompt?.agents),
+        skills: withoutMentions(prompt?.skills), delivery,
+      })
+    },
+  }))
 }
