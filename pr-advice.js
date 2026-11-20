@@ -212,8 +212,9 @@ export function createAdvisor({ settings, primary, checkout }) {
         return FINISH + (state.agent_merge === true
           ? "Agents merge their own [READY] pull requests once the evidence is current. "
           : "Stop at [READY] and tell your human partner it awaits their merge. ") +
-          (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps." :
-            "Keep the worktree after the merge.")
+          (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps. " :
+            "Keep the worktree after the merge. ") +
+          "An explicit request from your human partner in this session still wins."
       } catch { return null }
     },
     async advise(event, sessionID) {

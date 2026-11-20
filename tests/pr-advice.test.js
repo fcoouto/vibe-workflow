@@ -182,14 +182,15 @@ test("the user-merges and cleanup sentences appear together", async () => {
 const LEAD = "vibe-workflow: your human partner already decided during onboarding how finished work is integrated " +
   "in this project, so do not present the integration options or ask. Push the branch and open a pull request, " +
   "following the vibe-pull-requests skill ([BLOCKED] draft, then [READY]). "
+const LAST = "An explicit request from your human partner in this session still wins."
 test("finish states the onboarding decision for the finishing skill only", async () => {
   const merges = advisor({ state: "on", agent_merge: true, worktree_cleanup: true })
   assert.equal(await merges.finish("superpowers:finishing-a-development-branch"), LEAD +
     "Agents merge their own [READY] pull requests once the evidence is current. " +
-    "After a confirmed merge, follow the worktree cleanup steps.")
+    "After a confirmed merge, follow the worktree cleanup steps. " + LAST)
   const user = advisor({ state: "on", agent_merge: false, worktree_cleanup: null })
   assert.equal(await user.finish("finishing-a-development-branch"), LEAD +
-    "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge.")
+    "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge. " + LAST)
   const { finish, calls } = advisor()
   for (const skill of ["brainstorming", "finishing-a-development-branch-old", undefined, 7]) assert.equal(await finish(skill), null)
   assert.equal(calls.settings, 0)
