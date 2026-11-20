@@ -133,12 +133,14 @@ class SelectionTest(unittest.TestCase):
             result = self.run_select(now=None)
         self.assertEqual((result["state"], result["reason"]), ("selected", None), result.get("excluded"))
 
-    def test_first_run_fetches_once_and_reports_first_fetch(self):
+    def test_first_run_fetches_once_without_a_first_fetch_flag(self):
         first = self.run_select()
-        self.assertEqual((self.fetch.calls, first["first_fetch"]), ([scores.FIRST_TIMEOUT], True))
+        self.assertEqual(self.fetch.calls, [scores.FIRST_TIMEOUT])
         self.assertNotIn("refresh", first)
+        self.assertNotIn("first_fetch", first)
         second = self.run_select()
-        self.assertEqual((len(self.fetch.calls), second["first_fetch"]), (1, False))
+        self.assertEqual(len(self.fetch.calls), 1)
+        self.assertNotIn("first_fetch", second)
 
     def test_first_run_failure_is_scores_unavailable(self):
         self.fetch.raw = None

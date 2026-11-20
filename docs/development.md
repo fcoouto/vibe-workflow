@@ -124,7 +124,7 @@ Verified by tests only (synthetic hosts, fetchers and stub processes): the model
 list reduction and its coercion of odd host fields, route building, task levels
 and ranking, score mapping and family borrowing, the private score cache, its
 refresh schedule and fetch bounds (size, same-host redirects, total deadline),
-the first-fetch disclosure, the caller-mistake versus `selector_unavailable`
+the caller-mistake versus `selector_unavailable`
 split, the ChatGPT limit mark and its one-minute throttle, the Codex reset reader
 against a stub `codex`, and the notices.
 
@@ -159,9 +159,10 @@ Observed live on 20 November 2026:
   `session.step.failed` carries `data.error` as `{ type, message, status?,
   response?: { body }, retryAfterMs? }`.
 - End to end in OpenCode 2.2.6 with real OpenRouter data, `smart_router_select`
-  answered `selected` at level 1 and level 3. The first fetch ran and showed its
-  disclosure. The score cache was 76 KB with mode 0600. No internal keys
-  (`refresh`, `first_fetch`) reached the tool output. With `session.error`
+  answered `selected` at level 1 and level 3. The first fetch ran and showed a
+  one-time download notice, removed later because the README and the onboarding
+  question already disclose the download. The score cache was 76 KB with mode
+  0600. No internal keys reached the tool output. With `session.error`
   dropped, the host logged no unknown-event warning. Account facts were acquired
   for all three plans (ChatGPT, Claude, Go).
 - `claude-agent` models report `time.released` as 0.

@@ -322,9 +322,9 @@ else:
     print(Path("answer.json").read_text())
 `)
   try {
-    await writeFile(join(f.root, "answer.json"), answerWith({ refresh: { wanted: ["x"] }, first_fetch: true }))
+    await writeFile(join(f.root, "answer.json"), answerWith({ refresh: { wanted: ["x"] } }))
     const result = await f.execute()
-    assert.ok(!result.content.includes("refresh") && !result.content.includes("first_fetch"))
+    assert.ok(!result.content.includes("refresh"))
     for (let i = 0; i < 50; i++) {
       try { await readFile(join(f.root, "refresh-stdin")); break } catch { await new Promise((r) => setTimeout(r, 100)) }
     }
@@ -340,21 +340,17 @@ else:
   } finally { await rm(f.root, { recursive: true }) }
 })
 
-test("first fetch shows the disclosure once", async () => {
+test("a first score download adds no notice", async () => {
   const f = await fixture(echo)
   try {
     await writeFile(join(f.root, "answer.json"), answerWith({ first_fetch: true }))
-    const first = JSON.parse((await f.execute()).content)
-    assert.match(first.notice, /openrouter\.ai/)
-    assert.match(first.notice, /sends no credentials/)
-    assert.ok(!("first_fetch" in first))
-    assert.match(first.notice, /No model clears this task's level/)
-    await writeFile(join(f.root, "answer.json"), answerWith({}))
-    assert.equal(JSON.parse((await f.execute()).content).notice, null)
+    const failure = JSON.parse((await f.execute()).content)
+    assert.match(failure.notice, /No model clears this task's level/)
+    assert.doesNotMatch(failure.notice, /openrouter\.ai/)
     await writeFile(join(f.root, "answer.json"), JSON.stringify({ state: "selected", reason: null, excluded: [],
       route: { provider: "p", model: "m", effort: "high" }, admission: false, reservation: false, spend_permit: false,
       first_fetch: true }))
-    assert.match(JSON.parse((await f.execute()).content).notice, /openrouter\.ai/)
+    assert.equal(JSON.parse((await f.execute()).content).notice, null)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
