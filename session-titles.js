@@ -2,8 +2,8 @@ import { realpath } from "node:fs/promises"
 import { resolve } from "node:path"
 import { artifact, defaultRun, readFacts } from "./session-facts.js"
 
-export const MARK = "￻"
-export const PREFIX = /^￻?[▰▱]{5} (?:WAITING · )?/
+export const MARK = "\uFFFB"
+export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
 export const DEFAULT_TITLE = /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
 
 export const strip = (title) => title.replace(PREFIX, "")
@@ -62,12 +62,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
     let cells = task.cells
     if (ended) {
-      const { project = null, worktree_cleanup } = await gitWorkflow.inspect()
+      const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
       const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered,
         fallback: project ?? task.top, run })
       if (facts.head && facts.head === facts.branch) task.remembered = facts.head
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
-      cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: worktree_cleanup === true, primary: task.top === project }))
+      cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
     const title = (await ctx.session.get({ sessionID })).title ?? ""
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; return }

@@ -7,7 +7,7 @@ const exec = promisify(execFile)
 const KINDS = { specs: "spec", plans: "plan" }
 
 export function artifact(path) {
-  const at = path.indexOf("/docs/superpowers/")
+  const at = path.lastIndexOf("/docs/superpowers/")
   if (at < 0) return null
   const parts = path.slice(at + "/docs/superpowers/".length).split("/")
   const kind = KINDS[parts[0]]
@@ -57,7 +57,7 @@ export async function readFacts({ top, plan, remembered = null, fallback, run = 
     } catch {}
     if (plan) facts.declared = declaredPaths(await readFile(resolve(top, plan), "utf8").catch(() => ""))
     if (facts.branch && facts.upstream && facts.branch !== facts.base.replace(/^origin\//, "")) facts.head = facts.branch
-    else if (!facts.branch) facts.head = remembered
+    else facts.head = remembered
   } else facts.head = remembered
   if (!facts.head) return facts
   try {

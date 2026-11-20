@@ -50,7 +50,7 @@ function pushable(signal) {
   }
 }
 
-async function host(t, { state = "on", cleanup = false, events = true, directory, project } = {}) {
+async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   directory ??= root
@@ -88,7 +88,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     return facts.changed.join("\n")
   }
   const titlesFor = await registerSessionTitles(ctx, { run, settings: { inspect: async () => preference },
-    gitWorkflow: { inspect: async () => ({ state: "on", project: project ?? root, worktree_cleanup: cleanup }) } })
+    gitWorkflow: { inspect: async () => ({ state: gitState, project: project ?? root, worktree_cleanup: cleanup }) } })
   t.after(() => titlesFor.close())
   const write = async (path, sessionID = "ses_1", more = {}) => {
     const event = { tool: "write", status: "completed", sessionID, input: { path }, ...more }
@@ -193,6 +193,26 @@ test("a symlinked session directory reaches cell 5 through the primary checkout"
   symlinkSync(real, link)
   t.after(() => { rmSync(link, { force: true }); rmSync(real, { recursive: true, force: true }) })
   const h = await host(t, { cleanup: true, directory: link, project: real })
+  h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▰ Fix login flow")
+})
+
+test("a primary-checkout task reaches cell 5 after the checkout returns to the default branch", async (t) => {
+  const h = await host(t, { cleanup: true })
+  h.facts.prs = { "feat/x": [{ state: "OPEN", title: "x" }] }
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▱ WAITING · Fix login flow")
+  h.facts.branch = "main"
+  h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▰ Fix login flow")
+})
+
+test("cleanup counts only while the git workflow feature is on", async (t) => {
+  const h = await host(t, { cleanup: true, gitState: "off", project: "/elsewhere" })
   h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
   await h.write(SPEC)
   await h.end()

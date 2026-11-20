@@ -61,7 +61,7 @@ a `vibe-workflow:` line in its result.
 
 The opt-in `session_titles` setting is described in
 `docs/superpowers/specs/2026-11-20-session-titles-design.md`. Its "Evidence
-(2026-11-20)" section records what was read from OpenCode's own code, and its
+(2026-11-20)" section records the session timelines and the throwaway-plugin probe it rests on, and its
 "Known gaps (documented, not closed)" section lists what is not verified. Read
 those two sections before changing `session-facts.js` or `session-titles.js`; this
 file does not copy them.

@@ -95,6 +95,14 @@ test("readFacts follows the checkout through detached, branch, pushed and defaul
   got = await facts()
   assert.deepEqual([got.branch, got.upstream, got.head], ["main", true, null])
   assert.equal(calls.length, before)
+  got = await facts({ remembered: "feat/x" })
+  assert.deepEqual([got.branch, got.head, got.pr], ["main", "feat/x", pr])
+  assert.deepEqual(calls.at(-1).args.slice(0, 4), ["pr", "list", "--head", "feat/x"])
+})
+
+test("artifact finds the docs folder last when the checkout path contains one", () => {
+  assert.deepEqual(artifact("/w/docs/superpowers/app/docs/superpowers/specs/2026-11-20-x-design.md"),
+    { kind: "spec", top: "/w/docs/superpowers/app", slug: "x" })
 })
 
 test("readFacts reads declared paths from the plan under top", async (t) => {

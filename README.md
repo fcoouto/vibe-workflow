@@ -34,8 +34,8 @@ OpenCode asks whether to use Smart Router, who merges `[READY]` pull requests,
 and whether to clean up a task's worktree and local branch after a merge. If
 GitHub's auto-delete of merged branches is off, it also offers to turn it on.
 Last, it asks whether to show a five-step meter in the session title, with
-`WAITING` while the chat needs you. This is opt-in and off by default. It
-says what it will save, then saves your answers; your client's own edit
+`WAITING` while the chat needs you. This is opt-in and off by default.
+OpenCode says what it will save, then saves your answers; your client's own edit
 permission still applies. The choices live in `.vibe-workflow/settings.json`. In a
 linked worktree, the Smart Router file stays in the worktree and the git
 workflow choices are saved in the main checkout.
