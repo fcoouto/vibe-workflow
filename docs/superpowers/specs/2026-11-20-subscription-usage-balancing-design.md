@@ -50,6 +50,8 @@ Claude and Go readings already exist in the automatic-selection design's
 readers. For ChatGPT, that design reads Codex only after a 429. Balancing would
 need Codex read on demand like the others (zero tokens, one short process,
 under the same account assumption), which is a decision for the revisit.
+Start from the finding of the ChatGPT spike in the automatic-selection plan
+(Task 8, `docs/chatgpt-quota-spike.md`): it looks for exactly this source.
 
 ## The rule
 
