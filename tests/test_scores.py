@@ -67,22 +67,28 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(scores.lookup(cache, 'gpt-6-3-sol', None)['score'], 90)
         self.assertIsNone(scores.lookup(cache, 'unrelated', 'openai'))
 
-    def test_parse_rejects_bad_payloads(self):
-        bad = [b'not json', json.dumps(dict(data={})).encode(), json.dumps([]).encode(),
-               json.dumps(dict(data=[model('x/' + 'a' * 300)])).encode()]
-        for raw in bad:
-            with self.assertRaises(ValueError) as caught:
-                scores.parse_openrouter(raw)
-            self.assertEqual(str(caught.exception), 'scores_invalid')
-        for broken in (model('a/b', prompt='NaN'), model('a/b', prompt='-1'), model('a/b', score=101),
-                       model('a/b', score=float('nan')), model('a/b', score=-1), model('a/b', score='5')):
-            with self.assertRaises(ValueError):
-                parse(model('a/ok', 1), broken)
+    def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
-        with self.assertRaises(ValueError):
-            parse(*many)
-        with self.assertRaises(ValueError):
-            parse(*[model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)], previous=100)
+        few = [model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)]
+        for raw, previous in ((b'not json', 0), (json.dumps(dict(data={})).encode(), 0),
+                              (json.dumps([]).encode(), 0), (json.dumps(dict(data=many)).encode(), 0),
+                              (json.dumps(dict(data=few)).encode(), 100)):
+            with self.assertRaisesRegex(ValueError, '^scores_invalid$'):
+                scores.parse_openrouter(raw, previous)
+
+    def test_bad_entries_are_skipped_and_valid_ones_survive(self):
+        router = dict(id='openrouter/auto', pricing=dict(prompt='-1', completion='-1'))
+        bad = [router, model('a/nan', prompt='NaN'), model('a/neg', prompt='-1'), model('a/inf', completion='inf'),
+               model('a/high', score=101), model('a/low', score=-1), model('a/text', score='5'),
+               model('a/nanscore', score=float('nan')), model('x/' + 'a' * 300), model('a/\x00b')]
+        cache = parse(model('a/ok', 1), *bad)
+        self.assertEqual(list(cache['models']), ['a/ok'])
+
+    def test_same_creator_collision_is_dropped_and_lends_nothing(self):
+        cache = parse(model('openai/gpt-5.1', 50), model('openai/gpt-5-1', 60), model('openai/gpt-5.2', 40))
+        self.assertNotIn('openai/gpt-5-1', cache['models'])
+        self.assertEqual(scores.lookup(cache, 'gpt-5-1', 'openai')['score_source'], 'family')
+        self.assertEqual(scores.lookup(cache, 'gpt-5-1', 'openai')['score'], 40)
 
     def test_malformed_entries_are_skipped(self):
         cache = parse(model('a/ok', 1), 'junk', dict(id=5), dict(id='bare'), dict(id='/'),

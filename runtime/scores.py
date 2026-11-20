@@ -49,13 +49,11 @@ def parse_openrouter(raw, previous_scored=0):
         raise ValueError('scores_invalid') from None
     if type(data) is not list or len(data) > MAX_MODELS:
         raise ValueError('scores_invalid')
-    models = {}
+    models, ambiguous = {}, set()
     for item in data:
         model_id = item.get('id') if type(item) is dict else None
-        if type(model_id) is not str:
+        if not routing._text(model_id):
             continue
-        if len(model_id) > routing.MAX_ID or not model_id.isprintable():
-            raise ValueError('scores_invalid')
         creator, _, rest = model_id.partition('/')
         key = normalize(rest)
         pricing = item.get('pricing')
@@ -63,10 +61,19 @@ def parse_openrouter(raw, previous_scored=0):
             continue
         pricing = pricing or {}
         created = item.get('created')
-        models[f'{creator}/{key}'] = dict(
-            key=key, creator=creator, family=family_key(key), score=_score(item),
-            input=_price(pricing.get('prompt')), output=_price(pricing.get('completion')),
-            released=created if routing._amount(created) else 0)
+        try:
+            entry = dict(
+                key=key, creator=creator, family=family_key(key), score=_score(item),
+                input=_price(pricing.get('prompt')), output=_price(pricing.get('completion')),
+                released=created if routing._amount(created) else 0)
+        except ValueError:
+            continue
+        name = f'{creator}/{key}'
+        if name in models:
+            ambiguous.add(name)
+        models[name] = entry
+    for name in ambiguous:
+        del models[name]
     if sum(entry['score'] is not None for entry in models.values()) * 2 < previous_scored:
         raise ValueError('scores_invalid')
     return {'models': models}
