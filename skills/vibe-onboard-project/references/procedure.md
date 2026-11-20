@@ -61,9 +61,9 @@ the user never has to learn a new layout:
 
 - Header: Session titles
 - Question: Show task progress in the session title?
-- Context: Project: <project path>. The session title is the chat's name in the session list. With this on, the title gets a five-step progress meter, and WAITING while the session needs you. Only the meter part of the title is changed; removing it stops updates for that chat.
+- Context: Project: <project path>. The session title is the chat's name in the session list. The meter is a five-step progress bar added to the title; the title shows WAITING while the session needs you. Only the meter is changed. If you delete the meter from a title, that chat stops updating.
 - Choices:
-  - Show progress (Recommended) — Adds the meter to the title and updates it at the end of each turn.
+  - Show progress (Recommended) — Adds the meter to the title and updates it when each turn ends.
   - Keep titles as they are — Leaves every title alone. You can turn this on later.
 
 ## Steps
@@ -123,7 +123,7 @@ the user never has to learn a new layout:
    otherwise ask the affected question again and say why. The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
    client's. If edit is denied or permission is unavailable, do not write another way.
-   Apply session titles last, the same way: preview `session_titles` again with the
+   Unless question 5 was skipped, apply session titles last, the same way: preview `session_titles` again with the
    answered `enabled` and apply it with that fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.
    Report each feature that was not saved as **<Feature>: not saved.** followed by how

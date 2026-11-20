@@ -254,7 +254,8 @@ test("every onboarding question has the same control-shaped form", async (t) => 
 test("the procedure fixes the flow: up-front count, one report format, recovery and how to change later", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Up to five short questions.", "Session titles: not saved.", "Session titles: Off — titles are left alone.",
+  for (const phrase of ["Up to five short questions.", "Session titles: not saved.", "Unless question 5 was skipped, apply session titles last",
+    "Session titles: Off — titles are left alone.",
     "Session titles: On — updated at the end of each turn.",
     "Session titles: On · Setup needed — this OpenCode does not deliver session events.", "Saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Configuration checked —", "Git workflow: Off —", "Git workflow: On · I merge —",
@@ -316,4 +317,21 @@ test("session_titles rejects git workflow booleans", async (t) => {
   const { execute } = await fixture(t)
   assert.equal((await titles(execute, { op: "preview", agent_merge: true })).reason, "invalid_request")
   assert.equal((await titles(execute, { op: "preview", worktree_cleanup: true })).reason, "invalid_request")
+})
+
+test("session_titles never runs the Smart Router setup check", async (t) => {
+  const { mkdtemp } = await import("node:fs/promises")
+  const bin = await mkdtemp(join(tmpdir(), "vibe-spy-")), log = join(bin, "calls")
+  t.after(() => rm(bin, { recursive: true }))
+  await writeFile(join(bin, "python3"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 1\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => { process.env.PATH = path })
+  const { execute } = await fixture(t)
+  const calls = async () => (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean)
+  const preview = await titles(execute, { op: "preview" })
+  await titles(execute, { op: "apply", enabled: true, expected_snapshot: preview.snapshot })
+  assert.deepEqual(await calls(), [])
+  await execute({ op: "preview" })
+  assert.equal((await calls()).length, 1, "the spy sees the Smart Router check")
 })
