@@ -49,6 +49,14 @@ makes affected evidence stale.
 - After a confirmed merge, follow [worktree cleanup](worktree-cleanup.md) when the
   project chose it.
 
+## Finishing a branch
+
+When the git workflow is on, the user already chose during onboarding how finished
+work is integrated: push the branch, open a pull request through the lifecycle above,
+merge as "Who may merge" says, and clean up only if the project chose it. When the
+work is done, follow that and do not offer other ways to integrate it or ask again.
+An explicit request from the user in the session still wins.
+
 ## The primary checkout
 
 Never touch the primary checkout. Do not edit files, commit, switch, detach,

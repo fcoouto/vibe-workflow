@@ -87,6 +87,7 @@ test("disabled, not onboarded, unreadable or failing settings add nothing and ne
   for (const settings of [{ state: "off", agent_merge: false }, { state: "not_onboarded", agent_merge: null },
     { state: "blocked", reason: "project_settings_invalid" }, new Error("boom"), null]) {
     assert.equal(await advisor(settings).advise('gh pr create --title "x"'), null)
+    assert.equal(await advisor(settings).finish("finishing-a-development-branch"), null)
   }
 })
 
@@ -176,4 +177,20 @@ test("the user-merges and cleanup sentences appear together", async () => {
   const note = await advisor({ state: "on", agent_merge: false, worktree_cleanup: true }).advise("gh pr merge 3")
   assert.match(note, /chose to merge pull requests themselves/)
   assert.match(note, /Cleanup is on/)
+})
+
+const LEAD = "vibe-workflow: your human partner already decided during onboarding how finished work is integrated " +
+  "in this project, so do not present the integration options or ask. Push the branch and open a pull request, " +
+  "following the vibe-pull-requests skill ([BLOCKED] draft, then [READY]). "
+test("finish states the onboarding decision for the finishing skill only", async () => {
+  const merges = advisor({ state: "on", agent_merge: true, worktree_cleanup: true })
+  assert.equal(await merges.finish("superpowers:finishing-a-development-branch"), LEAD +
+    "Agents merge their own [READY] pull requests once the evidence is current. " +
+    "After a confirmed merge, follow the worktree cleanup steps.")
+  const user = advisor({ state: "on", agent_merge: false, worktree_cleanup: null })
+  assert.equal(await user.finish("finishing-a-development-branch"), LEAD +
+    "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge.")
+  const { finish, calls } = advisor()
+  for (const skill of ["brainstorming", "finishing-a-development-branch-old", undefined, 7]) assert.equal(await finish(skill), null)
+  assert.equal(calls.settings, 0)
 })

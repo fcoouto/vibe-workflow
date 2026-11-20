@@ -30,7 +30,8 @@ test("procedure states the lifecycle, readiness, merge and checkout rules", asyn
   const text = await read("references/procedure.md")
   for (const phrase of ["[BLOCKED]", "[READY]", "[SUPERSEDED]", "--undo", "git fetch origin main", "--ff-only",
     "agent_merge", ".github/pull_request_template.md", ".vibe-workflow/settings.json", "worktree",
-    '"feature":"git_workflow"', "previous_agent_merge", "observed on this head", "Never touch the primary checkout"]) {
+    '"feature":"git_workflow"', "previous_agent_merge", "observed on this head", "Never touch the primary checkout", "## Finishing a branch",
+    "do not offer other ways to integrate it"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })
