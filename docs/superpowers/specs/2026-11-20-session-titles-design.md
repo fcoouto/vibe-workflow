@@ -207,8 +207,9 @@ project, removed afterwards:
 - The `opencode` CLI on this machine's PATH is 2.2.6; the server that loads plugins is
   2.3.2, where the facts above were verified. Older servers are unverified.
 - If OpenCode's title generation finishes after the first turn ends, it can replace our
-  first title and the session is then treated as user-renamed. Check during
-  implementation, against a real first-turn spec write.
+  first title and the session is then treated as user-renamed. The live check (see
+  `docs/development.md`) did not exercise this: an API-created session never got a
+  generated title. Still unverified for desktop and terminal sessions.
 
 - A web merge after the session's last turn stays invisible until the session runs
   again; the title stays `▰▰▰▰▱ WAITING`.

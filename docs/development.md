@@ -66,4 +66,17 @@ The opt-in `session_titles` setting is described in
 those two sections before changing `session-facts.js` or `session-titles.js`; this
 file does not copy them.
 
-Live check (Task 6): pending. No result is claimed until it has run.
+Observed live (OpenCode 2.3.2, 20 November 2026, plugin at `04a0104`): the packaged
+plugin was loaded as a project-local copy in a throwaway local clone, with one
+API-created session and no push. The title was empty at creation; the first turn
+end wrote `▰▱▱▱▱ WAITING · live probe`, and it stayed unchanged 20 seconds later.
+Mid-turn the `WAITING` label was removed, and later turn ends showed `▰▰▰▱▱` and
+`▰▰▰▰▱` with `WAITING`. A background child kept its own title, and the root title
+was unchanged after the child's report woke it. After the checkout moved to a
+branch whose pull request was already merged, the turn end showed `▰▰▰▰▰` (cell 5)
+through a real `gh pr list` call from the plugin process.
+
+Not observed: OpenCode's own title generation (the API-created session never got a
+generated title, so the first-turn race was not exercised; desktop and terminal
+sessions are unverified), and a sample taken while the child was still running (that
+`WAITING` was inferred from the turn-end title). Other versions are unverified.
