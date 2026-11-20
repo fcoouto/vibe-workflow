@@ -447,3 +447,44 @@ test("Smart Router results have no worktree_cleanup key", async (t) => {
     assert.ok(!("worktree_cleanup" in result) && !("previous_worktree_cleanup" in result), JSON.stringify(result))
   }
 })
+
+test("session_titles previews, applies and reports unchanged like Smart Router", async (t) => {
+  const { path, create, root } = await fixture(t)
+  const project = create(root, "session_titles", { atProject: true })
+  const preview = await project.preview()
+  assert.deepEqual([preview.enabled, preview.change, "agent_merge" in preview], [true, "create", false])
+  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { version: 1, features: [{ session_titles: { enabled: true } }] })
+  const repeat = await project.preview({ enabled: true })
+  assert.equal(repeat.change, "none")
+  assert.equal((await project.apply(true, repeat.snapshot)).state, "unchanged")
+  const off = await project.preview(false)
+  assert.equal((await project.apply(false, off.snapshot)).state, "saved")
+  assert.equal((await project.inspect()).state, "off")
+})
+
+test("session_titles coexists with smart_router, git_workflow and unknown entries", async (t) => {
+  const { path, create, root, write } = await fixture(t)
+  await write({ version: 1, features: [{ smart_router: { enabled: false } }, { other: { x: 1 } },
+    { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } }] })
+  const project = create(root, "session_titles", { atProject: true }), preview = await project.preview()
+  assert.equal(preview.state, "preview")
+  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ smart_router: { enabled: false } }, { other: { x: 1 } },
+    { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } }, { session_titles: { enabled: true } }])
+  assert.equal((await create(root, "git_workflow").inspect()).worktree_cleanup, true)
+  assert.equal((await create(root).inspect()).enabled, false)
+})
+
+test("a worktree copy never turns session_titles on at the project path", async (t) => {
+  const { root, create } = await fixture(t)
+  gitIn(root, "init", "-q")
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  const linked = join(root, "linked")
+  gitIn(root, "worktree", "add", "-q", "--detach", linked)
+  await mkdir(join(linked, ".vibe-workflow"))
+  await writeFile(join(linked, ".vibe-workflow", "settings.json"),
+    JSON.stringify({ version: 1, features: [{ session_titles: { enabled: true } }] }))
+  const main = await create(linked, "session_titles", { atProject: true }).inspect()
+  assert.deepEqual([main.root, main.state], [root, "not_onboarded"])
+})
