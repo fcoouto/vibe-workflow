@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import stat
 import tempfile
+import time
 import unittest
 from unittest import mock
 import urllib.request
@@ -290,6 +291,41 @@ class FetchTest(unittest.TestCase):
         with mock.patch.object(scores.time, 'monotonic', lambda: clock[0]):
             with self.assertRaises(OSError):
                 scores.fetch_openrouter(5, environ={}, opener=Opener())
+
+    def test_fetch_deadline_holds_against_a_slow_drip(self):
+        class Drip:
+            sent = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read1(self, size=-1):
+                if self.sent >= 2000:
+                    return b''
+                time.sleep(0.05)
+                self.sent += 50
+                return b'x' * 50
+
+            def read(self, size=-1):
+                data = b''
+                while len(data) < size:
+                    chunk = self.read1()
+                    if not chunk:
+                        break
+                    data += chunk
+                return data
+
+        class Opener:
+            def open(self, request, timeout):
+                return Drip()
+
+        started = time.monotonic()
+        with self.assertRaises(OSError):
+            scores.fetch_openrouter(0.5, environ={}, opener=Opener())
+        self.assertLess(time.monotonic() - started, 0.5 + 0.3)
 
     def test_fetch_caps_size_and_sends_user_agent(self):
         requests = []

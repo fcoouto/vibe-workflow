@@ -172,6 +172,7 @@ print(Path("answer.json").read_text())
     for (const [reason, exclusion, action] of [
       ["scores_unavailable", null, /scores/i], ["no_models", null, /models/i],
       ["no_eligible_route", "unscored", /scored model/i],
+      ["unscored", "unscored", /No scored model fits this task yet/],
       ["no_recommendation", null, /clears this task's level/i],
       ["no_eligible_route", "billing_unverified", /sign-in/i],
       ["no_eligible_route", "quota_exhausted", /usage limits/i],
@@ -183,7 +184,7 @@ print(Path("answer.json").read_text())
         excluded: exclusion ? [{ reason: exclusion, route: "PRIVATE-SENTINEL" }] : [],
         admission: false, reservation: false, spend_permit: false,
       }))
-      const answer = JSON.parse((await f.execute()).content)
+      const answer = JSON.parse((await f.execute(undefined, `ses_${reason}_${exclusion}`)).content)
       assert.equal(answer.reason, reason)
       assert.equal(answer.route, null)
       assert.match(answer.notice, /^vibe-workflow:.*Continuing with your client's existing selection\.$/)
@@ -243,7 +244,7 @@ test("passes the reduced model list and drops a caller-supplied one", async () =
   const f = await fixture(`import json, sys
 req = json.load(sys.stdin)
 assert req["models"] == [dict(provider="openai", id="openai/gpt-x", model="gpt-x", family="gpt", variants=["high"],
-    context=100000, released="2026-01-01"), dict(provider="claude-agent", id="bare", model=None, family=None,
+    context=100000, released=None), dict(provider="claude-agent", id="bare", model=None, family=None,
     variants=[], context=None, released=None)], req["models"]
 print(json.dumps(dict(state="no_selection", route=None, reason="no_recommendation", excluded=[],
     admission=False, reservation=False, spend_permit=False)))
@@ -252,6 +253,26 @@ print(json.dumps(dict(state="no_selection", route=None, reason="no_recommendatio
     info({ id: "notools", capabilities: { tools: false } }), info({ id: "or/x", providerID: "openrouter" })])
   try {
     const answer = JSON.parse((await f.execute(undefined, "ses_a", { models: [{ id: "evil" }] })).content)
+    assert.equal(answer.reason, "no_recommendation")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("coerces unexpected model fields and skips unsafe ids", async () => {
+  const f = await fixture(`import json, sys
+req = json.load(sys.stdin)
+expected = [dict(provider="openai", id="float", model="gpt-x", family="gpt", variants=["v%d" % n for n in range(32)],
+    context=None, released=1700000000), dict(provider="openai", id="mixed", model="gpt-x", family="gpt",
+    variants=["high"], context=None, released=None)]
+assert req["models"] == expected, req["models"]
+print(json.dumps(dict(state="no_selection", route=None, reason="no_recommendation", excluded=[],
+    admission=False, reservation=False, spend_permit=False)))
+`, [info({ id: "float", limit: { context: 1.5 }, time: { released: 1700000000 },
+    variants: Array.from({ length: 40 }, (_, n) => ({ id: `v${n}` })) }),
+    info({ id: "mixed", limit: { context: -1 }, time: { released: 2 ** 60 }, variants: [{ id: 7 }, { id: "high" }, null] }),
+    info({ id: "x".repeat(257) }), info({ id: "" }), info({ id: "bad\nid" }), info({ id: 7 }),
+    info({ id: "noprovider", providerID: { evil: true } })])
+  try {
+    const answer = JSON.parse((await f.execute()).content)
     assert.equal(answer.reason, "no_recommendation")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -457,9 +478,12 @@ test("opted-out projects never mark", async () => {
   try {
     await preference(f.root, false)
     events.push({ type: "session.error", error: limit })
-    await f.h.hooks.get("http.response")({ response: new Response("subscription_sharing_usage_limit_exceeded", { status: 429 }) })
+    let cloned = false
+    const response = new Response("subscription_sharing_usage_limit_exceeded", { status: 429 })
+    await f.h.hooks.get("http.response")({ response: { status: 429, clone: () => { cloned = true; return response.clone() } } })
     await pause(400)
     assert.deepEqual(await runs(f.root), [])
+    assert.equal(cloned, false)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 

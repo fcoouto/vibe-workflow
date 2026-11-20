@@ -201,12 +201,44 @@ class SelectionTest(unittest.TestCase):
                         self.request(task=dict(TASK, files="PRIVATE-SENTINEL")),
                         self.request(credentials="PRIVATE-SENTINEL"),
                         self.request(constraints=dict(PRIVATE_SENTINEL=["x"])),
-                        self.request(models=[dict(self.models[0], variants="PRIVATE-SENTINEL")])):
+                        self.request(constraints=dict(allowed_models="PRIVATE-SENTINEL"))):
             with self.subTest(request=request):
                 result = self.run_select(request)
                 self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
                 self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
         self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
+
+    def test_plugin_supplied_models_failing_checks_are_selector_unavailable(self):
+        for bad in (dict(variants="PRIVATE-SENTINEL"), dict(context=1.5), dict(released="PRIVATE-SENTINEL"),
+                    dict(variants=["v%d" % n for n in range(40)]), dict(id="PRIVATE-SENTINEL" * 30)):
+            with self.subTest(bad=bad):
+                result = self.run_select(self.request(models=[dict(self.models[0], **bad)]))
+                self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+                self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+        self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
+
+    def test_unsafe_or_malformed_cache_is_selector_unavailable(self):
+        self.warm()
+        cache = self.root / scores.CACHE
+        cache.chmod(0o644)
+        result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+        cache.chmod(0o600)
+        cache.write_text(json.dumps(dict(version=1, models=["PRIVATE-SENTINEL"])))
+        result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+
+    def test_unexpected_internal_error_is_selector_unavailable(self):
+        with mock.patch("runtime.routing_observations.eligible", side_effect=RuntimeError("PRIVATE-SENTINEL")):
+            result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("blocked", "selector_unavailable"))
+        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+
+    def test_all_unscored_is_reported_as_unscored(self):
+        result = self.run_select(self.request(models=[model("opencode-go", "mystery-model")]))
+        self.assertEqual((result["state"], result["reason"]), ("no_selection", "unscored"))
+        self.assertEqual(result["excluded"], [dict(route="opencode-go-subscription:mystery-model", reason="unscored")])
 
     def test_check_setup(self):
         with mock.patch("runtime.opencode_account.refresh", side_effect=AssertionError("reader started")):
@@ -251,6 +283,17 @@ class RoutesTest(unittest.TestCase):
             routing_paths.routes([dict(self.models()[0], variants="high")])
         with self.assertRaises(ValueError):
             routing_paths.routes(self.models()[:1] * 513)
+
+    def test_model_fields_are_validated(self):
+        base = self.models()[0]
+        for bad in (dict(provider=None), dict(provider=7), dict(id=None), dict(id=7), dict(id="x" * 257),
+                    dict(model=7), dict(family=7), dict(context=1.5), dict(context=-1), dict(context="1"),
+                    dict(released="2026-01-01"), dict(released=-1), dict(released=True),
+                    dict(variants=["v%d" % n for n in range(33)]), dict(variants=[7])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                routing_paths.routes([dict(base, **bad)])
+        self.assertEqual(len(routing_paths.routes([dict(base, variants=["v%d" % n for n in range(32)])])[0]
+                             ["variants"]), 32)
 
     def test_overflow_never_excludes(self):
         for crossover, label in [("provider_blocked", "blocked"), ("provider_managed", "enabled"), ("unknown", "unknown")]:
