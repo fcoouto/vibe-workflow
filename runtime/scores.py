@@ -36,7 +36,8 @@ def family_key(key):
 
 
 def version(key):
-    return tuple(int(part) for part in key.split('-') if part.isdigit())
+    # Date segments (8+ digits) are not versions: a dated release keeps its base version.
+    return tuple(int(part) for part in key.split('-') if part.isascii() and part.isdigit() and len(part) < 8)
 
 
 def _price(value):

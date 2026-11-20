@@ -91,6 +91,16 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual((found['score'], found['score_source'], found['released']), (57, 'family', 20))
         self.assertIsNone(scores.lookup(cache, 'gpt-6-0-sol', 'openai'))
 
+    def test_date_segments_are_not_versions(self):
+        cache = parse(model('anthropic/claude-sonnet-4', 50, created=10),
+                      model('anthropic/claude-sonnet-4.6', 70, created=30),
+                      model('anthropic/claude-opus-4.7', 80, created=40), model('openai/gpt-5.1-codex', 60, created=50))
+        self.assertEqual(scores.lookup(cache, 'claude-sonnet-4-20250514', 'anthropic')['score'], 50)
+        self.assertIsNone(scores.lookup(cache, 'claude-opus-4-20250514', 'anthropic'))
+        self.assertIsNone(scores.lookup(cache, 'gpt-5-codex-20250101', 'openai'))
+        self.assertEqual(scores.version('claude-haiku-4-5-20251001'), (4, 5))
+        self.assertEqual(scores.version('gpt-²-sol'), ())
+
     def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
         few = [model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)]
