@@ -182,6 +182,14 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(result["state"], "no_selection")
         self.assertEqual({item["reason"] for item in result["excluded"]}, {"account_changed"})
 
+    def test_all_routes_failing_billing_is_no_eligible_route_before_scores(self):
+        self.source.billing = lambda route, now: None
+        result = self.run_select()
+        self.assertEqual((result["state"], result["reason"]), ("no_selection", "no_eligible_route"))
+        self.assertEqual({item["reason"] for item in result["excluded"]}, {"billing_unverified"})
+        self.assertEqual(len(result["excluded"]), 3)
+        self.assertEqual(self.fetch.calls, [])
+
     def test_empty_model_list_has_no_effects(self):
         absent = self.root / "absent"
         result = select(self.request(models=[]), state_dir=absent, source=self.source, fetch=self.fetch, now=NOW)

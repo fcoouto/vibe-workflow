@@ -90,10 +90,12 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         source.acquire_billing(list(unique.values()), now)
         kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
         catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
+        if not kept:
+            return result('no_selection', 'no_eligible_route', level=level, excluded=excluded)
         keys = {item['route']: _key(item, catalog) for item in kept}
         cache = scores.load(state_dir)
         had = _has_scores(cache)
-        if kept and not had:
+        if not had:
             cache = _fetch_first(state_dir, sorted(set(keys.values())), now, fetch)
         if not _has_scores(cache):
             return result('no_selection', 'scores_unavailable', level=level, excluded=excluded)
@@ -124,7 +126,7 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
                 chosen.append(item)
             if len(chosen) == 3:
                 break
-        reason = None if chosen else 'no_recommendation' if kept and not candidates else 'no_eligible_route'
+        reason = None if chosen else 'no_recommendation' if not candidates else 'no_eligible_route'
         answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
                         route=chosen[0] if chosen else None, alternatives=chosen[1:], first_fetch=not had)
         if had and scores.due(cache, sorted(wanted), now):
