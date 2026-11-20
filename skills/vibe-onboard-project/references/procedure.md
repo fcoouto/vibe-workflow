@@ -30,12 +30,12 @@ exactly as written, apart from the markers and the saved choice's place.
 
 - Header: Smart Router
 - Question: Use Smart Router for this project?
-- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. It downloads public model scores from openrouter.ai about weekly and sends no credentials. When it is saved on and the step 1 preview's readiness.state is setup_needed, add: It is on, but not ready yet.
+- Context: Smart Router suggests a provider, model and effort before work is delegated. Your client still runs every task. It downloads public model scores from openrouter.ai about weekly and sends no credentials. When it is saved on and the step 1 preview's readiness.state is setup_needed, add: It is on, but not ready yet. When readiness.reason is selector_unavailable, also add: Check that Python and the plugin package are available.
 - Choices:
   - Turn it on (Recommended) — Get a suggestion before each delegated task.
   - Leave it off — Keep choosing models yourself.
 - Choices when it is saved on:
-  - Keep it on (Current, Recommended) — Suggestions continue, or start once it is ready.
+  - Keep it on (Current, Recommended) — Suggestions start once it is ready.
   - Turn it off — You choose models yourself. Run onboarding again to undo.
 
 ### 2. Pull request merging

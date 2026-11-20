@@ -278,9 +278,11 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   assert.doesNotMatch(text, /Question 1 (leaves|keeps)|Skip git workflow guidance|\*\*Skip\*\*|Remote branch cleanup/)
   const [smartRouter] = questions
   for (const phrase of ["Turn it on (Recommended)", "Leave it off", "Keep it on (Current, Recommended)", "Turn it off",
-    "It is on, but not ready yet."]) {
+    "It is on, but not ready yet.", "readiness.state is setup_needed", "readiness.reason is selector_unavailable",
+    "Check that Python and the plugin package are available.", "Suggestions start once it is ready."]) {
     assert.ok(smartRouter.includes(phrase), phrase)
   }
+  assert.doesNotMatch(smartRouter, /Suggestions continue|not set up/)
   assert.ok(text.includes("Leave it off (Current)"))
   const savedOn = smartRouter.split(/^- Choices/m)[2]
   assert.match(savedOn.match(/^ {2,}- (.+?) — /m)[1], /\(Current, Recommended\)$/)

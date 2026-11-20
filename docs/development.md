@@ -155,10 +155,14 @@ merging, and session titles off.
 
 Not observed: any other model, a session started from the desktop or terminal
 client, a worktree session, question 4, and the step 1 order and no-bypass wording
-added after `6af94bf`. The status sentence
-and the saved-on description for question 1 were reworded after the merge with `main`
-("not ready yet" instead of "not set up yet", since Smart Router's own check can now
-report that model scores have not loaded); the live runs saw the earlier wording.
+added after `6af94bf`.
+
+The question 1 status sentence and saved-on description were reworded after the merge
+with `main`, which no live run saw. Smart Router's own check can now report
+`scores_unavailable` (model scores not loaded yet, retried automatically) or
+`selector_unavailable` (for example Python or the package is missing, which does not
+fix itself). The old "not set up yet" implied an action for the first reason, so the
+wording is "not ready yet", with a separate hint for the second.
 
 ## Smart Router automatic selection: what is known
 
