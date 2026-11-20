@@ -27,8 +27,6 @@ const actions = new Map([
   ["account_changed", "Check the selected account before requesting another recommendation."],
   ["selector_unavailable", "Check that Python and the plugin package are available, then try again."],
 ])
-const disclosure = "vibe-workflow: Smart Router downloads public model scores from openrouter.ai about weekly and sends no " +
-  "credentials. Scores: Artificial Analysis via OpenRouter."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -184,12 +182,11 @@ export default {
         }
         const { models: _ignored, ...own } = request ?? {}
         const list = ctx.model ? await models() : []
-        let answer = noModels(), firstFetch = false
+        let answer = noModels()
         if (list.length) {
-          const { refresh, first_fetch, ...rest } = await runRouter({ ...own, models: list },
+          const { refresh, ...rest } = await runRouter({ ...own, models: list },
             { directory, stateDir: state, signal, operation: "select" })
           answer = rest
-          firstFetch = first_fetch === true
           if (Array.isArray(refresh?.wanted) && !refreshing && !closed) {
             refreshing = true
             runRouter({ wanted: refresh.wanted }, { directory, stateDir: state, operation: "refresh" })
@@ -210,7 +207,6 @@ export default {
             if (notices.size > MAX_NOTICE_SESSIONS) notices.delete(notices.keys().next().value)
           }
         }
-        if (firstFetch && !closed) notice = [notice, disclosure].filter(Boolean).join(" ")
         return { content: JSON.stringify({ ...answer, notice }) }
       },
     }))

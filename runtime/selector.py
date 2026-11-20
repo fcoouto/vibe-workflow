@@ -142,7 +142,7 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     reason = None if chosen else 'no_eligible_route' if candidates \
         else 'unscored' if unscored == len(kept) else 'no_recommendation'
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
-                    route=chosen[0] if chosen else None, alternatives=chosen[1:], first_fetch=not had)
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:])
     if had and scores.due(cache, sorted(wanted), now):
         answer['refresh'] = dict(wanted=sorted(wanted))
     return answer
