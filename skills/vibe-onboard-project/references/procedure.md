@@ -57,12 +57,21 @@ the user never has to learn a new layout:
   - Turn it on (Recommended) — GitHub deletes a PR's branch when it merges. Runs gh repo edit --delete-branch-on-merge.
   - Not now — Leaves the setting off.
 
+### 5. Session titles
+
+- Header: Session titles
+- Question: Show task progress in the session title?
+- Context: Project: <project path>. The session title is the chat's name in the session list. With this on, the title gets a five-step progress meter, and WAITING while the session needs you. Only the meter part of the title is changed; removing it stops updates for that chat.
+- Choices:
+  - Show progress (Recommended) — Adds the meter to the title and updates it at the end of each turn.
+  - Keep titles as they are — Leaves every title alone. You can turn this on later.
+
 ## Steps
 
 1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. Show the
    preview's `project` path as the project, and the client. When `root` differs,
    the session is in a worktree; say its Smart Router file is saved in that
-   worktree. Tell the user what is coming in one line: **Up to four short questions.**
+   worktree. Tell the user what is coming in one line: **Up to five short questions.**
    Their answers are the consent to save. If blocked, explain the fixed reason
    and stop.
 2. Ask question 1. In an existing project, show the saved Smart Router choice as
@@ -85,20 +94,28 @@ the user never has to learn a new layout:
    - `GitHub auto-delete: not available (gh is missing or not logged in).` when the call fails because `gh` is missing or not logged in.
    - `GitHub auto-delete: not available (this remote is not on GitHub).` when there is no GitHub remote.
    - `GitHub auto-delete: not available (could not be read).` for any other failure.
-6. If an answer changes a proposal, preview that feature again with the selected
+6. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"session_titles"}`.
+   Ask question 5, also when git workflow guidance was skipped. In an existing project,
+   show the saved choice as the current one (the preview's `previous_enabled`; `null`
+   means it was never asked, so ask without a current marker). If that preview is
+   blocked, skip question 5, leave session titles off and report
+   **Session titles: not saved.** followed by the fixed reason; for
+   `project_root_unavailable`, say onboarding must run from the main checkout.
+7. If an answer changes a proposal, preview that feature again with the selected
    booleans (`enabled`, `agent_merge` and `worktree_cleanup` for git workflow;
-   **Skip** is all three `false`). If every preview says `change: "none"` and no
+   **Skip** is all three `false`; `enabled` for session titles). If every preview says `change: "none"` and no
    GitHub change is pending, say **Nothing to change.**, keep the saved choices and
    stop. A yes to question 4 counts as a change, so it is never swallowed by that stop.
    Otherwise say what will be saved, in one plain line per change and not as a
-   question, for example **Saving: Smart Router On, Git workflow I merge them, cleanup on —
+   question, for example **Saving: Smart Router On, Git workflow I merge them, cleanup on, Session titles On —
    .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
-   Use the full `path` when `root` differs. For git workflow, add that the main checkout's
+   Use the full `path` when `root` differs. Session titles are saved in the main checkout too.
+   For git workflow, add that the main checkout's
    settings file will change and that committing it is the user's step.
    Say it in order: the Saving line comes before anything is applied, and a cancel at any question or a denied native file-edit permission means no GitHub change.
-7. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
+8. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
-   `snapshot`. Both features share one file on a primary checkout, so then
+   `snapshot`. The features share one file, so then
    preview `git_workflow` again with the answered values. If its `change` and
    values match what the user answered, apply it with all three booleans and that
    fresh `snapshot`, for example
@@ -106,19 +123,22 @@ the user never has to learn a new layout:
    otherwise ask the affected question again and say why. The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
    client's. If edit is denied or permission is unavailable, do not write another way.
+   Apply session titles last, the same way: preview `session_titles` again with the
+   answered `enabled` and apply it with that fresh `snapshot`, for example
+   `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.
    Report each feature that was not saved as **<Feature>: not saved.** followed by how
    to recover, for example **Git workflow: not saved. Run onboarding from the main
    checkout.** If settings changed or the result is lost, inspect with a fresh preview
    instead of repeating apply, and ask the affected question again if the proposal
    changed. If apply reports `project_settings_lossy`, say that existing numbers cannot
    be preserved by the writer. Do not rewrite the file; ask the user to review it.
-8. On a yes to question 4, run `gh repo edit <owner/repo> --delete-branch-on-merge`. It
+9. On a yes to question 4, run `gh repo edit <owner/repo> --delete-branch-on-merge`. It
    runs after the settings apply and is independent of a technical failure there (busy,
    changed or lossy settings), but not of a cancel or a denied permission. Read the setting
    back with the same `gh repo view` call and report one line: `GitHub auto-delete: turned on.`,
    or `GitHub auto-delete: not changed.` with the reported reason, or that it could not be
    verified. Never claim the change without the read-back.
-9. Report actual readiness, one line per feature, in the form
+10. Report actual readiness, one line per feature, in the form
    **<Feature>: <state> — <detail>.** Use these lines, exactly:
    - Smart Router, `off`: Smart Router: Off — existing model selection.
    - Smart Router, `ready`: Smart Router: On · Configuration checked — route eligibility is checked when work is delegated.
@@ -129,8 +149,11 @@ the user never has to learn a new layout:
    - Git workflow, `ready`, cleanup on: Git workflow: On · I merge, cleanup on — reminders registered; not yet observed in this OpenCode. Advisory, not enforced. (Agents merge: Git workflow: On · Agents merge, cleanup on — …)
    - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.) Add ", cleanup on" after the merge choice when cleanup is on.
    - Git workflow, any other `setup_needed` reason: give the reported reason.
+   - Session titles, `off`: Session titles: Off — titles are left alone.
+   - Session titles, `ready`: Session titles: On — updated at the end of each turn.
+   - Session titles, `setup_needed` with `events_unavailable`: Session titles: On · Setup needed — this OpenCode does not deliver session events.
 
-   Add the GitHub line from step 5 or step 8 when question 4 ran or was skipped for a reason.
+   Add the GitHub line from step 5 or step 9 when question 4 ran or was skipped for a reason.
    An enabled preference is not proof of account availability or entitlement.
    Finish with one line: **Run onboarding again to change them.**
 

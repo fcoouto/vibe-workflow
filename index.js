@@ -144,13 +144,16 @@ export default {
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
     const prAdvice = await registerPrAdvice(ctx, { settings: () => gitWorkflow.inspect(),
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
+    const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
+    // Task 4 replaces this guard once session events are wired.
+    const titlesGuard = () => ({ state: "setup_needed", reason: "events_unavailable" })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) notices.clear()
       return result
-    } }, git_workflow: gitWorkflow }, (signal) =>
+    } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup" }),
-    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" })
+    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" }, titlesGuard)
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await ctx.session.hook("context", async (event) => {

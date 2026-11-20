@@ -15,14 +15,14 @@ export async function registerSkill(ctx, skill) {
   await ctx.skill.transform((editor) => editor.add({ id: skill, name: skill, path, description, content }))
 }
 
-const features = ["smart_router", "git_workflow"]
+const features = ["smart_router", "git_workflow", "session_titles"]
 
-export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
+export async function registerOnboarding(ctx, projects, checkSetup, prGuard, titlesGuard) {
   await registerSkill(ctx, name)
   await ctx.tool.transform((editor) => editor.add({
     name: toolName,
     description: `Preview or save a confirmed project preference: Smart Router (default) or git workflow guidance ` +
-      `(feature "git_workflow"). Follow the ${name} skill.`,
+      `(feature "git_workflow"), or session titles (feature "session_titles"). Follow the ${name} skill.`,
     input: {
       type: "object", additionalProperties: false, required: ["v", "op"],
       properties: {
@@ -42,7 +42,8 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
       const { signal } = invocation, project = projects[feature]
       const values = prefs ? Object.fromEntries(["enabled", "agent_merge", "worktree_cleanup"].filter((key) => key in request)
         .map((key) => [key, request[key]])) : request.enabled
-      const ready = async (enabled) => !enabled ? { state: "off", reason: null } : prefs ? prGuard() : checkSetup(signal)
+      const ready = async (enabled) => !enabled ? { state: "off", reason: null } : prefs ? prGuard()
+        : feature === "session_titles" ? titlesGuard() : checkSetup(signal)
       if (signal?.aborted) return output(blocked("project_settings_cancelled"))
       const proposed = await project.preview(values)
       if (proposed.state === "blocked") return output(proposed)
