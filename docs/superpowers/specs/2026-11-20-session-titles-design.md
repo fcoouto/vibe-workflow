@@ -43,8 +43,9 @@ rename. Nothing else.
   1. a design is generated (a spec file is written) -> `[DESIGN]`
   2. an implementation plan is generated (a plan file is written) -> `[PLAN]`
   3. implementation of the plan starts (an executor skill is loaded) -> `[BUILD]`
-- The latest event wins. A new design in a session that was building shows
-  `[DESIGN]` again, which is correct: that session is designing again.
+- The latest event wins, with one exception: a plan written while the session shows
+  `[BUILD]` keeps `[BUILD]` (usually a fix mid-build). A new design in a building
+  session shows `[DESIGN]` again, which is correct: that session is designing again.
 - No model calls, no polling, no database, no new runtime process, no new
   dependency.
 
@@ -82,13 +83,14 @@ Title format: `[STAGE] topic`, with STAGE one of `DESIGN`, `PLAN`, `BUILD`.
   renamed.
 - **User override.** If the plugin renamed a session and its title no longer carries
   a prefix, the user removed or replaced it: the plugin leaves that session alone
-  until the server restarts.
+  until the server restarts (the record is in memory; after a restart the prefix can
+  return once, and onboarding says so).
 - **Same title, no write.** An event that produces the current title does nothing.
 - **Failure is silent.** Any error (missing field, failed call) is swallowed; the
   tool result and the chat are never touched or delayed by naming.
 - **Root sessions only.** A session with a parent is skipped.
-- **Opt-in.** A `session_titles` feature, `{"session_titles": {"enabled": true}}`,
-  written by onboarding. Not onboarded or off means no hook work and no calls.
+- **Opt-in.** A `session_titles` feature, `{"version":1,"features":[{"session_titles":{"enabled":true}}]}`
+  entry, written by onboarding at the main project path. Not onboarded or off means no hook work and no calls.
 
 ## Approaches
 
@@ -122,7 +124,8 @@ follows from it. Choice recorded as the author's call; open to correction.
 - Stage words and brackets (`[DESIGN]`, `[PLAN]`, `[BUILD]`) echo the existing
   `[BLOCKED]`/`[READY]` pull request convention. The user may prefer other words.
 - Opt-in through onboarding (default off) rather than on by default.
-- Latest event wins, including regression from `BUILD` to `DESIGN`.
+- Latest event wins, except that a plan does not replace `BUILD` (added after review).
+- Gate: onboarding feature (recommended default here, one question) or a plugin option `ctx.options.session_titles` (about 60 fewer changed lines, but no per-project choice and no in-chat control).
 - Unverified on the installed host: the `skill` tool's name and input shape in
   `execute.after`, the `write` input field (`path` or `filePath`), the `parentID` and
   `title` fields of `ctx.session.get`, whether OpenCode's own title generation can
