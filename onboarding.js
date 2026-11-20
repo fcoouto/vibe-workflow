@@ -42,13 +42,13 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
       const { signal } = invocation, project = projects[feature]
       const values = prefs ? Object.fromEntries(["enabled", "agent_merge", "worktree_cleanup"].filter((key) => key in request)
         .map((key) => [key, request[key]])) : request.enabled
-      const ready = async (enabled) => !enabled ? { state: "off", reason: null } : prefs ? prGuard() : checkSetup(signal)
+      const ready = async (enabled, allowFetch) => !enabled ? { state: "off", reason: null } : prefs ? prGuard() : checkSetup(signal, allowFetch)
       if (signal?.aborted) return output(blocked("project_settings_cancelled"))
       const proposed = await project.preview(values)
       if (proposed.state === "blocked") return output(proposed)
       if (request.op === "preview") {
         if ("expected_snapshot" in request) return output(blocked("invalid_request"))
-        return output({ ...proposed, readiness: await ready(proposed.enabled) })
+        return output({ ...proposed, readiness: await ready(proposed.enabled, false) })
       }
       if (typeof request.enabled !== "boolean" || (prefs && (typeof request.agent_merge !== "boolean" || typeof request.worktree_cleanup !== "boolean")) ||
           typeof request.expected_snapshot !== "string" ||
@@ -68,7 +68,7 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard) {
       }
       const applied = await project.apply(values, request.expected_snapshot, { signal })
       if (applied.state === "blocked") return output(applied)
-      return output({ ...applied, readiness: await ready(applied.enabled) })
+      return output({ ...applied, readiness: await ready(applied.enabled, true) })
     },
   }))
 }

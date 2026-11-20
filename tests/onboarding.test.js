@@ -1,9 +1,14 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtempSync } from "node:fs"
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { pathToFileURL } from "node:url"
+
+// Spawned selectors inherit this, so a real CLI can never reach the network.
+process.env.VCW_TEST_HOME = mkdtempSync(join(tmpdir(), "vcw-test-home-"))
 
 async function fixture(t, permission = async () => {}, prepare) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "vibe-onboard-")))
@@ -283,4 +288,37 @@ test("the procedure pins the cleanup questions, the GitHub conditions, the apply
     assert.ok(text.includes(phrase), phrase)
   }
   assert.doesNotMatch(text, /Two short questions\./)
+})
+
+test("only apply with enabled true lets the setup check fetch scores", async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "vibe-setup-argv-")))
+  t.after(() => rm(root, { recursive: true }))
+  await mkdir(join(root, "scripts"))
+  await writeFile(join(root, "package.json"), '{"type":"module"}')
+  for (const name of ["index.js", "project.js", "onboarding.js", "pr-advice.js", "skills/vibe-onboard-project/SKILL.md",
+    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md"]) {
+    await mkdir(join(root, name, ".."), { recursive: true })
+    await copyFile(new URL(`../${name}`, import.meta.url), join(root, name))
+  }
+  await writeFile(join(root, "scripts", "select.py"), `import json, sys
+from pathlib import Path
+with open(Path(__file__).parent.parent / "argv.log", "a") as log:
+    log.write(" ".join(sys.argv[3:]) + "\\n")
+print(json.dumps(dict(state="ready", reason=None)))
+`)
+  execFileSync("git", ["init", "-q", root])
+  const tool = new Map()
+  const ctx = { location: { directory: root }, options: { state_dir: join(root, "state") },
+    tool: { transform: async (apply) => apply({ add: (entry) => tool.set(entry.name, entry) }) },
+    skill: { transform: async (apply) => apply({ add: () => {} }) },
+    permission: { assert: async () => {} }, session: { hook: async () => {} } }
+  const cleanup = await (await import(pathToFileURL(join(root, "index.js")))).default.setup(ctx)
+  t.after(() => cleanup?.())
+  const run = async (input) => JSON.parse((await tool.get("vibe_workflow_onboard").execute({ v: 1, ...input },
+    { sessionID: "s", messageID: "m", id: "c", agent: "build", signal: new AbortController().signal })).content)
+  const preview = await run({ op: "preview" })
+  assert.equal(preview.readiness.state, "ready")
+  await run({ op: "apply", enabled: true, expected_snapshot: preview.snapshot })
+  const lines = (await readFile(join(root, "argv.log"), "utf8")).trim().split("\n")
+  assert.deepEqual(lines, ["--check-setup", "--check-setup --allow-fetch"])
 })
