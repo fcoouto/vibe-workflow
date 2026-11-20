@@ -147,14 +147,36 @@ Observed live on 20 November 2026:
   rawFinish, cost, tokens, snapshot, files }`. By OpenCode's schema,
   `session.step.failed` carries `data.error` as `{ type, message, status?,
   response?: { body }, retryAfterMs? }`.
+- End to end in OpenCode 2.2.6 with real OpenRouter data, `smart_router_select`
+  answered `selected` at level 1 (Claude `haiku`) and level 3 (Claude `opus`,
+  Opus 5.5 with its own score). The first fetch ran and showed its disclosure.
+  The score cache was 76 KB with mode 0600. No internal keys (`refresh`,
+  `first_fetch`) reached the tool output. With `session.error` dropped, the host
+  logged no unknown-event warning. Account facts were acquired for all three
+  plans (ChatGPT, Claude, Go).
+- `claude-agent` models report `time.released` as 0.
+- OpenCode 2.2.6's token-sharing ChatGPT model set ends at `gpt-6.1-sol`.
+
+The live check found three defects that the tests' synthetic hosts hid; each is
+fixed with a regression test:
+
+- The model-list envelope reduced to an empty list, so every call answered
+  `no_models`.
+- The selector read the clock before acquiring account facts. The readers stamp
+  facts after acquisition, so every route looked like it had future facts and
+  was excluded as `billing_unverified`. The clock is now read after acquisition.
+- Family borrowing took scores from newer versions: old Haiku 4.5 borrowed Haiku
+  5.5's score, tied the real `haiku` and won on route order, and Opus 4.6 and 4.7
+  appeared as alternatives with Opus 5.5's score. A model now borrows only from
+  family members whose version (the all-digit segments of its key, compared as
+  integers) is not greater than its own, and at equal price and score an own
+  score ranks before a borrowed one.
 
 Not observed live:
 
 - A `provider.chatgpt-limit` step failure itself, so the mark through the event
   stream is verified by tests only.
 - Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
-- The Claude alias mapping through the stored native catalog in a real run.
-- The first fetch and its disclosure inside OpenCode.
 
 Ruling: the plugin subscribes only to `session.step.failed` and reads the error
 at `data.error`, keeping the top-level and `properties` fallbacks. An event stream
