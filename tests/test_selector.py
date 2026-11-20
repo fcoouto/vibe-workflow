@@ -64,6 +64,22 @@ def model(provider, name, **extra):
                      context=None, released=5), **extra)
 
 
+class StampedFacts(Facts):
+    """Like the real readers: acquisition takes time and stamps facts with the clock after it."""
+    def __init__(self, clock):
+        super().__init__()
+        self.clock, self.acquired = clock, None
+
+    def acquire_billing(self, routes, now):
+        super().acquire_billing(routes, now)
+        self.clock[0] += 5
+        self.acquired = int(time.time())
+
+    def billing(self, route, now):
+        # opencode_account._account's check: facts from after `now` are not fresh.
+        return super().billing(route, self.acquired) if 0 <= now - self.acquired <= 900 else None
+
+
 class Fetch:
     def __init__(self, raw=BODY):
         self.raw, self.calls = raw, []
@@ -109,6 +125,13 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(result["attribution"], "Scores: Artificial Analysis via OpenRouter")
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
+
+    def test_live_facts_stamped_after_the_clock_was_first_read_stay_eligible(self):
+        clock = [NOW]
+        self.source = StampedFacts(clock)
+        with mock.patch.object(selector.time, "time", lambda: clock[0]):
+            result = self.run_select(now=None)
+        self.assertEqual((result["state"], result["reason"]), ("selected", None), result.get("excluded"))
 
     def test_first_run_fetches_once_and_reports_first_fetch(self):
         first = self.run_select()

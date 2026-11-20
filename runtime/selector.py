@@ -98,6 +98,8 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     anchor = state_dir / 'router.json'
     source = source if source is not None else routing_observations.LocalSource(anchor)
     source.acquire_billing(list(unique.values()), now)
+    # Readers stamp the facts they just acquired, so an earlier clock would see them as future.
+    now = int(time.time()) if fixed is None else fixed
     kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
     catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
     if not kept:
