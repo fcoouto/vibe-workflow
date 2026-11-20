@@ -122,9 +122,13 @@ Astra and Claude Fable 5.2, and the user's choices in conversation.
    under a key the tool's input schema does not accept. The caller can never
    supply or alter the model list.
 3. Python keeps only models whose provider matches one of the three paths in
-   `config/routes.json`. Every path is always considered; there is no path
-   configuration. Paths without a signed-in account drop out through the existing
-   `billing_unverified` check.
+   `config/routes.json`. There is no path configuration. A path whose account
+   reader can never prove paid overflow is blocked (today ChatGPT and Go; see
+   *Open decision*) is skipped before any account read, with the fixed exclusion
+   reason `overflow_unprovable`, so it costs nothing. Paths without a signed-in
+   account drop out through the existing `billing_unverified` check.
+   (Builder's call, from the lightweight rule: without the skip, every request
+   would read ChatGPT and Go accounts that can never be picked.)
 4. The existing billing, overflow and quota checks run first, unchanged, and
    drop routes that cannot be used now. They run before ranking so the floor
    comes from the best model the user can actually use.
@@ -208,10 +212,13 @@ normalized id, family key, score, prices and `created`, plus `fetched_at`,
    answering: one bounded child process, killed on plugin cleanup. With no cache
    at all, the request itself fetches with a 5-second limit; if that fails, the
    answer is `no_selection: scores_unavailable` and the client keeps its model.
-3. **A new runnable model triggers a fetch.** If OpenCode lists a runnable model
-   on a plan path that has no entry in the cache, a refresh is due.
-4. **Unscored models retry on a widening interval:** 1 hour, 4 hours, 12 hours,
-   then every 24 hours, until scored. The family score covers the gap.
+3. **A new usable model triggers a fetch.** If a model that passed step 4 of the
+   data flow (a usable path and account) has no entry in the cache, a refresh is
+   due. Models on skipped or unusable paths never trigger one.
+4. **Unscored usable models retry on a widening interval:** 1 hour, 4 hours,
+   12 hours, then 24 hours. After that they wait for the weekly ceiling like
+   everything else, so a model that is never scored cannot cause daily fetches.
+   The family score covers the gap.
 5. **Weekly ceiling.** A refresh is due when `fetched_at` is older than 7 days.
 6. **At most one fetch per 15 minutes,** whatever the trigger.
 7. **Failures** keep the last good copy and back off from 5 minutes, doubling,
@@ -222,8 +229,10 @@ normalized id, family key, score, prices and `created`, plus `fetched_at`,
 9. **One fetcher at a time** through the existing storage lock.
 
 Cost, per the lightweight rule: one GET of about 88 KB, typically once a week
-plus once per new model, never more than once per 15 minutes, and one extra
-short-lived process only when a refresh is due. No model calls.
+plus a few times in the first day after a new usable model appears, never more
+than once per 15 minutes, and one extra short-lived process only when a refresh
+is due. No model calls. Account reads stay as they are today for usable paths
+and drop to none for skipped paths.
 
 Change from the conversation: a model disappearing from OpenCode does not
 trigger a fetch, because removal needs no new data. (Builder's call; the user
@@ -235,12 +244,18 @@ can reverse it.)
 - `router.json` and `strategy-table.json` are no longer read. Existing copies are
   left untouched.
 - Enabled or not is the project's onboarding answer, as today.
-- `check_setup` (used by onboarding) reports `ready` when the cache holds scores,
-  or when a bounded fetch succeeds; otherwise `setup_needed` with
-  `scores_unavailable`. It does not read accounts.
+- `check_setup` (used by onboarding) reports `ready` when the cache holds scores;
+  otherwise `setup_needed` with `scores_unavailable`. It does not read accounts.
+  The onboarding preview reads the cache only and never fetches, because it runs
+  before the user has answered. Only `apply` with `enabled: true` may run the
+  first bounded fetch.
 - The onboarding procedure's Smart Router question adds one line to its context:
   the router downloads public model scores from openrouter.ai about weekly and
   sends no credentials. The readiness lines change accordingly.
+- Projects that were already enabled never see that question again. The first
+  successful fetch on a machine (no cache existed before) therefore adds the same
+  line, once, as the result's `notice`. No consent state and no re-ask.
+  (Builder's call; the user can ask for a re-ask instead.)
 
 ### Result
 
@@ -268,9 +283,10 @@ the advisory invariants, the fallback notices and the context hook.
 can be picked, which in practice means Claude only. Under that rule the
 cross-plan cost comparison (GPT-6.2 Sol against Opus 5.5) never happens.
 Default in this design: keep the rule, so recommendations stay Claude-only
-until ChatGPT and Go can prove overflow is blocked. The alternative is to treat
-`unknown` as acceptable for ChatGPT and Go, which risks recommending a route
-that could bill extra usage.
+until ChatGPT and Go can prove overflow is blocked, and those paths are skipped
+without account reads. The alternative is to treat `unknown` as acceptable for
+ChatGPT and Go, which risks recommending a route that could bill extra usage;
+it would also bring their account reads back and drop `overflow_unprovable`.
 
 ## Testing
 
@@ -280,8 +296,12 @@ that could bill extra usage.
   `anthropic/claude-sonnet-5.5`; `openai/gpt-6.2-sol` direct; an ambiguous match
   is unscored; a new `gpt-6.3-sol` borrows Sol's score.
 - Refresh tests with a fake clock and fake fetcher for every rule above,
-  including the first-run wait, the 15-minute gap, backoff and the
-  sanity rejection.
+  including the first-run wait, the 15-minute gap, backoff, the sanity
+  rejection, and a never-scored model falling back to the weekly ceiling.
+- Skipped paths: no account reader is called for ChatGPT or Go, and their
+  models appear in `excluded` as `overflow_unprovable`.
+- Onboarding: preview never fetches; apply may; the one-time notice appears
+  only on the first fetch on a machine.
 - Contract tests: `v: 1` and missing facts are rejected; the caller cannot
   inject a model list; the advisory invariants hold.
 - No test touches the network or real accounts.
