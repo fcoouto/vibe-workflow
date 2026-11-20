@@ -57,6 +57,16 @@ primary) share the same append path but have not been observed. Other OpenCode
 versions are unverified. To repeat the check, run one matching command and look for
 a `vibe-workflow:` line in its result.
 
+The same hook also sees `skill` tool calls. Observed live (OpenCode 2.3.2, 20 November
+2026, package exported from `3f52aff`, loaded project-locally in a throwaway clone with
+git workflow on and agents merging): when an API-created session loaded
+`finishing-a-development-branch`, the onboarding-decision note was in that tool result,
+and the agent did not present the integration menu; it said it would push, open a
+[BLOCKED] draft, mark it [READY], merge it and keep the worktree, with nothing to ask.
+Not observed: the user-merges wording, the cleanup-on wording, a session started from
+the desktop or terminal client, and a skill attached to a prompt by the user (no tool
+call, so no note).
+
 ## Session titles: what is known
 
 The opt-in `session_titles` setting is described in
