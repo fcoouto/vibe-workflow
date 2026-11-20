@@ -144,7 +144,8 @@ Not observed live:
   unknown-type warning.
 - Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
 
-Ruling: both event types stay subscribed. Both are defined in OpenCode 2.2.6, and
-a possible log warning costs less than a missed limit. The event stream is not
-re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
+Ruling: both event types stay subscribed, each through its own subscription so a
+host that rejects one type still delivers the other. Both are defined in OpenCode
+2.2.6, and a possible log warning costs less than a missed limit. An event stream
+is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
 Other OpenCode versions are unverified.
