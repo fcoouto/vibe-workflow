@@ -141,36 +141,58 @@ Observed live on 20 November 2026:
   OpenRouter's `created`, because the selector uses either as a tie-break.
   The plugin still accepts a bare array.
 - Subscribing to `session.error` makes the host log `ignoring unknown event
-  types` on every load; only `session.step.failed` is a valid type.
+  types` on every load; of the two types tried, only `session.step.failed` is
+  accepted.
 - A step event arrives as `{ id, created, type, durable, location, data }`;
   `session.step.ended` carried `data: { sessionID, assistantMessageID, finish,
   rawFinish, cost, tokens, snapshot, files }`. By OpenCode's schema,
   `session.step.failed` carries `data.error` as `{ type, message, status?,
   response?: { body }, retryAfterMs? }`.
 - End to end in OpenCode 2.2.6 with real OpenRouter data, `smart_router_select`
-  answered `selected` at level 1 (Claude `haiku`) and level 3 (Claude `opus`,
-  Opus 5.5 with its own score). The first fetch ran and showed its disclosure.
-  The score cache was 76 KB with mode 0600. No internal keys (`refresh`,
-  `first_fetch`) reached the tool output. With `session.error` dropped, the host
-  logged no unknown-event warning. Account facts were acquired for all three
-  plans (ChatGPT, Claude, Go).
+  answered `selected` at level 1 and level 3. The first fetch ran and showed its
+  disclosure. The score cache was 76 KB with mode 0600. No internal keys
+  (`refresh`, `first_fetch`) reached the tool output. With `session.error`
+  dropped, the host logged no unknown-event warning. Account facts were acquired
+  for all three plans (ChatGPT, Claude, Go).
 - `claude-agent` models report `time.released` as 0.
 - OpenCode 2.2.6's token-sharing ChatGPT model set ends at `gpt-6.1-sol`.
 
-The live check found three defects that the tests' synthetic hosts hid; each is
+The live check found five problems that the tests' synthetic hosts hid; each is
 fixed with a regression test:
 
 - The model-list envelope reduced to an empty list, so every call answered
   `no_models`.
+- `time.released` arrived in milliseconds while OpenRouter's `created` is in
+  seconds; the plugin now converts it.
+- Subscribing to `session.error` logged an unknown-event warning on every load;
+  the plugin now subscribes only to `session.step.failed`.
 - The selector read the clock before acquiring account facts. The readers stamp
   facts after acquisition, so every route looked like it had future facts and
   was excluded as `billing_unverified`. The clock is now read after acquisition.
 - Family borrowing took scores from newer versions: old Haiku 4.5 borrowed Haiku
   5.5's score, tied the real `haiku` and won on route order, and Opus 4.6 and 4.7
   appeared as alternatives with Opus 5.5's score. A model now borrows only from
-  family members whose version (the all-digit segments of its key, compared as
-  integers) is not greater than its own, and at equal price and score an own
-  score ranks before a borrowed one.
+  family members whose version is not greater than its own, and at equal price
+  and score an own score ranks before a borrowed one.
+
+The version rule and the own-before-borrowed order were re-run live with real
+data:
+
+- Level 1 (`implementation`; files 1-2, spec exact, risk reversible) chose
+  `opencode-claude-subscription:haiku`: its own score 36.5 (`score_source:
+  openrouter`), effort low, price 0.2, paid overflow blocked. Alternatives:
+  `opencode-go-subscription:claude-haiku-5-5` (36.5) and
+  `opencode-chatgpt-subscription:gpt-6.1-terra` (51.3, price 2). 25 models were
+  unscored, including the old Claude versions that no longer borrow.
+- Level 3 (`planning`; files cross-system, spec open, risk critical) chose
+  `opencode-claude-subscription:opus`: its own score 59.1, effort high, price 8.
+  Alternative: `claude-fable-5-2` (64.6, price 16).
+
+A version is the key's ASCII all-digit segments, compared as integers; segments
+of 8 or more digits are dates and are ignored, so `claude-sonnet-4-20250514`
+borrows from Sonnet 4, not Sonnet 4.6. This date refinement is verified by tests
+only.
+<!-- Live level-1 check after the date refinement: pending. -->
 
 Not observed live:
 
