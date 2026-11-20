@@ -24,7 +24,7 @@ the user never has to learn a new layout:
 
 - Header: Smart Router
 - Question: Use Smart Router for this project?
-- Context: Project: <project path>. Smart Router recommends a provider, model and effort before work is delegated. It only advises.
+- Context: Project: <project path>. Smart Router recommends a provider, model and effort before work is delegated. It only advises. It downloads public model scores from openrouter.ai about weekly and sends no credentials.
 - Choices:
   - Use Smart Router (Recommended) — Automatically get provider, model, and effort recommendations before delegating work. Your client still launches and controls the tasks.
   - Keep existing model selection — Continue with your current model-selection workflow. You can enable Smart Router later.
@@ -141,7 +141,7 @@ the user never has to learn a new layout:
 10. Report actual readiness, one line per feature, in the form
    **<Feature>: <state> — <detail>.** Use these lines, exactly:
    - Smart Router, `off`: Smart Router: Off — existing model selection.
-   - Smart Router, `ready`: Smart Router: On · Configuration checked — route eligibility is checked when work is delegated.
+   - Smart Router, `ready`: Smart Router: On · Scores loaded — route eligibility is checked when work is delegated.
    - Smart Router, `setup_needed`: Smart Router: On · Setup needed — followed by the reported reason.
    - Git workflow, `off`: Git workflow: Off — no git workflow guidance.
    - Git workflow, `ready`: Git workflow: On · I merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.

@@ -36,9 +36,9 @@ The selected behavior is an advisory shortlist, not the legacy admission bridge.
 
 | New module | Extracted source and responsibility |
 | --- | --- |
-| `routing.py` | `routing.ensure_profile`, `resolve_row`, `rank`, scalar bounds; caller supplies work kind instead of a roster lookup |
+| `routing.py` | Task level and ranking; caller supplies work kind instead of a roster lookup |
 | `routing_paths.py` | `routing_paths.strategy_route`, `_strategies`, `generate`; only three OpenCode subscription paths |
-| `routing_funding.py` | `subscription_shortlist` only |
+| `scores.py` | OpenRouter score mapping (Artificial Analysis Intelligence Index), private cache and on-demand refresh |
 | `routing_observations.py` | Subscription-only `LocalSource` and shortlist checks; no gateway, task or ledger reads |
 | `subscription_billing.py` | `scope`, `problem`, `fact`, `marker`; marker hashing no longer imports workflow gates |
 | `opencode_account.py` | Existing bounded selected-account and Go usage reader, without native Codex recovery |
@@ -47,10 +47,14 @@ The selected behavior is an advisory shortlist, not the legacy admission bridge.
 | `storage.py` | Private-file checks and atomic JSON helpers from observations/usage-budget |
 | `processes.py` | Bounded process cleanup and reader-lock helpers, without the Codex protocol |
 | `continuity.py` | `_owned`, `_hex`, `_proved`, `_fence`, `_ours`, `_settle`, `_observe` from the generic account-continuity helpers |
-| `selector.py` | Trial composition: profile, rank, acquire, shortlist, verified blocked-overflow selection |
+| `selector.py` | Composition: task level, routes from host models, eligibility, score ranking, final account recheck |
+| `chatgpt_limit.py` | ChatGPT usage-limit mark: pauses ChatGPT routes until the Codex reset time, or for one hour |
+| `codex_reset.py` | One bounded `codex app-server` `account/rateLimits/read` on the user's Codex login; no model call |
 
 Runtime software: Python 3.11+, OpenCode V2; Claude CLI only for its native-login
-path. No third-party Python/npm package, database, Codex executable or daemon.
+path. The Codex executable is optional: only after a ChatGPT usage-limit mark,
+`codex_reset.py` starts `codex app-server` on the user's Codex login for one
+zero-token rate-limit read. No third-party Python/npm package, database or daemon.
 Fresh state is separate from legacy routing/usage state. Credentials remain
 owned by native clients and are never packaged.
 
@@ -72,9 +76,9 @@ AGENTS.md
 LICENSE
 README.md
 assets/logo.png
-config/router.example.json
+config/router.example.json (removed later)
 config/routes.json
-config/strategy-table.example.json
+config/strategy-table.example.json (removed later)
 docs/dependencies.md
 docs/development.md
 docs/setup.md

@@ -54,10 +54,6 @@ def validate(root, exported=False):
     package = json.loads((root / "package.json").read_text())
     if package.get("dependencies") or package.get("exports") != {".": "./index.js"}:
         raise ValueError("plugin_metadata_invalid")
-    if json.loads((root / "config/router.example.json").read_text()) != dict(version=1, enabled=False, paths=[]):
-        raise ValueError("example_must_be_disabled")
-    if json.loads((root / "config/strategy-table.example.json").read_text()).get("rows") != {}:
-        raise ValueError("example_must_be_empty")
     return len(FILES), sum((root / name).stat().st_size for name in FILES)
 
 

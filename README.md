@@ -52,23 +52,18 @@ It reports whether superpowers, caveman, ponytail, impeccable, context7, rtk,
 graphify, git, gh and Python are present and current. It installs or updates
 only what you approve, and backs up your OpenCode config first.
 
-## Configure routes
+## Scores
 
-Smart Router selects nothing until you configure it. In
-`~/.local/state/vibe-workflow/smart-router` (under `$XDG_STATE_HOME` when set),
-create these files from `config/`:
-
-- `router.json` from `router.example.json`: set `enabled` to `true` and list
-  path IDs from `routes.json`.
-- `strategy-table.json` from `strategy-table.example.json`: add the routes you
-  have verified for your accounts.
-
-Keep the directory private (`0700`) and the files private (`0600`). Routes use
-your existing native logins, such as the Claude CLI.
+There is nothing to configure. Smart Router ranks models by public scores from
+Artificial Analysis via OpenRouter, refreshed about weekly with no credentials.
+Routes use your existing native logins, such as the Claude CLI.
+When ChatGPT reports its usage limit, Smart Router pauses ChatGPT routes until
+the reset time, read once from your Codex sign-in if Codex is installed (no
+model call); otherwise it pauses them for one hour.
 
 ## Pause or remove
 
-- Pause: set `enabled` to `false` in `router.json`.
+- Pause: run onboarding again and choose to keep your existing model selection.
 - Remove: delete the plugin's entry from `opencode.jsonc`.
 
 Credentials and state are left untouched either way.

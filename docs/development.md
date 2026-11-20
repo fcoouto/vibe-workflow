@@ -104,3 +104,104 @@ Not observed:
   during the child's run was inferred from the turn-end title.
 
 Other versions are unverified.
+
+## Smart Router automatic selection: what is known
+
+The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
+the ChatGPT findings are in `docs/chatgpt-quota-spike.md`.
+
+Verified by tests only (synthetic hosts, fetchers and stub processes): the model
+list reduction and its coercion of odd host fields, route building, task levels
+and ranking, score mapping and family borrowing, the private score cache, its
+refresh schedule and fetch bounds (size, same-host redirects, total deadline),
+the first-fetch disclosure, the caller-mistake versus `selector_unavailable`
+split, the ChatGPT limit mark and its one-minute throttle, the Codex reset reader
+against a stub `codex`, and the notices.
+
+Observed live on 20 November 2026:
+
+- OpenRouter's public `GET /api/v1/models` list shape, including the Artificial
+  Analysis score field and `-1` prices on meta-models (routers, not models).
+  A refresh downloads about 0.9 MB uncompressed: the fetch sends no
+  `Accept-Encoding`, so the design's 88 KB gzip figure does not apply.
+- OpenCode's ChatGPT provider uses WebSocket by default. Its requests carried
+  `codex.response.metadata` and `responsesapi.websocket_timing` events with no
+  usage fields.
+- Codex `account/rateLimits/read` on a Codex login answered with the weekly
+  window through the new reader in 0.71 s, with no model call.
+- Codex refused rate-limit reads with OpenCode's token-sharing credential.
+- `provider.chatgpt-limit` is defined in OpenCode 2.2.6's code.
+- OpenCode 2.2.6's `ctx.model.list()` answers an envelope `{ location, data }`,
+  not an array; `data` held 468 `Model.Info` objects. Each has `id`, `modelID`,
+  `providerID`, `type`, `family`, `name`, `package`, `settings`, `headers`,
+  `capabilities`, `variants`, `time`, `cost`, `status`, `enabled` and `limit`,
+  sometimes `compatibility`. `variants` is a list of `{ id }` objects and can be
+  empty. `limit.context` is an integer. `time.released` is an integer in
+  milliseconds; the plugin converts it to whole seconds, the unit of
+  OpenRouter's `created`, because the selector uses either as a tie-break.
+  The plugin still accepts a bare array.
+- Subscribing to `session.error` makes the host log `ignoring unknown event
+  types` on every load; of the two types tried, only `session.step.failed` is
+  accepted.
+- A step event arrives as `{ id, created, type, durable, location, data }`;
+  `session.step.ended` carried `data: { sessionID, assistantMessageID, finish,
+  rawFinish, cost, tokens, snapshot, files }`. By OpenCode's schema,
+  `session.step.failed` carries `data.error` as `{ type, message, status?,
+  response?: { body }, retryAfterMs? }`.
+- End to end in OpenCode 2.2.6 with real OpenRouter data, `smart_router_select`
+  answered `selected` at level 1 and level 3. The first fetch ran and showed its
+  disclosure. The score cache was 76 KB with mode 0600. No internal keys
+  (`refresh`, `first_fetch`) reached the tool output. With `session.error`
+  dropped, the host logged no unknown-event warning. Account facts were acquired
+  for all three plans (ChatGPT, Claude, Go).
+- `claude-agent` models report `time.released` as 0.
+- OpenCode 2.2.6's token-sharing ChatGPT model set ends at `gpt-6.1-sol`.
+
+The live check found five problems that the tests' synthetic hosts hid; each is
+fixed with a regression test:
+
+- The model-list envelope reduced to an empty list, so every call answered
+  `no_models`.
+- `time.released` arrived in milliseconds while OpenRouter's `created` is in
+  seconds; the plugin now converts it.
+- Subscribing to `session.error` logged an unknown-event warning on every load;
+  the plugin now subscribes only to `session.step.failed`.
+- The selector read the clock before acquiring account facts. The readers stamp
+  facts after acquisition, so every route looked like it had future facts and
+  was excluded as `billing_unverified`. The clock is now read after acquisition.
+- Family borrowing took scores from newer versions: old Haiku 4.5 borrowed Haiku
+  5.5's score, tied the real `haiku` and won on route order, and Opus 4.6 and 4.7
+  appeared as alternatives with Opus 5.5's score. A model now borrows only from
+  family members whose version is not greater than its own, and at equal price
+  and score an own score ranks before a borrowed one.
+
+The version rule and the own-before-borrowed order were re-run live with real
+data:
+
+- Level 1 (`implementation`; files 1-2, spec exact, risk reversible) chose
+  `opencode-claude-subscription:haiku`: its own score 36.5 (`score_source:
+  openrouter`), effort low, price 0.2, paid overflow blocked. Alternatives:
+  `opencode-go-subscription:claude-haiku-5-5` (36.5) and
+  `opencode-chatgpt-subscription:gpt-6.1-terra` (51.3, price 2). 25 models were
+  unscored, including the old Claude versions that no longer borrow.
+- Level 3 (`planning`; files cross-system, spec open, risk critical) chose
+  `opencode-claude-subscription:opus`: its own score 59.1, effort high, price 8.
+  Alternative: `claude-fable-5-2` (64.6, price 16).
+
+A version is the key's ASCII all-digit segments, compared as integers; segments
+of 8 or more digits are dates and are ignored, so `claude-sonnet-4-20250514`
+borrows from Sonnet 4, not Sonnet 4.6. The date rule itself is verified by tests;
+a live level-1 call after it (commit 3c17042) again chose
+`opencode-claude-subscription:haiku` with its own score 36.5, the same
+alternatives and 25 unscored models.
+
+Not observed live:
+
+- A `provider.chatgpt-limit` step failure itself, so the mark through the event
+  stream is verified by tests only.
+- Whether the `http.response` hook's `providerID` option scopes calls to OpenAI.
+
+Ruling: the plugin subscribes only to `session.step.failed` and reads the error
+at `data.error`, keeping the top-level and `properties` fallbacks. An event stream
+is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
+Other OpenCode versions are unverified.

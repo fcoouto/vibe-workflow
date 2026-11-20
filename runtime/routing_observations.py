@@ -1,8 +1,8 @@
-"""Subscription-only cached eligibility and shortlist; no ledger, gateway or executor."""
+"""Subscription-only cached eligibility; no ledger, gateway or executor."""
 import copy
 import time
 
-from runtime import routing_funding, subscription_billing
+from runtime import subscription_billing
 from runtime.storage import (FRESH_SECONDS, EXHAUSTED_RECHECK_SECONDS, CLOCK_MARGIN, WINDOW_UNIT,
                              WINDOW_UNITS, RATE_WINDOWS, _resolved, _read, _locked, _write,
                              window_path, store_window, consumed_at, trust_left)
@@ -30,22 +30,18 @@ class LocalSource:
         stored = _read(window_path(self.settings_path)) if stored is None else stored
         return [dict(value, id=key) for key, value in stored.get('pools', {}).get(pool, {}).items()]
 
+PAID = {'provider_blocked': 'blocked', 'provider_managed': 'enabled', 'unknown': 'unknown'}
 
-def shortlist(routes, strategy_ids, source, now=None):
+
+def eligible(routes, source, now=None):
     now = int(time.time()) if now is None else now
     kept, excluded = [], []
-    by_id = {item['strategy_id']: item for item in routes}
-    for sid in dict.fromkeys(strategy_ids):
-        route = by_id.get(sid)
-        if route is None:
-            continue
+    for route in routes:
         found = subscription_billing.fact(source, route, now)
         marker = subscription_billing.marker(found, route, now)
         reason = None
         if marker is None:
             reason = 'billing_unverified'
-        elif found['paid_crossover'] != subscription_billing.BLOCKED:
-            reason = 'overflow_not_blocked'
         else:
             try:
                 reason = 'quota_exhausted' if source.quota(copy.deepcopy(route), now) == 'quota_exhausted' else None
@@ -54,6 +50,5 @@ def shortlist(routes, strategy_ids, source, now=None):
         if reason:
             excluded.append(dict(route=route['route'], reason=reason))
         else:
-            kept.append(dict(route, account_marker=marker))
-    ids = routing_funding.subscription_shortlist(strategy_ids, kept)
-    return [route for route in kept if route['strategy_id'] in ids], excluded
+            kept.append(dict(route, account_marker=marker, paid_overflow=PAID[found['paid_crossover']]))
+    return kept, excluded
