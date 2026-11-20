@@ -83,7 +83,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations", "routing_funding",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())

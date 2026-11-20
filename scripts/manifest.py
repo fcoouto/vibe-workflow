@@ -2,7 +2,7 @@
 RUNTIME = (
     "__init__", "routing", "routing_paths", "routing_observations", "routing_funding",
     "subscription_billing", "selector", "storage", "processes", "continuity",
-    "native_catalog", "claude_usage", "opencode_account",
+    "native_catalog", "claude_usage", "opencode_account", "scores",
 )
 FILES = (
     "index.js", "project.js", "onboarding.js", "pr-advice.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
