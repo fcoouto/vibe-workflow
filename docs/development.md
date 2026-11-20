@@ -104,3 +104,30 @@ Not observed:
   during the child's run was inferred from the turn-end title.
 
 Other versions are unverified.
+
+## Onboarding questions: what is known
+
+Observed live (OpenCode 2.3.2, 20 November 2026, model `opencode/tidepool-alpha-free`,
+the server default): the packaged plugin, exported from branch commits `1726cac`,
+`f4ee764` and `6af94bf`, was loaded as a project-local copy in throwaway local clones.
+Each copy had its plugin id and its onboarding skill id changed (the installed
+plugin's skill wins a same-id clash). Seeded settings were Smart Router on and
+unconfigured, git workflow on with agents merging, and session titles off. One
+API-created session per run was answered through the form API. The remotes were
+local paths, so no GitHub setting was read or changed.
+
+- Followed: the saved-on Smart Router list with "(Current, Recommended)" and the
+  "It is on, but not set up yet." status. After `f4ee764`, also the opening line
+  with project and client, exact headers, and the question 2 merge mapping. The
+  question 5 status preview with `enabled: true` ran in two of three runs, and
+  question 3's saved-off "(Current)" was correct.
+- Not followed: the context never reached the question control's text. The model
+  wrote it in chat once and dropped it in later runs. The saved choice was not
+  moved first, and question 5's saved-off "(Current)" was missing twice. Question
+  2 lost its third choice once.
+- Before `f4ee764`, a failed apply (`invalid_request`, from a mis-parsed tool
+  result) led the model to import `project.js` with `node` and write the settings
+  itself. With the no-bypass rule added, the next run applied through the tool.
+
+Not observed: any other model, a session started from the desktop or terminal
+client, a worktree session, and question 4 being asked.
