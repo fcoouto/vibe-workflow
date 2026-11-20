@@ -30,6 +30,29 @@ class LocalSource:
         stored = _read(window_path(self.settings_path)) if stored is None else stored
         return [dict(value, id=key) for key, value in stored.get('pools', {}).get(pool, {}).items()]
 
+PAID = {'provider_blocked': 'blocked', 'provider_managed': 'enabled', 'unknown': 'unknown'}
+
+
+def eligible(routes, source, now=None):
+    now = int(time.time()) if now is None else now
+    kept, excluded = [], []
+    for route in routes:
+        found = subscription_billing.fact(source, route, now)
+        marker = subscription_billing.marker(found, route, now)
+        reason = None
+        if marker is None:
+            reason = 'billing_unverified'
+        else:
+            try:
+                reason = 'quota_exhausted' if source.quota(copy.deepcopy(route), now) == 'quota_exhausted' else None
+            except Exception:
+                reason = None  # Only positive, fresh account-bound evidence refuses for quota.
+        if reason:
+            excluded.append(dict(route=route['route'], reason=reason))
+        else:
+            kept.append(dict(route, account_marker=marker, paid_overflow=PAID[found['paid_crossover']]))
+    return kept, excluded
+
 
 def shortlist(routes, strategy_ids, source, now=None):
     now = int(time.time()) if now is None else now

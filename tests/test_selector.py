@@ -7,6 +7,7 @@ import time
 import unittest
 
 from runtime import routing
+from runtime import routing_paths
 from runtime import selector
 from unittest import mock
 try:
@@ -224,3 +225,49 @@ class SelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoutesTest(unittest.TestCase):
+    def models(self):
+        return [dict(provider=p, id=i, model=None, family=None, variants=["high"], context=1000, released=5)
+                for p, i in [("claude-agent", "opus"), ("openai", "gpt"), ("opencode-go", "glm"), ("anthropic", "x")]]
+
+    def eligible(self, source, routes=None, now=1000):
+        from runtime import routing_observations
+        return routing_observations.eligible(routes or routing_paths.routes(self.models()), source, now)
+
+    def test_routes_come_from_models_per_path(self):
+        routes = routing_paths.routes(self.models())
+        self.assertEqual([(r["path"], r["route"], r["model"]) for r in routes],
+                         [(PATHS[0], PATHS[0] + ":opus", "opus"), (PATHS[1], PATHS[1] + ":gpt", "gpt"),
+                          (PATHS[2], PATHS[2] + ":glm", "glm")])
+        self.assertTrue(all(r["pool"] and r["harness"] and r["variants"] == ["high"] for r in routes))
+        with self.assertRaises(ValueError):
+            routing_paths.routes([dict(self.models()[0], variants="high")])
+        with self.assertRaises(ValueError):
+            routing_paths.routes(self.models()[:1] * 513)
+
+    def test_overflow_never_excludes(self):
+        for crossover, label in [("provider_blocked", "blocked"), ("provider_managed", "enabled"), ("unknown", "unknown")]:
+            source = Facts()
+            source.billing = lambda route, now, c=crossover, f=source.billing: dict(f(route, now), paid_crossover=c)
+            kept, excluded = self.eligible(source)
+            self.assertEqual((len(kept), excluded), (3, []))
+            self.assertEqual({r["paid_overflow"] for r in kept}, {label})
+            self.assertTrue(all(r["account_marker"] for r in kept))
+
+    def test_quota_and_billing_still_exclude(self):
+        source = Facts()
+        source.exhausted.add(PATHS[0])
+        kept, excluded = self.eligible(source)
+        self.assertEqual(excluded, [dict(route=PATHS[0] + ":opus", reason="quota_exhausted")])
+        self.assertEqual(len(kept), 2)
+        stale = Facts()
+        stale.billing = lambda route, now, f=stale.billing: dict(f(route, now), valid_until=now - 1)
+        kept, excluded = self.eligible(stale)
+        self.assertEqual((kept, {e["reason"] for e in excluded}), ([], {"billing_unverified"}))
+
+    def test_no_ten_route_cap(self):
+        models = [dict(self.models()[0], id="m%d" % n) for n in range(30)]
+        kept, excluded = self.eligible(Facts(), routing_paths.routes(models))
+        self.assertEqual((len(kept), excluded), (30, []))
