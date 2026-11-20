@@ -5,6 +5,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 import urllib.response
 
@@ -136,6 +137,8 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual(self.refresh([], 1000, self.fetcher(model('a/known', 1))), 'stored')
         cache = scores.load(self.dir)
         self.assertFalse(scores.due(cache, ['known'], 1000))
+        self.assertFalse(scores.due(cache, ['known'], 1000 + scores.GAP))
+        self.assertFalse(scores.due(cache, ['known'], 1000 + scores.CEILING))
         self.assertFalse(scores.due(cache, ['new'], 1000 + scores.GAP - 1))
         self.assertTrue(scores.due(cache, ['new'], 1000 + scores.GAP))
         self.assertFalse(scores.due(cache, [], 1000 + scores.CEILING))
@@ -183,6 +186,32 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(scores.due(capped, ['new'], scores.BACKOFF[1] - 1))
         self.assertTrue(scores.due(capped, ['new'], scores.BACKOFF[1]))
 
+    def test_nested_payload_fails_without_raising(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        before = scores.load(self.dir)['models']
+        nested = lambda timeout: b'{"data":' + b'[' * 200000
+        self.assertEqual(self.refresh(['new'], 1000, nested), 'failed')
+        cache = scores.load(self.dir)
+        self.assertEqual((cache['models'], cache['failures']), (before, 1))
+
+    def test_oversized_write_fails_and_keeps_last_good_copy(self):
+        self.refresh([], 0, self.fetcher(model('a/known', 1)))
+        before = scores.load(self.dir)['models']
+        big = [model(f'a/m{index}', 1) for index in range(200)]
+        with mock.patch.object(storage, 'MAX_FILE', 1000):
+            self.assertEqual(self.refresh(['new'], 1000, self.fetcher(*big)), 'failed')
+        cache = scores.load(self.dir)
+        self.assertEqual((cache['models'], cache['failures']), (before, 1))
+
+    def test_failure_prunes_removed_models(self):
+        self.refresh(['gone'], 0, self.fetcher(model('a/other', 1)))
+        self.assertEqual(self.refresh(['new'], 1000, failing), 'failed')
+        self.assertEqual(list(scores.load(self.dir)['unscored']), [])
+
+    def test_observation_lock_does_not_block_refresh(self):
+        with storage._locked(self.dir / 'window-observations.json'):
+            self.assertEqual(self.refresh([], 0, self.fetcher(model('a/known', 1))), 'stored')
+
     def test_first_failure_is_remembered(self):
         self.assertEqual(self.refresh([], 50, failing), 'failed')
         cache = scores.load(self.dir)
@@ -192,7 +221,7 @@ class RefreshTest(unittest.TestCase):
     def test_single_fetcher(self):
         self.refresh([], 0, self.fetcher(model('a/known', 1)))
         calls = self.calls
-        with storage._locked(self.dir / scores.CACHE):
+        with storage._locked(self.dir / scores.CACHE, lock=scores.LOCK):
             self.assertEqual(self.refresh(['new'], 5000, self.fetcher()), 'busy')
         self.assertEqual(self.calls, calls)
 
@@ -239,6 +268,28 @@ class FetchTest(unittest.TestCase):
 
         with self.assertRaises(OSError):
             scores.fetch_openrouter(1, environ={'VCW_TEST_HOME': '/x'}, opener=Boom())
+
+    def test_fetch_enforces_a_total_deadline(self):
+        clock = [0.0]
+
+        class Trickle:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                clock[0] += 2
+                return b'x'
+
+        class Opener:
+            def open(self, request, timeout):
+                return Trickle()
+
+        with mock.patch.object(scores.time, 'monotonic', lambda: clock[0]):
+            with self.assertRaises(OSError):
+                scores.fetch_openrouter(5, environ={}, opener=Opener())
 
     def test_fetch_caps_size_and_sends_user_agent(self):
         requests = []

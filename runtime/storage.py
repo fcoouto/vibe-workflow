@@ -67,12 +67,12 @@ def _read(path):
 
 
 @contextmanager
-def _locked(path, block=True):
+def _locked(path, block=True, lock='.observations.lock'):
     path = _resolved(path)
     for folder in reversed([p for p in (path.parent, *path.parent.parents) if not p.exists()]):
         folder.mkdir(mode=0o700, exist_ok=True)
     private(path.parent, True)
-    lock_path = path.parent / '.observations.lock'
+    lock_path = path.parent / lock
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         private(lock_path)

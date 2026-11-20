@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -22,6 +23,8 @@ RETRY = (3600, 14400, 43200, 86400)
 BACKOFF = (300, 3600)
 FIRST_TIMEOUT = 5.0
 MAX_BYTES = 5 << 20
+CHUNK = 1 << 16
+LOCK = '.scores.lock'
 
 
 def normalize(model_id):
@@ -162,7 +165,7 @@ def _unscored(cache, parsed, wanted, now):
 
 
 def refresh(state_dir, wanted, now, *, fetch=None, timeout=15.0):
-    with storage._locked(Path(state_dir) / CACHE, block=False) as path:
+    with storage._locked(Path(state_dir) / CACHE, block=False, lock=LOCK) as path:
         if path is None:
             return 'busy'
         cache = load(state_dir)
@@ -173,13 +176,14 @@ def refresh(state_dir, wanted, now, *, fetch=None, timeout=15.0):
         previous = sum(entry['score'] is not None for entry in base['models'].values())
         try:
             parsed = parse_openrouter((fetch or fetch_openrouter)(timeout), previous)
-        except (OSError, ValueError, http.client.HTTPException):
-            storage._write(path, dict(base, failures=base['failures'] + 1))
+            storage._write(path, dict(
+                version=1, fetched_at=now, attempt_at=now, failures=0, models=parsed['models'],
+                unscored=_unscored(cache, parsed, wanted, now)))
+            return 'stored'
+        except (OSError, ValueError, RecursionError, http.client.HTTPException):
+            kept = {key: row for key, row in base['unscored'].items() if key in wanted}
+            storage._write(path, dict(base, failures=base['failures'] + 1, unscored=kept))
             return 'failed'
-        storage._write(path, dict(
-            version=1, fetched_at=now, attempt_at=now, failures=0, models=parsed['models'],
-            unscored=_unscored(cache, parsed, wanted, now)))
-        return 'stored'
 
 
 class _SameHost(urllib.request.HTTPRedirectHandler):
@@ -194,8 +198,16 @@ def fetch_openrouter(timeout, environ=None, opener=None):
     if (os.environ if environ is None else environ).get('VCW_TEST_HOME'):
         raise OSError('network_disabled')
     request = urllib.request.Request(URL, headers={'User-Agent': 'vibe-workflow-smart-router'})
+    deadline = time.monotonic() + timeout
+    raw = b''
     with (opener or urllib.request.build_opener(_SameHost)).open(request, timeout=timeout) as response:
-        raw = response.read(MAX_BYTES + 1)
+        while len(raw) <= MAX_BYTES:
+            chunk = response.read(min(CHUNK, MAX_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+            if time.monotonic() > deadline:
+                raise OSError('scores_timeout')
     if len(raw) > MAX_BYTES:
         raise OSError('scores_too_large')
     return raw
