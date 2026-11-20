@@ -35,8 +35,8 @@ one wins. New models are included automatically. Users never edit a file.
 
 ## Anti-goals
 
-- Recommending a route with positive evidence that it bills paid overflow
-  (for example Claude with extra usage enabled).
+- Recommending a plan whose quota reading shows it at 100% (exhausted), where
+  further use would draw on paid extra usage or be refused.
 - Blocking the caller on the network during normal use.
 - Fuzzy model-name guessing. A wrong match is worse than no score.
 - Bundling or redistributing benchmark data in the package.
@@ -127,8 +127,8 @@ Astra and Claude Fable 5.2, and the user's choices in conversation.
    signed-in account drop out through the existing `billing_unverified` check.
 4. The existing billing and quota checks run first and drop routes that cannot
    be used now. They run before ranking so the floor comes from the best model
-   the user can actually use. The overflow check changes as described in
-   *Paid overflow*.
+   the user can actually use. The overflow check is removed; see
+   *Paid overflow and quota*.
 5. Each remaining model gets a score and a price from the cached OpenRouter data
    (see *Mapping* and *Refresh*), then the context and caller constraints apply.
 6. The ranking rule orders the candidates. The first is the pick; the next two
@@ -196,13 +196,30 @@ through the cost-benefit clause (57.3 against a floor of 58.1, at half of Opus
 Sonnet 5.5, level 3 → Opus 5.5. The builder may tune the ratios to meet these
 expectations; the expectations are the contract.
 
-### Paid overflow
+### Paid overflow and quota
 
-Decided by the user: accept `unknown`. A route is excluded only on positive
-evidence that it bills paid overflow (`paid_crossover: provider_managed`, which
-today only Claude can report, when extra usage is enabled). `provider_blocked`
-and `unknown` are both eligible. Each returned route carries its
-`paid_overflow` state (`blocked` or `unknown`) so the caller can see it.
+Decided by the user: the paid-overflow setting never excludes a plan. A plan
+with extra usage enabled (or unknown) still has its included quota, and it should
+be used. The only capacity rule is quota: when a plan's quota reading shows 100%
+(exhausted), its models stop being recommended until the reading resets. Below
+100%, every plan is eligible, whatever its overflow setting.
+
+- This is the existing quota check, unchanged: positive, fresh exhaustion
+  excludes (`quota_exhausted`); stale or missing readings never do. Claude
+  stops at 100% of its 5-hour or 7-day window or a model-scoped limit; Go stops
+  when any of its meters is limited or at 100%.
+- Work already running is not affected. The router only advises on new work, so
+  the last task can finish its few remaining calls past 100%, as the user has
+  observed providers allow.
+- The overflow exclusion (`overflow_not_blocked`, `routing_observations.py:47`
+  and `selector.py:85`) is removed. The overflow state is still read and is
+  returned on each route as `paid_overflow` (`blocked`, `enabled` or `unknown`),
+  for information only.
+- Known gap: ChatGPT has no quota reading in this codebase, so it never reaches
+  the 100% stop. If its plan runs out, the provider refuses (or uses credits if
+  the user opted in), and the caller excludes it with `excluded_models` as
+  today.
+
 Research behind the decision (20 November 2026):
 
 - **ChatGPT.** OpenCode signs in through ChatGPT's partner plan sharing (the
@@ -220,8 +237,8 @@ Research behind the decision (20 November 2026):
 - **Claude.** Unchanged: the native reader reports extra usage as enabled,
   disabled or unknown.
 
-The `overflow_not_blocked` exclusion is renamed `overflow_enabled` and applies
-only to `provider_managed`.
+None of these settings matter for eligibility any more; they are recorded here
+because they explain why `paid_overflow` is `unknown` for ChatGPT and Go.
 
 ### Refresh of the OpenRouter data
 
@@ -316,9 +333,10 @@ the advisory invariants, the fallback notices and the context hook.
 - Refresh tests with a fake clock and fake fetcher for every rule above,
   including the first-run wait, the 15-minute gap, backoff, the sanity
   rejection, and a never-scored model falling back to the weekly ceiling.
-- Paid overflow: `unknown` and `provider_blocked` routes are eligible and carry
-  their `paid_overflow` state; `provider_managed` routes are excluded as
-  `overflow_enabled`.
+- Paid overflow and quota: routes with overflow `blocked`, `enabled` or
+  `unknown` are all eligible below 100% and carry their `paid_overflow` state;
+  a fresh 100% reading excludes the plan's routes as `quota_exhausted`; a stale
+  or missing reading excludes nothing.
 - Removed models: a model absent from the live list is never recommended, even
   with a cached score, and its retry entry is pruned.
 - Onboarding: preview never fetches; apply may; the one-time notice appears
