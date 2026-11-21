@@ -350,7 +350,11 @@ first step. With the export of `1332e32`, which pushes on every step, one new se
 per model, after one shell step: `claude-agent/sonnet` found the instruction only in
 the entry's `<system-update>`, not in its system prompt; `openai/gpt-6.1-terra` found
 it in its developer instructions and in the entry. That repository also loaded the
-installed 0.7.1 plugin, so Terra saw the pushed text twice. Not observed: a session
+installed 0.7.1 plugin, so Terra saw the pushed text twice. With the export of
+`3a3745b`, which puts the entry only for `claude-agent`, after one shell step:
+`claude-agent/sonnet` found the instruction only in the entry's `<system-update>`;
+`opencode-go/claude-haiku-5-5` found it only in its system prompt (twice, again because
+of the installed plugin) and in no tool result. Not observed: a session
 started from the desktop or terminal client, other models, and unloading with live
 sessions.
 
