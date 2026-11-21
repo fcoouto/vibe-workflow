@@ -179,15 +179,18 @@ const NOTES = {
 
 const OVERRIDE = "An explicit request from your human partner in this session overrides this."
 const SKILL_NOTES = {
-  "finishing-a-development-branch": (state) => "vibe-workflow: your human partner's declared integration choice, set " +
+  "writing-plans": { gate: "onboarded", note: () => "vibe-workflow: your human partner pre-approved the execution " +
+    "method you recommend; treat it as already supplied and do not ask which one to use. Still ask them to review " +
+    "the plan, and wait for that review before implementing. " + OVERRIDE },
+  "finishing-a-development-branch": { gate: "git_workflow", note: (state) => "vibe-workflow: your human partner's declared integration choice, set " +
     "during onboarding: push the branch and open a pull request, following the vibe-pull-requests skill ([BLOCKED] " +
     "draft, then [READY]). Skip the options menu and do not ask; the skill's other steps still apply. " +
     (state.agent_merge === true ? "You may merge it yourself once it is [READY] and its evidence is current. "
       : "Stop at [READY] and tell your human partner it awaits their merge. ") +
     (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps in vibe-pull-requests. "
-      : "Keep the worktree after the merge. ") + OVERRIDE,
-  "using-git-worktrees": () => "vibe-workflow: your human partner's declared worktree preference, set during " +
-    "onboarding: always work in a worktree, never in the primary checkout. Do not ask for consent. " + OVERRIDE,
+      : "Keep the worktree after the merge. ") + OVERRIDE },
+  "using-git-worktrees": { gate: "git_workflow", note: () => "vibe-workflow: your human partner's declared worktree preference, set during " +
+    "onboarding: always work in a worktree, never in the primary checkout. Do not ask for consent. " + OVERRIDE },
 }
 
 function mergeNote(auto, agentMerge, primaryPath, cleanup) {
@@ -207,18 +210,19 @@ function remember(map, key, value) {
   if (map.size > MAX_SESSIONS) map.delete(map.keys().next().value)
 }
 
-export function createAdvisor({ settings, primary, checkout }) {
+export function createAdvisor({ settings, onboarded = async () => false, primary, checkout }) {
   const armed = new Map()
   const branches = new Map()
   return {
     clear() { armed.clear(); branches.clear() },
     async skillNote(skill) {
       try {
-        const note = typeof skill === "string" && Object.hasOwn(SKILL_NOTES, skill.split(/[:/]/).pop()) &&
+        const entry = typeof skill === "string" && Object.hasOwn(SKILL_NOTES, skill.split(/[:/]/).pop()) &&
           SKILL_NOTES[skill.split(/[:/]/).pop()]
-        if (!note) return null
+        if (!entry) return null
+        if (entry.gate === "onboarded") return await onboarded() === true ? entry.note() : null
         const state = await settings()
-        return state?.state === "on" ? note(state) : null
+        return state?.state === "on" ? entry.note(state) : null
       } catch { return null }
     },
     async advise(event, sessionID) {
@@ -295,8 +299,8 @@ function appendNote(event, note) {
 }
 
 // The hook is unverified on the installed host: every field is read defensively and a missing one keeps the note silent.
-export async function registerPrAdvice(ctx, { settings, primary, checkout = defaultCheckout }) {
-  const advisor = createAdvisor({ settings, primary, checkout })
+export async function registerPrAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout }) {
+  const advisor = createAdvisor({ settings, onboarded, primary, checkout })
   let closed = false
   const close = () => { closed = true; advisor.clear() }
   if (typeof ctx.tool?.hook !== "function") return { registered: false, close }

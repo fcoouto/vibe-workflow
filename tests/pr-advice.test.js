@@ -7,6 +7,7 @@ function advisor(settings = on, extra = {}) {
   const calls = { settings: 0 }
   const value = createAdvisor({
     settings: async () => { calls.settings++; if (settings instanceof Error) throw settings; return settings },
+    onboarded: async () => { calls.onboarded = (calls.onboarded ?? 0) + 1; return extra.isOnboarded ?? true },
     primary: async () => "/repo", checkout: async () => null, ...extra,
   })
   const advise = (command, sessionID = "ses_a", more = {}) =>
@@ -201,4 +202,23 @@ test("skillNote states the onboarding decision for the finishing and worktree sk
     assert.equal(await skillNote(skill), null)
   }
   assert.equal(calls.settings, 0)
+})
+
+const PLAN = "vibe-workflow: your human partner pre-approved the execution method you recommend; treat it as already " +
+  "supplied and do not ask which one to use. Still ask them to review the plan, and wait for that review before " +
+  "implementing. An explicit request from your human partner in this session overrides this."
+test("skillNote pre-approves the recommended execution method in any onboarded project", async () => {
+  for (const settings of [on, { state: "off" }, { state: "not_onboarded" }, null]) {
+    const { skillNote } = advisor(settings)
+    assert.equal(await skillNote("superpowers:writing-plans"), PLAN)
+    assert.equal(await skillNote("writing-plans"), PLAN)
+  }
+  const fresh = advisor(on, { isOnboarded: false })
+  assert.equal(await fresh.skillNote("writing-plans"), null)
+  const failing = advisor(on, { onboarded: async () => { throw new Error("boom") } })
+  assert.equal(await failing.skillNote("writing-plans"), null)
+  const { skillNote, calls } = advisor(on, { isOnboarded: false })
+  for (const skill of ["writing-plans-old", "brainstorming", "toString", "__proto__"]) assert.equal(await skillNote(skill), null)
+  assert.equal(calls.settings, 0)
+  assert.equal(calls.onboarded, undefined)
 })
