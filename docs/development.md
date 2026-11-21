@@ -310,6 +310,14 @@ removes it. `claude-agent` therefore receives it from the second step. Hosts
 without the entry API, or a failed put, keep the push on every step. The pull
 request fallback note is still only pushed. Other versions are unverified.
 
+Observed live after the change (OpenCode 2.3.2, 21 November 2026, export of
+`f790b44` loaded as a project-local copy with its plugin id changed, in the same
+throwaway repository, `claude-agent/sonnet`): after one shell step, Sonnet quoted the
+instruction from a `<system-update>`. With Smart Router then turned off, the same
+session's next step received "The context under "vibe-workflow-smart-router" no
+longer applies. Disregard it.", and Sonnet treated the instruction as removed. Not
+observed: a session started from the desktop or terminal client, and other models.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported
