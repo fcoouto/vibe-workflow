@@ -155,6 +155,15 @@ assert.match(await readFile(new URL('./references/procedure.md', pathToFileURL(s
         self.assertNotEqual(run.returncode, 0)
         self.assertEqual((output / "keep").read_text(), "user data")
 
+    def test_npm_files_cover_the_export(self):
+        # OpenCode installs the plugin from git through npm, which ships only package.json "files".
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from manifest import FILES
+        listed = json.loads((ROOT / "package.json").read_text())["files"]
+        missing = [name for name in FILES if name != "package.json"
+                   and not any(name == entry or name.startswith(entry.rstrip("/") + "/") for entry in listed)]
+        self.assertEqual(missing, [])
+
     def test_validator_rejects_legacy_files_and_imports_in_export(self):
         output = self.root / "export"
         self.assertEqual(self.build(output).returncode, 0)
