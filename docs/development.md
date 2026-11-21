@@ -318,14 +318,19 @@ So the Smart Router instruction is still pushed on every step, for every provide
 and only `claude-agent` sessions also get the entry `vibe-workflow-smart-router`,
 which they read from the second step on. A host that names no provider gets the
 entry too; a session that switches away from `claude-agent` keeps it. Other
-providers make no entry calls, and `opencode-go` never gets instructions inside tool
-results. A failed put is retried on the next step. Hosts without the entry API keep
+providers make no `put` calls, so an `opencode-go` session gets no entry in its tool
+results unless it ran on `claude-agent` first. Turning Smart Router off still calls
+`remove` for sessions on any provider; removing a key a session never had sends the
+model nothing (observed once on `opencode-go/claude-haiku-5-5`, two tool steps, no
+update). A failed put is retried on the next step. Hosts without the entry API keep
 only the push. The pull request fallback note is still only pushed. The design came
 from a council run, recorded in
 `docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`.
 Known gaps:
 
 - No channel reaches a `claude-agent` session's first model call.
+- A session that moves from `claude-agent` to `opencode-go` gets its entry, and later
+  any removal notice, appended to a tool result there.
 
 - Entries are durable but the plugin's record of them is in memory (at most 128
   sessions). Unloading removes the entries that load put; a crash does not, and a

@@ -49,7 +49,7 @@ No single mechanism serves all three plans today: the system-prompt push never r
 `claude-agent`, and the entry lands in a tool result on `opencode-go`. So the user's
 "injection as fallback" idea inverts: the push is the primary, stateless channel, and
 the entry is a `claude-agent`-only supplement. Gating the entry also serves the
-lightweight rule, since `openai` and `opencode-go` sessions make no entry calls. No
+lightweight rule, since `openai` and `opencode-go` sessions make no `put` calls. No
 option reaches a `claude-agent` session's first model call; only an upstream change
 (D6) can, and it would let the entry code be deleted.
 
