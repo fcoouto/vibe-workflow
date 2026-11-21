@@ -86,5 +86,63 @@ class RoutingTest(unittest.TestCase):
                 routing.check_constraints(bad)
 
 
+
+def c(route, key, creator, score, price=1, source='openrouter', released=0):
+    return dict(route=route, key=key, creator=creator, score=score, price=price, score_source=source,
+                released=released)
+
+
+def routes(items):
+    return [item['route'] for item in items]
+
+
+class SeatsTest(unittest.TestCase):
+    def test_one_per_lab_then_more_frontier(self):
+        found = routing.seats([c('fable', 'claude-fable-5-2', 'anthropic', 64.6), c('opus', 'claude-opus-5-5', 'anthropic', 59.1),
+                               c('astra', 'gpt-6-astra', 'openai', 62.1), c('sol', 'gpt-6-2-sol', 'openai', 57.3),
+                               c('sonnet', 'claude-sonnet-5-5', 'anthropic', 54.5)])
+        self.assertEqual(routes(found), ['fable', 'astra', 'opus', 'sol', 'sonnet'])
+
+    def test_below_frontier_only_after_frontier(self):
+        found = routing.seats([c('a1', 'a-1', 'anthropic', 90), c('a2', 'a-2', 'anthropic', 85),
+                               c('o1', 'o-1', 'openai', 70)])
+        self.assertEqual(routes(found), ['a1', 'a2', 'o1'])
+
+    def test_unknown_creator_is_not_a_new_lab(self):
+        found = routing.seats([c('a1', 'a-1', 'anthropic', 90), c('a2', 'a-2', 'anthropic', 89),
+                               c('x', 'x-1', None, 89.5)])
+        self.assertEqual(routes(found), ['a1', 'x', 'a2'])
+        found = routing.seats([c('x', 'x-1', None, 95), c('a1', 'a-1', 'anthropic', 90),
+                               c('o1', 'o-1', 'openai', 89)])
+        self.assertEqual(routes(found), ['a1', 'o1', 'x'])
+
+    def test_one_model_one_seat(self):
+        cases = [
+            ([c('claude', 'claude-haiku-5-5', 'anthropic', 50, price=2), c('go', 'claude-haiku-5-5', 'anthropic', 50)],
+             ['go']),
+            ([c('dated', 'claude-haiku-5-5-20261001', 'anthropic', 50), c('base', 'claude-haiku-5-5', 'anthropic', 50)],
+             ['base']),
+            ([c('fast', 'gpt-6-astra-fast', 'openai', 62, price=4), c('astra', 'gpt-6-astra', 'openai', 62)],
+             ['astra']),
+            ([c('six', 'gpt-6', 'openai', 60), c('six-two', 'gpt-6-2', 'openai', 61)], ['six-two', 'six']),
+            ([c('s3', 'gpt-6-3-sol', 'openai', 57, source='family'), c('s2', 'gpt-6-2-sol', 'openai', 57)],
+             ['s2', 's3']),
+            ([c('ours', 'gpt-6-astra-fast', 'openai', 62), c('theirs', 'gpt-6-astra', 'someone', 62, price=2)],
+             ['ours', 'theirs']),
+        ]
+        for given, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(routes(routing.seats(given)), expected)
+
+    def test_ties_use_the_shared_order_key(self):
+        found = routing.seats([c('d', 'm-d', 'anthropic', 70, released=1), c('c', 'm-c', 'anthropic', 70, released=2),
+                               c('b', 'm-b', 'anthropic', 70, source='family'), c('a', 'm-a', 'anthropic', 70, price=0.5),
+                               c('e', 'm-e', 'anthropic', 70, released=1)])
+        self.assertEqual(routes(found), ['a', 'c', 'd', 'e', 'b'])
+
+    def test_empty(self):
+        self.assertEqual(routing.seats([]), [])
+
+
 if __name__ == '__main__':
     unittest.main()

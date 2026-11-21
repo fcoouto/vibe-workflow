@@ -78,6 +78,34 @@ def order(candidates, level):
     near = [item for item in candidates if item['score'] >= NEAR_SCORE * floor
             and item['price'] <= NEAR_PRICE * cheapest]
     picked = {item['route']: item for item in ok + near}.values()
+    return sorted(picked, key=_cheapest_first)
+
+
+def _cheapest_first(item):
     # At equal price and score, an own score ranks before a family-borrowed one.
-    return sorted(picked, key=lambda item: (item['price'], -item['score'], item.get('score_source') == 'family',
-                                            -item['released'], item['route']))
+    return item['price'], -item['score'], item.get('score_source') == 'family', -item['released'], item['route']
+
+
+def _identity(item, bases):
+    creator = item['creator']
+    key = '-'.join(part for part in item['key'].split('-') if not (part.isdigit() and len(part) >= 8))
+    # A tier of a model (`-fast`, `-free`) is that model; a step in digits is a different one.
+    tiers = [base for owner, base in bases if owner == creator and key.startswith(base + '-')
+             and not any(ch.isdigit() for ch in key[len(base) + 1:])]
+    return creator, min(tiers, key=len) if tiers else key
+
+
+def seats(candidates):
+    """Council seat order: frontier models one per lab, then the rest of the frontier, then the strongest below."""
+    bases = {_identity(item, ()) for item in candidates}
+    kept = {}
+    for item in sorted(candidates, key=_cheapest_first):
+        kept.setdefault(_identity(item, bases), item)
+    ranked = sorted(kept.values(), key=lambda item: (-item['score'], *_cheapest_first(item)))
+    floor = RATIO[2] * max((item['score'] for item in ranked), default=0)
+    first, labs = [], set()
+    for item in ranked:
+        if item['score'] >= floor and item['creator'] is not None and item['creator'] not in labs:
+            first.append(item)
+            labs.add(item['creator'])
+    return first + [item for item in ranked if all(item is not seated for seated in first)]
