@@ -17,7 +17,7 @@ test("skill frontmatter matches the registration pattern and links the procedure
 test("procedure carries the process, roster and failure rules", async () => {
   hasAll(await read("references/procedure.md"), [
     "vibe_council_roster", 'agent: "explore"', "#<variant>", "docs/vibe-council/sessions/",
-    "shasum -a 256", "openai/gpt-6.2-astra", "claude-agent/opus", "claude-agent/claude-fable-5-2",
+    "shasum -a 256", "openai/gpt-6-astra", "claude-agent/opus", "claude-agent/claude-fable-5-2",
     "no vote", "did not vote", "Round 2", "worktree", "paid overflow", "call `vibe_council_roster` again",
   ])
 })

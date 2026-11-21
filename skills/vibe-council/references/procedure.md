@@ -10,7 +10,7 @@ would reverse one as a question.
 
 | Seat | Model |
 | --- | --- |
-| Astra | `openai/gpt-6.2-astra` |
+| Astra | `openai/gpt-6-astra` |
 | Opus | `claude-agent/opus` |
 | Fable | `claude-agent/claude-fable-5-2` |
 
@@ -26,7 +26,7 @@ may override per run ("ask Astra and Opus"), with one to five seats, unique name
 2. **Measure before asking.** Where a fact would change votes, measure it first and
    put the number in the brief.
 3. **Check the roster.** Call `vibe_council_roster` with
-   `{"v":1,"seats":[{"seat":"Astra","model":"openai/gpt-6.2-astra","variant":null}, …]}`.
+   `{"v":1,"seats":[{"seat":"Astra","model":"openai/gpt-6-astra","variant":null}, …]}`.
    - If `ready` is false, or any seat is not `ok`, stop and ask the user. Statuses:
      `unknown_model`, `unknown_variant`, `provider_not_on_plan`, `billing_unverified`,
      `quota_exhausted`, `unchecked`. Offer a seat's `candidates` only as options.

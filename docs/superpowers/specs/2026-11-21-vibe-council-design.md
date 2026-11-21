@@ -98,7 +98,7 @@ Input:
 
 ```json
 {"v": 1, "seats": [
-  {"seat": "Astra", "model": "openai/gpt-6.2-astra", "variant": null},
+  {"seat": "Astra", "model": "openai/gpt-6-astra", "variant": null},
   {"seat": "Opus",  "model": "claude-agent/opus", "variant": null},
   {"seat": "Fable", "model": "claude-agent/claude-fable-5-2", "variant": null}]}
 ```
@@ -139,7 +139,9 @@ Checked on 2026-11-21 with the `models` search tool: `openai/gpt-6.2-astra`,
 cost, and the same models also appear under `opencode/` and `openrouter/` with
 per-token prices. The live host check later showed that the search listing is not
 proof of a route: OpenCode 2.2.6's own model list has no `openai/gpt-6.2-astra`, and a
-direct run failed with `provider.no-route`. See `docs/development.md`.
+direct run failed with `provider.no-route`. See `docs/development.md`. The default
+Astra seat is therefore `openai/gpt-6-astra`, the newest Astra the ChatGPT plan routes
+on that host (user decision, 2026-11-21); the live council run used it.
 
 ### 4. Session records
 
@@ -201,7 +203,7 @@ to `result.md` there.
    names: anonymised positions and reasons, one final vote, at most one extra round.
 10. **Record** `result.md` with the user's decision.
 
-Default roster: Astra `openai/gpt-6.2-astra`, Opus `claude-agent/opus`, Fable
+Default roster: Astra `openai/gpt-6-astra`, Opus `claude-agent/opus`, Fable
 `claude-agent/claude-fable-5-2`. Three seats so majorities exist; vendor variety matters
 more than count.
 

@@ -58,7 +58,7 @@ Ask: **“Use `vibe-council` to review this plan.”** or run
 `/vibe-council <what to review>`.
 
 Each member reviews on its own and reports back. The default members are Astra
-(`openai/gpt-6.2-astra`), Opus (`claude-agent/opus`) and Fable
+(`openai/gpt-6-astra`), Opus (`claude-agent/opus`) and Fable
 (`claude-agent/claude-fable-5-2`); you can change them per run. Members run as
 OpenCode's `explore` agent, which cannot use edit tools or start subagents.
 Shell stays available, so the brief tells members to stay read-only. Seats are
