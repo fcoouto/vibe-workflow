@@ -281,6 +281,35 @@ at `data.error`, keeping the top-level and `properties` fallbacks. An event stre
 is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
 Other OpenCode versions are unverified.
 
+## Context instructions on claude-agent: what is known
+
+Read from OpenCode 2.3.2's code: the `claude-agent` provider registers its own
+`context`, `generate` and `compaction` session hooks at startup (`ClaudeInstructions`).
+They copy `event.system`, except its first part, into the options Claude Code is
+launched with. Plugin hooks run after it, so text a plugin pushes into `event.system`
+never reaches a `claude-agent` model. Other providers receive it.
+
+Observed live (OpenCode 2.3.2, 21 November 2026, installed plugin 0.7.1, throwaway
+repository with only Smart Router on, one prompt per model and no tools):
+`claude-agent/sonnet` reported no instruction about `smart_router_select`, only
+its catalog entry; `openai/gpt-6.1-terra` quoted the instruction verbatim.
+
+Durable session instruction entries (`ctx.session.instructions.entry.put` and
+`remove`) do reach `claude-agent`, as a `<system-update>` in the user turn that
+Sonnet treated as binding. Observed on the same version:
+
+- An entry applies from the step after the one that puts it, for both providers.
+  An entry put from a `session.created` subscription was not observed: under
+  `--standalone` the plugin loaded after the session was created.
+- Keys must match `^[a-z0-9][a-z0-9._-]*$`. `list` answers `[{ key, value }]`;
+  removing an absent key succeeds.
+
+So the Smart Router instruction is pushed on a session's first step and kept as
+the entry `vibe-workflow-smart-router` from then on; turning Smart Router off
+removes it. `claude-agent` therefore receives it from the second step. Hosts
+without the entry API, or a failed put, keep the push on every step. The pull
+request fallback note is still only pushed. Other versions are unverified.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported

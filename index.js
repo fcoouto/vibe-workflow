@@ -28,6 +28,14 @@ const actions = new Map([
   ["account_changed", "Check the selected account before requesting another recommendation."],
   ["selector_unavailable", "Check that Python and the plugin package are available, then try again."],
 ])
+const ROUTER_ENTRY = "vibe-workflow-smart-router"
+const ROUTER_INSTRUCTION =
+  "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
+  "describing the task by its facts: files, spec, risk. " +
+  "Use a recommendation only when compatible with the user's choices and the client's permitted native controls. " +
+  "If no recommendation is available, show its notice in chat when present, then keep the client's existing selection. " +
+  "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
+  "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -247,6 +255,20 @@ export default {
         refreshLater(refresh)
         return rest
       } }) })
+    // OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so text
+    // pushed here never reaches it. A durable session instruction entry does, from the next step on.
+    const entries = new Map()
+    async function entry(sessionID, on) {
+      const api = ctx.session.instructions?.entry
+      if (!api || typeof sessionID !== "string" || entries.get(sessionID) === on) return
+      try {
+        if (on) await api.put({ sessionID, key: ROUTER_ENTRY, value: ROUTER_INSTRUCTION })
+        else await api.remove({ sessionID, key: ROUTER_ENTRY })
+      } catch { return }
+      entries.delete(sessionID)
+      entries.set(sessionID, on)
+      if (entries.size > MAX_NOTICE_SESSIONS) entries.delete(entries.keys().next().value)
+    }
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {
@@ -254,15 +276,17 @@ export default {
           "vibe-workflow: open pull requests as [BLOCKED] drafts and follow the vibe-pull-requests skill." })
       }
       const preference = await project.inspect()
+      const sessionID = event?.sessionID
       if (preference.state === "off") notices.clear()
-      if (preference.state !== "on" || closed) return
-      event.system.push({ type: "text", text:
-        "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
-        "describing the task by its facts: files, spec, risk. " +
-        "Use a recommendation only when compatible with the user's choices and the client's permitted native controls. " +
-        "If no recommendation is available, show its notice in chat when present, then keep the client's existing selection. " +
-        "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
-        "The caller retains task ownership, native execution, reviews, permissions, continuation, and results." })
+      if (closed) return
+      if (preference.state !== "on") {
+        if (preference.state === "off" || entries.get(sessionID) === true) await entry(sessionID, false)
+        return
+      }
+      // The entry applies from the next step, so this step still carries the instruction in the system prompt.
+      const placed = entries.get(sessionID) === true
+      await entry(sessionID, true)
+      if (!placed) event.system.push({ type: "text", text: ROUTER_INSTRUCTION })
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
     await ctx.session.hook("http.response", async (event) => {

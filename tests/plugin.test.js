@@ -73,6 +73,77 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.deepEqual(event.options, {})
 })
 
+// OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so the
+// router instruction also goes into a durable session instruction entry, which that provider does receive.
+async function routed(enabled, entries) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "router-entry-")))
+  if (enabled !== null) await preference(root, enabled)
+  const h = host(root)
+  const calls = []
+  if (entries !== null) h.ctx.session.instructions = { entry: {
+    put: async (input) => { calls.push(["put", input]); if (entries === "failing") throw Error("host refused") },
+    remove: async (input) => { calls.push(["remove", input]) },
+  } }
+  const cleanup = await (await load()).setup(h.ctx)
+  const step = async (sessionID = "ses_a") => {
+    const system = []
+    await h.hooks.get("context")({ system, sessionID, options: {} })
+    return system.map((part) => part.text)
+  }
+  return { root, calls, step, cleanup }
+}
+
+test("the router instruction becomes a session entry and stays in the system prompt until the entry applies", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  const first = await r.step()
+  assert.equal(first.length, 1)
+  assert.match(first[0], /before delegating/i)
+  assert.equal(r.calls.length, 1)
+  const [kind, input] = r.calls[0]
+  assert.equal(kind, "put")
+  assert.equal(input.sessionID, "ses_a")
+  assert.match(input.key, /^[a-z0-9][a-z0-9._-]*$/)
+  assert.equal(input.value, first[0])
+  assert.deepEqual(await r.step(), [])
+  assert.equal(r.calls.length, 1)
+  assert.equal((await r.step("ses_b")).length, 1)
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["put", "ses_b"]])
+})
+
+test("turning Smart Router off removes the session entry once", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await preference(r.root, false)
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
+  assert.deepEqual(r.calls[1][1], { sessionID: "ses_a", key: r.calls[0][1].key })
+  await preference(r.root, true)
+  assert.equal((await r.step()).length, 1)
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove", "put"])
+})
+
+test("an opted-out project clears a leftover entry; an unonboarded one makes no entry calls", async (t) => {
+  for (const [enabled, expected] of [[false, ["remove"]], [null, []]]) {
+    const r = await routed(enabled, "working")
+    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+    assert.deepEqual(await r.step(), [])
+    assert.deepEqual(await r.step(), [])
+    assert.deepEqual(r.calls.map(([name]) => name), expected)
+  }
+})
+
+test("without working session entries the router instruction stays in the system prompt every step", async (t) => {
+  for (const entries of [null, "failing"]) {
+    const r = await routed(true, entries)
+    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+    assert.equal((await r.step()).length, 1)
+    assert.equal((await r.step()).length, 1)
+  }
+})
+
 test("a host without models returns no authority without creating state", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
   try {
