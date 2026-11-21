@@ -151,6 +151,11 @@ def _confirm(ordered, pool, limit):
     return chosen
 
 
+def _empty_reason(pool):
+    return 'no_eligible_route' if pool['candidates'] \
+        else 'unscored' if pool['unscored'] == pool['kept'] else 'no_recommendation'
+
+
 def _refresh_flag(answer, pool):
     if pool['had'] and scores.due(pool['cache'], sorted(pool['wanted']), pool['now']):
         answer['refresh'] = dict(wanted=sorted(pool['wanted']))
@@ -163,8 +168,7 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
     chosen = _confirm(routing.order(pool['candidates'], level), pool, 3)
-    reason = None if chosen else 'no_eligible_route' if pool['candidates'] \
-        else 'unscored' if pool['unscored'] == pool['kept'] else 'no_recommendation'
+    reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:])
     return _refresh_flag(answer, pool)
