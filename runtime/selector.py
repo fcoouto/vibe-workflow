@@ -85,64 +85,86 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         return result('blocked', 'selector_unavailable')
 
 
-def _select(request, level, constraints, *, state_dir, source, fetch, now):
-    state_dir, fixed = Path(state_dir), now
+def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed):
+    """The selection steps up to the scored candidates, shared by Smart Router and council picks."""
+    state_dir = Path(state_dir)
     now = int(time.time()) if fixed is None else fixed
     if not state_dir.is_absolute() or state_dir.is_symlink():
         raise ValueError('selector_unavailable')
     unique = {}
-    for item in routing_paths.routes(request['models']):
+    for item in routing_paths.routes(models):
         unique.setdefault(item['route'], item)
+    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={},
+                had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
     if not unique:
-        return result('no_selection', 'no_models', level=level)
+        return dict(pool, reason='no_models')
     anchor = state_dir / 'router.json'
-    source = source if source is not None else routing_observations.LocalSource(anchor)
+    source = pool['source'] = source if source is not None else routing_observations.LocalSource(anchor)
     source.acquire_billing(list(unique.values()), now)
     # Readers stamp the facts they just acquired, so an earlier clock would see them as future.
-    now = int(time.time()) if fixed is None else fixed
+    now = pool['now'] = int(time.time()) if fixed is None else fixed
     kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
+    pool.update(excluded=excluded, kept=len(kept))
     catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
     if not kept:
-        return result('no_selection', 'no_eligible_route', level=level, excluded=excluded)
-    keys = {item['route']: _key(item, catalog) for item in kept}
+        return dict(pool, reason='no_eligible_route')
+    keys = pool['keys'] = {item['route']: _key(item, catalog) for item in kept}
     cache = scores.load(state_dir)
     had = _has_scores(cache)
     if not had:
         cache = _fetch_first(state_dir, sorted(set(keys.values())), now, fetch)
     if not _has_scores(cache):
-        return result('no_selection', 'scores_unavailable', level=level, excluded=excluded)
-    tokens = request['task'].get('context_tokens', 0)
-    candidates, wanted, unscored = [], set(), 0
+        return dict(pool, reason='scores_unavailable')
+    pool.update(had=had, cache=cache)
     for item in kept:
         key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
         own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
         if own is None or own['score_source'] != 'openrouter':
-            wanted.add(key)
+            pool['wanted'].add(key)
         if own is None or own['price'] is None:
-            unscored += 1
+            pool['unscored'] += 1
             excluded.append(dict(route=item['route'], reason='unscored'))
         elif item['context_limit'] is not None and item['context_limit'] < tokens:
             excluded.append(dict(route=item['route'], reason='context_limit'))
         elif _constrained(item, effort, constraints):
             excluded.append(dict(route=item['route'], reason='constraint'))
         else:
-            candidates.append(dict(item, effort=effort,
-                                   score=own['score'], score_source=own['score_source'], price=own['price'],
-                                   released=item['released'] or own['released']))
+            pool['creators'][item['route']] = scores.CREATOR.get(item['path']) or own['creator']
+            pool['candidates'].append(dict(item, effort=effort,
+                                           score=own['score'], score_source=own['score_source'], price=own['price'],
+                                           released=item['released'] or own['released']))
+    return pool
+
+
+def _confirm(ordered, pool, limit):
+    """Recheck each account in order; a route whose account changed since eligibility is dropped."""
     chosen = []
-    for item in routing.order(candidates, level):
-        current = int(time.time()) if fixed is None else fixed
-        fact = subscription_billing.fact(source, item, current)
+    for item in ordered:
+        current = int(time.time()) if pool['fixed'] is None else pool['fixed']
+        fact = subscription_billing.fact(pool['source'], item, current)
         if subscription_billing.marker(fact, item, current) != item['account_marker']:
-            excluded.append(dict(route=item['route'], reason='account_changed'))
+            pool['excluded'].append(dict(route=item['route'], reason='account_changed'))
         else:
             chosen.append(item)
-        if len(chosen) == 3:
+        if len(chosen) == limit:
             break
-    reason = None if chosen else 'no_eligible_route' if candidates \
-        else 'unscored' if unscored == len(kept) else 'no_recommendation'
-    answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=excluded,
-                    route=chosen[0] if chosen else None, alternatives=chosen[1:])
-    if had and scores.due(cache, sorted(wanted), now):
-        answer['refresh'] = dict(wanted=sorted(wanted))
+    return chosen
+
+
+def _refresh_flag(answer, pool):
+    if pool['had'] and scores.due(pool['cache'], sorted(pool['wanted']), pool['now']):
+        answer['refresh'] = dict(wanted=sorted(pool['wanted']))
     return answer
+
+
+def _select(request, level, constraints, *, state_dir, source, fetch, now):
+    pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
+                       state_dir=state_dir, source=source, fetch=fetch, fixed=now)
+    if pool['reason']:
+        return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
+    chosen = _confirm(routing.order(pool['candidates'], level), pool, 3)
+    reason = None if chosen else 'no_eligible_route' if pool['candidates'] \
+        else 'unscored' if pool['unscored'] == pool['kept'] else 'no_recommendation'
+    answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:])
+    return _refresh_flag(answer, pool)
