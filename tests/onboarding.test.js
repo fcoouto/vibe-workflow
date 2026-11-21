@@ -237,21 +237,61 @@ test("every onboarding question has the same control-shaped form", async (t) => 
     const field = (name) => block.match(new RegExp(`^- ${name}: (.+)$`, "m"))?.[1]
     assert.ok(field("Header") && field("Header").length <= 30, field("Header"))
     assert.match(field("Question"), /\?$/)
-    assert.ok(field("Context")?.startsWith("Project: <project path>."), field("Header"))
-    const choices = [...block.matchAll(/^ {2,}- (.+?) — (.+)$/gm)]
-    assert.ok(choices.length >= 2 && choices.length <= 3, field("Header"))
-    for (const [, label, description] of choices) {
-      assert.ok(label.split(/\s+/).length <= 5, label)
-      assert.ok(description.length > 0 && !/`/.test(`${label}${description}`), label)
+    assert.ok(field("Context"), field("Header"))
+    assert.doesNotMatch(field("Context"), /<project path>|^Project:/)
+    const groups = block.split(/^- Choices/m).slice(1).map((group) => [...group.matchAll(/^ {2,}- (.+?) — (.+)$/gm)])
+    for (const choices of groups) {
+      assert.ok(choices.length >= 2 && choices.length <= 3, field("Header"))
+      for (const [, label, description] of choices) {
+        assert.ok(label.split(/\s+/).length <= 5, label)
+        assert.ok(description.length > 0 && !/`|\bgh /.test(`${label}${description}`), label)
+      }
     }
-    assert.match(choices[0][1], /\((Recommended)\)$/, field("Header"))
+    assert.match(groups[0][0][1], /\((Recommended)\)$/, field("Header"))
+    for (const saved of groups.slice(1)) assert.match(saved[0][1], /\(Current, Recommended\)$/, field("Header"))
   }
+  assert.equal(questions.filter((block) => /^- Choices when it is saved on:/m.test(block)).length, 3)
+  assert.equal(questions[3].match(/^- Header: (.+)$/m)[1], "GitHub branch cleanup")
+  assert.match(questions[1], /Turn off git guidance — No PR reminders, and no cleanup\./)
+  for (const [index, phrase] of [[1, "Reminders are not available in this OpenCode, so this is guidance only."],
+    [1, "current for the latest commit"], [1, "[BLOCKED]"],
+    [2, "never removes unmerged work, uncommitted work or ignored files"],
+    [4, "This OpenCode does not send session events, so titles will not update yet."],
+    [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
+    assert.ok(questions[index].includes(phrase), phrase)
+  }
+  const flat = text.replace(/\s+/g, " ")
+  for (const phrase of ["add that Smart Router is saved in this worktree",
+    "`previous_agent_merge` `true` is Agents merge their own and `false` is I merge them",
+    "In OpenCode, the control's question text is the Context followed by the Question",
+    "For `false`, that gives Keep them (Current) first and Clean up (Recommended) second.",
+    "For `false`, that gives Leave titles alone (Current) first and Show progress (Recommended) second.",
+    "Use each Header, Question and choice label exactly as written, apart from the markers and the saved choice's place.",
+    "If blocked, explain the fixed reason and stop. Otherwise, before question 1, write the opening line",
+    "**Project: <project>. Client: <client>. Up to five short questions.**",
+    "never import or run the plugin's files outside the tool, and never write the settings file yourself",
+    "\"feature\":\"git_workflow\",\"enabled\":true,\"agent_merge\":false,\"worktree_cleanup\":false",
+    "\"feature\":\"session_titles\",\"enabled\":true"]) {
+    assert.ok(flat.includes(phrase), phrase)
+  }
+  assert.equal(flat.split("the control's question text").length, 2)
+  assert.doesNotMatch(text, /Question 1 (leaves|keeps)|Skip git workflow guidance|\*\*Skip\*\*|Remote branch cleanup/)
+  const [smartRouter] = questions
+  for (const phrase of ["Turn it on (Recommended)", "Leave it off", "Keep it on (Current, Recommended)", "Turn it off",
+    "It is on, but not ready yet.", "readiness.state is setup_needed", "readiness.reason is selector_unavailable",
+    "Check that Python and the plugin package are available.", "Suggestions start once it is ready."]) {
+    assert.ok(smartRouter.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(smartRouter, /Suggestions continue|not set up/)
+  assert.ok(text.includes("Leave it off (Current)"))
+  const savedOn = smartRouter.split(/^- Choices/m)[2]
+  assert.match(savedOn.match(/^ {2,}- (.+?) — /m)[1], /\(Current, Recommended\)$/)
+  assert.doesNotMatch(smartRouter, /Use Smart Router \(Recommended\)|Keep existing model selection/)
   assert.equal(questions[0].match(/^- Question: (.+)$/m)[1], "Use Smart Router for this project?")
   assert.equal(questions[1].match(/^- Question: (.+)$/m)[1], "Who merges ready pull requests in this project?")
   assert.equal(questions[2].match(/^- Question: (.+)$/m)[1], "Clean up after a pull request is merged in this project?")
   assert.equal(questions[3].match(/^- Question: (.+)$/m)[1], "Delete merged branches on GitHub automatically?")
   assert.equal(questions[4].match(/^- Question: (.+)$/m)[1], "Show task progress in the session title?")
-  assert.match(questions[1], /Skip git workflow guidance — Saves all of this as off, including cleanup\./)
   assert.doesNotMatch(text, /Save both\?|Save onboarding choices|one confirmation/)
   assert.doesNotMatch(text, /`\[(READY|BLOCKED)\]`/)
 })
@@ -262,7 +302,7 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
   for (const phrase of ["Up to five short questions.", "Session titles: not saved.", "Unless question 5 was skipped, apply session titles last",
     "Session titles: Off — titles are left alone.",
     "Session titles: On — updated at the end of each turn.",
-    "Session titles: On · Setup needed — this OpenCode does not deliver session events.", "Saved in the main checkout", "project_root_unavailable",
+    "Session titles: On · Setup needed — this OpenCode does not deliver session events.", "saved in the main checkout", "project_root_unavailable",
     "Smart Router: Off —", "Smart Router: On · Scores loaded —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
     "Nothing to change", "Saving:", "native file-edit permission",
@@ -279,7 +319,7 @@ test("the old feature name is not accepted by the tool, only by stored settings"
 test("the procedure pins the cleanup questions, the GitHub conditions, the apply order and cancel", async (t) => {
   const { skills } = await fixture(t)
   const text = await readFile(new URL("./references/procedure.md", `file://${skills.get("vibe-onboard-project").path}`), "utf8")
-  for (const phrase of ["Skip git workflow guidance", "skips questions 3 and 4",
+  for (const phrase of ["Turn off git guidance", "skips questions 3 and 4",
     "gh repo view --json nameWithOwner,deleteBranchOnMerge,viewerPermission", "`deleteBranchOnMerge` is `false`",
     "`viewerPermission` is `ADMIN`", "gh repo edit", "--delete-branch-on-merge", "the same `gh repo view` call",
     "GitHub auto-delete: already on.", "GitHub auto-delete: not changed (admin access is needed).",

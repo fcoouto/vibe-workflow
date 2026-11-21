@@ -115,6 +115,55 @@ Not observed:
 
 Other versions are unverified.
 
+## Onboarding questions: what is known
+
+Observed live (OpenCode 2.3.2, 20 November 2026, model `opencode/tidepool-alpha-free`,
+the server default). The packaged plugin was loaded as a project-local copy in a
+throwaway local clone, one per run. Each copy had its plugin id and its onboarding skill
+id changed, because the installed plugin's skill wins a same-id clash. There was one
+API-created session per run, answered through the form API. The remotes were local
+paths, so no GitHub setting was read or changed, and question 4 was never asked.
+Every run seeded Smart Router on and unconfigured, git workflow on with agents
+merging, and session titles off.
+
+- **Run A**: export of `1726cac`, `worktree_cleanup` unset.
+  - Question 1 used the saved-on list with "(Current, Recommended)".
+  - Question 2 marked "I merge them" as current, which is wrong.
+  - Question 5 had "Leave titles alone (Current)" first, which is right. The status
+    preview with `enabled: true` was not run.
+  - Two headers were renamed. Context went into chat text for questions 2, 3 and 5,
+    and was dropped for question 1.
+  - Apply returned `invalid_request` from a mis-parsed tool result. The model then
+    imported `project.js` with `node` and wrote the settings itself.
+- **Run B**: export of `f4ee764`, `worktree_cleanup` unset.
+  - The opening line, exact headers and the "It is on, but not set up yet." status
+    all appeared.
+  - Question 2 showed "Agents merge their own (Current)" first, then "I merge them
+    (Recommended)" and "Turn off git guidance".
+  - Question 3 used the plain list.
+  - The question 5 status preview ran, but "(Current)" was missing.
+  - Context was passed as a `context` field the control does not have, so the user
+    never saw it.
+  - Every apply went through the tool.
+- **Run C**: export of `6af94bf`, `worktree_cleanup` false.
+  - Questions 2 and 3 marked the right "(Current)" choice, but put it second.
+    Question 2 lost its third choice.
+  - Question 5 still lacked "(Current)" despite the explicit mapping. Its status
+    preview was sent with an extra `expected_snapshot`, got `invalid_request` and
+    was not retried.
+  - Context was dropped. The run was stopped at question 5, so nothing was applied.
+
+Not observed: any other model, a session started from the desktop or terminal
+client, a worktree session, question 4, and the step 1 order and no-bypass wording
+added after `6af94bf`.
+
+The question 1 status sentence and saved-on description were reworded after the merge
+with `main`, which no live run saw. Smart Router's own check can now report
+`scores_unavailable` (model scores not loaded yet, retried automatically) or
+`selector_unavailable` (for example Python or the package is missing, which does not
+fix itself). The old "not set up yet" implied an action for the first reason, so the
+wording is "not ready yet", with a separate hint for the second.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
