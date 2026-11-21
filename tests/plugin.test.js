@@ -54,7 +54,7 @@ test("registers onboarding and keeps the native tool and existing context untouc
   const original = h.tools.get("subagent")
   await plugin.setup(h.ctx)
   assert.equal(plugin.id, "vibe-workflow")
-  assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "vibe_workflow_onboard"])
+  assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "vibe_workflow_onboard", "vibe_council_roster"])
   assert.equal(h.tools.get("subagent"), original)
   assert.deepEqual([...h.hooks.keys()], ["context", "http.response"])
   assert.deepEqual(h.hookOptions.get("http.response"), { providerID: "openai" })
@@ -95,8 +95,8 @@ async function fixture(body, models = listed(info()), extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["config/routes.json", "index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js", "skills/vibe-onboard-project/SKILL.md",
-    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md"]) {
+  for (const name of ["config/routes.json", "index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js", "council.js", "skills/vibe-onboard-project/SKILL.md",
+    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })
     await copyFile(new URL(`../${name}`, import.meta.url), target)
@@ -564,4 +564,96 @@ test("cleanup aborts the subscription", async () => {
     for (let i = 0; i < 20 && !events.finished(); i++) await pause(25)
     assert.equal(events.finished(), true)
   } finally { await rm(f.root, { recursive: true }) }
+})
+
+const seatsRequest = { v: 1, seats: [{ seat: "Ada", model: "openai/gpt-x", variant: null }] }
+const checkedSelect = `import json, sys
+req = json.load(sys.stdin)
+assert "--council-roster" in sys.argv
+assert all("name" not in m for m in req["models"])
+print(json.dumps(dict(state="checked", seats=[dict(provider="openai", id="gpt-x", status="ok", paid_overflow="blocked")],
+    admission=False, reservation=False, spend_permit=False)))
+`
+const roster = async (f, request = seatsRequest) =>
+  JSON.parse((await f.h.tools.get("vibe_council_roster").execute(request, { signal: new AbortController().signal })).content)
+
+test("council roster spawns select.py with --council-roster and returns its seats", async () => {
+  const f = await fixture(checkedSelect)
+  try {
+    const answer = await roster(f)
+    assert.equal(answer.ready, true)
+    assert.equal(answer.seats[0].status, "ok")
+    assert.equal(answer.seats[0].paid_overflow, "blocked")
+    assert.equal(answer.seats[0].name, "GPT X")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council roster hides malformed Python output", async () => {
+  const f = await fixture('print("PRIVATE-SENTINEL")')
+  try {
+    const answer = await roster(f)
+    assert.equal(answer.reason, "roster_unavailable")
+    assert.ok(!JSON.stringify(answer).includes("PRIVATE-SENTINEL"))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council roster ignores the Smart Router preference", async () => {
+  const f = await fixture(checkedSelect)
+  try {
+    await preference(f.root, false)
+    assert.equal((await roster(f)).seats[0].status, "ok")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("smart_router_select request carries no name", async () => {
+  const f = await fixture(`import json, sys
+req = json.load(sys.stdin)
+assert req["models"] and all("name" not in m for m in req["models"])
+print(json.dumps(dict(state="selected", route=dict(provider="openai", model="gpt-x", effort="high"),
+    admission=False, reservation=False, spend_permit=False)))
+`)
+  try {
+    assert.equal(JSON.parse((await f.execute()).content).state, "selected")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council command forwards the skill line and strips mentions", async () => {
+  const commands = new Map(), prompts = []
+  const f = await fixture(checkedSelect, listed(info()), {
+    command: { transform: async (cb) => cb({ add: (c) => commands.set(c.name, c) }) },
+    session: { hook: async () => {}, prompt: async (p) => { prompts.push(p) } },
+  })
+  try {
+    const command = commands.get("vibe-council")
+    assert.equal(command.description, "Run the council on a set of decisions.")
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "  ", files: [{ path: "a", mention: "m" }] } })
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "  x " } })
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "on R1-R9", agents: [{ name: "x", mention: "m" }],
+      skills: [{ name: "y", mention: "m" }] } })
+    assert.equal(prompts[0].text, "Use the vibe-council skill.")
+    assert.equal(prompts[1].text, "Use the vibe-council skill. x")
+    assert.equal(prompts[2].text, "Use the vibe-council skill. on R1-R9")
+    assert.deepEqual(prompts[0].files, [{ path: "a" }])
+    assert.deepEqual(prompts[2].agents, [{ name: "x" }])
+    assert.deepEqual(prompts[2].skills, [{ name: "y" }])
+    assert.equal(prompts[2].sessionID, "s1")
+    assert.equal(prompts[2].delivery, "d")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("setup succeeds without a command API", async () => {
+  const f = await fixture(checkedSelect)
+  try {
+    assert.ok(f.h.tools.has("vibe_council_roster"))
+    assert.ok(f.h.tools.has("smart_router_select"))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council roster reports a crashed reader as roster_unavailable", async () => {
+  const f = await fixture("import sys\nsys.exit(3)\n")
+  try {
+    const answer = await roster(f)
+    assert.equal(answer.ready, false)
+    assert.equal(answer.reason, "roster_unavailable")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })

@@ -265,3 +265,38 @@ Ruling: the plugin subscribes only to `session.step.failed` and reads the error
 at `data.error`, keeping the top-level and `properties` fallbacks. An event stream
 is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
 Other OpenCode versions are unverified.
+
+## Vibe council: what is known
+
+Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported
+package was the only plugin, loaded by a private server (`--standalone`) with its own
+config and state directories, in a throwaway one-commit git repository that was not
+onboarded. The native logins were the user's own. The coordinator model was
+`claude-agent/sonnet`.
+
+- `vibe_council_roster` with the default roster answered `ready: false`: Opus and
+  Fable `ok` with paid overflow `blocked`, display names "Opus 5.5" and "Fable 5.2";
+  Astra `unknown_model` with candidates `openai/gpt-6-astra` and
+  `openai/gpt-6-astra-fast`. Nothing was substituted.
+- The host's own model list (`ctx.model.list()`) has `gpt-6.2-astra` only under the
+  paid `opencode` provider; on `openai` the newest Astra is `gpt-6-astra`. A direct
+  `openai/gpt-6.2-astra` run failed with `provider.no-route: Model unavailable`. The
+  `models` search tool lists `openai/gpt-6.2-astra`, so that listing is not proof of a
+  route.
+- `/vibe-council` with the default roster: the coordinator loaded the skill, called the
+  roster tool, stopped, offered the candidates as options, and dispatched and wrote
+  nothing.
+- `/vibe-council` with Astra on `openai/gpt-6-astra`: the roster was `ready`
+  (`paid_overflow` `unknown` for Astra). The coordinator wrote the brief, hashed it,
+  named the folder `<hash12>_price-rounding-cli`, and dispatched three background
+  `subagent` calls with `agent: "explore"`, each with its explicit model and the same
+  one-line prompt. Every answer used the strict line format, under 500 words. The
+  coordinator saved `answers/`, wrote `result.md` (majority, unanimous and simplest-
+  variant rulings, "the coordinator did not vote") and asked two questions. The brief
+  did not contain its own path. Nothing outside `docs/vibe-council/` changed. A run took
+  about one minute.
+- Two runs started at once by the test harness wrote separate folders with different
+  hashes and did not interfere.
+
+Not observed live: dispatch with a variant (`provider/id#variant`), round 2, and a
+member that fails or times out. Other OpenCode versions are unverified.

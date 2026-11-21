@@ -48,6 +48,20 @@ class PackageTest(unittest.TestCase):
         self.assertEqual((answer["state"], answer["reason"], answer["route"]), ("no_selection", "no_eligible_route", None))
         self.assertFalse(answer["admission"])
 
+    def test_cli_council_roster_without_account_evidence(self):
+        models = [dict(provider="openai", id="gpt-6-2-sol", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        run = self.cli(json.dumps(dict(v=1, models=models)).encode(), extra=["--council-roster"])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        answer = json.loads(run.stdout)
+        self.assertEqual(answer["state"], "checked")
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["billing_unverified"])
+
+    def test_cli_council_roster_refuses_invalid_input(self):
+        run = self.cli(b"PRIVATE-SENTINEL", extra=["--council-roster"])
+        self.assertEqual(run.stdout.strip(), b'{"state":"failed"}')
+        self.assertNotIn(b"PRIVATE-SENTINEL", run.stdout + run.stderr)
+
     def test_cli_chatgpt_limit(self):
         run = self.cli(b"ignored", extra=["--chatgpt-limit"])
         self.assertEqual(run.returncode, 0, run.stderr)
@@ -86,11 +100,14 @@ class PackageTest(unittest.TestCase):
         run = self.build(output)
         self.assertEqual(run.returncode, 0, run.stderr.decode())
         files = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
-        expected = {"index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js",
+        expected = {"index.js", "project.js", "onboarding.js", "pr-advice.js", "session-facts.js", "session-titles.js", "council.js",
                     "package.json", "README.md", "LICENSE", "assets/logo.png",
                     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/scripts/check.py", "skills/vibe-prepare-my-workspace/partners.json",
+                    "skills/vibe-council/SKILL.md", "skills/vibe-council/references/procedure.md",
+                    "skills/vibe-council/references/brief-template.md",
+                    "skills/vibe-council/references/record-template.md",
                     "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
                     "skills/vibe-pull-requests/references/pull-request-template.md",
                     "skills/vibe-pull-requests/references/worktree-cleanup.md",
@@ -98,7 +115,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
@@ -122,9 +139,9 @@ await plugin.setup({
   skill: { transform: async f => f({ add: s => skills.push(s) }) },
   session: { hook: async () => {} },
 })
-assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_workflow_onboard'])
+assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_council_roster', 'vibe_workflow_onboard'])
 assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project'],
-  ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace'], ['vibe-pull-requests', 'vibe-pull-requests']])
+  ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace'], ['vibe-pull-requests', 'vibe-pull-requests'], ['vibe-council', 'vibe-council']])
 assert.match(await readFile(new URL('./references/procedure.md', pathToFileURL(skills[0].path)), 'utf8'),
   /Use Smart Router for this project\\?/)
 """, str(output / "index.js")], env=self.env, cwd=self.root, capture_output=True, text=True, timeout=10)

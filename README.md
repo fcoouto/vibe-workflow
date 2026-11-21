@@ -52,6 +52,23 @@ It reports whether superpowers, caveman, ponytail, impeccable, context7, rtk,
 graphify, git, gh and Python are present and current. It installs or updates
 only what you approve, and backs up your OpenCode config first.
 
+## Ask the council
+
+Ask: **“Use `vibe-council` to review this plan.”** or run
+`/vibe-council <what to review>`.
+
+Each member reviews on its own and reports back. The default members are Astra
+(`openai/gpt-6-astra`), Opus (`claude-agent/opus`) and Fable
+(`claude-agent/claude-fable-5-2`); you can change them per run. Members run as
+OpenCode's `explore` agent, which cannot use edit tools or start subagents.
+Shell stays available, so the brief tells members to stay read-only. Seats are
+limited to the Claude, OpenAI and OpenCode Go plans Smart Router routes through;
+no other model is substituted. Before it starts,
+`vibe_council_roster` checks your accounts with the same local, token-free reads
+as Smart Router, whether or not Smart Router is on. The record is saved in
+`docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the work
+happens, and is committed with it. The coordinator never votes; you decide.
+
 ## Scores
 
 There is nothing to configure. Smart Router ranks models by public scores from

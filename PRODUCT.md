@@ -41,6 +41,15 @@ overlapping behavior.
 - Isolated native-loading and lifecycle checks; see `docs/native-verification.md`.
 - Existing native credentials are reused, never copied into project setup.
 - Selection launches nothing and grants no admission, reservation or spend permit.
+- Council: the `vibe-council` skill and `/vibe-council` command convene a
+  roster of up to five seats (default Astra, Opus and Fable) as `explore`
+  agents (no edit tools or subagents; shell stays available, so the brief asks for
+  read-only work); the `vibe_council_roster` tool checks seats against the plan
+  providers in `config/routes.json` with local, token-free account reads,
+  whether or not Smart Router is on. It launches nothing and grants no
+  admission, reservation or spend permit. Records go to
+  `docs/vibe-council/sessions/<hash>_<topic>/` and are committed with the work.
+  The coordinator never votes; the user decides.
 - Pull request guidance: the `vibe-pull-requests` skill (lifecycle, readiness,
   template, primary checkout) and advisory notes after matching shell commands.
   Onboarding asks who merges `[READY]` PRs; the choice is saved as booleans in
