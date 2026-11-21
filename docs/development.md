@@ -304,19 +304,37 @@ Sonnet treated as binding. Observed on the same version:
 - Keys must match `^[a-z0-9][a-z0-9._-]*$`. `list` answers `[{ key, value }]`;
   removing an absent key succeeds.
 
-So the Smart Router instruction is pushed on a session's first step and kept as
-the entry `vibe-workflow-smart-router` from then on; turning Smart Router off
-removes it. `claude-agent` therefore receives it from the second step. Hosts
-without the entry API, or a failed put, keep the push on every step. The pull
-request fallback note is still only pushed. Other versions are unverified.
+The code reading is of the compiled 2.3.2 binary, so there is no source file or line;
+the bundled function is named `ClaudeInstructions.register`.
+
+So the Smart Router instruction is still pushed on every step, which other
+providers read as before, and is also put once per session as the entry
+`vibe-workflow-smart-router`, which `claude-agent` reads from the second step on.
+A failed put is retried on the next step. Hosts without the entry API keep only the
+push. The pull request fallback note is still only pushed. Known gaps:
+
+- Entries are durable but the plugin's record of them is in memory (at most 128
+  sessions). Unloading removes the entries that load put; a crash does not, and a
+  reload forgets them. After a reload, an opted-out project removes a session's
+  entry at its next step, but an unonboarded or invalid one leaves it, to avoid an
+  entry call for every session in projects that never used Smart Router.
+- Turning Smart Router off removes the entry at that session's next step, and the
+  model hears of it from the step after.
+
+Other versions are unverified.
 
 Observed live after the change (OpenCode 2.3.2, 21 November 2026, export of
 `f790b44` loaded as a project-local copy with its plugin id changed, in the same
 throwaway repository, `claude-agent/sonnet`): after one shell step, Sonnet quoted the
 instruction from a `<system-update>`. With Smart Router then turned off, the same
 session's next step received "The context under "vibe-workflow-smart-router" no
-longer applies. Disregard it.", and Sonnet treated the instruction as removed. Not
-observed: a session started from the desktop or terminal client, and other models.
+longer applies. Disregard it.", and Sonnet treated the instruction as removed. In a
+second session the entry was put, the session was compacted, and on the next step
+Sonnet found the instruction in its system prompt as a
+`<context key="vibe-workflow-smart-router">` block. That export pushed only on the
+first step; the push on every step that followed review only affects other
+providers. Not observed: a session started from the desktop or terminal client,
+other models, and unloading with live sessions.
 
 ## Vibe council: what is known
 

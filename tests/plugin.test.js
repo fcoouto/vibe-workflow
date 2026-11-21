@@ -93,7 +93,7 @@ async function routed(enabled, entries) {
   return { root, calls, step, cleanup }
 }
 
-test("the router instruction becomes a session entry and stays in the system prompt until the entry applies", async (t) => {
+test("the router instruction is put once per session as an entry and stays in the system prompt", async (t) => {
   const r = await routed(true, "working")
   t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
   const first = await r.step()
@@ -105,10 +105,54 @@ test("the router instruction becomes a session entry and stays in the system pro
   assert.equal(input.sessionID, "ses_a")
   assert.match(input.key, /^[a-z0-9][a-z0-9._-]*$/)
   assert.equal(input.value, first[0])
-  assert.deepEqual(await r.step(), [])
+  // Other providers keep the instruction in every system prompt, as before the entry existed.
+  assert.deepEqual(await r.step(), first)
   assert.equal(r.calls.length, 1)
   assert.equal((await r.step("ses_b")).length, 1)
   assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["put", "ses_b"]])
+})
+
+test("unloading removes the entries this load put, and a step without a session id makes no entry calls", async (t) => {
+  const r = await routed(true, "working")
+  t.after(() => rm(r.root, { recursive: true }))
+  assert.equal((await r.step(null)).length, 1)
+  assert.deepEqual(r.calls, [])
+  await r.step("ses_a")
+  await r.step("ses_b")
+  await preference(r.root, false)
+  await r.step("ses_b")
+  await r.cleanup()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
+    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_b"], ["remove", "ses_a"]])
+})
+
+test("a failing put is retried on the next step", async (t) => {
+  const r = await routed(true, "failing")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await r.step()
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "put"])
+})
+
+test("settings that become invalid remove an entry this load put", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await preference(r.root, "malformed")
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
+})
+
+test("entry state is bounded: the oldest session is forgotten and put again when seen", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  for (let index = 0; index <= 128; index++) await r.step(`ses_${index}`)
+  assert.equal(r.calls.length, 129)
+  await r.step("ses_128")
+  assert.equal(r.calls.length, 129)
+  await r.step("ses_0")
+  assert.deepEqual(r.calls.at(-1), ["put", r.calls[0][1]])
 })
 
 test("turning Smart Router off removes the session entry once", async (t) => {

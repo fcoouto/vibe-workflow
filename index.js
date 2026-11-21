@@ -283,10 +283,9 @@ export default {
         if (preference.state === "off" || entries.get(sessionID) === true) await entry(sessionID, false)
         return
       }
-      // The entry applies from the next step, so this step still carries the instruction in the system prompt.
-      const placed = entries.get(sessionID) === true
       await entry(sessionID, true)
-      if (!placed) event.system.push({ type: "text", text: ROUTER_INSTRUCTION })
+      // Other providers keep reading the system prompt, and the entry applies only from the next step.
+      if (!closed) event.system.push({ type: "text", text: ROUTER_INSTRUCTION })
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
     await ctx.session.hook("http.response", async (event) => {
@@ -320,6 +319,10 @@ export default {
       prAdvice.close()
       titles.close()
       notices.clear()
+      // Entries outlive the plugin; remove the ones this load put so no session asks for a missing tool.
+      for (const [sessionID, on] of entries) if (on) ctx.session.instructions?.entry
+        ?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {})
+      entries.clear()
       for (const stop of active) stop()
     }
   },
