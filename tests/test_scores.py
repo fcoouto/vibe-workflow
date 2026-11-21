@@ -57,7 +57,7 @@ class ScoresTest(unittest.TestCase):
     def test_unique_key_without_creator_resolves(self):
         cache = parse(model('openai/gpt-6.2-sol', 57, created=7))
         self.assertEqual(scores.lookup(cache, 'gpt-6-2-sol', None), dict(
-            score=57, price=scores_price(2, 10), score_source='openrouter', released=7))
+            score=57, price=scores_price(2, 10), score_source='openrouter', released=7, creator='openai'))
 
     def test_unscored_model_borrows_newest_family_score(self):
         cache = parse(model('openai/gpt-6.2-sol', 57, created=20), model('openai/gpt-6.1-sol', 50, created=10),
@@ -66,6 +66,7 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(found['score_source'], 'family')
         self.assertEqual(found['score'], 57)
         self.assertEqual(found['price'], scores_price(2, 10))
+        self.assertEqual(found['creator'], 'openai')
 
     def test_family_borrow_keeps_own_price_and_honors_creator(self):
         cache = parse(model('openai/gpt-6.2-sol', 57, created=20),
@@ -74,6 +75,7 @@ class ScoresTest(unittest.TestCase):
         found = scores.lookup(cache, 'gpt-6-3-sol', 'openai')
         self.assertEqual((found['score'], found['price']), (57, scores_price(4, 20)))
         self.assertEqual(scores.lookup(cache, 'gpt-6-3-sol', None)['score'], 90)
+        self.assertEqual(scores.lookup(cache, 'gpt-6-3-sol', None)['creator'], 'someone')
         self.assertIsNone(scores.lookup(cache, 'unrelated', 'openai'))
 
     def test_family_borrow_never_uses_a_newer_version(self):

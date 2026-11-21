@@ -3,8 +3,12 @@ import { registerSkill } from "./onboarding.js"
 const NO_AUTHORITY = { admission: false, reservation: false, spend_permit: false }
 const SEAT = /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/
 const VARIANT = /^[a-z0-9_-]{1,32}$/
+// A lab slug from the public score download: untrusted text, so only a plain slug reaches the agent.
+const CREATOR = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const STATUSES = new Set(["ok", "billing_unverified", "quota_exhausted"])
 const OVERFLOW = new Set(["blocked", "enabled", "unknown"])
+const EMPTY = new Set(["no_models", "no_eligible_route", "scores_unavailable", "unscored", "no_recommendation"])
+const DEFAULT_COUNT = 3
 
 const plain = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
 const exactly = (o, keys) => plain(o) && Object.keys(o).length === keys.length && keys.every((k) => k in o)
@@ -31,6 +35,42 @@ function valid(request) {
   return true
 }
 
+// A pick request is `{v: 1}` with an optional seat count; it never carries seats.
+function pickCount(request) {
+  if (!plain(request) || request.v !== 1 || !Object.keys(request).every((k) => k === "v" || k === "count")) return null
+  if (!("count" in request)) return DEFAULT_COUNT
+  return Number.isInteger(request.count) && request.count >= 1 && request.count <= 5 ? request.count : null
+}
+
+// The last word of the display name ("Opus 5.5" gives "Opus"), or of the id, numbered when taken.
+function seatName(entry, taken) {
+  const word = [entry.name, entry.id].map((t) => String(t ?? "").match(/[A-Za-z]+/g)?.at(-1)).find(Boolean) ?? "Seat"
+  const base = (word[0].toUpperCase() + word.slice(1)).slice(0, 29)
+  let name = base
+  for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} ${n}`
+  taken.add(name.toLowerCase())
+  return name
+}
+
+// A picked answer only counts when every seat is a listed model and the reason matches the seat count.
+function pickedRows(answer, list, count) {
+  if (answer?.state !== "picked" || !Array.isArray(answer.seats) || answer.seats.length > count
+    || typeof answer.attribution !== "string" || answer.attribution.length > 200) return null
+  const n = answer.seats.length
+  if (!(n === count ? answer.reason === null : n > 0 ? answer.reason === "fewer_seats" : EMPTY.has(answer.reason))) return null
+  const taken = new Set(), seen = new Set(), rows = []
+  for (const s of answer.seats) {
+    const hit = plain(s) ? list.find((m) => m.provider === s.provider && m.id === s.id) : null
+    if (!hit || seen.has(`${hit.provider}/${hit.id}`) || !(s.variant === null || hit.variants?.includes(s.variant))
+      || !OVERFLOW.has(s.paid_overflow) || typeof s.score !== "number" || !Number.isFinite(s.score)
+      || !(s.creator === null || (typeof s.creator === "string" && CREATOR.test(s.creator)))) return null
+    seen.add(`${hit.provider}/${hit.id}`)
+    rows.push({ seat: seatName(hit, taken), model: `${hit.provider}/${hit.id}`, name: hit.name ?? null, variant: s.variant,
+      status: "ok", paid_overflow: s.paid_overflow, candidates: [], score: s.score, creator: s.creator })
+  }
+  return rows
+}
+
 // Same-line suggestions for a model id that is not listed: the last word of the id, newest release first.
 function candidates(list, provider, id) {
   const word = id.toLowerCase().match(/[a-z]+/g)?.at(-1)
@@ -46,13 +86,28 @@ function lined(answer, sent) {
       && (s.status === "ok" ? OVERFLOW.has(s.paid_overflow) : s.paid_overflow === null))
 }
 
-export function createRoster({ models, check, providers }) {
+export function createRoster({ models, check, pick, providers }) {
+  const answer = (ready, reason, seats) => ({ ready, reason, seats, ...NO_AUTHORITY })
+  async function listed() {
+    try {
+      const list = await models()
+      return Array.isArray(list) ? list : []
+    } catch { return [] }
+  }
+  async function picked(count, signal) {
+    const list = await listed()
+    if (list.length === 0) return answer(false, "models_unavailable", [])
+    let got
+    try { got = await pick(list.map(({ name, ...entry }) => entry), count, signal) } catch { got = null }
+    const rows = pickedRows(got, list, count)
+    if (!rows) return answer(false, "roster_unavailable", [])
+    return { ...answer(rows.length === count, got.reason, rows), attribution: got.attribution }
+  }
   return async function roster(request, signal) {
-    const answer = (ready, reason, seats) => ({ ready, reason, seats, ...NO_AUTHORITY })
+    const count = pickCount(request)
+    if (count !== null) return picked(count, signal)
     if (!valid(request)) return answer(false, "invalid_request", [])
-    let list
-    try { list = await models() } catch { list = [] }
-    if (!Array.isArray(list)) list = []
+    const list = await listed()
     if (list.length === 0) return answer(false, "models_unavailable", request.seats.map((s) => ({ seat: s.seat, model: s.model,
       name: null, variant: s.variant, status: "unchecked", paid_overflow: null, candidates: [] })))
     const rows = request.seats.map((s) => {
@@ -90,12 +145,14 @@ export async function registerCouncil(ctx, { roster }) {
   await registerSkill(ctx, "vibe-council")
   await ctx.tool.transform((editor) => editor.add({
     name: "vibe_council_roster",
-    description: "Check council seats before dispatch: exact model, plan provider, subscription billing, quota and paid overflow. " +
-      "Never substitutes a model and launches nothing. Follow the vibe-council skill.",
+    description: "Pick council seats by the seat rule with {v: 1} and an optional count (frontier models, one per lab first), " +
+      "or check named seats with {v: 1, seats}: exact model, plan provider, subscription billing, quota and paid overflow. " +
+      "Never substitutes a named model and launches nothing. Follow the vibe-council skill.",
     input: {
-      type: "object", additionalProperties: false, required: ["v", "seats"],
+      type: "object", additionalProperties: false, required: ["v"],
       properties: {
         v: { type: "integer", const: 1 },
+        count: { type: "integer", minimum: 1, maximum: 5 },
         seats: {
           type: "array", minItems: 1, maxItems: 5,
           items: {

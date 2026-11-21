@@ -57,17 +57,19 @@ only what you approve, and backs up your OpenCode config first.
 Ask: **“Use `vibe-council` to review this plan.”** or run
 `/vibe-council <what to review>`.
 
-Each member reviews on its own and reports back. The default members are Astra
-(`openai/gpt-6-astra`), Opus (`claude-agent/opus`) and Fable
-(`claude-agent/claude-fable-5-2`); you can change them per run. Members run as
-OpenCode's `explore` agent, which cannot use edit tools or start subagents.
-Shell stays available, so the brief tells members to stay read-only. Seats are
-limited to the Claude, OpenAI and OpenCode Go plans Smart Router routes through;
-no other model is substituted. Before it starts,
-`vibe_council_roster` checks your accounts with the same local, token-free reads
-as Smart Router, whether or not Smart Router is on. The record is saved in
-`docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the work
-happens, and is committed with it. The coordinator never votes; you decide.
+Each member reviews on its own and reports back. Unless you name the members,
+the council picks three when it starts: the strongest models on your plans, from
+different labs where it can, ranked by the same scores as Smart Router. Ask for
+one to five, or name every member yourself; a named model is never swapped.
+Members run as OpenCode's `explore` agent, which cannot use edit tools or start
+subagents. Shell stays available, so the brief tells members to stay read-only.
+Seats are limited to the Claude, OpenAI and OpenCode Go plans Smart Router
+routes through. Before it starts, `vibe_council_roster` checks your accounts
+with the same local, token-free reads as Smart Router, whether or not Smart
+Router is on. The first council downloads the public scores if they are missing,
+and later councils refresh them in the background about weekly. The record is
+saved in `docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the
+work happens, and is committed with it. The coordinator never votes; you decide.
 
 ## Scores
 

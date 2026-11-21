@@ -74,6 +74,13 @@ export default {
       providers = new Set(JSON.parse(await readFile(join(ROOT, "config", "routes.json"), "utf8")).paths.map((path) => path.provider))
     } catch {}
     let refreshing = false
+    // One background score refresh at a time, never awaited by the answer it came with.
+    function refreshLater(refresh) {
+      if (!Array.isArray(refresh?.wanted) || refreshing || closed) return
+      refreshing = true
+      runRouter({ wanted: refresh.wanted }, { directory, stateDir: state, operation: "refresh" })
+        .catch(() => {}).finally(() => { refreshing = false })
+    }
     // Host fields are coerced, not trusted: one odd model must not fail the whole request.
     const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 256
       && !/[\p{C}\p{Z}]/u.test(value.replaceAll(" ", ""))
@@ -93,8 +100,9 @@ export default {
       } catch { return [] }
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
-      const setup = operation === "check_setup", council = operation === "council", refresh = operation === "refresh", mark = operation === "mark"
-      const fallback = () => council ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
+      const setup = operation === "check_setup", council = operation === "council", pick = operation === "council_pick"
+      const refresh = operation === "refresh", mark = operation === "mark"
+      const fallback = () => council || pick ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
       if (closed || signal?.aborted || typeof directory !== "string" || !isAbsolute(directory)
@@ -114,6 +122,7 @@ export default {
           if (refresh) args.push("--refresh")
           if (mark) args.push("--chatgpt-limit")
           if (council) args.push("--council-roster")
+          if (pick) args.push("--council-pick")
           child = spawn("python3", args, { cwd: directory, stdio: ["pipe", "pipe", "ignore"] })
         } catch { resolve(fallback()); return }
         active.add(stop)
@@ -140,8 +149,8 @@ export default {
               if (value.state !== "setup_needed" || !["scores_unavailable", "selector_unavailable"].includes(value.reason)) throw Error()
               return resolve({ state: value.state, reason: value.reason })
             }
-            if (council) {
-              if (value.state !== "checked" || !Array.isArray(value.seats)
+            if (council || pick) {
+              if (value.state !== (pick ? "picked" : "checked") || !Array.isArray(value.seats)
                 || ["admission", "reservation", "spend_permit"].some((key) => value[key] !== false)) throw Error()
               return resolve(value)
             }
@@ -194,11 +203,7 @@ export default {
           const { refresh, ...rest } = await runRouter({ ...own, models: list.map(({ name, ...entry }) => entry) },
             { directory, stateDir: state, signal, operation: "select" })
           answer = rest
-          if (Array.isArray(refresh?.wanted) && !refreshing && !closed) {
-            refreshing = true
-            runRouter({ wanted: refresh.wanted }, { directory, stateDir: state, operation: "refresh" })
-              .catch(() => {}).finally(() => { refreshing = false })
-          }
+          refreshLater(refresh)
         }
         let notice = null
         if (answer.state === "selected") notices.delete(sessionID)
@@ -235,7 +240,13 @@ export default {
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await registerCouncil(ctx, { roster: createRoster({ models: ctx.model ? models : async () => [], providers,
-      check: (entries, signal) => runRouter({ v: 1, models: entries }, { directory, stateDir: state, signal, operation: "council" }) }) })
+      check: (entries, signal) => runRouter({ v: 1, models: entries }, { directory, stateDir: state, signal, operation: "council" }),
+      pick: async (entries, count, signal) => {
+        const { refresh, ...rest } = await runRouter({ v: 1, count, models: entries },
+          { directory, stateDir: state, signal, operation: "council_pick" })
+        refreshLater(refresh)
+        return rest
+      } }) })
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {

@@ -657,3 +657,51 @@ test("council roster reports a crashed reader as roster_unavailable", async () =
     assert.equal(answer.reason, "roster_unavailable")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
+
+const pickSelect = `import json, sys
+from pathlib import Path
+if "--refresh" in sys.argv:
+    Path("refresh-stdin").write_text(sys.stdin.read())
+    sys.exit(0)
+req = json.load(sys.stdin)
+assert "--council-pick" in sys.argv
+assert set(req) == {"v", "count", "models"} and req["v"] == 1 and req["count"] == 3, req
+assert req["models"] and all("name" not in m for m in req["models"])
+print(json.dumps(dict(state="picked", reason="fewer_seats", seats=[dict(provider="openai", id="gpt-x", variant="high", score=60,
+    score_source="openrouter", creator="openai", paid_overflow="blocked")], excluded=[],
+    attribution="Scores: Artificial Analysis via OpenRouter", refresh=dict(wanted=["x"]),
+    admission=False, reservation=False, spend_permit=False)))
+`
+
+test("council pick spawns select.py with --council-pick and starts one refresh", async () => {
+  const f = await fixture(pickSelect)
+  try {
+    const answer = await roster(f, { v: 1 })
+    assert.deepEqual([answer.ready, answer.reason], [false, "fewer_seats"])
+    assert.deepEqual(answer.seats.map((s) => [s.seat, s.model, s.name, s.variant, s.score]), [["X", "openai/gpt-x", "GPT X", "high", 60]])
+    assert.ok(!JSON.stringify(answer).includes("refresh"))
+    for (let i = 0; i < 50; i++) {
+      try { await readFile(join(f.root, "refresh-stdin")); break } catch { await new Promise((r) => setTimeout(r, 100)) }
+    }
+    assert.equal(await readFile(join(f.root, "refresh-stdin"), "utf8"), '{"wanted":["x"]}')
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council pick ignores the Smart Router preference", async () => {
+  const f = await fixture(pickSelect)
+  try {
+    await preference(f.root, false)
+    assert.equal((await roster(f, { v: 1 })).seats[0].status, "ok")
+    await rm(join(f.root, ".vibe-workflow"), { recursive: true })
+    assert.equal((await roster(f, { v: 1 })).seats[0].status, "ok")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council pick hides malformed Python output", async () => {
+  const f = await fixture('print("PRIVATE-SENTINEL")')
+  try {
+    const answer = await roster(f, { v: 1 })
+    assert.equal(answer.reason, "roster_unavailable")
+    assert.ok(!JSON.stringify(answer).includes("PRIVATE-SENTINEL"))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})

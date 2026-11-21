@@ -105,7 +105,8 @@ def _result(entry, source, priced):
     given = entry if own else priced
     price = routing.price(given['input'], given['output']) \
         if given['input'] is not None and given['output'] is not None else None
-    return dict(score=entry['score'], price=price, score_source=source, released=entry['released'])
+    return dict(score=entry['score'], price=price, score_source=source, released=entry['released'],
+                creator=entry['creator'])
 
 
 def lookup(cache, key, creator):

@@ -311,5 +311,28 @@ onboarded. The native logins were the user's own. The coordinator model was
 - Two runs started at once by the test harness wrote separate folders with different
   hashes and did not interfere.
 
-Not observed live: dispatch with a variant (`provider/id#variant`), round 2, and a
-member that fails or times out. Other OpenCode versions are unverified.
+Not observed live: round 2, and a member that fails or times out. Other OpenCode
+versions are unverified.
+
+### Picked seats
+
+Observed live (OpenCode 2.3.2, 21 November 2026, export of `4e8620c`), set up as
+above with `opencode run --standalone`, a fresh private state folder (mode 0700),
+the user's own logins and `claude-agent/sonnet` as the coordinator.
+
+- `/vibe-council` with no named seats called `vibe_council_roster` with `{"v":1}`.
+  The first call downloaded the scores (`openrouter-models.json`, 76 KB, mode 0600)
+  and answered `ready: true` with Fable `claude-agent/claude-fable-5-2` (Anthropic,
+  64.6), Astra `openai/gpt-6.2-astra` (OpenAI, 62.1) and Opus `claude-agent/opus`
+  (Anthropic, 59.1), all with variant `high`. That is one seat per lab first, then
+  the next frontier model. Paid overflow was `blocked` for Claude and `unknown` for
+  ChatGPT.
+- The three members were dispatched as `provider/id#high` and all answered; on
+  2.3.2, `openai/gpt-6.2-astra` is on the plan provider and ran. A run took about
+  90 seconds. Only `docs/vibe-council/` changed.
+- The record's member table carried lab, score and the credit. Before dispatch, the
+  coordinator wrote only "Roster is ready" and did not show the roster table the
+  procedure asks for, in both runs.
+- A state folder created with mode 0755 makes storage refuse it: every route is
+  `billing_unverified` and the pick answers `no_eligible_route`. The first run of
+  this check hit that through its own setup.

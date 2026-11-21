@@ -6,17 +6,21 @@ recommendation and the user decides. Run it only when the user asks. Never vote 
 decisions you wrote, and never override an earlier user decision: show anything that
 would reverse one as a question.
 
-## Default roster
+## Seats
 
-| Seat | Model |
-| --- | --- |
-| Astra | `openai/gpt-6-astra` |
-| Opus | `claude-agent/opus` |
-| Fable | `claude-agent/claude-fable-5-2` |
+There is no fixed roster. Unless the user names the seats, `vibe_council_roster`
+picks them at council time from the plan models available now, using the same
+scores and account checks as Smart Router:
 
-Three seats so majorities exist; vendor variety matters more than count. The user
-may override per run ("ask Astra and Opus"), with one to five seats, unique names,
-`provider/id` models and an optional variant.
+1. frontier models (within 90% of the best score), one per lab, strongest first;
+2. more frontier models, even from a lab already seated;
+3. the strongest models below the frontier.
+
+Different labs are preferred, never required. A model reachable through two plans
+takes one seat. Three seats by default, so majorities exist. The user may ask for
+one to five seats, or name every seat ("ask Astra and Opus"): unique names,
+`provider/id` models and an optional variant. Named seats are never mixed with
+picked ones.
 
 ## Steps
 
@@ -25,18 +29,34 @@ may override per run ("ask Astra and Opus"), with one to five seats, unique name
    consequence if the item is wrong. Above about 30 items, split into batches.
 2. **Measure before asking.** Where a fact would change votes, measure it first and
    put the number in the brief.
-3. **Check the roster.** Call `vibe_council_roster` with
-   `{"v":1,"seats":[{"seat":"Astra","model":"openai/gpt-6-astra","variant":null}, …]}`.
+3. **Get the roster.** Call `vibe_council_roster`:
+   - No seats named: `{"v":1}`, or `{"v":1,"count":N}` when the user asks for a
+     size. The answer is already checked. Each seat also carries `score` and
+     `creator` (its lab).
+   - Seats named: `{"v":1,"seats":[{"seat":"<Name>","model":"<provider/id>","variant":null}, …]}`.
+     Never substitute a named model.
+   - With `fewer_seats`, show the seats found and ask whether to run with them or
+     name the rest. To run with them, call `{"v":1,"count":<found>}` and use that
+     answer.
    - If `ready` is false, or any seat is not `ok`, stop and ask the user. Statuses:
      `unknown_model`, `unknown_variant`, `provider_not_on_plan`, `billing_unverified`,
      `quota_exhausted`, `unchecked`. Offer a seat's `candidates` only as options.
      Never substitute a model yourself.
    - If the tool returns `ready` false with a reason (`invalid_request`,
-     `models_unavailable`, `roster_unavailable`), or is unavailable (Python missing,
-     timeout), stop and tell the user. Do not dispatch unchecked seats.
-   - When every seat is `ok`, show the roster (seat, model ID, name, paid overflow) in
-     the same message that starts the run. Do not wait for a reply. A paid overflow
-     value is reported, never a reason to stop.
+     `models_unavailable`, `roster_unavailable`, or for a pick `no_models`,
+     `no_eligible_route`, `scores_unavailable`, `unscored`, `no_recommendation`), or
+     is unavailable (Python missing, timeout), stop and tell the user. Do not
+     dispatch unchecked seats.
+   - When every seat is `ok`, show the roster as this table in the same message
+     that starts the run, before you dispatch anyone:
+
+     | Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |
+     | --- | --- | --- | --- | --- | --- | --- |
+
+     Lab and Score come from a picked roster (`creator`, `score`); write `—` for
+     named seats. Under a picked roster, add the credit
+     "Scores: Artificial Analysis via OpenRouter". Do not wait for a reply.
+     A paid overflow value is reported, never a reason to stop.
    - After any seat change (the user picks a replacement or a candidate),
      call `vibe_council_roster` again. Dispatch only the exact `model` and `variant`
      values from an answer with `ready: true`.
