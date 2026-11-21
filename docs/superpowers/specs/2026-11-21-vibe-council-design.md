@@ -134,10 +134,12 @@ the user asks for a council; the README says so. The ChatGPT limit pause is reco
 only while Smart Router is on, so with it off a limited Astra seat is found at dispatch
 and handled as a member failure.
 
-Checked live on 2026-11-21: `openai/gpt-6.2-astra`, `claude-agent/opus` and
-`claude-agent/claude-fable-5-2` are listed with no per-token cost. The same models are
-also listed under `opencode/` and `openrouter/` with per-token prices; the plan-provider
-rule refuses those as `provider_not_on_plan`.
+Checked on 2026-11-21 with the `models` search tool: `openai/gpt-6.2-astra`,
+`claude-agent/opus` and `claude-agent/claude-fable-5-2` are listed with no per-token
+cost, and the same models also appear under `opencode/` and `openrouter/` with
+per-token prices. The live host check later showed that the search listing is not
+proof of a route: OpenCode 2.2.6's own model list has no `openai/gpt-6.2-astra`, and a
+direct run failed with `provider.no-route`. See `docs/development.md`.
 
 ### 4. Session records
 
