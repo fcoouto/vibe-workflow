@@ -50,15 +50,31 @@ function pushable(signal) {
   }
 }
 
-async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on" } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+function memoryStorage({ failing = false } = {}) {
+  const data = new Map(), calls = { get: 0, set: 0 }
+  const fail = () => { if (failing) throw Error("storage") }
+  return { data, calls,
+    get: async (key) => { calls.get++; fail(); return data.has(key) ? structuredClone(data.get(key)) : undefined },
+    set: async (key, value) => { calls.set++; fail(); data.set(key, structuredClone(value)) },
+    remove: async (key) => { fail(); data.delete(key) },
+    scan: async ({ prefix }) => { fail(); return { entries: [...data].filter(([key]) => key.startsWith(prefix))
+      .map(([key, value]) => ({ key, value: structuredClone(value) })) } } }
+}
+
+async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
+  storage = memoryStorage(), root } = {}) {
+  if (!root) {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
+    const made = root
+    t.after(() => rmSync(made, { recursive: true, force: true }))
+  }
   directory ??= root
   const titles = new Map(), calls = { get: [], update: [], run: [], hook: [] }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
   const preference = { state }
   let stream, subscribed
   const ctx = {
+    location: { directory: root }, storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
     session: {
       get: async ({ sessionID }) => {
@@ -96,7 +112,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     return event
   }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
-  return { root, ctx, calls, facts, titles, preference, write, emit, registered: titlesFor, subscribed: () => subscribed,
+  return { root, ctx, calls, facts, titles, preference, write, emit, storage, registered: titlesFor, subscribed: () => subscribed,
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
@@ -367,4 +383,81 @@ test("the tool result is never modified", async (t) => {
   await h.end()
   assert.equal(event.result, result)
   assert.deepEqual(writes, [])
+})
+
+const KEY = "session-titles/ses_1"
+test("a binding survives a restart through plugin storage", async (t) => {
+  const storage = memoryStorage()
+  const first = await host(t, { storage })
+  await first.write(SPEC)
+  await first.end()
+  assert.equal(first.titles.get("ses_1"), compose("Fix login flow", 1, true))
+  first.registered.close()
+  const second = await host(t, { storage, root: first.root })
+  second.titles.set("ses_1", first.titles.get("ses_1"))
+  second.facts.changed = ["src/login.js"]
+  await second.end()
+  assert.equal(second.titles.get("ses_1"), compose("Fix login flow", 2, true))
+})
+
+test("reaching cell 5 removes the stored binding, and a silenced session stays stored across a restart", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  await h.write(SPEC)
+  await h.end()
+  assert.ok(storage.data.has(KEY))
+  h.facts.prs["feat/x"] = [{ state: "MERGED", title: "x" }]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 5, false))
+  assert.equal(storage.data.has(KEY), false)
+  h.facts.prs = {}
+  await h.write(SPEC, "ses_2")
+  await h.end("ses_2")
+  h.titles.set("ses_2", "My own title")
+  await h.end("ses_2")
+  assert.equal(storage.data.get("session-titles/ses_2").silenced, true)
+  h.registered.close()
+  const again = await host(t, { storage, root: h.root })
+  again.titles.set("ses_2", "My own title")
+  await again.write(OTHER, "ses_2")
+  await again.end("ses_2")
+  assert.equal(again.titles.get("ses_2"), "My own title")
+})
+
+test("a record saved by another project's instance is ignored", async (t) => {
+  const storage = memoryStorage()
+  storage.data.set(KEY, { location: "/elsewhere", at: 1, last: null, silenced: false,
+    task: { top: "/elsewhere", spec: "/elsewhere/s.md", plan: null, remembered: null, cells: 2, slug: "x", fresh: false } })
+  const h = await host(t, { storage })
+  await h.end()
+  assert.deepEqual(h.calls.update, [])
+})
+
+test("storage failures fall back to memory and never throw", async (t) => {
+  const h = await host(t, { storage: memoryStorage({ failing: true }) })
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("an unknown session reads storage once, and never when session titles are off", async (t) => {
+  const h = await host(t)
+  await h.end("ses_9")
+  await h.end("ses_9")
+  assert.equal(h.storage.calls.get, 1)
+  const off = await host(t, { state: "off" })
+  await off.end("ses_9")
+  assert.equal(off.storage.calls.get, 0)
+})
+
+test("at most 128 records are stored; the oldest go first", async (t) => {
+  const storage = memoryStorage()
+  const h0 = await host(t, { storage })
+  for (let i = 0; i < 128; i++) storage.data.set(`session-titles/old_${i}`, { location: h0.root, at: i, task: null,
+    last: null, silenced: true })
+  await h0.write(SPEC)
+  await h0.end()
+  assert.equal([...storage.data.keys()].filter((key) => key.startsWith("session-titles/")).length, 128)
+  assert.equal(storage.data.has("session-titles/old_0"), false)
+  assert.ok(storage.data.has(KEY))
 })

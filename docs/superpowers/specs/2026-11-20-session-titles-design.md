@@ -213,7 +213,8 @@ project, removed afterwards:
 
 - A web merge after the session's last turn stays invisible until the session runs
   again; the title stays `▰▰▰▰▱ WAITING`.
-- A restart loses bindings; titles freeze until the next spec write.
+- A restart lost bindings until 2026-11-21; they are now kept in plugin storage (see
+  `2026-11-21-titles-storage-design.md`).
 - File coverage measures breadth, not correctness; scaffolding can fill cells early, and
   declared files never touched can hold cell 3.
 - A stale `origin/main`, or `main` merged into the branch, shifts the diff.
