@@ -29,9 +29,9 @@ const TYPES = ["session.execution.started", "session.execution.succeeded", "sess
   "session.execution.interrupted"]
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun }) {
-  const sessions = new Map(), chains = new Map(), checked = new Set(), controller = new AbortController()
-  const close = () => { controller.abort(); sessions.clear(); checked.clear() }
-  const where = ctx.location?.directory ?? null, storage = ctx.storage
+  const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
+  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
+  const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
   const on = async () => !controller.signal.aborted && (await settings.inspect()).state === "on"
   const enqueue = (sessionID, job) => {
@@ -50,7 +50,17 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const oldest = sessions.keys().next().value
       sessions.delete(oldest)
       checked.delete(oldest)
+      saved.delete(oldest)
     }
+  }
+
+  const text = (value) => value === null || typeof value === "string"
+  function restore(task) {
+    if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
+      typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
+      !(task.spec || task.plan)) return null
+    const { top, spec, plan, remembered, cells, slug, fresh } = task
+    return { top, spec, plan, remembered, cells, slug, fresh }
   }
 
   async function load(sessionID) {
@@ -58,19 +68,32 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     checked.add(sessionID)
     if (checked.size > MAX_SESSIONS * 8) checked.delete(checked.values().next().value)
     try {
-      const saved = await storage?.get(KEY + sessionID)
-      if (saved?.location !== where || !(saved.task || saved.silenced === true)) return
-      const task = saved.task && typeof saved.task.top === "string" && Number.isInteger(saved.task.cells) ? saved.task : null
-      keep(sessionID, { task, last: typeof saved.last === "string" ? saved.last : null, silenced: saved.silenced === true })
+      const record = await storage?.get(KEY + sessionID)
+      if (record?.location !== where) return
+      const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
+        silenced: record.silenced === true }
+      if (!entry.task && !entry.silenced) return
+      keep(sessionID, entry)
+      saved.set(sessionID, JSON.stringify(entry))
     } catch {}
   }
 
+  // A failed remove can leave a finished task behind; it is only read again after the session leaves memory, and a
+  // finished task then shows its last meter again until the next spec write. The 128-record cap is shared by projects.
   async function save(sessionID, entry) {
     try {
       if (!storage) return
-      if (!entry.task && !entry.silenced) return await storage.remove(KEY + sessionID)
+      const snapshot = JSON.stringify(entry), known = saved.has(sessionID)
+      if (saved.get(sessionID) === snapshot) return
+      if (!entry.task && !entry.silenced) {
+        await storage.remove(KEY + sessionID)
+        saved.delete(sessionID)
+        return
+      }
       await storage.set(KEY + sessionID, { location: where, at: Date.now(), task: entry.task, last: entry.last,
         silenced: entry.silenced })
+      saved.set(sessionID, snapshot)
+      if (known) return
       const entries = []
       let page = await storage.scan({ prefix: KEY })
       while (page) {

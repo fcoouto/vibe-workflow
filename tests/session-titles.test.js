@@ -51,18 +51,24 @@ function pushable(signal) {
 }
 
 function memoryStorage({ failing = false } = {}) {
-  const data = new Map(), calls = { get: 0, set: 0 }
+  const data = new Map(), calls = { get: 0, set: 0, scan: 0 }
   const fail = () => { if (failing) throw Error("storage") }
   return { data, calls,
     get: async (key) => { calls.get++; fail(); return data.has(key) ? structuredClone(data.get(key)) : undefined },
     set: async (key, value) => { calls.set++; fail(); data.set(key, structuredClone(value)) },
     remove: async (key) => { fail(); data.delete(key) },
-    scan: async ({ prefix }) => { fail(); return { entries: [...data].filter(([key]) => key.startsWith(prefix))
-      .map(([key, value]) => ({ key, value: structuredClone(value) })) } } }
+    scan: async ({ prefix, after, limit = 50 }) => {
+      calls.scan++
+      fail()
+      const keys = [...data.keys()].filter((key) => key.startsWith(prefix) && (after === undefined || key > after)).sort()
+      const page = keys.slice(0, limit)
+      return { entries: page.map((key) => ({ key, value: structuredClone(data.get(key)) })),
+        ...(keys.length > limit && { next: page.at(-1) }) }
+    } }
 }
 
 async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
-  storage = memoryStorage(), root } = {}) {
+  storage = memoryStorage(), root, located = true } = {}) {
   if (!root) {
     root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
     const made = root
@@ -74,7 +80,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   const preference = { state }
   let stream, subscribed
   const ctx = {
-    location: { directory: root }, storage,
+    ...(located && { location: { directory: root } }), storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
     session: {
       get: async ({ sessionID }) => {
@@ -460,4 +466,50 @@ test("at most 128 records are stored; the oldest go first", async (t) => {
   assert.equal([...storage.data.keys()].filter((key) => key.startsWith("session-titles/")).length, 128)
   assert.equal(storage.data.has("session-titles/old_0"), false)
   assert.ok(storage.data.has(KEY))
+})
+
+test("a malformed stored record is ignored instead of breaking the session", async (t) => {
+  const good = { top: "/x", spec: "/x/s.md", plan: null, remembered: null, cells: 2, slug: "x", fresh: false }
+  for (const task of [{ ...good, cells: 9 }, { ...good, cells: 0 }, { ...good, cells: 2.5 }, { ...good, slug: 5 },
+    { ...good, plan: 7 }, { ...good, spec: null }, { ...good, fresh: "no" }, { ...good, top: null }]) {
+    const storage = memoryStorage()
+    const h = await host(t, { storage })
+    storage.data.set(KEY, { location: h.root, at: 1, task, last: null, silenced: false })
+    await h.end()
+    await h.start()
+    assert.deepEqual(h.calls.update, [], JSON.stringify(task))
+  }
+})
+
+test("a session dropped from memory is reloaded from storage", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  await h.write(SPEC)
+  for (let i = 0; i < 127; i++) await h.write(SPEC, `ses_other_${i}`)
+  await h.end()
+  await h.write(SPEC, "ses_last")
+  h.facts.changed = ["src/login.js"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 2, true))
+})
+
+test("an unchanged turn writes nothing to storage, and only a new session triggers pruning", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  await h.write(SPEC)
+  await h.end()
+  const after = { ...storage.calls }
+  await h.end()
+  assert.equal(storage.calls.set, after.set)
+  assert.equal(storage.calls.scan, after.scan)
+  assert.equal(after.scan, 1)
+})
+
+test("without a known location, storage is never used", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage, located: false })
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+  assert.deepEqual(storage.calls, { get: 0, set: 0, scan: 0 })
 })
