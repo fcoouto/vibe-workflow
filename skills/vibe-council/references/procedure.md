@@ -47,11 +47,16 @@ picked ones.
      `no_eligible_route`, `scores_unavailable`, `unscored`, `no_recommendation`), or
      is unavailable (Python missing, timeout), stop and tell the user. Do not
      dispatch unchecked seats.
-   - When every seat is `ok`, show the roster (seat, model ID, name, paid overflow)
-     in the same message that starts the run. For a picked roster, also show each
-     score and lab, with the credit
-     "Scores: Artificial Analysis via OpenRouter". Do not wait for a reply. A paid
-     overflow value is reported, never a reason to stop.
+   - When every seat is `ok`, show the roster as this table in the same message
+     that starts the run, before you dispatch anyone:
+
+     | Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |
+     | --- | --- | --- | --- | --- | --- | --- |
+
+     Lab and Score come from a picked roster (`creator`, `score`); write `—` for
+     named seats. Under a picked roster, add the credit
+     "Scores: Artificial Analysis via OpenRouter". Do not wait for a reply.
+     A paid overflow value is reported, never a reason to stop.
    - After any seat change (the user picks a replacement or a candidate),
      call `vibe_council_roster` again. Dispatch only the exact `model` and `variant`
      values from an answer with `ready: true`.

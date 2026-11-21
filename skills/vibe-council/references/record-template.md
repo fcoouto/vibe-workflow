@@ -18,11 +18,13 @@ A run lives in `docs/vibe-council/sessions/<hash12>_<context>/`:
 ## Members
 
 Each member's seat, model ID, display name, variant and paid overflow, as the roster
-check reported them.
+tool reported them; lab and score only for a picked roster (`—` for named seats).
 
-| Seat | Model ID | Name | Variant | Paid overflow |
-| --- | --- | --- | --- | --- |
-| <seat> | <provider/id> | <display name> | <variant or none> | <blocked | enabled | unknown> |
+| Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |
+| --- | --- | --- | --- | --- | --- | --- |
+| <seat> | <provider/id> | <display name> | <variant or none> | <blocked | enabled | unknown> | <lab or —> | <score or —> |
+
+<For a picked roster: "Scores: Artificial Analysis via OpenRouter".>
 
 ## Votes
 

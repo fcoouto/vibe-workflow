@@ -19,6 +19,7 @@ test("procedure carries the process, roster and failure rules", async () => {
     "vibe_council_roster", 'agent: "explore"', "#<variant>", "docs/vibe-council/sessions/",
     "shasum -a 256", '{"v":1}', '"count"', "fewer_seats", "Scores: Artificial Analysis via OpenRouter",
     "no vote", "did not vote", "Round 2", "worktree", "paid overflow", "call `vibe_council_roster` again",
+    "| Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |",
   ])
 })
 
@@ -39,5 +40,6 @@ test("brief template carries the member rules", async () => {
 })
 
 test("record template carries the record fields", async () => {
-  hasAll(await read("references/record-template.md"), ["SHA-256", "paid overflow", "User decision"])
+  hasAll(await read("references/record-template.md"), ["SHA-256", "paid overflow", "User decision",
+    "| Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |", "Scores: Artificial Analysis via OpenRouter"])
 })
