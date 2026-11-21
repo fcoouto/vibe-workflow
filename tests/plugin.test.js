@@ -93,9 +93,11 @@ async function routed(enabled, entries) {
     },
   } }
   const cleanup = await (await load()).setup(h.ctx)
-  const step = async (sessionID = "ses_a") => {
+  // OpenCode 2.3.2 passes the model as { id, providerID, variant }; no provider stands for an older host.
+  const step = async (sessionID = "ses_a", providerID) => {
     const system = []
-    await h.hooks.get("context")({ system, sessionID, options: {} })
+    const model = providerID ? { id: "model", providerID, variant: null } : undefined
+    await h.hooks.get("context")({ system, sessionID, options: {}, ...(model && { model }) })
     return system.map((part) => part.text)
   }
   return { root, calls, step, cleanup }
@@ -118,6 +120,24 @@ test("the router instruction is put once per session as an entry and stays in th
   assert.equal(r.calls.length, 1)
   assert.equal((await r.step("ses_b")).length, 1)
   assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["put", "ses_b"]])
+})
+
+test("only claude-agent, or an unknown provider, gets the entry; every provider keeps the push", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  for (const [sessionID, provider] of [["ses_openai", "openai"], ["ses_go", "opencode-go"],
+    ["ses_claude", "claude-agent"], ["ses_unknown", undefined]]) {
+    assert.equal((await r.step(sessionID, provider)).length, 1)
+  }
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_claude"], ["put", "ses_unknown"]])
+})
+
+test("a session that leaves claude-agent keeps its entry and the push", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step("ses_a", "claude-agent")
+  assert.equal((await r.step("ses_a", "openai")).length, 1)
+  assert.deepEqual(r.calls.map(([name]) => name), ["put"])
 })
 
 test("unloading removes the entries this load put, and a step without a session id makes no entry calls", async (t) => {

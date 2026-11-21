@@ -289,8 +289,11 @@ export default {
         if (preference.state === "off" || entries.get(sessionID) === true) await entry(sessionID, false)
         return
       }
-      await entry(sessionID, true)
-      // Other providers keep reading the system prompt, and the entry applies only from the next step.
+      // Only claude-agent needs the entry; opencode-go would show it inside a tool result. A host that names
+      // no provider gets it too. A session that leaves claude-agent keeps its entry.
+      const provider = event?.model?.providerID
+      if (typeof provider !== "string" || provider === "claude-agent") await entry(sessionID, true)
+      // Every other provider reads the system prompt, and the entry applies only from the next step.
       if (!closed) event.system.push({ type: "text", text: ROUTER_INSTRUCTION })
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.

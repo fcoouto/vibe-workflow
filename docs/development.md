@@ -298,20 +298,34 @@ Durable session instruction entries (`ctx.session.instructions.entry.put` and
 `remove`) do reach `claude-agent`, as a `<system-update>` in the user turn that
 Sonnet treated as binding. Observed on the same version:
 
-- An entry applies from the step after the one that puts it, for both providers.
+- An entry applies from the step after the one that puts it, for every provider.
   An entry put from a `session.created` subscription was not observed: under
   `--standalone` the plugin loaded after the session was created.
 - Keys must match `^[a-z0-9][a-z0-9._-]*$`. `list` answers `[{ key, value }]`;
   removing an absent key succeeds.
+- Where an entry lands differs by provider: `openai/gpt-6.1-terra` gets it as a
+  developer-message `<context>`, still there after compaction; `opencode-go` (Claude
+  Haiku 5.5 on the Go plan) gets it appended to the result of the next tool call. A
+  pushed part reaches `opencode-go` in its system prompt.
+- The `context` event carries `model` as `{ id, providerID, variant }`, with
+  `providerID` `claude-agent`, `openai` or `opencode-go`. A hook registered with
+  `{ providerID: "claude-agent" }` ran only for the `claude-agent` session.
 
 The code reading is of the compiled 2.3.2 binary, so there is no source file or line;
 the bundled function is named `ClaudeInstructions.register`.
 
-So the Smart Router instruction is still pushed on every step, which other
-providers read as before, and is also put once per session as the entry
-`vibe-workflow-smart-router`, which `claude-agent` reads from the second step on.
-A failed put is retried on the next step. Hosts without the entry API keep only the
-push. The pull request fallback note is still only pushed. Known gaps:
+So the Smart Router instruction is still pushed on every step, for every provider,
+and only `claude-agent` sessions also get the entry `vibe-workflow-smart-router`,
+which they read from the second step on. A host that names no provider gets the
+entry too; a session that switches away from `claude-agent` keeps it. Other
+providers make no entry calls, and `opencode-go` never gets instructions inside tool
+results. A failed put is retried on the next step. Hosts without the entry API keep
+only the push. The pull request fallback note is still only pushed. The design came
+from a council run, recorded in
+`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`.
+Known gaps:
+
+- No channel reaches a `claude-agent` session's first model call.
 
 - Entries are durable but the plugin's record of them is in memory (at most 128
   sessions). Unloading removes the entries that load put; a crash does not, and a
