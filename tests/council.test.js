@@ -146,3 +146,92 @@ test("check receives entries without name", async () => {
   assert.deepEqual(calls[0].entries, [{ provider: "openai", id: "gpt-6.2-astra", model: "gpt-6.2-astra", family: "gpt",
     variants: ["high"], context: 1000, released: 200 }])
 })
+
+const PICK_LIST = [entry("openai", "gpt-6-astra", { name: "GPT-6 Astra" }),
+  entry("claude-agent", "opus", { name: "Opus 5.5", variants: [] }), entry("claude-agent", "claude-fable-5-2", { name: "Fable 5.2" }),
+  entry("openai", "gpt-6.2-sol", { name: "GPT-6.2 Sol" }), entry("openai", "gpt-6.3-sol", { name: "GPT-6.3 Sol" }),
+  entry("openai", "x-model", { name: null })]
+const ATTRIBUTION = "Scores: Artificial Analysis via OpenRouter"
+const picked = (seats, extra = {}) => ({ state: "picked", reason: null, seats, excluded: [], attribution: ATTRIBUTION, ...FALSE, ...extra })
+const ps = (provider, id, over = {}) => ({ provider, id, variant: "high", score: 60, score_source: "openrouter", creator: "openai",
+  paid_overflow: "blocked", ...over })
+
+// A stub pick that records its calls; the check must never run in pick mode.
+const pickSetup = ({ list = PICK_LIST, answer } = {}) => {
+  const calls = []
+  const pick = async (entries, count, signal) => {
+    calls.push({ entries, count, signal })
+    return typeof answer === "function" ? answer(entries, count) : answer
+  }
+  const roster = createRoster({ models: async () => list, check: async () => { throw new Error("check in pick mode") }, pick,
+    providers: new Set(["openai", "claude-agent"]) })
+  return { calls, roster }
+}
+
+test("a bare request picks three seats named from their display names", async () => {
+  const { roster, calls } = pickSetup({ answer: picked([ps("claude-agent", "claude-fable-5-2", { creator: "anthropic", score: 64.6 }),
+    ps("openai", "gpt-6-astra", { score: 62.1, paid_overflow: "unknown" }),
+    ps("claude-agent", "opus", { creator: "anthropic", score: 59.1, variant: null })]) })
+  const signal = new AbortController().signal
+  const a = await roster({ v: 1 }, signal)
+  assert.equal(calls[0].count, 3)
+  assert.equal(calls[0].signal, signal)
+  assert.ok(calls[0].entries.every((e) => !("name" in e)))
+  assert.equal(calls[0].entries.length, PICK_LIST.length)
+  assert.deepEqual(a, { ready: true, reason: null, seats: [
+    { seat: "Fable", model: "claude-agent/claude-fable-5-2", name: "Fable 5.2", variant: "high", status: "ok", paid_overflow: "blocked",
+      candidates: [], score: 64.6, creator: "anthropic" },
+    { seat: "Astra", model: "openai/gpt-6-astra", name: "GPT-6 Astra", variant: "high", status: "ok", paid_overflow: "unknown",
+      candidates: [], score: 62.1, creator: "openai" },
+    { seat: "Opus", model: "claude-agent/opus", name: "Opus 5.5", variant: null, status: "ok", paid_overflow: "blocked",
+      candidates: [], score: 59.1, creator: "anthropic" }], ...FALSE, attribution: ATTRIBUTION })
+})
+
+test("count is honoured and seat names stay unique", async () => {
+  const { roster, calls } = pickSetup({ answer: picked([ps("openai", "gpt-6.3-sol"), ps("openai", "gpt-6.2-sol"),
+    ps("openai", "x-model")]) })
+  const a = await roster({ v: 1, count: 3 })
+  assert.equal(calls[0].count, 3)
+  assert.deepEqual(a.seats.map((s) => s.seat), ["Sol", "Sol 2", "Model"])
+  const two = pickSetup({ answer: picked([ps("openai", "gpt-6.3-sol"), ps("openai", "gpt-6.2-sol")]) })
+  assert.equal((await two.roster({ v: 1, count: 2 })).ready, true)
+  assert.equal(two.calls[0].count, 2)
+})
+
+test("a short pick is not ready", async () => {
+  const short = await pickSetup({ answer: picked([ps("openai", "gpt-6-astra")], { reason: "fewer_seats" }) }).roster({ v: 1 })
+  assert.deepEqual([short.ready, short.reason, short.seats.length], [false, "fewer_seats", 1])
+  const none = await pickSetup({ answer: picked([], { reason: "scores_unavailable" }) }).roster({ v: 1 })
+  assert.deepEqual([none.ready, none.reason, none.seats], [false, "scores_unavailable", []])
+})
+
+test("a pick answer that does not line up is roster_unavailable", async () => {
+  const astra = ps("openai", "gpt-6-astra")
+  const bad = [{ state: "failed" }, picked([ps("openai", "not-listed")]), picked([ps("openai", "gpt-6-astra", { variant: "max" })]),
+    picked([ps("openai", "gpt-6-astra", { paid_overflow: "x" })]), picked([ps("openai", "gpt-6-astra", { score: "60" })]),
+    picked([ps("openai", "gpt-6-astra", { score: null })]), picked([ps("openai", "gpt-6-astra", { creator: 7 })]),
+    picked([astra, astra, ps("openai", "x-model")]), picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol"),
+      ps("openai", "gpt-6.3-sol")]), picked([astra], { reason: null }), picked([], { reason: "fewer_seats" }),
+    picked([], { reason: "whatever" }), picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")], { reason: "fewer_seats" }),
+    picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")], { attribution: 7 }), null, () => { throw new Error("x") }]
+  for (const answer of bad) {
+    const a = await pickSetup({ answer }).roster({ v: 1 })
+    assert.deepEqual(a, { ready: false, reason: "roster_unavailable", seats: [], ...FALSE })
+  }
+})
+
+test("invalid pick requests never reach the pick", async () => {
+  const { roster, calls } = pickSetup({ answer: picked([]) })
+  const s = seat("A", "openai/gpt-6-astra")
+  for (const c of [{ v: 1, count: 3, seats: [s] }, { v: 1, count: 0 }, { v: 1, count: 6 }, { v: 1, count: 2.5 },
+    { v: 1, count: "3" }, { v: 1, count: null }, { v: 2 }, { v: 1, extra: 1 }, { count: 3 }]) {
+    assert.deepEqual(await roster(c), { ready: false, reason: "invalid_request", seats: [], ...FALSE })
+  }
+  assert.equal(calls.length, 0)
+})
+
+test("a pick with no models never reaches the pick", async () => {
+  const { roster, calls } = pickSetup({ list: [], answer: picked([]) })
+  assert.deepEqual(await roster({ v: 1 }), { ready: false, reason: "models_unavailable", seats: [], ...FALSE })
+  assert.equal(calls.length, 0)
+})
