@@ -83,6 +83,13 @@ after loading `finishing-a-development-branch` it planned to verify tests, push,
 would ask for the base branch only if unclear). Not observed: the user-merges and
 cleanup-off wordings, and sessions started from the desktop or terminal client.
 
+The table also pre-approves the execution method when `writing-plans` loads, in any
+onboarded project. Observed live (OpenCode 2.3.2, 21 November 2026, `scripts/live_check.py`,
+only Smart Router saved, as off): the note was in the skill's tool result, and the agent's
+handoff skipped the method question and still asked for the plan review ("Please review the
+plan. Does it capture what you want?"). It did not name the method it would use. Not
+observed: a real plan and execution after the review.
+
 ## Session titles: what is known
 
 The opt-in `session_titles` setting is described in

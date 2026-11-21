@@ -223,9 +223,11 @@ export default {
       },
     }))
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
-    const prAdvice = await registerPrAdvice(ctx, { settings: () => gitWorkflow.inspect(),
-      primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
+    const onboarded = async () => (await Promise.all([project, gitWorkflow, sessionTitles].map((item) => item.inspect())))
+      .some(({ state }) => state === "on" || state === "off")
+    const prAdvice = await registerPrAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
+      primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)

@@ -215,3 +215,16 @@ test("a worktree-skill load gets the declared worktree preference only when the 
   const off = await fixture(t, { settings: { enabled: false, agent_merge: false } })
   assert.equal((await load(off.hooks)).content.length, 1)
 })
+
+test("a writing-plans load gets the method pre-approval when any feature is onboarded, never in a fresh project", async (t) => {
+  const load = async (hooks) => {
+    const event = { tool: "skill", status: "completed", sessionID: "ses_1", input: { id: "superpowers:writing-plans" },
+      result: { content: [{ type: "text", text: "which approach?" }] } }
+    await hooks.get("execute.after")(event)
+    return event.result
+  }
+  const router = await fixture(t, { settings: JSON.stringify({ version: 1, features: [{ smart_router: { enabled: false } }] }) })
+  assert.match((await load(router.hooks)).content[1].text, /^\n\nvibe-workflow: your human partner pre-approved the execution method/)
+  const fresh = await fixture(t, { settings: null })
+  assert.equal((await load(fresh.hooks)).content.length, 1)
+})
