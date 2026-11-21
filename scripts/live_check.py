@@ -54,7 +54,7 @@ def summarize(messages):
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "tool":
-                state = part.get("state") or {}
+                state = part.get("state") if isinstance(part.get("state"), dict) else {}
                 result = state.get("content") or state.get("output") or ""
                 events.append({"kind": "tool", "name": part.get("name"), "input": state.get("input") or {},
                                "note": _note(_text(result))})
@@ -103,7 +103,10 @@ def check(prompts, settings=None, origin=None, keep=False, wait=900):
     session = None
     try:
         project = prepare(work, settings, origin)
-        session = _api("post", "/api/session", data={"location": {"directory": str(project)}})["id"]
+        created = _api("post", "/api/session", data={"location": {"directory": str(project)}})
+        session = created.get("id") if isinstance(created, dict) else None
+        if not session:
+            raise ValueError(f"no session id in the create response: {created!r}")
         for prompt in prompts:
             _api("post", f"/api/session/{session}/prompt", data={"text": prompt})
             _api("post", f"/api/experimental/session/{session}/wait", timeout=wait)
@@ -115,8 +118,8 @@ def check(prompts, settings=None, origin=None, keep=False, wait=900):
         if session and not keep:
             try:
                 _api("delete", f"/api/session/{session}")
-            except (subprocess.SubprocessError, OSError, ValueError):
-                pass
+            except (subprocess.SubprocessError, OSError, ValueError) as error:
+                print(f"live-check: could not delete session {session}: {error}", file=sys.stderr)
         if not keep:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -125,7 +128,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt", action="append", required=True)
     parser.add_argument("--settings", type=json.loads)
-    parser.add_argument("--origin")
+    parser.add_argument("--origin", help="origin URL for gh lookups; use a throwaway or local URL, since the "
+                        "session's agent could fetch from or push to it")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
     print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep), indent=2, ensure_ascii=False))

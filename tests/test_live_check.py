@@ -1,9 +1,12 @@
 """Pure parts of the dev-only live-check script; never runs OpenCode."""
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("live_check", ROOT / "scripts" / "live_check.py")
@@ -55,14 +58,34 @@ class SummarizeTest(unittest.TestCase):
         messages = [{"type": "assistant", "content": [
             {"type": "tool", "name": "shell", "state": {"input": {"command": "gh pr ready 3"},
              "content": "ready\n\nvibe-workflow: before merging, check."}},
-            {"type": "tool"}, "junk", {"type": "text"},
+            {"type": "tool"}, {"type": "tool", "name": "read", "state": "odd"}, "junk", {"type": "text"},
         ]}, "junk"]
         self.assertEqual(live_check.summarize(messages), [
             {"kind": "tool", "name": "shell", "input": {"command": "gh pr ready 3"},
              "note": "vibe-workflow: before merging, check."},
             {"kind": "tool", "name": None, "input": {}, "note": None},
+            {"kind": "tool", "name": "read", "input": {}, "note": None},
             {"kind": "reply", "text": ""},
         ])
+
+
+class CleanupTest(unittest.TestCase):
+    def test_a_failed_session_delete_is_reported_with_its_id(self):
+        def api(method, path, data=None, timeout=60):
+            if method == "delete":
+                raise subprocess.CalledProcessError(1, "opencode")
+            return {"id": "ses_leak"} if path == "/api/session" else []
+        stderr = io.StringIO()
+        with mock.patch.object(live_check, "prepare", return_value=Path("/nonexistent")), \
+                mock.patch.object(live_check, "_api", side_effect=api), contextlib.redirect_stderr(stderr):
+            live_check.check(["hi"])
+        self.assertIn("ses_leak", stderr.getvalue())
+
+    def test_a_create_response_without_an_id_fails_clearly(self):
+        with mock.patch.object(live_check, "prepare", return_value=Path("/nonexistent")), \
+                mock.patch.object(live_check, "_api", return_value={"unexpected": True}):
+            with self.assertRaisesRegex(ValueError, "session id"):
+                live_check.check(["hi"])
 
 
 if __name__ == "__main__":

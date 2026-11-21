@@ -22,7 +22,8 @@ Use a new output path for each export. For a live check of plugin behavior, run
 checkout's package into a throwaway clone, runs one API-created session through `opencode api`
 (inference on the default model), prints the tool calls, `vibe-workflow:` notes, replies and
 title as JSON, and removes the session and clone afterwards (`--keep` keeps them). It is never
-exported. Keep each Python module within 1000 lines.
+exported. `--origin` sets the clone's remote for `gh` lookups; use a throwaway or local URL, because
+the session's agent could fetch from or push to it. Keep each Python module within 1000 lines.
 There is no linter, type checker, package manager, CI or release process here.
 Test native readers only with synthetic transports and isolated private homes.
 Report deterministic package checks separately from observed native execution.
