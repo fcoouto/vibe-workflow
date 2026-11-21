@@ -23,13 +23,15 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 }
 
 const MAX_SESSIONS = 128
+const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun }) {
-  const sessions = new Map(), chains = new Map(), controller = new AbortController()
-  const close = () => { controller.abort(); sessions.clear() }
+  const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
+  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
+  const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
   const on = async () => !controller.signal.aborted && (await settings.inspect()).state === "on"
   const enqueue = (sessionID, job) => {
@@ -37,6 +39,70 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     chains.set(sessionID, next)
     next.then(() => { if (chains.get(sessionID) === next) chains.delete(sessionID) })
     return next
+  }
+
+  // The binding is kept in plugin storage so a server restart does not freeze the meter. A record is read once per
+  // server lifetime and only by the instance of the project that saved it; any storage error leaves memory only.
+  function keep(sessionID, entry) {
+    sessions.delete(sessionID)
+    sessions.set(sessionID, entry)
+    if (sessions.size > MAX_SESSIONS) {
+      const oldest = sessions.keys().next().value
+      sessions.delete(oldest)
+      checked.delete(oldest)
+      saved.delete(oldest)
+    }
+  }
+
+  const text = (value) => value === null || typeof value === "string"
+  function restore(task) {
+    if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
+      typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
+      !(task.spec || task.plan)) return null
+    const { top, spec, plan, remembered, cells, slug, fresh } = task
+    return { top, spec, plan, remembered, cells, slug, fresh }
+  }
+
+  async function load(sessionID) {
+    if (sessions.has(sessionID) || checked.has(sessionID)) return
+    checked.add(sessionID)
+    if (checked.size > MAX_SESSIONS * 8) checked.delete(checked.values().next().value)
+    try {
+      const record = await storage?.get(KEY + sessionID)
+      if (record?.location !== where) return
+      const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
+        silenced: record.silenced === true }
+      if (!entry.task && !entry.silenced) return
+      keep(sessionID, entry)
+      saved.set(sessionID, JSON.stringify(entry))
+    } catch {}
+  }
+
+  // A failed remove can leave a finished task behind; it is only read again after the session leaves memory, and a
+  // finished task then shows its last meter again until the next spec write. The 128-record cap is shared by projects.
+  async function save(sessionID, entry) {
+    try {
+      if (!storage) return
+      const snapshot = JSON.stringify(entry), known = saved.has(sessionID)
+      if (saved.get(sessionID) === snapshot) return
+      if (!entry.task && !entry.silenced) {
+        await storage.remove(KEY + sessionID)
+        saved.delete(sessionID)
+        return
+      }
+      await storage.set(KEY + sessionID, { location: where, at: Date.now(), task: entry.task, last: entry.last,
+        silenced: entry.silenced })
+      saved.set(sessionID, snapshot)
+      if (known) return
+      const entries = []
+      let page = await storage.scan({ prefix: KEY })
+      while (page) {
+        entries.push(...(page.entries ?? []))
+        page = page.next ? await storage.scan({ prefix: KEY, after: page.next }) : null
+      }
+      entries.sort((a, b) => (a.value?.at ?? 0) - (b.value?.at ?? 0))
+      for (const { key } of entries.slice(0, Math.max(0, entries.length - MAX_SESSIONS))) await storage.remove(key)
+    } catch {}
   }
 
   async function bind(sessionID, path) {
@@ -47,17 +113,21 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!found) return
     const top = await realpath(found.top).catch(() => found.top)
     const file = top + absolute.slice(found.top.length)
+    await load(sessionID)
     const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false }
     const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true }
     if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
     else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
     else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
-    sessions.delete(sessionID)
-    sessions.set(sessionID, entry)
-    if (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value)
+    keep(sessionID, entry)
+    await save(sessionID, entry)
   }
 
   async function evaluate(sessionID, ended) {
+    if (!sessions.has(sessionID)) {
+      if (checked.has(sessionID) || !await on()) return
+      await load(sessionID)
+    }
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
     let cells = task.cells
@@ -70,7 +140,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
     const title = (await ctx.session.get({ sessionID })).title ?? ""
-    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; return }
+    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
     const next = compose(topic, cells, ended && cells < 5)
@@ -79,6 +149,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     Object.assign(task, { cells, fresh: false })
     entry.last = next
     if (cells === 5) entry.task = null
+    await save(sessionID, entry)
   }
 
   try {
