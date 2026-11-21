@@ -17,9 +17,18 @@ test("skill frontmatter matches the registration pattern and links the procedure
 test("procedure carries the process, roster and failure rules", async () => {
   hasAll(await read("references/procedure.md"), [
     "vibe_council_roster", 'agent: "explore"', "#<variant>", "docs/vibe-council/sessions/",
-    "shasum -a 256", "openai/gpt-6-astra", "claude-agent/opus", "claude-agent/claude-fable-5-2",
+    "shasum -a 256", '{"v":1}', '"count"', "fewer_seats", "Scores: Artificial Analysis via OpenRouter",
     "no vote", "did not vote", "Round 2", "worktree", "paid overflow", "call `vibe_council_roster` again",
   ])
+})
+
+test("no council file hard-sets a seat", async () => {
+  for (const name of ["SKILL.md", "references/procedure.md", "references/brief-template.md", "references/record-template.md"]) {
+    const text = await read(name)
+    for (const id of ["gpt-6-astra", "claude-agent/opus", "claude-fable-5-2"]) assert.ok(!text.includes(id), `${name}: ${id}`)
+  }
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8")
+  for (const id of ["gpt-6-astra", "claude-agent/opus", "claude-fable-5-2"]) assert.ok(!readme.includes(id), `README.md: ${id}`)
 })
 
 test("brief template carries the member rules", async () => {

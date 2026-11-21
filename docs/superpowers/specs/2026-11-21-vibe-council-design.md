@@ -207,6 +207,9 @@ Default roster: Astra `openai/gpt-6-astra`, Opus `claude-agent/opus`, Fable
 `claude-agent/claude-fable-5-2`. Three seats so majorities exist; vendor variety matters
 more than count.
 
+Superseded: seats are now picked by the seat rule when the user names none; see
+[the council seat rule](2026-11-21-council-seat-rule-design.md).
+
 ## Brief template (brief-template.md)
 
 About 1,500 to 3,000 words, sections in this order:
