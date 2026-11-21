@@ -116,12 +116,13 @@ helper, `refreshLater(refresh)`, which both tools call. The model reduction
   for Claude, OpenAI for ChatGPT) or, for Go, the matched entry's creator. A
   family-borrowed score never merges two models: `gpt-6-3-sol` keeps its own
   identity while it borrows `gpt-6-2-sol`'s score. A tier of a model is the same
-  model (builder's call): a key that extends another candidate's key from the
-  same creator with words that have no digits (`gpt-6-astra-fast`,
-  `gpt-6-2-sol-free`) takes that key's identity. A step in digits never merges
-  (`gpt-6` and `gpt-6-2` stay apart). Within one identity, the candidate that
-  Smart Router's own order key ranks first is kept (price, own score before
-  borrowed, newest release, route id).
+  model (builder's call, narrowed by the final review): a key that extends
+  another candidate's key from the same creator with words that have no digits,
+  and has the same score (`gpt-6-astra-fast` at Astra's score), takes that key's
+  identity. A sibling with its own score (`gpt-6-mini`, `gpt-6-pro`) and a step
+  in digits (`gpt-6` and `gpt-6-2`) stay apart. Within one identity, the
+  strongest candidate is kept, then the one Smart Router's own order key ranks
+  first (price, own score before borrowed, newest release, route id).
 - Orders with `routing.seats(candidates)`, then `_confirm(ordered, ..., count)`.
 - Answer: `{state: "picked", reason, seats: [...], excluded, attribution,
   admission: false, reservation: false, spend_permit: false}`, plus the internal

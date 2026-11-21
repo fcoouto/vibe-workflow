@@ -23,6 +23,12 @@ test("procedure carries the process, roster and failure rules", async () => {
   ])
 })
 
+test("the README says councils keep the scores fresh", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8")
+  const section = readme.slice(readme.indexOf("## Ask the council"), readme.indexOf("## Scores"))
+  assert.match(section.replace(/\s+/g, " "), /refresh(es)? them in the background about weekly/)
+})
+
 test("no council file hard-sets a seat", async () => {
   for (const name of ["SKILL.md", "references/procedure.md", "references/brief-template.md", "references/record-template.md"]) {
     const text = await read(name)

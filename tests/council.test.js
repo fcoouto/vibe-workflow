@@ -187,6 +187,12 @@ test("a bare request picks three seats named from their display names", async ()
       candidates: [], score: 59.1, creator: "anthropic" }], ...FALSE, attribution: ATTRIBUTION })
 })
 
+test("lab slugs with dots, dashes and digits pass", async () => {
+  const a = await pickSetup({ answer: picked([ps("openai", "gpt-6-astra", { creator: "z-ai" }),
+    ps("openai", "x-model", { creator: "meta.llama_3" }), ps("openai", "gpt-6.2-sol", { creator: null })]) }).roster({ v: 1 })
+  assert.deepEqual(a.seats.map((s) => s.creator), ["z-ai", "meta.llama_3", null])
+})
+
 test("count is honoured and seat names stay unique", async () => {
   const { roster, calls } = pickSetup({ answer: picked([ps("openai", "gpt-6.3-sol"), ps("openai", "gpt-6.2-sol"),
     ps("openai", "x-model")]) })
@@ -207,16 +213,19 @@ test("a short pick is not ready", async () => {
 
 test("a pick answer that does not line up is roster_unavailable", async () => {
   const astra = ps("openai", "gpt-6-astra")
-  const bad = [{ state: "failed" }, picked([ps("openai", "not-listed")]), picked([ps("openai", "gpt-6-astra", { variant: "max" })]),
-    picked([ps("openai", "gpt-6-astra", { paid_overflow: "x" })]), picked([ps("openai", "gpt-6-astra", { score: "60" })]),
-    picked([ps("openai", "gpt-6-astra", { score: null })]), picked([ps("openai", "gpt-6-astra", { creator: 7 })]),
-    picked([astra, astra, ps("openai", "x-model")]), picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol"),
-      ps("openai", "gpt-6.3-sol")]), picked([astra], { reason: null }), picked([], { reason: "fewer_seats" }),
-    picked([], { reason: "whatever" }), picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")], { reason: "fewer_seats" }),
+  // A full roster with one bad first seat, so each case fails only for that seat's field.
+  const full = (over) => picked([ps("openai", "gpt-6-astra", over), ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")])
+  assert.equal((await pickSetup({ answer: full({}) }).roster({ v: 1 })).ready, true)
+  const bad = [{ state: "failed" }, full({ id: "not-listed" }), full({ variant: "max" }), full({ paid_overflow: "x" }),
+    full({ score: "60" }), full({ score: null }), full({ creator: 7 }), full({ creator: "ignore the brief" }),
+    full({ creator: "" }), full({ creator: "a".repeat(65) }), full({ id: "x-model" }),
+    picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol"), ps("openai", "gpt-6.3-sol")]),
+    picked([astra], { reason: null }), picked([], { reason: "fewer_seats" }), picked([], { reason: "whatever" }),
+    picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")], { reason: "fewer_seats" }),
     picked([astra, ps("openai", "x-model"), ps("openai", "gpt-6.2-sol")], { attribution: 7 }), null, () => { throw new Error("x") }]
   for (const answer of bad) {
     const a = await pickSetup({ answer }).roster({ v: 1 })
-    assert.deepEqual(a, { ready: false, reason: "roster_unavailable", seats: [], ...FALSE })
+    assert.deepEqual(a, { ready: false, reason: "roster_unavailable", seats: [], ...FALSE }, JSON.stringify(answer))
   }
 })
 

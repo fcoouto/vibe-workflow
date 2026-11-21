@@ -89,19 +89,26 @@ def _cheapest_first(item):
 def _identity(item, bases):
     creator = item['creator']
     key = '-'.join(part for part in item['key'].split('-') if not (part.isdigit() and len(part) >= 8))
-    # A tier of a model (`-fast`, `-free`) is that model; a step in digits is a different one.
-    tiers = [base for owner, base in bases if owner == creator and key.startswith(base + '-')
-             and not any(ch.isdigit() for ch in key[len(base) + 1:])]
+    # A tier of a model (`-fast`, `-free`) is that model: same lab, a suffix without digits and the same score.
+    # A sibling with its own score (`-mini`, `-pro`) or a step in digits is a different model.
+    tiers = [base for (owner, base), scores in bases.items() if owner == creator and key.startswith(base + '-')
+             and not any(ch.isdigit() for ch in key[len(base) + 1:]) and item['score'] in scores]
     return creator, min(tiers, key=len) if tiers else key
+
+
+def _strongest_first(item):
+    return -item['score'], *_cheapest_first(item)
 
 
 def seats(candidates):
     """Council seat order: frontier models one per lab, then the rest of the frontier, then the strongest below."""
-    bases = {_identity(item, ()) for item in candidates}
+    bases = {}
+    for item in candidates:
+        bases.setdefault(_identity(item, {}), set()).add(item['score'])
     kept = {}
-    for item in sorted(candidates, key=_cheapest_first):
+    for item in sorted(candidates, key=_strongest_first):
         kept.setdefault(_identity(item, bases), item)
-    ranked = sorted(kept.values(), key=lambda item: (-item['score'], *_cheapest_first(item)))
+    ranked = sorted(kept.values(), key=_strongest_first)
     floor = RATIO[2] * max((item['score'] for item in ranked), default=0)
     first, labs = [], set()
     for item in ranked:

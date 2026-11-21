@@ -134,6 +134,25 @@ class SeatsTest(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(routes(routing.seats(given)), expected)
 
+    def test_a_sibling_with_its_own_score_keeps_its_own_seat(self):
+        cases = [
+            ([c('base', 'gpt-6', 'openai', 70, price=4), c('mini', 'gpt-6-mini', 'openai', 45),
+              c('opus', 'claude-opus-5-5', 'anthropic', 68)], ['base', 'opus', 'mini']),
+            ([c('six', 'gpt-6', 'openai', 60), c('pro', 'gpt-6-pro', 'openai', 72)], ['pro', 'six']),
+            ([c('flash', 'gemini-3-flash', 'google', 50), c('lite', 'gemini-3-flash-lite', 'google', 35)],
+             ['flash', 'lite']),
+            ([c('free', 'gpt-6-astra-free', 'openai', 62, price=0), c('astra', 'gpt-6-astra', 'openai', 62)],
+             ['free']),
+        ]
+        for given, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(routes(routing.seats(given)), expected)
+
+    def test_one_identity_keeps_its_strongest_copy(self):
+        found = routing.seats([c('cheap', 'claude-haiku-5-5', 'anthropic', 40, price=1),
+                               c('strong', 'claude-haiku-5-5', 'anthropic', 50, price=2)])
+        self.assertEqual(routes(found), ['strong'])
+
     def test_ties_use_the_shared_order_key(self):
         found = routing.seats([c('d', 'm-d', 'anthropic', 70, released=1), c('c', 'm-c', 'anthropic', 70, released=2),
                                c('b', 'm-b', 'anthropic', 70, source='family'), c('a', 'm-a', 'anthropic', 70, price=0.5),

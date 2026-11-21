@@ -3,6 +3,8 @@ import { registerSkill } from "./onboarding.js"
 const NO_AUTHORITY = { admission: false, reservation: false, spend_permit: false }
 const SEAT = /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/
 const VARIANT = /^[a-z0-9_-]{1,32}$/
+// A lab slug from the public score download: untrusted text, so only a plain slug reaches the agent.
+const CREATOR = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const STATUSES = new Set(["ok", "billing_unverified", "quota_exhausted"])
 const OVERFLOW = new Set(["blocked", "enabled", "unknown"])
 const EMPTY = new Set(["no_models", "no_eligible_route", "scores_unavailable", "unscored", "no_recommendation"])
@@ -61,7 +63,7 @@ function pickedRows(answer, list, count) {
     const hit = plain(s) ? list.find((m) => m.provider === s.provider && m.id === s.id) : null
     if (!hit || seen.has(`${hit.provider}/${hit.id}`) || !(s.variant === null || hit.variants?.includes(s.variant))
       || !OVERFLOW.has(s.paid_overflow) || typeof s.score !== "number" || !Number.isFinite(s.score)
-      || !(s.creator === null || (typeof s.creator === "string" && s.creator.length <= 64))) return null
+      || !(s.creator === null || (typeof s.creator === "string" && CREATOR.test(s.creator)))) return null
     seen.add(`${hit.provider}/${hit.id}`)
     rows.push({ seat: seatName(hit, taken), model: `${hit.provider}/${hit.id}`, name: hit.name ?? null, variant: s.variant,
       status: "ok", paid_overflow: s.paid_overflow, candidates: [], score: s.score, creator: s.creator })

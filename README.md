@@ -66,10 +66,10 @@ subagents. Shell stays available, so the brief tells members to stay read-only.
 Seats are limited to the Claude, OpenAI and OpenCode Go plans Smart Router
 routes through. Before it starts, `vibe_council_roster` checks your accounts
 with the same local, token-free reads as Smart Router, whether or not Smart
-Router is on. If the scores were never downloaded, the first council downloads
-them, as Smart Router would. The record is saved in
-`docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the work
-happens, and is committed with it. The coordinator never votes; you decide.
+Router is on. The first council downloads the public scores if they are missing,
+and later councils refresh them in the background about weekly. The record is
+saved in `docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the
+work happens, and is committed with it. The coordinator never votes; you decide.
 
 ## Scores
 
