@@ -24,7 +24,7 @@ function valid(request) {
   for (const s of seats) {
     if (!exactly(s, ["seat", "model", "variant"]) || typeof s.seat !== "string" || !SEAT.test(s.seat)) return false
     if (!split(s.model) || (s.variant !== null && !(typeof s.variant === "string" && VARIANT.test(s.variant)))) return false
-    const key = s.seat.toLowerCase()
+    const key = s.seat.toLowerCase().replaceAll(" ", "-")
     if (names.has(key)) return false
     names.add(key)
   }
@@ -36,7 +36,7 @@ function candidates(list, provider, id) {
   const word = id.toLowerCase().match(/[a-z]+/g)?.at(-1)
   if (!word) return []
   return list.filter((m) => m.provider === provider && (m.id.toLowerCase().includes(word) || String(m.name ?? "").toLowerCase().includes(word)))
-    .sort((a, b) => (b.released ?? -Infinity) - (a.released ?? -Infinity)).slice(0, 3).map((m) => `${m.provider}/${m.id}`)
+    .sort((a, b) => (b.released ?? 0) - (a.released ?? 0)).slice(0, 3).map((m) => `${m.provider}/${m.id}`)
 }
 
 // A checked answer only counts when it lines up seat for seat with what was sent.
@@ -120,7 +120,7 @@ export async function registerCouncil(ctx, { roster }) {
       const extra = typeof prompt?.text === "string" ? prompt.text.trim() : ""
       await ctx.session.prompt({
         ...prompt, sessionID,
-        text: extra ? `Use the vibe-council skill. ${prompt.text}` : "Use the vibe-council skill.",
+        text: extra ? `Use the vibe-council skill. ${extra}` : "Use the vibe-council skill.",
         files: withoutMentions(prompt?.files), agents: withoutMentions(prompt?.agents),
         skills: withoutMentions(prompt?.skills), delivery,
       })

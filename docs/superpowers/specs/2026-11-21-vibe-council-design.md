@@ -112,7 +112,7 @@ Flow:
    (`ctx.model.list()`, already filtered to enabled models on the plan providers).
    Match each seat's `provider/id` exactly. No match: the seat's status depends on
    whether its provider is on the plan (`unknown_model`, with up to three enabled
-   models of the same `family` as candidates) or not (`provider_not_on_plan`). A variant
+   models whose id or name contains the last alphabetic word of the seat id as candidates; an unlisted model has no host family) or not (`provider_not_on_plan`). A variant
    not in the model's `variants` gives `unknown_variant`.
 2. Python: matched seats go to `scripts/select.py --council-roster` through the existing
    `runRouter` spawn, reusing the Smart Router state directory and its account cache:
@@ -207,8 +207,10 @@ more than count.
 
 About 1,500 to 3,000 words, sections in this order:
 
-1. Role line: "You are <Seat>, one of N council members (<seats>). Answer
-   independently."
+1. Role line: "You are one of <N> council members (<seat names>). Answer
+   independently." It never names the member's own seat, since one `brief.md` is shared
+   and hashed. A round 2 prompt is saved as `brief-r2.md` and lists the session's
+   `answers/` folder as forbidden.
 2. The user's standing instructions, verbatim.
 3. Bias prompt: weigh optimistic bias as well as pessimistic bias.
 4. Context, half a page at most; point to files, do not paste them.

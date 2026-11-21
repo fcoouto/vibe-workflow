@@ -3,6 +3,7 @@
 A run lives in `docs/vibe-council/sessions/<hash12>_<context>/`:
 
 - `brief.md`: the exact bytes every member read.
+- `brief-r2.md`: the round 2 prompt, when a round 2 ran.
 - `answers/<seat>.md`: each member's raw answer (round 2: `<seat>-r2.md`).
 - `result.md`: laid out as below.
 

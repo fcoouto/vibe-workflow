@@ -42,8 +42,9 @@ overlapping behavior.
 - Existing native credentials are reused, never copied into project setup.
 - Selection launches nothing and grants no admission, reservation or spend permit.
 - Council: the `vibe-council` skill and `/vibe-council` command convene a
-  roster of up to five seats (default Astra, Opus and Fable) as read-only
-  `explore` agents; the `vibe_council_roster` tool checks seats against the plan
+  roster of up to five seats (default Astra, Opus and Fable) as `explore`
+  agents (no edit tools or subagents; shell stays available, so the brief asks for
+  read-only work); the `vibe_council_roster` tool checks seats against the plan
   providers in `config/routes.json` with local, token-free account reads,
   whether or not Smart Router is on. It launches nothing and grants no
   admission, reservation or spend permit. Records go to

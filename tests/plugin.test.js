@@ -627,19 +627,33 @@ test("council command forwards the skill line and strips mentions", async () => 
     const command = commands.get("vibe-council")
     assert.equal(command.description, "Run the council on a set of decisions.")
     await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "  ", files: [{ path: "a", mention: "m" }] } })
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "  x " } })
     await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "on R1-R9", agents: [{ name: "x", mention: "m" }],
       skills: [{ name: "y", mention: "m" }] } })
     assert.equal(prompts[0].text, "Use the vibe-council skill.")
-    assert.equal(prompts[1].text, "Use the vibe-council skill. on R1-R9")
+    assert.equal(prompts[1].text, "Use the vibe-council skill. x")
+    assert.equal(prompts[2].text, "Use the vibe-council skill. on R1-R9")
     assert.deepEqual(prompts[0].files, [{ path: "a" }])
-    assert.deepEqual(prompts[1].agents, [{ name: "x" }])
-    assert.deepEqual(prompts[1].skills, [{ name: "y" }])
-    assert.equal(prompts[1].sessionID, "s1")
-    assert.equal(prompts[1].delivery, "d")
+    assert.deepEqual(prompts[2].agents, [{ name: "x" }])
+    assert.deepEqual(prompts[2].skills, [{ name: "y" }])
+    assert.equal(prompts[2].sessionID, "s1")
+    assert.equal(prompts[2].delivery, "d")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
 test("setup succeeds without a command API", async () => {
   const f = await fixture(checkedSelect)
-  await f.cleanup?.(); await rm(f.root, { recursive: true })
+  try {
+    assert.ok(f.h.tools.has("vibe_council_roster"))
+    assert.ok(f.h.tools.has("smart_router_select"))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("council roster reports a crashed reader as roster_unavailable", async () => {
+  const f = await fixture("import sys\nsys.exit(3)\n")
+  try {
+    const answer = await roster(f)
+    assert.equal(answer.ready, false)
+    assert.equal(answer.reason, "roster_unavailable")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })

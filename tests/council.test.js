@@ -70,6 +70,21 @@ test("same model on two seats", async () => {
   assert.equal(a.ready, true)
   assert.equal(calls[0].entries.length, 2)
   assert.deepEqual(a.seats.map((s) => s.seat), ["One", "Two"])
+  assert.deepEqual(a.seats.map((s) => s.status), ["ok", "ok"])
+})
+
+test("seat names that share a file name are rejected", async () => {
+  const { roster } = setup()
+  const a = await roster(req(seat("A B", "openai/gpt-6.2-astra"), seat("A-B", "openai/gpt-6.2-astra")))
+  assert.equal(a.reason, "invalid_request")
+})
+
+test("candidates with no release date keep their list order", async () => {
+  const list = [entry("openai", "gpt-6.1-luna", { released: null }), entry("openai", "gpt-6.2-luna", { released: null }),
+    entry("openai", "gpt-6.3-luna", { released: 5 })]
+  const { roster } = setup({ list })
+  const a = await roster(req(seat("A", "openai/gpt-9-luna")))
+  assert.deepEqual(a.seats[0].candidates, ["openai/gpt-6.3-luna", "openai/gpt-6.1-luna", "openai/gpt-6.2-luna"])
 })
 
 test("empty model list", async () => {

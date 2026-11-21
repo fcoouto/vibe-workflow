@@ -37,6 +37,9 @@ may override per run ("ask Astra and Opus"), with one to five seats, unique name
    - When every seat is `ok`, show the roster (seat, model ID, name, paid overflow) in
      the same message that starts the run. Do not wait for a reply. A paid overflow
      value is reported, never a reason to stop.
+   - After any seat change (the user picks a replacement or a candidate),
+     call `vibe_council_roster` again. Dispatch only the exact `model` and `variant`
+     values from an answer with `ready: true`.
 4. **Write the brief.** Use [the brief template](brief-template.md). Pick the record
    location first (see Where the record goes). Then:
    1. Write the brief to `docs/vibe-council/sessions/draft_<context>/brief.md`.
@@ -58,7 +61,8 @@ may override per run ("ask Astra and Opus"), with one to five seats, unique name
    `explore` agent denies edits, writes and subagents and asks before reading `.env`
    files, but it still allows shell. "No Git writes" rests on the brief.
 6. **Save answers** to `answers/<seat>.md`. Use the lowercased seat name with spaces
-   turned into `-`. Round 2 answers go to `answers/<seat>-r2.md`.
+   turned into `-`; seat names that give the same file name count as the same seat.
+   Round 2 answers go to `answers/<seat>-r2.md`.
 7. **Tally** each item: unanimous, majority (note the minority) or split. When a
    majority says CHANGE but differs on how, pick the simplest variant and flag it as
    your own call. A missing line is "no vote".
@@ -66,8 +70,9 @@ may override per run ("ask Astra and Opus"), with one to five seats, unique name
    and defer lists, the shared compounding insight, and one or two questions only
    where the user must decide. State that you did not vote.
 9. **Round 2,** only when the user asks, and only for 1–1–1 splits or items the user
-   names. Send anonymised positions and reasons, ask for one final vote, and run at
-   most one extra round.
+   names. Write the prompt to `brief-r2.md` in the session folder, with anonymised
+   positions and reasons, and a forbidden-path line for the session's `answers/`
+   folder. Ask for one final vote and run at most one extra round.
 10. **Record** `result.md` from [the record template](record-template.md) with the
     user's decision. When the run settles a spec or decision document, add a
     one-line link to `result.md` there.

@@ -8,8 +8,8 @@ and never put the brief's own folder path in it.
 # Council brief: <topic>
 
 ## Role
-You are <Seat>, one of <N> council members (<seat names>). Answer independently. You
-cannot see the other members' answers.
+You are one of <N> council members (<seat names>). Answer independently. You cannot
+see the other members' answers.
 
 ## The user's standing instructions
 <Verbatim. Do not paraphrase.>
@@ -44,7 +44,8 @@ Answer with at most 500 words, in this order:
 ## Constraints
 - Read-only. No edits, no Git writes, no subagents.
 - Forbidden paths: <secrets, credentials and private data, plus the project-specific
-  paths the coordinator lists>. Do not read them.
+  paths the coordinator lists>. Do not read them. In a round 2 brief, also list the
+  session's `answers/` folder.
 - Use the network only if you need it.
 - Use about 15 tool calls.
 - Answer in your final message.

@@ -60,9 +60,10 @@ Ask: **“Use `vibe-council` to review this plan.”** or run
 Each member reviews on its own and reports back. The default members are Astra
 (`openai/gpt-6.2-astra`), Opus (`claude-agent/opus`) and Fable
 (`claude-agent/claude-fable-5-2`); you can change them per run. Members run as
-OpenCode's read-only `explore` agent, so they cannot edit files or start
-subagents. Seats are limited to the Claude, OpenAI and OpenCode Go plans Smart
-Router routes through; no other model is substituted. Before it starts,
+OpenCode's `explore` agent, which cannot use edit tools or start subagents.
+Shell stays available, so the brief tells members to stay read-only. Seats are
+limited to the Claude, OpenAI and OpenCode Go plans Smart Router routes through;
+no other model is substituted. Before it starts,
 `vibe_council_roster` checks your accounts with the same local, token-free reads
 as Smart Router, whether or not Smart Router is on. The record is saved in
 `docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the work
