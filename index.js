@@ -258,6 +258,10 @@ export default {
     // OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so text
     // pushed here never reaches it. A durable session instruction entry does, from the next step on.
     const entries = new Map()
+    // Never awaited and never throws: it also runs from the unload cleanup.
+    const drop = (sessionID) => {
+      try { ctx.session.instructions?.entry?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {}) } catch {}
+    }
     async function entry(sessionID, on) {
       const api = ctx.session.instructions?.entry
       if (!api || typeof sessionID !== "string" || entries.get(sessionID) === on) return
@@ -265,6 +269,8 @@ export default {
         if (on) await api.put({ sessionID, key: ROUTER_ENTRY, value: ROUTER_INSTRUCTION })
         else await api.remove({ sessionID, key: ROUTER_ENTRY })
       } catch { return }
+      // A put that lands after unload would otherwise stay on the host with nothing left to remove it.
+      if (closed) { if (on) drop(sessionID); return }
       entries.delete(sessionID)
       entries.set(sessionID, on)
       if (entries.size > MAX_NOTICE_SESSIONS) entries.delete(entries.keys().next().value)
@@ -320,8 +326,7 @@ export default {
       titles.close()
       notices.clear()
       // Entries outlive the plugin; remove the ones this load put so no session asks for a missing tool.
-      for (const [sessionID, on] of entries) if (on) ctx.session.instructions?.entry
-        ?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {})
+      for (const [sessionID, on] of entries) if (on) drop(sessionID)
       entries.clear()
       for (const stop of active) stop()
     }

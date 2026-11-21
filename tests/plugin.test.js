@@ -81,8 +81,16 @@ async function routed(enabled, entries) {
   const h = host(root)
   const calls = []
   if (entries !== null) h.ctx.session.instructions = { entry: {
-    put: async (input) => { calls.push(["put", input]); if (entries === "failing") throw Error("host refused") },
-    remove: async (input) => { calls.push(["remove", input]) },
+    put: async (input) => {
+      calls.push(["put", input])
+      if (entries === "failing") throw Error("host refused")
+      if (typeof entries === "object") await entries.put
+    },
+    remove: (input) => {
+      calls.push(["remove", input])
+      if (entries === "throwing") throw Error("host torn down")
+      return Promise.resolve()
+    },
   } }
   const cleanup = await (await load()).setup(h.ctx)
   const step = async (sessionID = "ses_a") => {
@@ -125,6 +133,29 @@ test("unloading removes the entries this load put, and a step without a session 
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
     [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_b"], ["remove", "ses_a"]])
+})
+
+test("a put still running at unload is removed once it lands, and that step adds nothing", async (t) => {
+  let land
+  const r = await routed(true, { put: new Promise((resolve) => { land = resolve }) })
+  t.after(() => rm(r.root, { recursive: true }))
+  const step = r.step()
+  for (let tick = 0; tick < 1000 && !r.calls.length; tick++) await new Promise((resolve) => setTimeout(resolve, 1))
+  assert.equal(r.calls.length, 1)
+  await r.cleanup()
+  land()
+  assert.deepEqual(await step, [])
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["remove", "ses_a"]])
+})
+
+test("a remove that throws at unload does not stop the rest of the cleanup", async (t) => {
+  const r = await routed(true, "throwing")
+  t.after(() => rm(r.root, { recursive: true }))
+  await r.step("ses_a")
+  await r.step("ses_b")
+  await r.cleanup()
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
+    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_a"], ["remove", "ses_b"]])
 })
 
 test("a failing put is retried on the next step", async (t) => {

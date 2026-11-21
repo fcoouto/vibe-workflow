@@ -332,9 +332,13 @@ longer applies. Disregard it.", and Sonnet treated the instruction as removed. I
 second session the entry was put, the session was compacted, and on the next step
 Sonnet found the instruction in its system prompt as a
 `<context key="vibe-workflow-smart-router">` block. That export pushed only on the
-first step; the push on every step that followed review only affects other
-providers. Not observed: a session started from the desktop or terminal client,
-other models, and unloading with live sessions.
+first step. With the export of `1332e32`, which pushes on every step, one new session
+per model, after one shell step: `claude-agent/sonnet` found the instruction only in
+the entry's `<system-update>`, not in its system prompt; `openai/gpt-6.1-terra` found
+it in its developer instructions and in the entry. That repository also loaded the
+installed 0.7.1 plugin, so Terra saw the pushed text twice. Not observed: a session
+started from the desktop or terminal client, other models, and unloading with live
+sessions.
 
 ## Vibe council: what is known
 
