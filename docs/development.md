@@ -281,6 +281,88 @@ at `data.error`, keeping the top-level and `properties` fallbacks. An event stre
 is not re-subscribed if it ends, so later limits go unmarked until the plugin reloads.
 Other OpenCode versions are unverified.
 
+## Context instructions on claude-agent: what is known
+
+Read from OpenCode 2.3.2's code: the `claude-agent` provider registers its own
+`context`, `generate` and `compaction` session hooks at startup (`ClaudeInstructions`).
+They copy `event.system`, except its first part, into the options Claude Code is
+launched with. Plugin hooks run after it, so text a plugin pushes into `event.system`
+never reaches a `claude-agent` model. Other providers receive it.
+
+Observed live (OpenCode 2.3.2, 21 November 2026, installed plugin 0.7.1, throwaway
+repository with only Smart Router on, one prompt per model and no tools):
+`claude-agent/sonnet` reported no instruction about `smart_router_select`, only
+its catalog entry; `openai/gpt-6.1-terra` quoted the instruction verbatim.
+
+Durable session instruction entries (`ctx.session.instructions.entry.put` and
+`remove`) do reach `claude-agent`, as a `<system-update>` in the user turn that
+Sonnet treated as binding. Observed on the same version:
+
+- An entry applies from the step after the one that puts it, for every provider.
+  An entry put from a `session.created` subscription was not observed: under
+  `--standalone` the plugin loaded after the session was created.
+- Keys must match `^[a-z0-9][a-z0-9._-]*$`. `list` answers `[{ key, value }]`;
+  removing an absent key succeeds.
+- Where an entry lands differs by provider: `openai/gpt-6.1-terra` gets it as a
+  developer-message `<context>`, still there after compaction; `opencode-go` (Claude
+  Haiku 5.5 on the Go plan) gets it appended to the result of the next tool call. A
+  pushed part reaches `opencode-go` in its system prompt.
+- The `context` event carries `model` as `{ id, providerID, variant }`, with
+  `providerID` `claude-agent`, `openai` or `opencode-go`. A hook registered with
+  `{ providerID: "claude-agent" }` ran only for the `claude-agent` session.
+
+The code reading is of the compiled 2.3.2 binary, so there is no source file or line;
+the bundled function is named `ClaudeInstructions.register`.
+
+So the Smart Router instruction is still pushed on every step, for every provider,
+and only `claude-agent` sessions also get the entry `vibe-workflow-smart-router`,
+which they read from the second step on. A host that names no provider gets the
+entry too; a session that switches away from `claude-agent` keeps it. Other
+providers make no `put` calls, so an `opencode-go` session gets no entry in its tool
+results unless it ran on `claude-agent` first. Turning Smart Router off still calls
+`remove` for sessions on any provider; removing a key a session never had sends the
+model nothing (observed once on `opencode-go/claude-haiku-5-5`, two tool steps, no
+update). A failed put is retried on the next step. Hosts without the entry API keep
+only the push. The pull request fallback note is still only pushed. The design came
+from a council run, recorded in
+`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`.
+Known gaps:
+
+- No channel reaches a `claude-agent` session's first model call.
+- A session that moves from `claude-agent` to `opencode-go` gets its entry, and later
+  any removal notice, appended to a tool result there.
+
+- Entries are durable but the plugin's record of them is in memory (at most 128
+  sessions). Unloading removes the entries that load put; a crash does not, and a
+  reload forgets them. After a reload, an opted-out project removes a session's
+  entry at its next step, but an unonboarded or invalid one leaves it, to avoid an
+  entry call for every session in projects that never used Smart Router.
+- Turning Smart Router off removes the entry at that session's next step, and the
+  model hears of it from the step after.
+
+Other versions are unverified.
+
+Observed live after the change (OpenCode 2.3.2, 21 November 2026, export of
+`f790b44` loaded as a project-local copy with its plugin id changed, in the same
+throwaway repository, `claude-agent/sonnet`): after one shell step, Sonnet quoted the
+instruction from a `<system-update>`. With Smart Router then turned off, the same
+session's next step received "The context under "vibe-workflow-smart-router" no
+longer applies. Disregard it.", and Sonnet treated the instruction as removed. In a
+second session the entry was put, the session was compacted, and on the next step
+Sonnet found the instruction in its system prompt as a
+`<context key="vibe-workflow-smart-router">` block. That export pushed only on the
+first step. With the export of `1332e32`, which pushes on every step, one new session
+per model, after one shell step: `claude-agent/sonnet` found the instruction only in
+the entry's `<system-update>`, not in its system prompt; `openai/gpt-6.1-terra` found
+it in its developer instructions and in the entry. That repository also loaded the
+installed 0.7.1 plugin, so Terra saw the pushed text twice. With the export of
+`3a3745b`, which puts the entry only for `claude-agent`, after one shell step:
+`claude-agent/sonnet` found the instruction only in the entry's `<system-update>`;
+`opencode-go/claude-haiku-5-5` found it only in its system prompt (twice, again because
+of the installed plugin) and in no tool result. Not observed: a session
+started from the desktop or terminal client, other models, and unloading with live
+sessions.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported

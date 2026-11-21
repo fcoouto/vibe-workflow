@@ -73,6 +73,172 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.deepEqual(event.options, {})
 })
 
+// OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so the
+// router instruction also goes into a durable session instruction entry, which that provider does receive.
+async function routed(enabled, entries) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "router-entry-")))
+  if (enabled !== null) await preference(root, enabled)
+  const h = host(root)
+  const calls = []
+  if (entries !== null) h.ctx.session.instructions = { entry: {
+    put: async (input) => {
+      calls.push(["put", input])
+      if (entries === "failing") throw Error("host refused")
+      if (typeof entries === "object") await entries.put
+    },
+    remove: (input) => {
+      calls.push(["remove", input])
+      if (entries === "throwing") throw Error("host torn down")
+      return Promise.resolve()
+    },
+  } }
+  const cleanup = await (await load()).setup(h.ctx)
+  // OpenCode 2.3.2 passes the model as { id, providerID, variant }; no provider stands for an older host.
+  const step = async (sessionID = "ses_a", providerID) => {
+    const system = []
+    const model = providerID ? { id: "model", providerID, variant: null } : undefined
+    await h.hooks.get("context")({ system, sessionID, options: {}, ...(model && { model }) })
+    return system.map((part) => part.text)
+  }
+  return { root, calls, step, cleanup }
+}
+
+test("the router instruction is put once per session as an entry and stays in the system prompt", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  const first = await r.step()
+  assert.equal(first.length, 1)
+  assert.match(first[0], /before delegating/i)
+  assert.equal(r.calls.length, 1)
+  const [kind, input] = r.calls[0]
+  assert.equal(kind, "put")
+  assert.equal(input.sessionID, "ses_a")
+  assert.match(input.key, /^[a-z0-9][a-z0-9._-]*$/)
+  assert.equal(input.value, first[0])
+  // Other providers keep the instruction in every system prompt, as before the entry existed.
+  assert.deepEqual(await r.step(), first)
+  assert.equal(r.calls.length, 1)
+  assert.equal((await r.step("ses_b")).length, 1)
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["put", "ses_b"]])
+})
+
+test("only claude-agent, or an unknown provider, gets the entry; every provider keeps the push", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  for (const [sessionID, provider] of [["ses_openai", "openai"], ["ses_go", "opencode-go"],
+    ["ses_claude", "claude-agent"], ["ses_unknown", undefined]]) {
+    assert.equal((await r.step(sessionID, provider)).length, 1)
+  }
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_claude"], ["put", "ses_unknown"]])
+})
+
+test("a session that leaves claude-agent keeps its entry and the push", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step("ses_a", "claude-agent")
+  assert.equal((await r.step("ses_a", "openai")).length, 1)
+  assert.deepEqual(r.calls.map(([name]) => name), ["put"])
+})
+
+test("unloading removes the entries this load put, and a step without a session id makes no entry calls", async (t) => {
+  const r = await routed(true, "working")
+  t.after(() => rm(r.root, { recursive: true }))
+  assert.equal((await r.step(null)).length, 1)
+  assert.deepEqual(r.calls, [])
+  await r.step("ses_a")
+  await r.step("ses_b")
+  await preference(r.root, false)
+  await r.step("ses_b")
+  await r.cleanup()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
+    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_b"], ["remove", "ses_a"]])
+})
+
+test("a put still running at unload is removed once it lands, and that step adds nothing", async (t) => {
+  let land
+  const r = await routed(true, { put: new Promise((resolve) => { land = resolve }) })
+  t.after(() => rm(r.root, { recursive: true }))
+  const step = r.step()
+  for (let tick = 0; tick < 1000 && !r.calls.length; tick++) await new Promise((resolve) => setTimeout(resolve, 1))
+  assert.equal(r.calls.length, 1)
+  await r.cleanup()
+  land()
+  assert.deepEqual(await step, [])
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["remove", "ses_a"]])
+})
+
+test("a remove that throws at unload does not stop the rest of the cleanup", async (t) => {
+  const r = await routed(true, "throwing")
+  t.after(() => rm(r.root, { recursive: true }))
+  await r.step("ses_a")
+  await r.step("ses_b")
+  await r.cleanup()
+  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
+    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_a"], ["remove", "ses_b"]])
+})
+
+test("a failing put is retried on the next step", async (t) => {
+  const r = await routed(true, "failing")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await r.step()
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "put"])
+})
+
+test("settings that become invalid remove an entry this load put", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await preference(r.root, "malformed")
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
+})
+
+test("entry state is bounded: the oldest session is forgotten and put again when seen", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  for (let index = 0; index <= 128; index++) await r.step(`ses_${index}`)
+  assert.equal(r.calls.length, 129)
+  await r.step("ses_128")
+  assert.equal(r.calls.length, 129)
+  await r.step("ses_0")
+  assert.deepEqual(r.calls.at(-1), ["put", r.calls[0][1]])
+})
+
+test("turning Smart Router off removes the session entry once", async (t) => {
+  const r = await routed(true, "working")
+  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+  await r.step()
+  await preference(r.root, false)
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(await r.step(), [])
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
+  assert.deepEqual(r.calls[1][1], { sessionID: "ses_a", key: r.calls[0][1].key })
+  await preference(r.root, true)
+  assert.equal((await r.step()).length, 1)
+  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove", "put"])
+})
+
+test("an opted-out project clears a leftover entry; an unonboarded one makes no entry calls", async (t) => {
+  for (const [enabled, expected] of [[false, ["remove"]], [null, []]]) {
+    const r = await routed(enabled, "working")
+    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+    assert.deepEqual(await r.step(), [])
+    assert.deepEqual(await r.step(), [])
+    assert.deepEqual(r.calls.map(([name]) => name), expected)
+  }
+})
+
+test("without working session entries the router instruction stays in the system prompt every step", async (t) => {
+  for (const entries of [null, "failing"]) {
+    const r = await routed(true, entries)
+    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
+    assert.equal((await r.step()).length, 1)
+    assert.equal((await r.step()).length, 1)
+  }
+})
+
 test("a host without models returns no authority without creating state", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
   try {
