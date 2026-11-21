@@ -87,8 +87,10 @@ The table also pre-approves the execution method when `writing-plans` loads, in 
 onboarded project. Observed live (OpenCode 2.3.2, 21 November 2026, `scripts/live_check.py`,
 only Smart Router saved, as off): the note was in the skill's tool result, and the agent's
 handoff skipped the method question and still asked for the plan review ("Please review the
-plan. Does it capture what you want?"). It did not name the method it would use. Not
-observed: a real plan and execution after the review.
+plan. Does it capture what you want?"). It did not name the method it would use, so the
+note gained "name it"; observed again the same day, the handoff then named the method
+("Execution method: Native (pre-approved, so no choice needed)") and still asked for the
+review. Not observed: a real plan and execution after the review.
 
 ## Session titles: what is known
 
