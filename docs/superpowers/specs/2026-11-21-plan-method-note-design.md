@@ -14,7 +14,7 @@ its wait for that review, stay. Approved by the user 2026-11-21.
   `skill` tool loads `writing-plans` (bare or prefixed), append exactly:
 
   > vibe-workflow: your human partner pre-approved the execution method you recommend;
-  > treat it as already supplied and do not ask which one to use. Still ask them to review
+  > treat it as already supplied, name it, and do not ask which one to use. Still ask them to review
   > the plan, and wait for that review before implementing. An explicit request from your
   > human partner in this session overrides this.
 
@@ -29,3 +29,6 @@ its wait for that review, stay. Approved by the user 2026-11-21.
 ## Not in scope
 
 A setting or onboarding question; skipping the plan review; notes for other skills.
+
+"name it" was added on 2026-11-21 after the live check showed the handoff did not say which
+method would be used, so the user could not object to it.

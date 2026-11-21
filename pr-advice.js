@@ -180,8 +180,8 @@ const NOTES = {
 const OVERRIDE = "An explicit request from your human partner in this session overrides this."
 const SKILL_NOTES = {
   "writing-plans": { gate: "onboarded", note: () => "vibe-workflow: your human partner pre-approved the execution " +
-    "method you recommend; treat it as already supplied and do not ask which one to use. Still ask them to review " +
-    "the plan, and wait for that review before implementing. " + OVERRIDE },
+    "method you recommend; treat it as already supplied, name it, and do not ask which one to use. Still ask them to " +
+    "review the plan, and wait for that review before implementing. " + OVERRIDE },
   "finishing-a-development-branch": { gate: "git_workflow", note: (state) => "vibe-workflow: your human partner's declared integration choice, set " +
     "during onboarding: push the branch and open a pull request, following the vibe-pull-requests skill ([BLOCKED] " +
     "draft, then [READY]). Skip the options menu and do not ask; the skill's other steps still apply. " +
