@@ -115,9 +115,13 @@ helper, `refreshLater(refresh)`, which both tools call. The model reduction
   digits) removed. The creator is the plan's hint (`scores.CREATOR`: Anthropic
   for Claude, OpenAI for ChatGPT) or, for Go, the matched entry's creator. A
   family-borrowed score never merges two models: `gpt-6-3-sol` keeps its own
-  identity while it borrows `gpt-6-2-sol`'s score. Within one identity, the
-  candidate that Smart Router's own order key ranks first is kept (price, own
-  score before borrowed, newest release, route id).
+  identity while it borrows `gpt-6-2-sol`'s score. A tier of a model is the same
+  model (builder's call): a key that extends another candidate's key from the
+  same creator with words that have no digits (`gpt-6-astra-fast`,
+  `gpt-6-2-sol-free`) takes that key's identity. A step in digits never merges
+  (`gpt-6` and `gpt-6-2` stay apart). Within one identity, the candidate that
+  Smart Router's own order key ranks first is kept (price, own score before
+  borrowed, newest release, route id).
 - Orders with `routing.seats(candidates)`, then `_confirm(ordered, ..., count)`.
 - Answer: `{state: "picked", reason, seats: [...], excluded, attribution,
   admission: false, reservation: false, spend_permit: false}`, plus the internal
@@ -187,7 +191,10 @@ The "Default roster" table goes. In its place:
   seat's score and lab, and credits "Scores: Artificial Analysis via
   OpenRouter".
 - With `fewer_seats`, show the seats found and ask whether to run with them or
-  name the rest.
+  name the rest. To run with them, call `{"v":1,"count":<found>}` (builder's
+  call). The pick is deterministic on the same facts, so it returns the same
+  seats as a `ready` answer unless an account changed in between, and the "only
+  from `ready`" rule stays whole.
 
 ### Documentation
 
@@ -208,8 +215,14 @@ The "Default roster" table goes. In its place:
   Below-frontier models come only after the frontier runs out. An unknown
   creator does not take a pass-1 place.
 - Identity: Haiku through Claude and Go yields one seat; a dated alias and its
-  base yield one seat; `gpt-6-3-sol` borrowing from `gpt-6-2-sol` keeps its own
-  seat.
+  base yield one seat; `gpt-6-astra-fast` and `gpt-6-astra` yield one seat;
+  `gpt-6` and `gpt-6-2` stay two; `gpt-6-3-sol` borrowing from `gpt-6-2-sol`
+  keeps its own seat.
+- Live check, only with the user's authorization (it runs the seats' models): a
+  `/vibe-council` with no named seats in a throwaway project, as in the merged
+  live check. It records the picked seats and the first dispatch with
+  `provider/id#variant`, which no live check has seen yet. If `#variant`
+  dispatch fails live, picks fall back to `variant: null`.
 - `council.pick` with fake facts and cache: an exhausted plan is skipped; an
   account change at the recheck drops the seat; `fewer_seats`; no scores and no
   network answers `scores_unavailable`; the first download runs once; a due
