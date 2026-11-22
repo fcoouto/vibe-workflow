@@ -40,9 +40,10 @@ nothing if any does:
 ## Order
 
 1. Tell the user first: "Merge confirmed. Cleaning up now: branch <name> and worktree
-   <path>. I will move this chat to the primary checkout and verify from its path
-   afterwards." The session's own directory disappears at the end, so the chat must leave
-   it first.
+   <path>. I will first move this chat to the main project folder <primary path> so it
+   keeps working, then check the result from there." Drop the move sentence when the
+   client cannot move a session (step 5). The session's own directory disappears at the
+   end, so the chat must leave it first.
 2. Capture the absolute common git dir (`git rev-parse --path-format=absolute --git-common-dir`) and the branch
    name. Check that the primary checkout is on the default branch with
    `git --git-dir=<common git dir> symbolic-ref --short HEAD`; if it is not, stop.
@@ -55,13 +56,21 @@ nothing if any does:
    up only while the branch's remote branch still exists.
 5. Move the session. If the session's working directory is this worktree, move the session
    to the primary checkout's absolute path with the client's own mechanism (table below).
-   A chat left in a removed folder cannot send its next message. Some clients apply the
-   move only at the next step, so confirm it in a later step with a read-only command that
-   prints the working directory. If the move fails or cannot be confirmed, stop, report,
-   and leave the worktree in place. If the client has no way to move a session, tell the
-   user the chat will lose its folder and ask before removing.
-6. Remove the worktree as the last action that changes anything, only after step 5 is
-   confirmed, with the client's own mechanism and never with force (table below).
+   A chat left in a removed folder cannot send its next message.
+   - Some clients apply a move only after the current tool call returns. Make the move in
+     a tool call of its own, then confirm it in a separate, later tool call, before step 6,
+     with a read-only command that prints the working directory. The output must be the
+     primary checkout's path; anything else counts as not confirmed.
+   - If the client's removal tool already returns the session to the original folder
+     (table below), there is no separate move: go to step 6 and confirm in step 7.
+   - If the move fails or cannot be confirmed, stop and report that the local branch is
+     already deleted and the worktree remains, detached. Leave the worktree in place.
+   - If the client has no way to move a session, tell the user this chat will stop working
+     once the worktree is removed and that they will need a new chat in <primary path>.
+     Then ask before removing. If they decline, stop and leave the worktree in place.
+6. Remove the worktree as the last action that changes anything, with the client's own
+   mechanism and never with force (table below). Do this only after step 5 confirmed the
+   move, found none was needed, or the user agreed to remove without one.
 7. Verify with read-only commands that name the primary checkout's path, because your own
    directory is gone: `git -C <primary> worktree list` and
    `git -C <primary> branch --list <branch>`. Report what they show, or say it could not
@@ -75,7 +84,7 @@ do not count as touching it.
 
 | Client | Move the session first (step 5) | Remove the worktree (step 6) |
 |---|---|---|
-| OpenCode | `session_move` with the primary checkout's path, in a call of its own: the move lands at the next step, so nothing that needs the new folder runs in the same call. Confirm with `pwd` in a later step. | `worktree_remove` with the worktree's directory (it needs `edit` permission on it). Never `force`. Its docs describe removing the worktree only; step 7 verifies the result. |
-| Claude Code | `ExitWorktree` returns the session to the original folder, so there is nothing extra to move. | `ExitWorktree` with the remove action. It may already have removed a clean worktree on exit; then there is nothing to do. |
-| Codex | No known mechanism: ask before removing. This row is unverified. | Codex removes its own managed worktrees past a limit. Do not remove Codex-managed worktrees yourself. This row is unverified. |
+| OpenCode | Call `session_move` alone with the primary checkout's absolute path. The move applies only after that call returns, so never put `worktree_remove` or anything that needs the new folder in the same call. Then run `pwd` in a separate call; it must print the primary checkout's path. | `worktree_remove` with the worktree's directory (it needs `edit` permission on it). Never `force`. Its docs describe removing the worktree only; step 7 verifies the result. |
+| Claude Code | No separate move: the `ExitWorktree` call in step 6 returns the session to the original folder. Confirm the folder in step 7. | `ExitWorktree` with the remove action. It may already have removed a clean worktree on exit; then there is nothing to do. |
+| Codex | Not applicable: you do not remove Codex-managed worktrees, so there is nothing to move for. For a worktree you made yourself there is no known mechanism: ask before removing. This row is unverified. | Codex removes its own managed worktrees past a limit. Do not remove Codex-managed worktrees yourself. This row is unverified. |
 | Any other client, or no tool | No known mechanism: ask before removing. | `git worktree remove <path>`, run from outside the worktree and without `--force`. |

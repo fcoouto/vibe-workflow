@@ -60,6 +60,17 @@ the worktree was gone. So the order is: move, confirm in a later step, then remo
   Claude Code `ExitWorktree` already returns to the original folder (nothing extra);
   Codex unverified, no known mechanism, so ask; any other client, ask.
 
+## Review of the wording
+
+Fable 5.2 reviewed the wording on 2026-11-22; its nine findings were applied. The notice
+now says "main project folder" and drops the move sentence for clients that cannot move;
+"later step" became "a separate, later tool call, before step 6", with a pass condition
+(the printed path must be the primary checkout's); step 6 lists when removal may run;
+Claude Code has no separate move because one `ExitWorktree` call moves and removes; the
+Codex row is "not applicable" for managed worktrees; the no-mechanism message says the chat
+will stop working and a new chat is needed in the primary path; the stop path reports that
+the branch is already deleted and the worktree remains detached.
+
 ## Proof expected
 
 - A test in `tests/pull-request-skill.test.js` asserts the reference names the move step

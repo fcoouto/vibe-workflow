@@ -54,7 +54,7 @@ test("skill files never point to Superpowers or claim enforcement", async () => 
 
 test("the cleanup reference moves the session before it removes the worktree", async () => {
   const text = await read("references/worktree-cleanup.md")
-  for (const phrase of ["Move the session", "session_move", "ask before removing", "Remove the worktree"]) {
+  for (const phrase of ["Move the session", "session_move", "ask before removing", "Remove the worktree", "separate, later tool call", "anything else counts as not confirmed"]) {
     assert.ok(text.includes(phrase), phrase)
   }
   assert.ok(text.indexOf("Move the session") < text.indexOf("Remove the worktree"))
