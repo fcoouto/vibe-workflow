@@ -40,11 +40,11 @@
 **Files:** Modify `session-facts.js` (`readFacts`), `session-titles.js` (`load`, `evaluate`, `save`), `tests/session-facts.test.js`, `tests/session-titles.test.js`
 
 **Interfaces:**
-- Produces: `readFacts(...)` result gains `errors: Array<{ step: "status"|"base"|"diff"|"plan"|"pr", code: string }>`; saved record gains `diag: { instance: string, exists: boolean, branch: string|null, upstream: boolean, head: string|null, pr: string|null, errors: Array<{step, code}> }` (`pr` is the PR state).
+- Produces: `readFacts(...)` result gains `errors: Array<{ step: "status"|"diff"|"plan"|"pr", code: string }>`; saved record gains `diag: { instance: string, exists: boolean, branch: string|null, upstream: boolean, head: string|null, pr: string|null, errors: Array<{step, code}> }` (`pr` is the PR state).
 
 - [ ] **Step 1:** Add tests: (a) `readFacts reports which read failed` with a `run` that throws `Object.assign(Error("x"), { code: "ENOENT" })` for `status` and a timeout-style error (`killed: true`) for `gh`: `got.errors` contains `{ step: "status", code: "ENOENT" }` and `{ step: "pr", code: "timeout" }`, and no message text; (b) in the titles tests, after `h.end()` the stored record has `diag` with `instance` a non-empty string, `branch: "feat/x"`, `upstream: true`, `errors: []`; with `facts.fail = true` the record's `diag.errors` is non-empty and contains no `"run"` message text; (c) a stored record with a malformed `diag` (`{ instance: 5 }`, extra keys, `errors` not an array) loads without breaking the session and the bad `diag` is replaced at the next save; (d) an unchanged second `h.end()` writes nothing (`storage.calls.set` unchanged).
 - [ ] **Step 2:** Run both test files; expect FAIL.
-- [ ] **Step 3:** In `readFacts`, push `{ step, code }` where each read now catches (`status`, `base`, `diff`, `plan`, `pr`); `code` = `error.code` when a string, `"timeout"` when `error.killed`, `"exit:<n>"` when `error.status` is a number, else `"error"`. Add `errors: []` to the default facts.
+- [ ] **Step 3:** In `readFacts`, push `{ step, code }` where each read now catches (`status`, `diff`, `plan`, `pr`); `code` = `error.code` when a string, `"timeout"` when `error.killed`, `"exit:<n>"` when `error.status` is a number, else `"error"`. Add `errors: []` to the default facts.
 - [ ] **Step 4:** In `session-titles.js`, create an `instance` id once per `registerSessionTitles` call; set `entry.diag` in `evaluate` from the facts; include it in `save`'s record and snapshot; in `load`, accept `record.diag` only when it matches the shape above, else `null`.
 - [ ] **Step 5:** Run both files plus `node --test tests/*.test.js`; expect PASS. Commit `feat: store what the title meter last read and which read failed`.
 

@@ -130,6 +130,24 @@ test("readFacts uses the remembered branch and fallback when top is gone", async
   assert.equal(calls.length, 1)
 })
 
+test("readFacts reports which read failed, as codes without messages", async (t) => {
+  const { top, main } = setup(t)
+  const failing = (status, gh) => async (command, args, options) => {
+    if (command === "gh") throw gh
+    if (args[0] === "status") throw status
+    return defaultRun(command, args, options)
+  }
+  const missing = Object.assign(new Error("spawn git ENOENT /secret/path"), { code: "ENOENT" })
+  const slow = Object.assign(new Error("Command failed: gh https://token@example.invalid"), { killed: true })
+  let got = await readFacts({ top, remembered: "feat/x", fallback: main, run: failing(missing, slow) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "ENOENT" }, { step: "pr", code: "timeout" }])
+  assert.doesNotMatch(JSON.stringify(got.errors), /secret|token|spawn/)
+  got = await readFacts({ top, remembered: "feat/x", fallback: main,
+    run: failing(Object.assign(new Error("x"), { code: 128 }), new SyntaxError("Unexpected token")) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "exit:128" }, { step: "pr", code: "error" }])
+  assert.deepEqual((await readFacts({ top, fallback: main, run: recorder().run })).errors, [])
+})
+
 test("readFacts resolves without rejecting outside a usable repository", async (t) => {
   const root = tmp(t)
   const { calls, run } = recorder()

@@ -513,3 +513,33 @@ test("without a known location, storage is never used", async (t) => {
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
   assert.deepEqual(storage.calls, { get: 0, set: 0, scan: 0 })
 })
+
+test("a saved record says what the last read saw and which read failed", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const { instance, ...seen } = h.storage.data.get(KEY).diag
+  assert.ok(typeof instance === "string" && instance.length > 0)
+  assert.deepEqual(seen, { exists: true, branch: "feat/x", upstream: true, head: "feat/x", pr: null, errors: [] })
+  h.facts.fail = true
+  await h.end()
+  const { diag } = h.storage.data.get(KEY)
+  assert.ok(diag.errors.length > 0)
+  assert.deepEqual([diag.branch, diag.head], [null, "feat/x"])
+  assert.doesNotMatch(JSON.stringify(diag), /run/)
+})
+
+test("a malformed stored diag is dropped and replaced at the next save", async (t) => {
+  const task = (root) => ({ top: root, spec: `${root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false })
+  const ok = { instance: "a", exists: true, branch: null, upstream: false, head: null, pr: null, errors: [] }
+  for (const diag of [{ instance: 5 }, "x", { ...ok, errors: "no" }, { ...ok, errors: [{ step: "nope", code: "x" }] },
+    { ...ok, branch: 3 }]) {
+    const storage = memoryStorage()
+    const h = await host(t, { storage })
+    storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag, task: task(h.root) })
+    await h.end()
+    const saved = storage.data.get(KEY).diag
+    assert.ok(typeof saved.instance === "string" && Array.isArray(saved.errors), JSON.stringify(diag))
+    assert.notDeepEqual(saved, diag)
+  }
+})

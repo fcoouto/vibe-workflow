@@ -40,12 +40,18 @@ export async function defaultRun(command, args, { cwd, timeout }) {
 
 const lines = (text) => text.split("\n").filter(Boolean)
 
+// A short code for a failed read: never the message, which can carry paths or remote URLs.
+const codeOf = (error) => typeof error?.code === "string" ? error.code : error?.killed ? "timeout"
+  : Number.isInteger(error?.code) ? `exit:${error.code}` : "error"
+
 export async function readFacts({ top, plan, remembered = null, fallback, run = defaultRun }) {
   const git = (cwd, ...args) => run("git", args, { cwd, timeout: 2000 })
   const exists = await stat(top).then((info) => info.isDirectory(), () => false)
-  const facts = { exists, branch: null, upstream: false, base: "origin/main", head: null, changed: [], declared: [], pr: null }
+  const facts = { exists, branch: null, upstream: false, base: "origin/main", head: null, changed: [], declared: [], pr: null,
+    errors: [] }
+  const failed = (step) => (error) => { facts.errors.push({ step, code: codeOf(error) }) }
   if (exists) {
-    const status = await git(top, "status", "--porcelain=v2", "--branch", "-uall").catch(() => "")
+    const status = await git(top, "status", "--porcelain=v2", "--branch", "-uall").catch((error) => { failed("status")(error); return "" })
     const header = (name) => status.match(new RegExp(`^# branch\\.${name} (.+)$`, "m"))?.[1] ?? null
     const branch = header("head")
     facts.branch = branch === "(detached)" ? null : branch
@@ -55,8 +61,8 @@ export async function readFacts({ top, plan, remembered = null, fallback, run = 
       const diff = lines(await git(top, "diff", "--name-only", "--merge-base", facts.base))
       const untracked = lines(status).filter((line) => line.startsWith("? ")).map((line) => line.slice(2))
       facts.changed = [...new Set([...diff, ...untracked])]
-    } catch {}
-    if (plan) facts.declared = declaredPaths(await readFile(resolve(top, plan), "utf8").catch(() => ""))
+    } catch (error) { failed("diff")(error) }
+    if (plan) facts.declared = declaredPaths(await readFile(resolve(top, plan), "utf8").catch((error) => { failed("plan")(error); return "" }))
     if (facts.branch && facts.upstream && facts.branch !== facts.base.replace(/^origin\//, "")) facts.head = facts.branch
     else facts.head = remembered
   } else facts.head = remembered
@@ -66,6 +72,6 @@ export async function readFacts({ top, plan, remembered = null, fallback, run = 
       { cwd: exists ? top : fallback, timeout: 5000 })
     const [first] = JSON.parse(out)
     if (first) facts.pr = { state: first.state, title: first.title }
-  } catch {}
+  } catch (error) { failed("pr")(error) }
   return facts
 }

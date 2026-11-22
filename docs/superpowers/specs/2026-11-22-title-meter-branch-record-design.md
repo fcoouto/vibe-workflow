@@ -54,7 +54,7 @@ Evidence (verified 2026-11-22):
 ## Design
 
 1. `declaredPaths`: on a `**Files:**` line, also read backticked path-like tokens after the label.
-2. `readFacts` returns `errors: [{ step, code }]` for its swallowed reads (`status`, `base`,
+2. `readFacts` returns `errors: [{ step, code }]` for its swallowed reads (`status`,
    `diff`, `plan`, `pr`); `code` is a short string (`ENOENT`, `ETIMEDOUT`, `exit:<n>`, `error`).
 3. `session-facts.js` exports `branchOf({ top, run })`: the checked-out branch of `top`, or null
    when detached, on the default branch, or unreadable.
@@ -82,6 +82,8 @@ no README or onboarding change; no injected notes, so the live injection check i
 - `classify` is reused from `pr-advice.js` instead of a second command parser.
 - The title is not rewritten at tool time; the next turn end does it.
 - Diagnostics live at the record's top level, outside the `task` whitelist.
+- The `origin/HEAD` read is not an error step: it fails in any repository without that ref and falls
+  back to `origin/main`, so recording it would put noise in every record.
 
 ## Proof expected
 
