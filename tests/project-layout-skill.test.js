@@ -22,6 +22,14 @@ test("procedure carries the placement, restructure and recording rules", async (
   ])
 })
 
+test("procedure offers to record a missing layout once", async () => {
+  hasAll(await read("references/procedure.md"), ["offer once, at the end of the task, to record"])
+})
+
+test("procedure treats a direct request for one move as its own approval", async () => {
+  hasAll(await read("references/procedure.md"), ["asks for directly needs no further approval"])
+})
+
 test("no skill file names writing-plans or carries a machine path", async () => {
   for (const name of files) {
     const text = await read(name)

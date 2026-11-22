@@ -3,7 +3,8 @@
 Use this when you create a file or folder, and when the user asks you to organize or
 restructure a project. A project that has its own layout is respected: learn it, keep
 new files consistent with it, and never push it toward the examples. Move, rename or
-delete nothing without a plan the user approved.
+delete nothing on your own: a restructure needs a plan the user approved, while a
+single move or rename the user asks for directly needs no further approval.
 
 ## Placement order
 
@@ -55,4 +56,6 @@ With the user's approval, write the project's placement rules into its existing 
 instructions file (`AGENTS.md`, or the file the project already uses): about ten lines
 that say where new code, tests, scripts and docs go, plus any exception worth knowing.
 Record rules, never a file listing, because a listing ages. When a restructure changes
-the layout, update those lines in the same pull request.
+the layout, update those lines in the same pull request. When the project has no
+recorded layout yet, offer once, at the end of the task, to record the layout you
+followed.
