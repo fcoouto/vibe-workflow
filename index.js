@@ -255,6 +255,7 @@ export default {
         refreshLater(refresh)
         return rest
       } }) })
+    await registerSkill(ctx, "vibe-project-layout")
     // OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so text
     // pushed here never reaches it. A durable session instruction entry does, from the next step on.
     const entries = new Map()
