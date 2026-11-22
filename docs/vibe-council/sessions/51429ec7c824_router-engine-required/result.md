@@ -53,4 +53,9 @@ part; sticky picks keep that coupling to the day a recorded model is retired.
 
 ## User decision
 
-Pending.
+2026-11-22:
+1. D1 dropped and D2 kept: Smart Router keeps its opt-out; the engine is required for plugin internals only.
+2. D3 as the majority changed it: keep the recorded models and re-pick only when one is no longer listed
+   (`opencode models`, no model call). D4 kept. D5 as the council recommended: the pre-authorization widens to
+   one level-1 Smart Router pick per subscription path (three providers, four prompts), used only when a recorded
+   model is gone. The coordinator's alternative (ask the user on retirement instead of widening) was declined.
