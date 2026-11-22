@@ -871,43 +871,14 @@ test("the router instruction is never pushed", async (t) => {
   }
 })
 
-test("no entry is put for any provider", async (t) => {
-  const n = await noted(true, { entries: "working" })
-  t.after(n.done)
-  for (const providerID of ["claude-agent", "openai", "opencode-go", undefined]) {
-    await n.step(schema(), { sessionID: `ses_${providerID}`, providerID })
-  }
-  assert.ok(n.calls.every(([kind]) => kind !== "put"))
-})
-
-test("a leftover router entry is removed once per session, whatever its provider", async (t) => {
-  const n = await noted(true, { entries: "working" })
-  t.after(n.done)
-  // An older version kept the entry after a session left claude-agent, so its first step here may be on any provider.
-  for (const [sessionID, providerID] of [["ses_c", "claude-agent"], ["ses_c", "claude-agent"], ["ses_u", undefined],
-    ["ses_o", "openai"], ["ses_g", "opencode-go"], ["ses_c", "openai"]]) await n.step(schema(), { sessionID, providerID })
-  assert.deepEqual(n.calls.map(([kind, input]) => [kind, input.sessionID, input.key]),
-    ["ses_c", "ses_u", "ses_o", "ses_g"].map((id) => ["remove", id, "vibe-workflow-smart-router"]))
-  n.calls.length = 0
-  for (let i = 0; i < 129; i++) await n.step(schema(), { sessionID: `ses_${i}`, providerID: "claude-agent" })
-  await n.step(schema(), { sessionID: "ses_0", providerID: "claude-agent" })
-  assert.equal(n.calls.length, 130)
-  assert.equal(n.calls.at(-1)[1].sessionID, "ses_0")
-})
-
-test("an unonboarded router makes no entry calls", async (t) => {
-  const n = await noted(null, { entries: "working" })
-  t.after(n.done)
-  await n.step(schema(), { providerID: "claude-agent" })
-  assert.deepEqual(n.calls, [])
-})
-
-test("a throwing or missing entry API never breaks the step", async (t) => {
-  for (const entries of ["throwing", "rejecting", undefined]) {
-    const n = await noted(true, { entries })
+test("no session instruction entry call is made for any provider", async (t) => {
+  for (const settings of [true, false, null]) {
+    const n = await noted(settings, { entries: "working" })
     t.after(n.done)
-    const { tools } = await n.step(schema(), { providerID: "claude-agent" })
-    assert.equal(tools.subagent.input.properties.model.description, FULL)
+    for (const providerID of ["claude-agent", "openai", "opencode-go", undefined]) {
+      await n.step(schema(), { sessionID: `ses_${providerID}`, providerID })
+    }
+    assert.deepEqual(n.calls, [])
   }
 })
 
