@@ -32,8 +32,8 @@ const ROUTER_ENTRY = "vibe-workflow-smart-router"
 const ROUTER_INSTRUCTION =
   "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
   "describing the task by its facts: files, spec, risk. " +
-  "Use a recommendation only when compatible with the user's choices and the client's permitted native controls. " +
-  "If no recommendation is available, show its notice in chat when present, then keep the client's existing selection. " +
+  "Use its recommendation unless the user named a model. " +
+  "If no recommendation is available, show its notice in chat when present, then follow the vibe-workflow subagent model note. " +
   "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
   "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
 // OpenCode's subagent tool says never to set `model` unless the user asks; onboarded projects ask. It rides on the
