@@ -179,6 +179,9 @@ exactly as written, apart from the markers and the saved choice's place.
 
    Add the GitHub line from step 5 or step 9 when question 4 ran or was skipped for a reason.
    An enabled preference is not proof of account availability or entitlement.
+   When `root` differs and Smart Router was saved, add before the last line:
+   **Smart Router is saved only in this worktree. Merge this branch into main so it applies to the project.**
+   Offer to open the pull request with `vibe-pull-requests`; do not merge unasked.
    Finish with one line: **Run onboarding again to change them.**
 
 Do not install anything, modify unrelated settings or ask about unshipped
