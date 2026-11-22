@@ -78,7 +78,8 @@ INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": Tr
 # One shell-note probe proves the execute.after hook still appends its notes to tool results: a branch switch in
 # the clone (a primary checkout) must come back with the primary-checkout note.
 SHELL_PROBE_MODEL = "claude-agent/haiku"
-SHELL_PROMPT = ("Run exactly one shell command and nothing else: git switch -c vibe-injection-probe . "
+SHELL_COMMAND = "git switch -c vibe-injection-probe"
+SHELL_PROMPT = ("Run exactly this one shell command, and no other tool call:\n" + SHELL_COMMAND + "\n"
                 "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
 SHELL_NOTE = re.compile(r"vibe-workflow: the primary checkout \(.+?\) is now on vibe-injection-probe\. "
                         r"Never touch the primary checkout")
@@ -103,8 +104,12 @@ def injection_passes(reply, tool_calls, notes):
     return tool_calls == 0 and all(normalize(note) in quoted for note in notes)
 
 
-def shell_probe_passes(reply, tool_calls):
-    return tool_calls == 1 and SHELL_NOTE.search(normalize(reply)) is not None
+def shell_probe_passes(answer):
+    """The hook delivered the note (it is in the one exact command's result) and the model saw it (it quotes it)."""
+    tools = answer.get("tools") or []
+    if answer.get("tool_calls") != 1 or len(tools) != 1 or (tools[0].get("command") or "").strip() != SHELL_COMMAND:
+        return False
+    return all(SHELL_NOTE.search(normalize(text)) for text in (tools[0].get("output"), answer.get("reply")))
 
 
 def isolated_env(config_home):
@@ -112,7 +117,8 @@ def isolated_env(config_home):
 
     OPENCODE_* variables can point at another config (OPENCODE_CONFIG, _DIR, _CONTENT) or the caller's session.
     """
-    env = {name: value for name, value in os.environ.items() if not name.startswith("OPENCODE")}
+    # GIT_* variables could point Git somewhere other than the throwaway clone.
+    env = {name: value for name, value in os.environ.items() if not name.startswith(("OPENCODE", "GIT_"))}
     return {**env, "XDG_CONFIG_HOME": str(config_home)}
 
 
@@ -132,7 +138,7 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
     # One event per line. Only top-level `text` events are the model's reply; a `tool_use` event is one tool call,
     # and the text nested in its result is the tool's output, not the reply.
-    texts, tools, sessions = {}, set(), []
+    texts, tools, sessions = {}, {}, []
     for event in _events(out):
         if not isinstance(event, dict):
             continue
@@ -146,8 +152,15 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
             # Parts arrive either as growing snapshots or as deltas under the same id.
             seen, text = texts.get(key, ""), part["text"]
             texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
-        elif event.get("type") == "tool_use":
-            tools.add(key)
+        elif event.get("type") == "tool_use" and key not in tools:
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            given = state.get("input") if isinstance(state.get("input"), dict) else {}
+            content = (state.get("metadata") or {}).get("content") if isinstance(state.get("metadata"), dict) else None
+            texts_out = [item.get("text", "") for item in content if isinstance(item, dict)] if isinstance(content, list) else []
+            if isinstance(state.get("output"), str):
+                texts_out.append(state["output"])
+            tools[key] = {"command": given.get("command") if isinstance(given.get("command"), str) else None,
+                          "output": "\n".join(text for text in texts_out if isinstance(text, str))}
     session, deleted = (sessions[0] if sessions else None), False
     if session:
         # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
@@ -157,7 +170,8 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
             deleted = True
         except (subprocess.SubprocessError, OSError):
             pass
-    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "session": session, "deleted": deleted}
+    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "tools": list(tools.values()),
+            "session": session, "deleted": deleted}
 
 
 def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
@@ -188,7 +202,7 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
             answer = runner(project, SHELL_PROBE_MODEL, isolated_env(config_home), prompt=SHELL_PROMPT)
         except (subprocess.SubprocessError, OSError, ValueError) as error:
             answer = {"reply": f"run failed: {error}", "tool_calls": 0}
-        passed = shell_probe_passes(answer["reply"], answer["tool_calls"])
+        passed = shell_probe_passes(answer)
         results.append({"model": SHELL_PROBE_MODEL, "probe": "shell-note", "pass": passed,
                         "excerpt": "" if passed else answer["reply"][:200],
                         "session_left": None if answer.get("deleted", True) else answer.get("session")})
@@ -234,6 +248,9 @@ def summarize(messages):
 
 
 def _run(argv, cwd=None, timeout=120, data=None, env=None):
+    # Inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, ...) would point Git away from the paths given here.
+    if env is None:
+        env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     return subprocess.run(argv, cwd=cwd, input=data, capture_output=True, text=True, timeout=timeout,
                           check=True, env=env).stdout
 
@@ -251,6 +268,8 @@ def prepare(work, settings=None, origin=None):
     package, project = work / "package", work / "project"
     _run([sys.executable, "-B", str(ROOT / "scripts" / "package.py"), "--output", str(package)], cwd=ROOT)
     _run(["git", "clone", "-q", str(ROOT), str(project)])
+    # The session may run Git in the clone; no global or repository hook may run there.
+    _run(["git", "config", "core.hooksPath", "/dev/null"], cwd=project)
     with open(project / ".git" / "info" / "exclude", "a") as exclude:
         exclude.write("\n.opencode/\n")
     plugin = project / ".opencode" / "plugins" / "live-check"

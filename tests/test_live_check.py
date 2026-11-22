@@ -112,8 +112,10 @@ class VersionTest(unittest.TestCase):
                     live_check.read_record(path)
 
 
-SHELL_ANSWER = {"reply": "vibe-workflow: the primary checkout (/x/project) is now on vibe-injection-probe. Never touch "
-                         "the primary checkout; tell the user, and do task work in a worktree.", "tool_calls": 1}
+SHELL_NOTE_TEXT = ("vibe-workflow: the primary checkout (/x/project) is now on vibe-injection-probe. Never touch "
+                   "the primary checkout; tell the user, and do task work in a worktree.")
+SHELL_ANSWER = {"reply": SHELL_NOTE_TEXT, "tool_calls": 1,
+                "tools": [{"command": "git switch -c vibe-injection-probe", "output": "Switched\n" + SHELL_NOTE_TEXT}]}
 
 
 class InjectionTest(unittest.TestCase):
@@ -183,12 +185,12 @@ class InjectionTest(unittest.TestCase):
         self.assertEqual(seen["data"], "")
         self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("quoted", 1, None))
 
-    def test_isolated_env_drops_opencode_overrides(self):
+    def test_isolated_env_drops_opencode_and_git_overrides(self):
         overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_CONFIG_DIR": "/x", "OPENCODE_CONFIG_CONTENT": "{}",
-                     "OPENCODE_SESSION_ID": "ses_parent"}
+                     "OPENCODE_SESSION_ID": "ses_parent", "GIT_DIR": "/elsewhere/.git", "GIT_CONFIG_GLOBAL": "/g"}
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, overrides):
             env = live_check.isolated_env(Path(folder))
-        self.assertFalse([name for name in env if name.startswith("OPENCODE")])
+        self.assertFalse([name for name in env if name.startswith(("OPENCODE", "GIT_"))])
         self.assertEqual(env["XDG_CONFIG_HOME"], folder)
 
     def test_run_model_joins_streamed_deltas_and_keeps_growing_snapshots(self):
@@ -237,7 +239,7 @@ class InjectionTest(unittest.TestCase):
         note = SHELL_ANSWER["reply"]
         lines = [{"type": "step_start", "sessionID": "ses_x", "part": {"id": "prt_1", "type": "step-start"}},
                  {"type": "tool_use", "sessionID": "ses_x", "part": {"id": "toolu_1", "type": "tool", "state": {
-                     "metadata": {"content": [{"type": "text", "text": "Switched"}, {"type": "text", "text": note}]}}}},
+                     "input": {"command": "git switch -c vibe-injection-probe"}, "metadata": {"content": [{"type": "text", "text": "Switched"}, {"type": "text", "text": note}]}}}},
                  {"type": "step_finish", "sessionID": "ses_x", "part": {"id": "prt_2", "type": "step-finish"}},
                  {"type": "text", "sessionID": "ses_x", "part": {"id": "prt_3", "type": "text", "text": "Quoted."}}]
 
@@ -246,18 +248,24 @@ class InjectionTest(unittest.TestCase):
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
         self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("Quoted.", 1, "ses_x"))
+        self.assertEqual(answer["tools"][0]["command"], "git switch -c vibe-injection-probe")
+        self.assertIn(note, answer["tools"][0]["output"])
 
-    def test_shell_probe_passes_only_with_the_note_and_one_tool_call(self):
-        self.assertTrue(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 1))
-        self.assertFalse(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 0))
-        self.assertFalse(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 2))
-        self.assertFalse(live_check.shell_probe_passes("Switched to a new branch 'vibe-injection-probe'", 1))
+    def test_shell_probe_needs_the_exact_command_and_the_note_in_its_result_and_reply(self):
+        self.assertTrue(live_check.shell_probe_passes(SHELL_ANSWER))
+        tool = SHELL_ANSWER["tools"][0]
+        for broken in ({**SHELL_ANSWER, "tools": [{**tool, "output": "Switched to a new branch"}]},
+                       {**SHELL_ANSWER, "tools": [{**tool, "command": "git switch -c vibe-injection-probe && ls"}]},
+                       {**SHELL_ANSWER, "tools": [tool, tool], "tool_calls": 2},
+                       {**SHELL_ANSWER, "tools": [], "tool_calls": 0},
+                       {**SHELL_ANSWER, "reply": "Switched to a new branch 'vibe-injection-probe'"}):
+            self.assertFalse(live_check.shell_probe_passes(broken), broken)
 
     def test_the_shell_probe_runs_once_on_an_approved_model_with_git_workflow_on(self):
         self.assertIn(live_check.SHELL_PROBE_MODEL, live_check.APPROVED_MODELS)
         features = {key for entry in live_check.INJECTION_SETTINGS["features"] for key in entry}
         self.assertEqual(features, {"smart_router", "git_workflow"})
-        self.assertIn("git switch -c vibe-injection-probe", live_check.SHELL_PROMPT)
+        self.assertIn("\ngit switch -c vibe-injection-probe\n", live_check.SHELL_PROMPT)
 
     def test_a_failing_shell_probe_blocks_the_record(self):
         model_note, router_note = self.NOTES
@@ -270,7 +278,7 @@ class InjectionTest(unittest.TestCase):
             def runner(project, model, env, prompt=live_check.INJECTION_PROMPT):
                 calls.append((model, prompt))
                 if prompt == live_check.SHELL_PROMPT:
-                    return {"reply": "no note came back", "tool_calls": 1}
+                    return {**SHELL_ANSWER, "tools": [{**SHELL_ANSWER["tools"][0], "output": "no note came back"}]}
                 return {"reply": model_note + " " + router_note, "tool_calls": 0}
             with mock.patch.multiple(live_check, APPROVED_MODELS=("a/one", "b/two"), SHELL_PROBE_MODEL="a/one"), \
                     mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
@@ -281,6 +289,14 @@ class InjectionTest(unittest.TestCase):
             shell = [item for item in summary["results"] if item.get("probe") == "shell-note"]
             self.assertEqual(len(shell), 1)
             self.assertFalse(shell[0]["pass"])
+
+    def test_the_prepared_clone_runs_no_git_hooks(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"GIT_DIR": "/nonexistent/.git"}):
+            project = live_check.prepare(Path(folder).resolve())
+            clean = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+            hooks = subprocess.run(["git", "config", "core.hooksPath"], cwd=project, capture_output=True, text=True,
+                                   env=clean)
+        self.assertEqual(hooks.stdout.strip(), "/dev/null")
 
     def test_the_cli_offers_injection(self):
         run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],
