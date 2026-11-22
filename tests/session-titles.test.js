@@ -75,7 +75,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     t.after(() => rmSync(made, { recursive: true, force: true }))
   }
   directory ??= root
-  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [] }
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [] }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
   const preference = { state }
   let stream, subscribed
@@ -97,8 +97,9 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     },
     ...(events && { event: { subscribe: ({ types, signal }) => { subscribed = { types, signal }; return stream = pushable(signal) } } }),
   }
-  const run = async (command, args) => {
+  const run = async (command, args, options) => {
     calls.run.push([command, ...args])
+    if (args[0] === "status") calls.status.push({ args, cwd: options?.cwd })
     if (facts.fail) throw Error("run")
     if (command === "gh") {
       await facts.gate
@@ -545,11 +546,17 @@ test("a malformed stored diag is dropped and replaced at the next save", async (
     const storage = memoryStorage()
     const h = await host(t, { storage })
     storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag, task: task(h.root) })
+    await h.start()
+    assert.equal(storage.data.get(KEY).diag, null, `a turn start keeps nothing from ${JSON.stringify(diag)}`)
     await h.end()
     const saved = storage.data.get(KEY).diag
     assert.ok(typeof saved.instance === "string" && Array.isArray(saved.errors), JSON.stringify(diag))
-    assert.notDeepEqual(saved, diag)
   }
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: ok, task: task(h.root) })
+  await h.start()
+  assert.deepEqual(storage.data.get(KEY).diag, ok)
 })
 
 test("the saved diag counts declared and changed plan paths", async (t) => {
@@ -575,6 +582,9 @@ test("a push, PR create or PR merge records the bound checkout's branch, with or
     await h.shell(command)
     assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x", command)
     assert.deepEqual(h.calls.update, [], "the title is not written at tool time")
+    const status = h.calls.status.at(-1)
+    assert.equal(status.cwd, h.root, `${command} reads the bound checkout, not the command's directory`)
+    assert.ok(status.args.includes("-uno"), command)
   }
 })
 
@@ -625,9 +635,12 @@ test("the default branch and a detached checkout are never recorded", async (t) 
 })
 
 test("with the feature off or a failing read, a push does no work and never throws", async (t) => {
-  const off = await host(t, { state: "off" })
+  const off = await host(t)
+  await off.write(SPEC)
+  off.preference.state = "off"
   await off.shell("git push")
-  assert.equal(off.calls.run.length, 0)
+  assert.equal(statusCalls(off), 0)
+  assert.equal(off.storage.data.get(KEY).task.remembered, null)
   const h = await host(t)
   await h.write(SPEC)
   h.facts.fail = true

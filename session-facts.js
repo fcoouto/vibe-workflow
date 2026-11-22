@@ -41,7 +41,8 @@ export async function defaultRun(command, args, { cwd, timeout }) {
 const lines = (text) => text.split("\n").filter(Boolean)
 
 // A short code for a failed read: never the message, which can carry paths or remote URLs.
-const codeOf = (error) => typeof error?.code === "string" ? error.code : error?.killed ? "timeout"
+const codeOf = (error) => error?.killed ? "timeout"
+  : typeof error?.code === "string" && /^[\w:]{1,40}$/.test(error.code) ? error.code
   : Number.isInteger(error?.code) ? `exit:${error.code}` : "error"
 
 // The branch checked out in `top`, for a tool-time record: null when detached, on the default branch or unreadable.

@@ -157,6 +157,9 @@ test("readFacts reports which read failed, as codes without messages", async (t)
   got = await readFacts({ top, remembered: "feat/x", fallback: main,
     run: failing(Object.assign(new Error("x"), { code: 128 }), new SyntaxError("Unexpected token")) })
   assert.deepEqual(got.errors, [{ step: "status", code: "exit:128" }, { step: "pr", code: "error" }])
+  got = await readFacts({ top, remembered: "feat/x", fallback: main,
+    run: failing(Object.assign(new Error("x"), { code: "has space /secret" }), Object.assign(new Error("y"), { code: "ERR_X", killed: true })) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "error" }, { step: "pr", code: "timeout" }])
   assert.deepEqual((await readFacts({ top, fallback: main, run: recorder().run })).errors, [])
 })
 

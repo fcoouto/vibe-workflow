@@ -169,7 +169,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
       entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
         pr: clip(facts.pr?.state), declared: facts.declared.length,
-        done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors.slice(0, 5) }
+        done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
