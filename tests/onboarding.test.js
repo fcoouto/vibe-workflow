@@ -309,6 +309,11 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
     "Git workflow: On · I merge, cleanup on —", "Git workflow: On · Agents merge, cleanup on —"]) {
     assert.ok(text.includes(phrase), phrase)
   }
+  const flat = text.replace(/\s+/g, " ")
+  for (const phrase of ["When `root` differs and Smart Router was saved, add before the last line",
+    "**Smart Router is saved only in this worktree. Merge this branch into main so it applies to the project.**"]) {
+    assert.ok(flat.includes(phrase), phrase)
+  }
 })
 
 test("the old feature name is not accepted by the tool, only by stored settings", async (t) => {
