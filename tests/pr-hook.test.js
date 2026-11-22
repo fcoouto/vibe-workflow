@@ -126,9 +126,9 @@ test("case 4 names the main checkout, and case 5 follows the real checkout", asy
   assert.equal((await fire("git switch -c y", { input: { command: "git switch -c y", workdir: linked } })).result, "done")
 })
 
-test("fallback context line appears with Smart Router off, pull requests on and no hook, never with the hook", async (t) => {
+test("no pull request line is pushed into the context, with or without the hook", async (t) => {
   const line = /open pull requests as \[BLOCKED\] drafts/
-  assert.ok((await (await fixture(t, { hook: false })).context()).some((text) => line.test(text)))
+  assert.ok(!(await (await fixture(t, { hook: false })).context()).some((text) => line.test(text)))
   assert.ok(!(await (await fixture(t)).context()).some((text) => line.test(text)))
   assert.ok(!(await (await fixture(t, { hook: false, settings: { enabled: false, agent_merge: false } })).context())
     .some((text) => line.test(text)))
