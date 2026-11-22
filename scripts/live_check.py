@@ -71,13 +71,16 @@ def version_problem(installed_text, record):
 
 INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of the model parameter in your "
                     "subagent tool's input schema.")
-# The user pre-authorized the injection check for exactly these models; a different list needs their approval.
-APPROVED_MODELS = ("claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5")
+# The three subscription paths Smart Router routes, provider -> harness. The record holds one model per path; when one
+# is no longer listed, the user pre-authorized one level-1 Smart Router pick on that path (council 51429ec7c824).
+PATHS = {rule["provider"]: rule["harness"] for rule in json.loads((ROOT / "config" / "routes.json").read_text())["paths"]}
+LEVEL_ONE = {"v": 2, "work_kind": "testing", "task": {"files": "1-2", "spec": "exact", "risk": "reversible"}}
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "vibe-workflow" / "smart-router"
 INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}},
                                                 {"git_workflow": {"enabled": True}}]}
-# One shell-note probe proves the execute.after hook still appends its notes to tool results: a branch switch in
-# the clone (a primary checkout) must come back with the primary-checkout note.
-SHELL_PROBE_MODEL = "claude-agent/haiku"
+# One shell-note probe, on the claude-agent path's model, proves the execute.after hook still appends its notes to
+# tool results: a branch switch in the clone (a primary checkout) must come back with the primary-checkout note.
+SHELL_PROBE_PATH = "claude-agent"
 SHELL_COMMAND = "git switch -c vibe-injection-probe"
 SHELL_PROMPT = ("Run exactly this one shell command, and no other tool call:\n" + SHELL_COMMAND + "\n"
                 "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
@@ -174,47 +177,127 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
             "session": session, "deleted": deleted}
 
 
-def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
-    """Ask each recorded model to quote the subagent model parameter; record the version only if all pass."""
+def reduce_models(raw):
+    """OpenCode's model list reduced the way index.js reduces ctx.model.list() for the selector."""
+    def text(value):
+        return isinstance(value, str) and 0 < len(value) <= 256 and not re.search(r"[\x00-\x1f\x7f]", value)
+
+    def amount(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    items = raw.get("data") if isinstance(raw, dict) else raw
+    found = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not item.get("enabled") or item.get("status") == "deprecated" \
+                or (item.get("capabilities") or {}).get("tools") is False or item.get("providerID") not in PATHS \
+                or not text(item.get("id")):
+            continue
+        released = amount((item.get("time") or {}).get("released"))
+        found.append({"provider": item["providerID"], "id": item["id"],
+                      "model": item["modelID"] if text(item.get("modelID")) else None,
+                      "name": item["name"] if text(item.get("name")) else None,
+                      "family": item["family"] if text(item.get("family")) else None,
+                      "variants": [v["id"] for v in item.get("variants") or [] if isinstance(v, dict) and text(v.get("id"))][:32],
+                      "context": amount((item.get("limit") or {}).get("context")),
+                      "released": None if released is None else released // 1000})
+    return found[:512]
+
+
+def read_host_models(env):
+    """OpenCode's model list without a model call, from a private server in the clone (env carries PWD)."""
+    out = _run(["opencode", "api", "get", "/api/model", "--standalone"], cwd=env["PWD"], timeout=120, data="", env=env)
+    return reduce_models(json.loads(out))
+
+
+def pick_for_path(provider, models):
+    """One level-1 Smart Router pick limited to one subscription path: (provider/id, None) or (None, reason)."""
+    request = {**LEVEL_ONE, "models": models, "constraints": {"allowed_harnesses": [PATHS[provider]]}}
+    try:
+        answer = json.loads(_run([sys.executable, "-I", "-B", str(ROOT / "scripts" / "select.py"), "--state-dir",
+                                  str(STATE_DIR)], timeout=120, data=json.dumps(request)))
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        return None, f"selector failed: {error}"
+    route = answer.get("route") if isinstance(answer, dict) else None
+    if answer.get("state") != "selected" or not isinstance(route, dict):
+        return None, answer.get("reason") or "no_selection"
+    return f"{route.get('provider')}/{route.get('model')}", None
+
+
+def _models_by_path(models):
+    by_path = {}
+    for model in models:
+        provider = model.split("/", 1)[0]
+        if provider not in PATHS or provider in by_path:
+            raise ValueError(f"the record needs one model per subscription path ({sorted(PATHS)}), got {models}; "
+                             "changing that needs the user's approval")
+        by_path[provider] = model
+    if set(by_path) != set(PATHS):
+        raise ValueError(f"the record needs one model per subscription path ({sorted(PATHS)}), got {models}")
+    return by_path
+
+
+def _answer(runner, project, model, env, **prompt):
+    try:
+        return runner(project, model, env, **prompt)
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        return {"reply": f"run failed: {error}", "tool_calls": 0}
+
+
+def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None, host_models=None,
+                    picker=None):
+    """Ask one model per subscription path to quote the subagent model parameter, then run the shell-note probe.
+
+    A recorded model that is no longer listed is replaced by one level-1 Smart Router pick on its path. The record is
+    written (version, date and the models used) only when every pick and every probe passes.
+    """
     record = read_record(record_path)
-    models = record["models"]
-    if len(set(models)) != len(models) or sorted(models) != sorted(APPROVED_MODELS):
-        raise ValueError(f"the record's models {models} are not the approved list {list(APPROVED_MODELS)}; "
-                         "changing them needs the user's approval")
+    by_path = _models_by_path(record["models"])
     notes = note_texts((ROOT / "index.js").read_text())
+    host_models, picker = host_models or read_host_models, picker or pick_for_path
     if version_text is None:
         version_text = _run(["opencode", "--version"], timeout=30)
     work = Path(tempfile.mkdtemp(prefix="vibe-injection-check-")).resolve()
-    results = []
+    results, chosen = [], {}
     try:
         project = prepare(work, INJECTION_SETTINGS)
         config_home = work / "config"
         config_home.mkdir()
-        for model in record["models"]:
-            try:
-                answer = runner(project, model, isolated_env(config_home))
-            except (subprocess.SubprocessError, OSError, ValueError) as error:
-                answer = {"reply": f"run failed: {error}", "tool_calls": 0}
-            passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
-            results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200],
+        env = {**isolated_env(config_home), "PWD": str(project)}
+        listed_models = host_models(env)
+        listed = {f"{item['provider']}/{item['id']}" for item in listed_models}
+        for provider, model in by_path.items():
+            if model in listed:
+                chosen[provider] = (model, None)
+                continue
+            pick, reason = picker(provider, listed_models)
+            if pick and pick.split("/", 1)[0] == provider and pick in listed:
+                chosen[provider] = (pick, model)
+            else:
+                results.append({"path": provider, "model": model, "outcome": "could_not_select", "pass": False,
+                                "excerpt": reason or f"pick {pick} is not a listed model on {provider}"})
+        if not results:
+            for provider, (model, replaced) in chosen.items():
+                answer = _answer(runner, project, model, env)
+                passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
+                results.append({"path": provider, "model": model, "replaced": replaced, "pass": passed,
+                                "outcome": "delivered" if passed else "not_delivered",
+                                "excerpt": "" if passed else answer["reply"][:200],
+                                "session_left": None if answer.get("deleted", True) else answer.get("session")})
+            model = chosen[SHELL_PROBE_PATH][0]
+            answer = _answer(runner, project, model, env, prompt=SHELL_PROMPT)
+            passed = shell_probe_passes(answer)
+            results.append({"path": SHELL_PROBE_PATH, "model": model, "probe": "shell-note", "pass": passed,
+                            "outcome": "delivered" if passed else "not_delivered",
+                            "excerpt": "" if passed else answer["reply"][:200],
                             "session_left": None if answer.get("deleted", True) else answer.get("session")})
-        try:
-            answer = runner(project, SHELL_PROBE_MODEL, isolated_env(config_home), prompt=SHELL_PROMPT)
-        except (subprocess.SubprocessError, OSError, ValueError) as error:
-            answer = {"reply": f"run failed: {error}", "tool_calls": 0}
-        passed = shell_probe_passes(answer)
-        results.append({"model": SHELL_PROBE_MODEL, "probe": "shell-note", "pass": passed,
-                        "excerpt": "" if passed else answer["reply"][:200],
-                        "session_left": None if answer.get("deleted", True) else answer.get("session")})
     finally:
         shutil.rmtree(work, ignore_errors=True)
     version = parse_version(version_text)
-    recorded = bool(version) and all(item["pass"] for item in results)
+    recorded = bool(version) and bool(results) and all(item["pass"] for item in results)
     if recorded:
-        record.update(version=version, verified=today or datetime.date.today().isoformat())
+        record.update(models=[chosen[provider][0] for provider in by_path], version=version,
+                      verified=today or datetime.date.today().isoformat())
         Path(record_path).write_text(json.dumps(record, indent=2) + "\n")
     return {"version": version, "results": results, "recorded": recorded}
-
 
 def _note(text):
     start = text.find("vibe-workflow:")
