@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -109,6 +110,60 @@ class VersionTest(unittest.TestCase):
                     path.write_text(text)
                 with self.assertRaises(ValueError, msg=text):
                     live_check.read_record(path)
+
+
+class InjectionTest(unittest.TestCase):
+    NOTES = live_check.note_texts((ROOT / "index.js").read_text())
+
+    def test_extracts_both_notes_from_the_real_index(self):
+        model_note, router_note = self.NOTES
+        self.assertTrue(model_note.startswith("vibe-workflow: your human partner asks"))
+        self.assertTrue(model_note.endswith("Otherwise leave it unset."))
+        self.assertTrue(router_note.startswith("Smart Router is on:"))
+        self.assertTrue(router_note.endswith("spending authority."))
+
+    def test_passes_only_with_both_notes_and_no_tool_call(self):
+        model_note, router_note = self.NOTES
+        quoted = ('"NEVER set this. ' + model_note + "\n " + router_note + '"').replace('"', '\\"')
+        self.assertTrue(live_check.injection_passes(quoted, 0, self.NOTES))
+        self.assertFalse(live_check.injection_passes("NEVER set this. " + model_note, 0, self.NOTES))
+        self.assertFalse(live_check.injection_passes(model_note + " " + router_note, 1, self.NOTES))
+
+    def test_isolated_env_hides_the_user_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env = live_check.isolated_env(Path(folder))
+            self.assertEqual(env["XDG_CONFIG_HOME"], folder)
+            self.assertEqual(env["HOME"], os.environ["HOME"])
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
+    def test_records_only_when_every_model_passes(self):
+        model_note, router_note = self.NOTES
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "record.json"
+            path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
+            passing = lambda project, model, env: {"reply": model_note + " " + router_note, "tool_calls": 0}  # noqa: E731
+            with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
+                summary = live_check.check_injection(path, runner=passing, version_text="opencode v2.3.2\n",
+                                                     today="2026-11-22")
+            self.assertTrue(summary["recorded"])
+            self.assertEqual(json.loads(path.read_text()),
+                             {"models": ["a/one", "b/two"], "version": "2.3.2", "verified": "2026-11-22"})
+            before = path.read_bytes()
+            failing = lambda project, model, env: ({"reply": "nothing here", "tool_calls": 0}  # noqa: E731
+                                                   if model == "b/two" else passing(project, model, env))
+            with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
+                summary = live_check.check_injection(path, runner=failing, version_text="opencode v2.4.0\n",
+                                                     today="2026-12-01")
+            self.assertFalse(summary["recorded"])
+            self.assertEqual(path.read_bytes(), before)
+            result = [item for item in summary["results"] if item["model"] == "b/two"][0]
+            self.assertFalse(result["pass"])
+            self.assertEqual(result["excerpt"], "nothing here")
+
+    def test_the_cli_offers_injection(self):
+        run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],
+                             capture_output=True, text=True, timeout=30)
+        self.assertIn("--injection", run.stdout)
 
 
 if __name__ == "__main__":

@@ -13,12 +13,14 @@ if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname
     del sys.path[0]
 
 import argparse  # noqa: E402
+import datetime  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 from pathlib import Path  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import os  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = 'id: "vibe-workflow",'
@@ -67,6 +69,95 @@ def version_problem(installed_text, record):
     return None
 
 
+INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of the model parameter in your "
+                    "subagent tool's input schema.")
+INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}}]}
+
+
+def note_texts(index_source):
+    """MODEL_NOTE and ROUTER_NOTE as index.js defines them: `const NAME =` then "+"-joined double-quoted literals."""
+    def one(name):
+        match = re.search(r"const " + name + r' =\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)', index_source)
+        if not match:
+            raise ValueError(f"index.js defines no {name}")
+        return "".join(json.loads(literal) for literal in re.findall(r'"(?:[^"\\]|\\.)*"', match.group(1)))
+    return one("MODEL_NOTE"), one("ROUTER_NOTE")
+
+
+def normalize(text):
+    return re.sub(r"\s+", " ", (text or "").replace('\\"', '"')).strip()
+
+
+def injection_passes(reply, tool_calls, notes):
+    quoted = normalize(reply)
+    return tool_calls == 0 and all(normalize(note) in quoted for note in notes)
+
+
+def isolated_env(config_home):
+    """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not."""
+    return {**os.environ, "XDG_CONFIG_HOME": str(config_home)}
+
+
+def _events(output):
+    for line in output.splitlines():
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue
+
+
+def run_model(project, model, env):
+    """One first-call prompt on one model in an isolated private server; text parts form the reply."""
+    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
+               cwd=project, timeout=300, env=env)
+    texts, tools = {}, set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            kind, key = value.get("type"), value.get("id") or id(value)
+            if kind == "text" and isinstance(value.get("text"), str):
+                texts[key] = value["text"]
+            elif kind in ("tool", "tool_use", "tool-call"):
+                tools.add(key)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+    for event in _events(out):
+        walk(event)
+    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools)}
+
+
+def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
+    """Ask each recorded model to quote the subagent model parameter; record the version only if all pass."""
+    record = read_record(record_path)
+    notes = note_texts((ROOT / "index.js").read_text())
+    if version_text is None:
+        version_text = _run(["opencode", "--version"], timeout=30)
+    work = Path(tempfile.mkdtemp(prefix="vibe-injection-check-")).resolve()
+    results = []
+    try:
+        project = prepare(work, INJECTION_SETTINGS)
+        config_home = work / "config"
+        config_home.mkdir()
+        for model in record["models"]:
+            try:
+                answer = runner(project, model, isolated_env(config_home))
+            except (subprocess.SubprocessError, OSError, ValueError) as error:
+                answer = {"reply": f"run failed: {error}", "tool_calls": 0}
+            passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
+            results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200]})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    version = parse_version(version_text)
+    recorded = bool(version) and all(item["pass"] for item in results)
+    if recorded:
+        record.update(version=version, verified=today or datetime.date.today().isoformat())
+        Path(record_path).write_text(json.dumps(record, indent=2) + "\n")
+    return {"version": version, "results": results, "recorded": recorded}
+
+
 def _note(text):
     start = text.find("vibe-workflow:")
     return None if start < 0 else text[start:].split("\n", 1)[0]
@@ -98,9 +189,9 @@ def summarize(messages):
     return events
 
 
-def _run(argv, cwd=None, timeout=120, data=None):
+def _run(argv, cwd=None, timeout=120, data=None, env=None):
     return subprocess.run(argv, cwd=cwd, input=data, capture_output=True, text=True, timeout=timeout,
-                          check=True).stdout
+                          check=True, env=env).stdout
 
 
 def _api(*args, data=None, timeout=60):
@@ -161,12 +252,19 @@ def check(prompts, settings=None, origin=None, keep=False, wait=900):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prompt", action="append", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--prompt", action="append")
+    mode.add_argument("--injection", action="store_true", help="check that agents receive the injected notes on "
+                      "every recorded model; records the OpenCode version only if all pass (pre-authorized)")
     parser.add_argument("--settings", type=json.loads)
     parser.add_argument("--origin", help="origin URL for gh lookups; use a throwaway or local URL, since the "
                         "session's agent could fetch from or push to it")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    if args.injection:
+        summary = check_injection()
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0 if summary["recorded"] else 1
     print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep), indent=2, ensure_ascii=False))
     return 0
 
