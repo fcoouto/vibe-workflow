@@ -75,7 +75,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     t.after(() => rmSync(made, { recursive: true, force: true }))
   }
   directory ??= root
-  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [] }
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [] }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
   const preference = { state }
   let stream, subscribed
@@ -100,6 +100,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   const run = async (command, args, options) => {
     calls.run.push([command, ...args])
     if (args[0] === "status") calls.status.push({ args, cwd: options?.cwd })
+    if (command === "gh") calls.gh.push(options?.cwd)
     if (facts.fail) throw Error("run")
     if (command === "gh") {
       await facts.gate
@@ -542,7 +543,9 @@ test("a malformed stored diag is dropped and replaced at the next save", async (
     { ...ok, branch: 3 }, { ...ok, extra: "x" }, { ...ok, declared: -1 }, { ...ok, done: 1.5 }, { ...ok, branch: "b".repeat(201) },
     { ...ok, errors: [{ step: "pr", code: "has space and /secret/path" }] },
     { ...ok, errors: Array.from({ length: 6 }, () => ({ step: "pr", code: "error" })) },
-    { ...ok, errors: [{ step: "pr", code: "error", message: "x" }] }]) {
+    { ...ok, errors: [{ step: "pr", code: "error", message: "x" }] },
+    { ...ok, instance: "/Users/me/secret" }, { ...ok, instance: "" }, { ...ok, pr: "https://token@example.invalid" },
+    { ...ok, pr: "open" }]) {
     const storage = memoryStorage()
     const h = await host(t, { storage })
     storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag, task: task(h.root) })
@@ -554,9 +557,10 @@ test("a malformed stored diag is dropped and replaced at the next save", async (
   }
   const storage = memoryStorage()
   const h = await host(t, { storage })
-  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: ok, task: task(h.root) })
+  const merged = { ...ok, pr: "MERGED", instance: "k3x9a7b2" }
+  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: merged, task: task(h.root) })
   await h.start()
-  assert.deepEqual(storage.data.get(KEY).diag, ok)
+  assert.deepEqual(storage.data.get(KEY).diag, merged)
 })
 
 test("the saved diag counts declared and changed plan paths", async (t) => {
@@ -576,27 +580,34 @@ const statusCalls = (h) => h.calls.run.filter((call) => call[1] === "status").le
 test("a push, PR create or PR merge records the bound checkout's branch, with or without an upstream", async (t) => {
   for (const command of ["git push origin HEAD", "rtk git push -u origin feat/x", "git -C /elsewhere push", "gh pr create --draft",
     "gh pr merge 5 --merge", "cd /x && git push"]) {
-    const h = await host(t)
-    await h.write(SPEC)
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-elsewhere-")))
+    t.after(() => rmSync(elsewhere, { recursive: true, force: true }))
+    const h = await host(t, { directory: elsewhere })
+    await h.write(`${h.root}/${SPEC}`)
     Object.assign(h.facts, { branch: "feat/x", upstream: false })
-    await h.shell(command)
+    await h.shell(command, "ses_1", { input: { command, workdir: elsewhere } })
     assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x", command)
     assert.deepEqual(h.calls.update, [], "the title is not written at tool time")
     const status = h.calls.status.at(-1)
-    assert.equal(status.cwd, h.root, `${command} reads the bound checkout, not the command's directory`)
+    assert.notEqual(h.root, elsewhere)
+    assert.equal(status.cwd, h.root, `${command} reads the bound checkout, not the session or command directory`)
     assert.ok(status.args.includes("-uno"), command)
   }
 })
 
 test("merge and cleanup inside one turn still reach cell 5 once the branch was recorded at merge time", async (t) => {
   const flow = async (record) => {
-    const h = await host(t)
+    const primary = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-primary-")))
+    t.after(() => rmSync(primary, { recursive: true, force: true }))
+    const h = await host(t, { cleanup: true, project: primary })
     await h.write(SPEC)
     h.facts.branch = "feat/x"
     if (record) await h.shell("gh pr merge 5 --merge")
     rmSync(h.root, { recursive: true, force: true })
     h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+    h.calls.gh.length = 0
     await h.end()
+    assert.deepEqual(h.calls.gh, record ? [primary] : [], "the PR is looked up, from the existing primary checkout, only when the branch was recorded")
     return h.titles.get("ses_1")
   }
   assert.equal(await flow(true), compose("Fix login flow", 5, false))

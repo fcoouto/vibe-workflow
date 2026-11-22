@@ -39,7 +39,8 @@ Evidence (verified 2026-11-22):
   the command's directory, and the default branch is never recorded.
 - Storing secrets: diagnostics hold a branch name, booleans, a PR state, a step name and an
   error code, never stderr, paths or file contents.
-- Writing the title or running a write command at tool time.
+- Writing the title or running a write command at tool time. Every git read runs with `GIT_OPTIONAL_LOCKS=0`
+  (set in `defaultRun`), so `git status` never refreshes the index or takes `index.lock` against the agent's own git commands.
 - A storage write on every turn: diagnostics hold no timestamps and join the save snapshot, so
   an unchanged read writes nothing.
 
@@ -65,7 +66,7 @@ Evidence (verified 2026-11-22):
    codes are ignored (the hook fields are unverified on the host); no upstream is required.
 5. The saved record gains `diag: { instance, exists, branch, upstream, head, pr, declared, done, errors }`, where `declared` counts the plan's declared paths and `done` those already changed (two integers, so a meter stuck at 2 or 3 is explained too),
    refreshed at every turn-end read (a turn start reads no facts), validated on load, and part of the save snapshot. `instance` is
-   a short random id per plugin instance.
+   a short random id per plugin instance (`[a-z0-9]{1,16}` on load), and `pr` is one of `OPEN`, `MERGED`, `CLOSED` or null on write and on load.
 
 ## Known gaps (accepted)
 

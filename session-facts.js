@@ -34,7 +34,8 @@ export function declaredPaths(planText) {
 
 export async function defaultRun(command, args, { cwd, timeout }) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
-  const { stdout } = await exec(command, args, { cwd, env: { ...env, LC_ALL: "C" }, timeout, maxBuffer: 1 << 20 })
+  // GIT_OPTIONAL_LOCKS=0: `git status` must never refresh the index or hold index.lock against the agent's own git commands.
+  const { stdout } = await exec(command, args, { cwd, env: { ...env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" }, timeout, maxBuffer: 1 << 20 })
   return stdout
 }
 

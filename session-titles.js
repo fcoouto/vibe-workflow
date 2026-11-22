@@ -60,6 +60,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   const text = (value) => value === null || typeof value === "string"
   const instance = Math.random().toString(36).slice(2, 10)
   const STEPS = ["status", "diff", "plan", "pr"]
+  const PR_STATES = ["OPEN", "MERGED", "CLOSED"]
   const short = (value) => value === null || (typeof value === "string" && value.length <= 200)
   const count = (value) => Number.isInteger(value) && value >= 0
   const KEYS = ["instance", "exists", "branch", "upstream", "head", "pr", "declared", "done", "errors"]
@@ -67,8 +68,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   function diagOf(value) {
     if (!value || typeof value !== "object" || Object.keys(value).some((key) => !KEYS.includes(key))) return null
     const { instance: id, exists, branch, upstream, head, pr, declared, done, errors } = value
-    if (typeof id !== "string" || id.length > 40 || typeof exists !== "boolean" || typeof upstream !== "boolean" ||
-      ![branch, head, pr].every(short) || !count(declared) || !count(done) || !Array.isArray(errors) || errors.length > 5 ||
+    if (typeof id !== "string" || !/^[a-z0-9]{1,16}$/.test(id) || typeof exists !== "boolean" || typeof upstream !== "boolean" ||
+      ![branch, head].every(short) || !(pr === null || PR_STATES.includes(pr)) || !count(declared) || !count(done) || !Array.isArray(errors) || errors.length > 5 ||
       !errors.every((error) => error && Object.keys(error).length === 2 && STEPS.includes(error.step) &&
         typeof error.code === "string" && /^[\w:]{1,40}$/.test(error.code))) return null
     return { instance: id, exists, branch, upstream, head, pr, declared, done, errors: errors.map(({ step, code }) => ({ step, code })) }
@@ -168,7 +169,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       if (facts.head && facts.head === facts.branch) task.remembered = facts.head
       const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
       entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
-        pr: clip(facts.pr?.state), declared: facts.declared.length,
+        pr: PR_STATES.includes(facts.pr?.state) ? facts.pr.state : null, declared: facts.declared.length,
         done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))

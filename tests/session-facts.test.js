@@ -163,6 +163,23 @@ test("readFacts reports which read failed, as codes without messages", async (t)
   assert.deepEqual((await readFacts({ top, fallback: main, run: recorder().run })).errors, [])
 })
 
+test("readFacts reports a failed diff and a missing plan by step and code", async (t) => {
+  const { top, main } = setup(t)
+  const run = async (command, args, options) => {
+    if (args[0] === "diff") throw Object.assign(new Error("fatal: bad revision /secret/path"), { code: 129 })
+    return defaultRun(command, args, options)
+  }
+  const got = await readFacts({ top, plan: "docs/superpowers/plans/missing.md", fallback: main, run })
+  assert.deepEqual(got.errors, [{ step: "diff", code: "exit:129" }, { step: "plan", code: "ENOENT" }])
+  assert.doesNotMatch(JSON.stringify(got.errors), /secret|revision/)
+})
+
+test("git is told not to take optional locks, so a tool-time read never writes the index", async () => {
+  const env = await defaultRun(process.execPath, ["-e", "process.stdout.write(String(process.env.GIT_OPTIONAL_LOCKS))"],
+    { cwd: tmpdir(), timeout: 5000 })
+  assert.equal(env, "0")
+})
+
 test("readFacts resolves without rejecting outside a usable repository", async (t) => {
   const root = tmp(t)
   const { calls, run } = recorder()
