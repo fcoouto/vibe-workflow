@@ -160,6 +160,21 @@ class InjectionTest(unittest.TestCase):
             self.assertFalse(result["pass"])
             self.assertEqual(result["excerpt"], "nothing here")
 
+    def test_run_model_points_opencode_at_the_clone_with_empty_stdin(self):
+        seen = {}
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            seen.update(argv=argv, cwd=cwd, data=data, env=env)
+            return "\n".join([json.dumps({"type": "text", "part": {"id": "p1", "type": "text", "text": "quoted"}}),
+                              "not json", json.dumps({"part": {"id": "t1", "type": "tool"}})])
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"PWD": "/elsewhere", "HOME": "/h"})
+        self.assertEqual(seen["cwd"], Path("/clone"))
+        self.assertEqual(seen["env"]["PWD"], "/clone")
+        self.assertEqual(seen["env"]["HOME"], "/h")
+        self.assertEqual(seen["data"], "")
+        self.assertEqual(answer, {"reply": "quoted", "tool_calls": 1})
+
     def test_the_cli_offers_injection(self):
         run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],
                              capture_output=True, text=True, timeout=30)

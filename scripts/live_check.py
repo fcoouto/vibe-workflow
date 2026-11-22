@@ -108,8 +108,10 @@ def _events(output):
 
 def run_model(project, model, env):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
+    # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
+    # caller's input out of the prompt.
     out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
-               cwd=project, timeout=300, env=env)
+               cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
     texts, tools = {}, set()
 
     def walk(value):
