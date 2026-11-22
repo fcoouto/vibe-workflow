@@ -112,6 +112,10 @@ class VersionTest(unittest.TestCase):
                     live_check.read_record(path)
 
 
+SHELL_ANSWER = {"reply": "vibe-workflow: the primary checkout (/x/project) is now on vibe-injection-probe. Never touch "
+                         "the primary checkout; tell the user, and do task work in a worktree.", "tool_calls": 1}
+
+
 class InjectionTest(unittest.TestCase):
     NOTES = live_check.note_texts((ROOT / "index.js").read_text())
 
@@ -141,10 +145,11 @@ class InjectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "record.json"
             path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
-            approved = mock.patch.object(live_check, "APPROVED_MODELS", ("a/one", "b/two"))
+            approved = mock.patch.multiple(live_check, APPROVED_MODELS=("a/one", "b/two"), SHELL_PROBE_MODEL="a/one")
             approved.start()
             self.addCleanup(approved.stop)
-            passing = lambda project, model, env: {"reply": model_note + " " + router_note, "tool_calls": 0}  # noqa: E731
+            passing = lambda project, model, env, prompt=live_check.INJECTION_PROMPT: (  # noqa: E731
+                SHELL_ANSWER if prompt == live_check.SHELL_PROMPT else {"reply": model_note + " " + router_note, "tool_calls": 0})
             with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
                 summary = live_check.check_injection(path, runner=passing, version_text="opencode v2.3.2\n",
                                                      today="2026-11-22")
@@ -152,8 +157,8 @@ class InjectionTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()),
                              {"models": ["a/one", "b/two"], "version": "2.3.2", "verified": "2026-11-22"})
             before = path.read_bytes()
-            failing = lambda project, model, env: ({"reply": "nothing here", "tool_calls": 0}  # noqa: E731
-                                                   if model == "b/two" else passing(project, model, env))
+            failing = lambda project, model, env, prompt=live_check.INJECTION_PROMPT: (  # noqa: E731
+                {"reply": "nothing here", "tool_calls": 0} if model == "b/two" else passing(project, model, env, prompt))
             with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
                 summary = live_check.check_injection(path, runner=failing, version_text="opencode v2.4.0\n",
                                                      today="2026-12-01")
@@ -226,6 +231,41 @@ class InjectionTest(unittest.TestCase):
                     live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
                 prepare.assert_not_called()
                 runner.assert_not_called()
+
+    def test_shell_probe_passes_only_with_the_note_and_one_tool_call(self):
+        self.assertTrue(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 1))
+        self.assertFalse(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 0))
+        self.assertFalse(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 2))
+        self.assertFalse(live_check.shell_probe_passes("Switched to a new branch 'vibe-injection-probe'", 1))
+
+    def test_the_shell_probe_runs_once_on_an_approved_model_with_git_workflow_on(self):
+        self.assertIn(live_check.SHELL_PROBE_MODEL, live_check.APPROVED_MODELS)
+        features = {key for entry in live_check.INJECTION_SETTINGS["features"] for key in entry}
+        self.assertEqual(features, {"smart_router", "git_workflow"})
+        self.assertIn("git switch -c vibe-injection-probe", live_check.SHELL_PROMPT)
+
+    def test_a_failing_shell_probe_blocks_the_record(self):
+        model_note, router_note = self.NOTES
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "record.json"
+            path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
+            before = path.read_bytes()
+            calls = []
+
+            def runner(project, model, env, prompt=live_check.INJECTION_PROMPT):
+                calls.append((model, prompt))
+                if prompt == live_check.SHELL_PROMPT:
+                    return {"reply": "no note came back", "tool_calls": 1}
+                return {"reply": model_note + " " + router_note, "tool_calls": 0}
+            with mock.patch.multiple(live_check, APPROVED_MODELS=("a/one", "b/two"), SHELL_PROBE_MODEL="a/one"), \
+                    mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
+                summary = live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
+            self.assertFalse(summary["recorded"])
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual([call for call in calls if call[1] == live_check.SHELL_PROMPT], [("a/one", live_check.SHELL_PROMPT)])
+            shell = [item for item in summary["results"] if item.get("probe") == "shell-note"]
+            self.assertEqual(len(shell), 1)
+            self.assertFalse(shell[0]["pass"])
 
     def test_the_cli_offers_injection(self):
         run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],

@@ -73,7 +73,15 @@ INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of th
                     "subagent tool's input schema.")
 # The user pre-authorized the injection check for exactly these models; a different list needs their approval.
 APPROVED_MODELS = ("claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5")
-INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}}]}
+INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}},
+                                                {"git_workflow": {"enabled": True}}]}
+# One shell-note probe proves the execute.after hook still appends its notes to tool results: a branch switch in
+# the clone (a primary checkout) must come back with the primary-checkout note.
+SHELL_PROBE_MODEL = "claude-agent/haiku"
+SHELL_PROMPT = ("Run exactly one shell command and nothing else: git switch -c vibe-injection-probe . "
+                "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
+SHELL_NOTE = re.compile(r"vibe-workflow: the primary checkout \(.+?\) is now on vibe-injection-probe\. "
+                        r"Never touch the primary checkout")
 
 
 def note_texts(index_source):
@@ -95,6 +103,10 @@ def injection_passes(reply, tool_calls, notes):
     return tool_calls == 0 and all(normalize(note) in quoted for note in notes)
 
 
+def shell_probe_passes(reply, tool_calls):
+    return tool_calls == 1 and SHELL_NOTE.search(normalize(reply)) is not None
+
+
 def isolated_env(config_home):
     """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not.
 
@@ -112,11 +124,11 @@ def _events(output):
             continue
 
 
-def run_model(project, model, env):
+def run_model(project, model, env, prompt=INJECTION_PROMPT):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
     # caller's input out of the prompt.
-    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
+    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", prompt],
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
     texts, tools, sessions = {}, set(), []
 
@@ -175,6 +187,14 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
             passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
             results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200],
                             "session_left": None if answer.get("deleted", True) else answer.get("session")})
+        try:
+            answer = runner(project, SHELL_PROBE_MODEL, isolated_env(config_home), prompt=SHELL_PROMPT)
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            answer = {"reply": f"run failed: {error}", "tool_calls": 0}
+        passed = shell_probe_passes(answer["reply"], answer["tool_calls"])
+        results.append({"model": SHELL_PROBE_MODEL, "probe": "shell-note", "pass": passed,
+                        "excerpt": "" if passed else answer["reply"][:200],
+                        "session_left": None if answer.get("deleted", True) else answer.get("session")})
     finally:
         shutil.rmtree(work, ignore_errors=True)
     version = parse_version(version_text)
