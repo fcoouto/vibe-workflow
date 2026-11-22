@@ -14,6 +14,7 @@ if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 from pathlib import Path  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
@@ -22,6 +23,8 @@ import tempfile  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = 'id: "vibe-workflow",'
 LIVE_ID = 'id: "vibe-workflow-live",'
+RECORD = ROOT / "tests" / "opencode-verified.json"
+INJECTION_COMMAND = "python3 -B scripts/live_check.py --injection"
 GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=live-check",
        "-c", "user.email=live-check@example.invalid", "-c", "commit.gpgsign=false"]
 
@@ -30,6 +33,38 @@ def rename_plugin_id(text):
     if text.count(PLUGIN_ID) != 1:
         raise ValueError("expected exactly one plugin id")
     return text.replace(PLUGIN_ID, LIVE_ID)
+
+
+def parse_version(text):
+    match = re.fullmatch(r"opencode v(\d+\.\d+\.\d+)\s*", text or "")
+    return match.group(1) if match else None
+
+
+def read_record(path):
+    """The live-verified record: `models` always, `version` and `verified` once a live check passed."""
+    try:
+        record = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        raise ValueError(f"no live-verified record at {path}") from None
+    except (OSError, ValueError) as error:
+        raise ValueError(f"unreadable live-verified record {path}: {error}") from None
+    models = record.get("models") if isinstance(record, dict) else None
+    if not isinstance(models, list) or not models or not all(isinstance(model, str) and model for model in models):
+        raise ValueError(f"live-verified record {path} needs a non-empty list of model ids under 'models'")
+    return record
+
+
+def version_problem(installed_text, record):
+    """None when the installed OpenCode is the live-verified one; otherwise what to tell the operator."""
+    installed, verified = parse_version(installed_text), record.get("version")
+    if installed is None:
+        return f"could not read the OpenCode version from {installed_text!r}; run `{INJECTION_COMMAND}`"
+    if not verified:
+        return f"OpenCode {installed} has no live-verified injection yet; run `{INJECTION_COMMAND}`"
+    if installed != verified:
+        return (f"OpenCode {installed} differs from the live-verified {verified}; run `{INJECTION_COMMAND}` "
+                "to check that agents still receive the injected notes")
+    return None
 
 
 def _note(text):

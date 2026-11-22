@@ -1,0 +1,3 @@
+{
+  "models": ["claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5"]
+}

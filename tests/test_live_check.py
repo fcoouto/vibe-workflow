@@ -2,9 +2,11 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -86,6 +88,27 @@ class CleanupTest(unittest.TestCase):
                 mock.patch.object(live_check, "_api", return_value={"unexpected": True}):
             with self.assertRaisesRegex(ValueError, "session id"):
                 live_check.check(["hi"])
+
+
+class VersionTest(unittest.TestCase):
+    def test_parses_the_cli_version(self):
+        self.assertEqual(live_check.parse_version("opencode v2.3.2\n"), "2.3.2")
+        for text in ("v2.3.2", "", "opencode 2.3", "opencode v2.3"):
+            self.assertIsNone(live_check.parse_version(text), text)
+
+    def test_reads_a_record_and_rejects_broken_ones(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "record.json"
+            good = {"version": "2.3.2", "verified": "2026-11-22", "models": ["claude-agent/haiku"]}
+            path.write_text(json.dumps(good))
+            self.assertEqual(live_check.read_record(path), good)
+            for text in (None, "{", json.dumps({"models": []}), json.dumps({"models": [1]}), json.dumps([])):
+                if text is None:
+                    path.unlink()
+                else:
+                    path.write_text(text)
+                with self.assertRaises(ValueError, msg=text):
+                    live_check.read_record(path)
 
 
 if __name__ == "__main__":
