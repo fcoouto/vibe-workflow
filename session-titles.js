@@ -57,13 +57,18 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   const text = (value) => value === null || typeof value === "string"
   const instance = Math.random().toString(36).slice(2, 10)
   const STEPS = ["status", "diff", "plan", "pr"]
-  // Only these fields are kept, so a stored record can never smuggle anything else into the next save.
+  const short = (value) => value === null || (typeof value === "string" && value.length <= 200)
+  const count = (value) => Number.isInteger(value) && value >= 0
+  const KEYS = ["instance", "exists", "branch", "upstream", "head", "pr", "declared", "done", "errors"]
+  // Only these fields, within these bounds, are kept: a stored record can never smuggle anything else into the next save.
   function diagOf(value) {
-    if (!value || typeof value !== "object") return null
-    const { instance: id, exists, branch, upstream, head, pr, errors } = value
-    if (typeof id !== "string" || typeof exists !== "boolean" || typeof upstream !== "boolean" || ![branch, head, pr].every(text) ||
-      !Array.isArray(errors) || !errors.every((error) => error && STEPS.includes(error.step) && typeof error.code === "string")) return null
-    return { instance: id, exists, branch, upstream, head, pr, errors: errors.map(({ step, code }) => ({ step, code })) }
+    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !KEYS.includes(key))) return null
+    const { instance: id, exists, branch, upstream, head, pr, declared, done, errors } = value
+    if (typeof id !== "string" || id.length > 40 || typeof exists !== "boolean" || typeof upstream !== "boolean" ||
+      ![branch, head, pr].every(short) || !count(declared) || !count(done) || !Array.isArray(errors) || errors.length > 5 ||
+      !errors.every((error) => error && Object.keys(error).length === 2 && STEPS.includes(error.step) &&
+        typeof error.code === "string" && /^[\w:]{1,40}$/.test(error.code))) return null
+    return { instance: id, exists, branch, upstream, head, pr, declared, done, errors: errors.map(({ step, code }) => ({ step, code })) }
   }
   function restore(task) {
     if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
@@ -146,8 +151,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered,
         fallback: project ?? task.top, run })
       if (facts.head && facts.head === facts.branch) task.remembered = facts.head
-      entry.diag = { instance, exists: facts.exists, branch: facts.branch, upstream: facts.upstream, head: facts.head,
-        pr: facts.pr ? facts.pr.state : null, errors: facts.errors }
+      const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
+      entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
+        pr: clip(facts.pr?.state), declared: facts.declared.length,
+        done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors.slice(0, 5) }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }

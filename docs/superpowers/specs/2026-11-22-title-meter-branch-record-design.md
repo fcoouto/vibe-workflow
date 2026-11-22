@@ -12,10 +12,10 @@ Evidence (verified 2026-11-22):
 - Stored records (`kv` table, keys `session-titles/<id>`): all three records from this
   project have `remembered: null`; the one from another project has it set.
 - A replay of the real plugin with real git reaches cell 5 in the normal flow and sticks at
-  cell 4 when push, merge, detach and worktree removal all happen before any turn end. After the
+  cell 4 (or lower, with no PR yet seen) when push, merge, detach and worktree removal all happen before the next turn end. After the
   worktree is gone the PR is found only through `remembered`.
 - `declaredPaths` ignores paths written on the `**Files:**` line itself; 5 of 16 plans here
-  use that form, which caps those tasks at cell 2.
+  use that form, which caps those tasks at cell 2 until a PR is found.
 - Every read failure in `readFacts` is swallowed, so a frozen meter explains nothing.
 
 ## Goals
@@ -55,7 +55,7 @@ Evidence (verified 2026-11-22):
 
 1. `declaredPaths`: on a `**Files:**` line, also read backticked path-like tokens after the label.
 2. `readFacts` returns `errors: [{ step, code }]` for its swallowed reads (`status`,
-   `diff`, `plan`, `pr`); `code` is a short string (`ENOENT`, `ETIMEDOUT`, `exit:<n>`, `error`).
+   `diff`, `plan`, `pr`); `code` is a short string (`ENOENT`, `timeout`, `exit:<n>`, `error`).
 3. `session-facts.js` exports `branchOf({ top, run })`: the checked-out branch of `top`, or null
    when detached, on the default branch, or unreadable.
 4. In `session-titles.js`, the existing `execute.after` handler also accepts a completed shell
@@ -63,14 +63,19 @@ Evidence (verified 2026-11-22):
    `pr_create` or `pr_merge`. For a root session with a live binding it queues one job: if the feature
    is on, `branchOf` the bound checkout and store the branch in `task.remembered` (saved). Exit
    codes are ignored (the hook fields are unverified on the host); no upstream is required.
-5. The saved record gains `diag: { instance, exists, branch, upstream, head, pr, errors }`,
-   refreshed at every evaluation, validated on load, and part of the save snapshot. `instance` is
+5. The saved record gains `diag: { instance, exists, branch, upstream, head, pr, declared, done, errors }`, where `declared` counts the plan's declared paths and `done` those already changed (two integers, so a meter stuck at 2 or 3 is explained too),
+   refreshed at every turn-end read (a turn start reads no facts), validated on load, and part of the save snapshot. `instance` is
    a short random id per plugin instance.
 
 ## Known gaps (accepted)
 
-A compound command that detaches or removes the worktree before the hook runs; a merge from the
-web UI or another tool with no earlier push seen; a record read by a different instance (PR B).
+- A compound command that detaches or removes the worktree before the hook runs.
+- A merge from the web UI or another tool with no earlier push seen.
+- Forms `classify` misses: `gh -R owner/repo pr merge`, `bash -c "git push"`, `env`, `command` or `time`
+  prefixes, commands inside scripts, and non-shell tools. `rtk git push` and `git -C <dir> push` are seen.
+- Any push anywhere, even a failed one or `git -C other push`, records the bound checkout's branch
+  (exit codes are ignored). A reused branch name whose old PR is merged can then show cell 5.
+- A record read by a different plugin instance (PR B).
 
 ## Constraints
 
@@ -81,6 +86,8 @@ no README or onboarding change; no injected notes, so the live injection check i
 
 - `classify` is reused from `pr-advice.js` instead of a second command parser.
 - The title is not rewritten at tool time; the next turn end does it.
+- `branchOf` parses its own `status --porcelain=v2 --branch -uno` output (no shared helper with `readFacts`;
+  `-uno` keeps the read cheap at tool time).
 - Diagnostics live at the record's top level, outside the `task` whitelist.
 - The `origin/HEAD` read is not an error step: it fails in any repository without that ref and falls
   back to `origin/main`, so recording it would put noise in every record.

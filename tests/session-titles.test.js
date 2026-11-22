@@ -520,7 +520,7 @@ test("a saved record says what the last read saw and which read failed", async (
   await h.end()
   const { instance, ...seen } = h.storage.data.get(KEY).diag
   assert.ok(typeof instance === "string" && instance.length > 0)
-  assert.deepEqual(seen, { exists: true, branch: "feat/x", upstream: true, head: "feat/x", pr: null, errors: [] })
+  assert.deepEqual(seen, { exists: true, branch: "feat/x", upstream: true, head: "feat/x", pr: null, declared: 0, done: 0, errors: [] })
   h.facts.fail = true
   await h.end()
   const { diag } = h.storage.data.get(KEY)
@@ -531,9 +531,12 @@ test("a saved record says what the last read saw and which read failed", async (
 
 test("a malformed stored diag is dropped and replaced at the next save", async (t) => {
   const task = (root) => ({ top: root, spec: `${root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false })
-  const ok = { instance: "a", exists: true, branch: null, upstream: false, head: null, pr: null, errors: [] }
+  const ok = { instance: "a", exists: true, branch: null, upstream: false, head: null, pr: null, declared: 0, done: 0, errors: [] }
   for (const diag of [{ instance: 5 }, "x", { ...ok, errors: "no" }, { ...ok, errors: [{ step: "nope", code: "x" }] },
-    { ...ok, branch: 3 }]) {
+    { ...ok, branch: 3 }, { ...ok, extra: "x" }, { ...ok, declared: -1 }, { ...ok, done: 1.5 }, { ...ok, branch: "b".repeat(201) },
+    { ...ok, errors: [{ step: "pr", code: "has space and /secret/path" }] },
+    { ...ok, errors: Array.from({ length: 6 }, () => ({ step: "pr", code: "error" })) },
+    { ...ok, errors: [{ step: "pr", code: "error", message: "x" }] }]) {
     const storage = memoryStorage()
     const h = await host(t, { storage })
     storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag, task: task(h.root) })
@@ -542,4 +545,16 @@ test("a malformed stored diag is dropped and replaced at the next save", async (
     assert.ok(typeof saved.instance === "string" && Array.isArray(saved.errors), JSON.stringify(diag))
     assert.notDeepEqual(saved, diag)
   }
+})
+
+test("the saved diag counts declared and changed plan paths", async (t) => {
+  const h = await host(t)
+  mkdirSync(join(h.root, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(join(h.root, PLAN), "**Files:** Modify `a.js`, `b.js`\n")
+  await h.write(SPEC)
+  await h.write(PLAN)
+  h.facts.changed = ["a.js"]
+  await h.end()
+  const { diag } = h.storage.data.get(KEY)
+  assert.deepEqual([diag.declared, diag.done], [2, 1])
 })
