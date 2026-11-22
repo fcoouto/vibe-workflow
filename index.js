@@ -4,11 +4,11 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createRoster, registerCouncil } from "./council.js"
-import { registerOnboarding, registerSkill } from "./onboarding.js"
-import { registerPrAdvice } from "./pr-advice.js"
-import { createProjectSettings } from "./project.js"
-import { registerSessionTitles } from "./session-titles.js"
+import { createRoster, registerCouncil } from "./src/council.js"
+import { registerOnboarding, registerSkill } from "./src/onboarding.js"
+import { registerPrAdvice } from "./src/pr-advice.js"
+import { createProjectSettings } from "./src/project.js"
+import { registerSessionTitles } from "./src/session-titles.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536

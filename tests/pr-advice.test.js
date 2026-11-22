@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { classify, createAdvisor } from "../pr-advice.js"
+import { classify, createAdvisor } from "../src/pr-advice.js"
 
 const on = { state: "on", agent_merge: false }
 function advisor(settings = on, extra = {}) {

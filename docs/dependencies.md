@@ -1,7 +1,7 @@
 # Extraction dependency manifest
 
-Chat onboarding adds `project.js` for Git-root resolution and project settings,
-`onboarding.js` for OpenCode registration, and the two bundled files under
+Chat onboarding adds `src/project.js` for Git-root resolution and project settings,
+`src/onboarding.js` for OpenCode registration, and the two bundled files under
 `skills/vibe-onboard-project/`. `index.js` shares the bounded Python bridge with
 local-only readiness checks and adds project-aware consultation guidance.
 The export still excludes development documents, `PRODUCT.md`, tests,
@@ -12,7 +12,7 @@ project preference files, credentials and evidence.
 is `prepare-my-workspace` in the earlier plugin (`697e1797`). The earlier hooks,
 upgrade records, run directories and `workflow.py` were not carried over.
 
-`pr-advice.js` and `skills/vibe-pull-requests/` add the pull request guidance: a
+`src/pr-advice.js` and `skills/vibe-pull-requests/` add the pull request guidance: a
 classifier and advisor for `gh pr` and `git` shell commands, the skill, its
 procedure and template. Sources are the earlier plugin's PR lifecycle
 (`policies/08-merge-readiness.md`), `templates/pull-request.md`, the onboarding
@@ -30,7 +30,7 @@ skill, its procedure and a few example layouts. Its source is the analyze, plan,
 approve, move flow of the Composio `file-organizer` skill
 (https://github.com/ComposioHQ/awesome-claude-skills/blob/master/file-organizer/SKILL.md),
 rewritten for code projects. Duplicate finding, date folders, archiving, deletion and
-the personal-folder material were not carried over. `pr-advice.js` adds one sentence
+the personal-folder material were not carried over. `src/pr-advice.js` adds one sentence
 pointing to the skill on a `writing-plans` load.
 
 Follow-up development-only checks: `tests/verify_group.py`,

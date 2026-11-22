@@ -147,7 +147,7 @@ The opt-in `session_titles` setting is described in
 `docs/superpowers/specs/2026-11-20-session-titles-design.md`. Its "Evidence
 (2026-11-20)" section records the session timelines and the throwaway-plugin probe it rests on, and its
 "Known gaps (documented, not closed)" section lists what is not verified. Read
-those two sections before changing `session-facts.js` or `session-titles.js`; this
+those two sections before changing `src/session-facts.js` or `src/session-titles.js`; this
 file does not copy them.
 
 Observed live (OpenCode 2.3.2, 20 November 2026): the packaged plugin, exported
