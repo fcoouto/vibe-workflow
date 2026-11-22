@@ -363,6 +363,17 @@ of the installed plugin) and in no tool result. Not observed: a session
 started from the desktop or terminal client, other models, and unloading with live
 sessions.
 
+## Subagent model note: what is known
+
+The design is `docs/superpowers/specs/2026-11-22-subagent-model-note-design.md`; its
+"Evidence (2026-11-22)" and "Known gaps" sections record the probes and what is not
+verified, and this file does not copy them. In an onboarded project the `context` hook
+appends the note to the description of the `subagent` tool's `model` parameter, not to
+the tool description: OpenCode 2.3.2's `claude-agent` bridge cuts the subagent tool
+description to 2048 characters (bundled function `OZ`, constant `Y0`), moving the
+"Available subagents:" list first, but passes the input schema whole. Only OpenCode
+2.3.2 is verified; if `event.tools` changes shape, the hook changes nothing.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported

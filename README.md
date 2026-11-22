@@ -40,6 +40,10 @@ permission still applies. The choices live in `.vibe-workflow/settings.json`. In
 linked worktree, the Smart Router file stays in the worktree and the git
 workflow choices are saved in the main checkout.
 
+In an onboarded project, agents also pick each subagent's model: one you name,
+else Smart Router's pick when it is on, else the tier their workflow calls for,
+on the same provider.
+
 Reminders are advisory, not enforced. Agents open PRs as `[BLOCKED]` drafts, mark
 them `[READY]`, keep the main checkout on a current `main`, and clean up only
 when chosen and after a verified merge.
@@ -94,7 +98,8 @@ model call); otherwise it pauses them for one hour.
 
 ## Pause or remove
 
-- Pause: run onboarding again and choose to keep your existing model selection.
+- Pause: run onboarding again and turn Smart Router off. Agents still pick
+  subagent models from their workflow's own guidance.
 - Remove: delete the plugin's entry from `opencode.jsonc`.
 
 Credentials and state are left untouched either way.
