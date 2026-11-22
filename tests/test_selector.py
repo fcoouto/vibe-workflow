@@ -117,6 +117,7 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(result["state"], "selected")
         self.assertEqual(result["level"], 2)
         self.assertEqual(result["route"]["model"], "gpt-6-2-sol")
+        self.assertEqual(result["route"]["provider"], "openai")
         self.assertEqual((result["route"]["effort"], result["route"]["score"], result["route"]["price"],
                           result["route"]["score_source"], result["route"]["paid_overflow"]),
                          ("high", 78.0, 6.0, "openrouter", "blocked"))

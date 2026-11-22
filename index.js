@@ -32,10 +32,17 @@ const ROUTER_ENTRY = "vibe-workflow-smart-router"
 const ROUTER_INSTRUCTION =
   "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
   "describing the task by its facts: files, spec, risk. " +
-  "Use a recommendation only when compatible with the user's choices and the client's permitted native controls. " +
-  "If no recommendation is available, show its notice in chat when present, then keep the client's existing selection. " +
+  "Use its recommendation unless the user or your active skill named an exact model. " +
+  "If no recommendation is available, show its notice in chat when present, then follow the vibe-workflow subagent model note. " +
   "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
   "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
+// OpenCode's subagent tool says never to set `model` unless the user asks; onboarded projects ask. It rides on the
+// parameter itself: the claude-agent bridge cuts the tool description at 2048 characters but passes the schema whole.
+const MODEL_NOTE =
+  "vibe-workflow: your human partner asks you to set the subagent tool's `model` and variant in this project; " +
+  "this is the explicit request that tool requires. Use the first that applies: a model they or your active skill " +
+  "name exactly; Smart Router's recommendation, when on; the tier your skill or plan calls for, on this session's " +
+  "provider. Otherwise leave it unset."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -47,7 +54,7 @@ function failureAdvice(answer) {
     answer.reason === "no_eligible_route" && actions.has(excluded)
       && exclusions.every((entry) => entry?.reason === excluded) ? excluded : "generic"
   const action = actions.get(cause) ?? "Check routing settings or account availability."
-  return [cause, `vibe-workflow: Smart Router found no eligible route. ${action} Continuing with your client's existing selection.`]
+  return [cause, `vibe-workflow: Smart Router found no eligible route. ${action}`]
 }
 const input = {
   type: "object", additionalProperties: false, required: ["v", "work_kind", "task"],
@@ -276,7 +283,20 @@ export default {
       entries.set(sessionID, on)
       if (entries.size > MAX_NOTICE_SESSIONS) entries.delete(entries.keys().next().value)
     }
+    // The host may hand the same schema object to every step, so strip the note before deciding to add it.
+    async function noteModel(event) {
+      const model = event?.tools?.subagent?.input?.properties?.model
+      if (typeof model?.description !== "string") return
+      const bare = model.description.replace(` ${MODEL_NOTE}`, "")
+      const on = !closed && await onboarded()
+      // Cleanup may run while settings are read; after it, the schema is no longer ours to touch.
+      if (closed) return
+      const wanted = on ? `${bare} ${MODEL_NOTE}` : bare
+      try { if (model.description !== wanted) model.description = wanted } catch {}
+    }
     await ctx.session.hook("context", async (event) => {
+      if (closed) return
+      await noteModel(event)
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {
         event.system.push({ type: "text", text:

@@ -363,6 +363,34 @@ of the installed plugin) and in no tool result. Not observed: a session
 started from the desktop or terminal client, other models, and unloading with live
 sessions.
 
+## Subagent model note: what is known
+
+The design is `docs/superpowers/specs/2026-11-22-subagent-model-note-design.md`; its
+"Evidence (2026-11-22)" and "Known gaps" sections record the probes and what is not
+verified, and this file does not copy them. In an onboarded project the `context` hook
+appends the note to the description of the `subagent` tool's `model` parameter, not to
+the tool description: OpenCode 2.3.2's `claude-agent` bridge cuts the subagent tool
+description to 2048 characters (bundled function `OZ`, constant `Y0`), moving the
+"Available subagents:" list first, but passes the input schema whole. Only OpenCode
+2.3.2 is verified; if `event.tools` changes shape, the hook changes nothing.
+
+Observed live (OpenCode 2.3.2, 22 November 2026, `scripts/live_check.py` on the server's
+default model, branch `feat/subagent-model-note` at `aeb4503` (rebased as `ccd4d57`), only Smart Router saved,
+as off), one session per prompt:
+
+- "Use a subagent to count the lines in README.md": the agent dispatched `general` with
+  no `model`. No skill, plan or named model applied, so this is the note's "Otherwise
+  leave it unset".
+- The same task after loading `subagent-driven-development` and following its model
+  guidance: the agent read the settings, said Smart Router was off so the skill's tier
+  applied ("single-file mechanical task → cheap model"), looked models up with the
+  `models` tool, and dispatched with `model: "openrouter/tencent/hy4-flash"`.
+
+Not observed: the session's own model and provider (the script does not record them),
+so the same-provider rule was not checked; Smart Router on; a user-named or
+skill-named exact model; `claude-agent` sessions; and sessions started from the desktop
+or terminal client.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported

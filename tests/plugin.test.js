@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync } from "node:fs"
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -68,6 +69,11 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.match(system[1].text, /before delegating/i)
   assert.match(system[1].text, /show .*notice.*chat/i)
   assert.match(system[1].text, /files.*spec.*risk/i)
+  assert.doesNotMatch(system[1].text, /permitted native controls|existing selection/)
+  assert.match(system[1].text, /unless the user or your active skill named an exact model/)
+  assert.match(system[1].text, /subagent model note/)
+  assert.match(system[1].text, /no launch or spending authority/)
+  assert.match(system[1].text, /override a native denial/)
   assert.equal(event.permissions, permissions)
   assert.equal(event.tools, h.tools)
   assert.deepEqual(event.options, {})
@@ -333,7 +339,7 @@ print("{}")
 })
 
 test("enabled failures explain known reasons without exposing untrusted exclusion data", async () => {
-  const generic = "vibe-workflow: Smart Router found no eligible route. Check routing settings or account availability. Continuing with your client's existing selection."
+  const generic = "vibe-workflow: Smart Router found no eligible route. Check routing settings or account availability."
   const f = await fixture(`from pathlib import Path
 print(Path("answer.json").read_text())
 `)
@@ -356,7 +362,8 @@ print(Path("answer.json").read_text())
       const answer = JSON.parse((await f.execute(undefined, `ses_${reason}_${exclusion}`)).content)
       assert.equal(answer.reason, reason)
       assert.equal(answer.route, null)
-      assert.match(answer.notice, /^vibe-workflow:.*Continuing with your client's existing selection\.$/)
+      assert.match(answer.notice, /^vibe-workflow: Smart Router found no eligible route\. .*\.$/)
+      assert.doesNotMatch(answer.notice, /existing selection/)
       if (action instanceof RegExp) assert.match(answer.notice, action)
       else assert.equal(answer.notice, action)
       assert.ok(!answer.notice.includes("PRIVATE-SENTINEL"))
@@ -870,4 +877,112 @@ test("council pick hides malformed Python output", async () => {
     assert.equal(answer.reason, "roster_unavailable")
     assert.ok(!JSON.stringify(answer).includes("PRIVATE-SENTINEL"))
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+// The subagent tool's `model` parameter says never to set it unless the user asks; onboarded projects ask.
+const MODEL_NOTE = "vibe-workflow: your human partner asks you to set the subagent tool's `model` and variant in " +
+  "this project; this is the explicit request that tool requires. Use the first that applies: a model they or your " +
+  "active skill name exactly; Smart Router's recommendation, when on; the tier your skill or plan calls for, on this " +
+  "session's provider. Otherwise leave it unset."
+const NEVER = "NEVER set this unless the user explicitly asks for a particular model or variant."
+const schema = () => ({ subagent: { description: "Spawns an agent in a child session.", input: { type: "object",
+  properties: { model: { type: "string", description: NEVER } } } } })
+
+async function noted(settings, { git = false } = {}) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "model-note-")))
+  if (git) execFileSync("git", ["init", "-q"], { cwd: root })
+  if (settings !== null) await preference(root, settings)
+  const h = host(root)
+  const cleanup = await (await load()).setup(h.ctx)
+  const step = async (tools = schema()) => {
+    const system = []
+    await h.hooks.get("context")({ system, tools, sessionID: "ses_a", options: {} })
+    return { tools, system }
+  }
+  return { root, step, cleanup, done: async () => { await cleanup?.(); await rm(root, { recursive: true }) } }
+}
+
+test("onboarded projects get the model note once on the subagent model parameter", async (t) => {
+  for (const enabled of [false, true]) {
+    const n = await noted(enabled)
+    t.after(n.done)
+    const { tools } = await n.step()
+    assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+    assert.equal(tools.subagent.description, "Spawns an agent in a child session.")
+  }
+})
+
+test("onboarded by git workflow alone still gets the note", async (t) => {
+  const n = await noted(JSON.stringify({ version: 1, features: [{ git_workflow: { enabled: false } }] }), { git: true })
+  t.after(n.done)
+  const { tools } = await n.step()
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+})
+
+test("unonboarded projects keep the model description untouched", async (t) => {
+  const n = await noted(null)
+  t.after(n.done)
+  const { tools } = await n.step()
+  assert.equal(tools.subagent.input.properties.model.description, NEVER)
+})
+
+test("appends the note once when the host reuses the schema", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const tools = schema()
+  for (let i = 0; i < 3; i++) await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+})
+
+test("removes the note when the project is no longer onboarded", async (t) => {
+  const n = await noted(false)
+  t.after(n.done)
+  const tools = schema()
+  await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+  await rm(join(n.root, ".vibe-workflow", "settings.json"))
+  await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, NEVER)
+})
+
+test("a frozen model schema is left alone and the hook still runs", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const tools = schema()
+  Object.freeze(tools.subagent.input.properties.model)
+  const { system } = await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, NEVER)
+  assert.equal(system.length, 1)
+  assert.match(system[0].text, /before delegating/i)
+})
+
+test("missing or odd tool shapes are a no-op", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const odd = [undefined, new Map([["subagent", schema().subagent]]), {}, { subagent: { input: null } },
+    { subagent: { input: { properties: { model: { description: 7 } } } } }]
+  for (const tools of odd) {
+    const before = JSON.stringify(tools instanceof Map ? [...tools] : tools)
+    await n.step(tools)
+    assert.equal(JSON.stringify(tools instanceof Map ? [...tools] : tools), before)
+  }
+})
+
+test("no note after unload", async (t) => {
+  const n = await noted(true)
+  t.after(async () => rm(n.root, { recursive: true }))
+  await n.cleanup?.()
+  const { tools } = await n.step()
+  assert.equal(tools.subagent.input.properties.model.description, NEVER)
+})
+
+test("cleanup during an in-flight step leaves an annotated schema alone", async (t) => {
+  const n = await noted(true)
+  t.after(async () => rm(n.root, { recursive: true }))
+  const tools = schema()
+  tools.subagent.input.properties.model.description = `${NEVER} ${MODEL_NOTE}`
+  const running = n.step(tools)
+  await n.cleanup?.()
+  await running
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
 })
