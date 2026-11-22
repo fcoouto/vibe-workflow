@@ -25,7 +25,8 @@ the approval is the user's own decision, not an onboarding answer. Approved by t
 
 ## Behavior
 
-- The OpenCode plugin (`index.js`) appends this to the `subagent` tool's description:
+- The OpenCode plugin (`index.js`) appends this, after one space, to the description of
+  the `subagent` tool's `model` parameter, right after OpenCode's "NEVER set this …":
 
   > vibe-workflow: your human partner asks you to set the subagent tool's `model` and
   > variant in this project; this is the explicit request that tool requires. Use the
@@ -36,11 +37,19 @@ the approval is the user's own decision, not an onboarding answer. Approved by t
 - Gate: the project is onboarded (the existing `onboarded` check: any feature has a
   saved choice, on or off). A project nobody onboarded keeps stock behavior.
 - Channel: the existing `context` session hook appends the note to
-  `event.tools.subagent.description` on every step, once per step. OpenCode's own shell
-  tool edits its description in the same hook. No system-prompt push and no session
-  instruction entry: the note travels with the tool, so it reaches every provider from
-  the first model call, and it disappears on the next step once the gate is false.
-  If `event.tools.subagent` or a string `description` is missing, nothing happens.
+  `event.tools.subagent.input.properties.model.description` on every step, once per
+  step. `input` is a plain JSON Schema object there. OpenCode's own shell and subagent
+  tools edit their descriptions in the same hook. No system-prompt push and no session
+  instruction entry: the note travels with the parameter, so it reaches every provider
+  from the first model call, and it disappears on the next step once the gate is false.
+  If any part of that path is missing or the description is not a string, nothing
+  happens.
+- Why the parameter and not the tool description: the `claude-agent` bridge cuts the
+  subagent tool description to 2048 characters. When it is longer, the bridge moves the
+  "Available subagents:" list to the front and cuts the tail (OpenCode 2.3.2, bundled
+  function `OZ`, constant `Y0=2048`). A note on the tool description lands right after
+  that list, so it is lost once the user's agent list grows. The bridge passes
+  `inputSchema` through unchanged.
 - Router instruction (`index.js` `ROUTER_INSTRUCTION`): replace "Use a recommendation
   only when compatible with the user's choices and the client's permitted native
   controls." with a clause that defers only to a model the user named, and replace "then
@@ -63,21 +72,36 @@ do not change. `docs/development.md` records the change and the gaps below.
 
 - Onboarding: question 1 and its choices stay as they are; no new question or setting.
   Its off choice still reads "Keep choosing models yourself"; the user accepted that.
-- Editing the `model` parameter's own description inside `input`: the tool-level
-  description is enough, as the probe below shows.
+- Editing the tool-level description (see "Why the parameter" above).
 
 ## Evidence (2026-11-22)
 
-Probe on OpenCode 2.3.2: a throwaway repository with only a project-local probe plugin,
-`opencode run --standalone`, one prompt per model and no tools. The plugin's `context`
-hook appended a marker sentence to `event.tools.subagent.description`. On the first
-model call, `claude-agent/sonnet` and `openai/gpt-6.1-terra` both quoted the full
-marker sentence, whose text was not in the prompt. The hook saw `event.tools` keyed by
-tool name (`subagent` with keys `description` and `input`) for both providers.
+Probes on OpenCode 2.3.2: a throwaway repository with only a project-local probe plugin,
+`opencode run --standalone`, one prompt per model and no tools, all on the first model
+call. Markers were text the prompt did not contain.
+
+- Tool description, appended marker: `claude-agent/sonnet` and `openai/gpt-6.1-terra`
+  quoted it. With markers at both ends of a 2239-character description, Sonnet's first
+  60 characters began "Available subagents:" and its last 60 ended mid-sentence in
+  OpenCode's own text, which matches the bridge code above.
+- `model` parameter, appended marker: `claude-agent/sonnet`, `openai/gpt-6.1-terra` and
+  `opencode-go/claude-haiku-5-5` each quoted the full parameter description with the
+  marker at its end. For all three the hook saw `input` with keys `type`, `properties`,
+  `required`, `additionalProperties`, and `properties.model` with `type` and
+  `description`.
+
+Code mode, read from the 2.3.2 binary: the subagent tool is registered with
+`codemode: false` unconditionally, so it is never moved behind `execute`, even with the
+experimental `full_codemode` flag (off by default, opt-in via `OPENCODE_FLAGS` or
+`experimental.full_codemode`). This user's config does not enable it.
 
 ## Known gaps
 
-- Full code mode, where tools may sit behind `execute`, was not probed; the probe's
-  sessions listed `subagent` directly. Other models and OpenCode versions are unverified.
+- One model per provider was probed: the three subscription paths Smart Router routes
+  (`claude-agent`, `openai`, `opencode-go`). Every model receives the same schema, so
+  what varies by model is only whether it follows the note, not whether it sees it.
+- OpenCode versions other than 2.3.2 are unverified. The `event.tools` shape is
+  undocumented; a version that changes it makes the hook a no-op (stock behavior), not
+  an error. The live record in `docs/development.md` names the version.
 - Projects onboarded before this change get the note without having been asked; the
   user accepted that as their own approval.
