@@ -20,6 +20,7 @@ from pathlib import Path  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import unicodedata  # noqa: E402
 import os  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +74,23 @@ INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of th
                     "subagent tool's input schema.")
 # The three subscription paths Smart Router routes, provider -> harness. The record holds one model per path; when one
 # is no longer listed, the user pre-authorized one level-1 Smart Router pick on that path (council 51429ec7c824).
-PATHS = {rule["provider"]: rule["harness"] for rule in json.loads((ROOT / "config" / "routes.json").read_text())["paths"]}
+ROUTES = ROOT / "config" / "routes.json"
+# Exactly the paths the user authorized; a new or re-billed route in routes.json does not extend the authorization.
+AUTHORIZED = ("claude-agent", "openai", "opencode-go")
+
+
+def authorized_paths(config):
+    """provider -> harness for the authorized subscription paths; anything else in the config refuses the check."""
+    rules = config.get("paths") if isinstance(config, dict) else None
+    paths = {rule.get("provider"): rule.get("harness") for rule in rules or [] if isinstance(rule, dict)}
+    if set(paths) != set(AUTHORIZED) or len(paths) != len(rules or []) or any(
+            rule.get("billing_class") != "included_subscription" for rule in rules or []):
+        raise ValueError(f"config/routes.json must hold exactly the authorized subscription paths {list(AUTHORIZED)}, "
+                         "each billed as included_subscription; changing them needs the user's approval")
+    return paths
+
+
+PATHS = {rule["provider"]: rule["harness"] for rule in json.loads(ROUTES.read_text())["paths"]}
 LEVEL_ONE = {"v": 2, "work_kind": "testing", "task": {"files": "1-2", "spec": "exact", "risk": "reversible"}}
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "vibe-workflow" / "smart-router"
 INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}},
@@ -177,49 +194,63 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
             "session": session, "deleted": deleted}
 
 
+def _host_list(raw):
+    items = raw.get("data") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        raise ValueError("OpenCode's model list has an unexpected shape")
+    return items
+
+
 def reduce_models(raw):
-    """OpenCode's model list reduced the way index.js reduces ctx.model.list() for the selector."""
+    """OpenCode's model list reduced exactly as index.js models() reduces ctx.model.list() for the selector."""
     def text(value):
-        return isinstance(value, str) and 0 < len(value) <= 256 and not re.search(r"[\x00-\x1f\x7f]", value)
+        # index.js: 1..256 characters, and no control, format or separator character other than a space.
+        return isinstance(value, str) and 0 < len(value) <= 256 and not any(
+            unicodedata.category(char)[0] in "CZ" for char in value.replace(" ", ""))
 
     def amount(value):
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-    items = raw.get("data") if isinstance(raw, dict) else raw
+        return value if type(value) is int and 0 <= value <= 2 ** 53 - 1 else None
     found = []
-    for item in items if isinstance(items, list) else []:
+    for item in _host_list(raw):
         if not isinstance(item, dict) or not item.get("enabled") or item.get("status") == "deprecated" \
                 or (item.get("capabilities") or {}).get("tools") is False or item.get("providerID") not in PATHS \
                 or not text(item.get("id")):
             continue
         released = amount((item.get("time") or {}).get("released"))
+        variants = item.get("variants") if isinstance(item.get("variants"), list) else []
         found.append({"provider": item["providerID"], "id": item["id"],
                       "model": item["modelID"] if text(item.get("modelID")) else None,
-                      "name": item["name"] if text(item.get("name")) else None,
                       "family": item["family"] if text(item.get("family")) else None,
-                      "variants": [v["id"] for v in item.get("variants") or [] if isinstance(v, dict) and text(v.get("id"))][:32],
+                      "variants": [v.get("id") for v in variants if isinstance(v, dict) and text(v.get("id"))][:32],
                       "context": amount((item.get("limit") or {}).get("context")),
                       "released": None if released is None else released // 1000})
-    return found[:512]
+        if len(found) == 512:
+            break
+    return found
 
 
 def read_host_models(env):
-    """OpenCode's model list without a model call, from a private server in the clone (env carries PWD)."""
+    """OpenCode's raw model list without a model call, from a private server in the clone (env carries PWD)."""
     out = _run(["opencode", "api", "get", "/api/model", "--standalone"], cwd=env["PWD"], timeout=120, data="", env=env)
-    return reduce_models(json.loads(out))
+    return json.loads(out)
 
 
 def pick_for_path(provider, models):
-    """One level-1 Smart Router pick limited to one subscription path: (provider/id, None) or (None, reason)."""
+    """One level-1 Smart Router pick on one path: (provider/id, None, paid_overflow) or (None, reason, None)."""
     request = {**LEVEL_ONE, "models": models, "constraints": {"allowed_harnesses": [PATHS[provider]]}}
     try:
         answer = json.loads(_run([sys.executable, "-I", "-B", str(ROOT / "scripts" / "select.py"), "--state-dir",
                                   str(STATE_DIR)], timeout=120, data=json.dumps(request)))
     except (subprocess.SubprocessError, OSError, ValueError) as error:
-        return None, f"selector failed: {error}"
-    route = answer.get("route") if isinstance(answer, dict) else None
-    if answer.get("state") != "selected" or not isinstance(route, dict):
-        return None, answer.get("reason") or "no_selection"
-    return f"{route.get('provider')}/{route.get('model')}", None
+        return None, f"selector failed: {error}", None
+    if not isinstance(answer, dict):
+        return None, "selector answered an unexpected shape", None
+    route = answer.get("route")
+    if answer.get("state") != "selected":
+        return None, answer.get("reason") if isinstance(answer.get("reason"), str) else "no_selection", None
+    if not isinstance(route, dict) or not all(isinstance(route.get(key), str) for key in ("provider", "model")):
+        return None, "selector answered an unexpected route", None
+    return f"{route['provider']}/{route['model']}", None, route.get("paid_overflow")
 
 
 def _models_by_path(models):
@@ -250,6 +281,9 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
     written (version, date and the models used) only when every pick and every probe passes.
     """
     record = read_record(record_path)
+    authorized_paths(json.loads(ROUTES.read_text()))
+    if set(PATHS) != set(AUTHORIZED):
+        raise ValueError(f"only the authorized subscription paths {list(AUTHORIZED)} may run")
     by_path = _models_by_path(record["models"])
     notes = note_texts((ROOT / "index.js").read_text())
     host_models, picker = host_models or read_host_models, picker or pick_for_path
@@ -262,23 +296,39 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
         config_home = work / "config"
         config_home.mkdir()
         env = {**isolated_env(config_home), "PWD": str(project)}
-        listed_models = host_models(env)
-        listed = {f"{item['provider']}/{item['id']}" for item in listed_models}
-        for provider, model in by_path.items():
-            if model in listed:
-                chosen[provider] = (model, None)
-                continue
-            pick, reason = picker(provider, listed_models)
-            if pick and pick.split("/", 1)[0] == provider and pick in listed:
-                chosen[provider] = (pick, model)
-            else:
-                results.append({"path": provider, "model": model, "outcome": "could_not_select", "pass": False,
-                                "excerpt": reason or f"pick {pick} is not a listed model on {provider}"})
+        try:
+            raw = _host_list(host_models(env))
+            if not raw:
+                raise ValueError("OpenCode listed no models")
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            raw = None
+            results.append({"path": None, "model": None, "outcome": "models_unavailable", "pass": False,
+                            "excerpt": str(error)[:200]})
+        if raw is not None:
+            listed = {f"{item.get('providerID')}/{item.get('id')}" for item in raw if isinstance(item, dict)}
+            eligible_models = reduce_models(raw)
+            eligible = {f"{item['provider']}/{item['id']}" for item in eligible_models}
+            for provider, model in by_path.items():
+                if model in eligible:
+                    chosen[provider] = (model, None, None)
+                    continue
+                if model in listed:
+                    # Still listed but filtered out (disabled, deprecated, no tools): not retired, so no pick.
+                    results.append({"path": provider, "model": model, "outcome": "could_not_select", "pass": False,
+                                    "excerpt": "the recorded model is listed but not eligible; ask the user"})
+                    continue
+                pick, reason, overflow = picker(provider, eligible_models)
+                if pick and pick.split("/", 1)[0] == provider and pick in eligible:
+                    chosen[provider] = (pick, model, overflow)
+                else:
+                    results.append({"path": provider, "model": model, "outcome": "could_not_select", "pass": False,
+                                    "excerpt": reason or f"pick {pick} is not an eligible model on {provider}"})
         if not results:
-            for provider, (model, replaced) in chosen.items():
+            for provider, (model, replaced, overflow) in chosen.items():
                 answer = _answer(runner, project, model, env)
                 passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
-                results.append({"path": provider, "model": model, "replaced": replaced, "pass": passed,
+                results.append({"path": provider, "model": model, "replaced": replaced, "paid_overflow": overflow,
+                                "pass": passed,
                                 "outcome": "delivered" if passed else "not_delivered",
                                 "excerpt": "" if passed else answer["reply"][:200],
                                 "session_left": None if answer.get("deleted", True) else answer.get("session")})

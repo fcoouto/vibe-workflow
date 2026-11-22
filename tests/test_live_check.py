@@ -238,8 +238,14 @@ class InjectionTest(unittest.TestCase):
 
 def host(*ids):
     """A host model list as reduce_models returns it."""
-    return [{"provider": item.split("/", 1)[0], "id": item.split("/", 1)[1], "model": None, "name": None,
-             "family": None, "variants": [], "context": None, "released": None} for item in ids]
+    return [{"provider": item.split("/", 1)[0], "id": item.split("/", 1)[1], "model": None, "family": None,
+             "variants": [], "context": None, "released": None} for item in ids]
+
+
+def raw_host(*ids):
+    """A host model list as `opencode api get /api/model` returns it."""
+    return [{"providerID": item.split("/", 1)[0], "id": item.split("/", 1)[1], "enabled": True, "status": "active"}
+            for item in ids]
 
 
 RECORDED = ["claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5"]
@@ -267,7 +273,39 @@ class PathTest(unittest.TestCase):
     def check(self, listed=RECORDED, picker=None, runner=None):
         picker = picker or mock.Mock(side_effect=AssertionError("no pick expected"))
         return live_check.check_injection(self.path, runner=runner or self.runner, version_text="opencode v2.3.2\n",
-                                          today="2026-11-22", host_models=lambda env: host(*listed), picker=picker)
+                                          today="2026-11-22", host_models=lambda env: raw_host(*listed), picker=picker)
+
+    def test_only_the_three_authorized_subscription_paths_may_run(self):
+        for paths in ({**live_check.PATHS, "openrouter": "paid"}, {"claude-agent": "x", "openai": "y"}):
+            with mock.patch.object(live_check, "PATHS", paths), self.assertRaisesRegex(ValueError, "authorized"):
+                self.check()
+        billing = {"paths": [{"provider": "claude-agent", "harness": "h", "billing_class": "metered"}]}
+        with self.assertRaisesRegex(ValueError, "authorized"):
+            live_check.authorized_paths(billing)
+        self.assertEqual(self.calls, [])
+
+    def test_a_listed_but_ineligible_recorded_model_stops_without_a_pick(self):
+        raw = [{"providerID": "claude-agent", "id": "haiku", "enabled": True},
+               {"providerID": "openai", "id": "gpt-6.1-terra", "enabled": True, "status": "deprecated"},
+               {"providerID": "opencode-go", "id": "claude-haiku-5-5", "enabled": True}]
+        picker = mock.Mock()
+        summary = live_check.check_injection(self.path, runner=self.runner, version_text="opencode v2.3.2\n",
+                                             host_models=lambda env: raw, picker=picker)
+        picker.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(summary["recorded"])
+        self.assertEqual([(item["path"], item["outcome"]) for item in summary["results"]],
+                         [("openai", "could_not_select")])
+
+    def test_an_unreadable_or_empty_model_list_stops_without_picks(self):
+        for raw in ({"unexpected": True}, [], None):
+            picker = mock.Mock()
+            summary = live_check.check_injection(self.path, runner=self.runner, version_text="opencode v2.3.2\n",
+                                                 host_models=lambda env, raw=raw: raw, picker=picker)
+            picker.assert_not_called()
+            self.assertEqual(self.calls, [])
+            self.assertFalse(summary["recorded"])
+            self.assertEqual(summary["results"][0]["outcome"], "models_unavailable")
 
     def test_paths_come_from_the_routes_config(self):
         self.assertEqual(set(live_check.PATHS), {"claude-agent", "openai", "opencode-go"})
@@ -297,7 +335,7 @@ class PathTest(unittest.TestCase):
 
     def test_an_unlisted_model_is_picked_once_on_its_path_and_recorded_after_all_pass(self):
         listed = ["claude-agent/haiku", "openai/gpt-6.3-terra", "opencode-go/claude-haiku-5-5"]
-        picker = mock.Mock(return_value=("openai/gpt-6.3-terra", None))
+        picker = mock.Mock(return_value=("openai/gpt-6.3-terra", None, "blocked"))
         summary = self.check(listed=listed, picker=picker)
         picker.assert_called_once()
         self.assertEqual(picker.call_args.args[0], "openai")
@@ -305,11 +343,12 @@ class PathTest(unittest.TestCase):
         self.assertTrue(summary["recorded"])
         self.assertEqual(json.loads(self.path.read_text())["models"], listed)
         picked = [item for item in summary["results"] if item["model"] == "openai/gpt-6.3-terra"][0]
-        self.assertEqual(picked["replaced"], "openai/gpt-6.1-terra")
+        self.assertEqual((picked["replaced"], picked["paid_overflow"]), ("openai/gpt-6.1-terra", "blocked"))
 
     def test_a_failed_or_off_path_pick_is_could_not_select_and_runs_nothing(self):
         before = self.path.read_bytes()
-        for answer in ((None, "no_eligible_route"), ("claude-agent/sonnet", None), ("openai/not-listed", None)):
+        for answer in ((None, "no_eligible_route", None), ("claude-agent/sonnet", None, "blocked"),
+                       ("openai/not-listed", None, "blocked")):
             self.calls.clear()
             summary = self.check(listed=["claude-agent/haiku", "opencode-go/claude-haiku-5-5"],
                                  picker=mock.Mock(return_value=answer))
@@ -340,33 +379,49 @@ class HostModelsTest(unittest.TestCase):
         raw = [{"providerID": "claude-agent", "id": "haiku", "modelID": "haiku", "name": "Haiku", "family": "claude-haiku",
                 "enabled": True, "status": "active", "capabilities": {"tools": True},
                 "variants": [{"id": "low"}, {"id": 7}], "limit": {"context": 1000000}, "time": {"released": 1700000000999}},
+               {"providerID": "claude-agent", "id": "odd", "family": "zero\u200bwidth", "enabled": True,
+                "limit": {"context": 2 ** 60}, "time": {"released": -1}},
                {"providerID": "openai", "id": "off", "enabled": False},
                {"providerID": "openai", "id": "old", "enabled": True, "status": "deprecated"},
                {"providerID": "openai", "id": "notools", "enabled": True, "capabilities": {"tools": False}},
                {"providerID": "openrouter", "id": "paid", "enabled": True}]
-        self.assertEqual(live_check.reduce_models({"data": raw}), [
-            {"provider": "claude-agent", "id": "haiku", "model": "haiku", "name": "Haiku", "family": "claude-haiku",
-             "variants": ["low"], "context": 1000000, "released": 1700000000}])
+        self.assertEqual(live_check.reduce_models(raw), [
+            {"provider": "claude-agent", "id": "haiku", "model": "haiku", "family": "claude-haiku",
+             "variants": ["low"], "context": 1000000, "released": 1700000000},
+            {"provider": "claude-agent", "id": "odd", "model": None, "family": None, "variants": [], "context": None,
+             "released": None}])
+        self.assertEqual(live_check.reduce_models({"data": raw[:1]})[0]["id"], "haiku")
+        for broken in ({"unexpected": True}, None, "x"):
+            with self.assertRaises(ValueError):
+                live_check.reduce_models(broken)
 
     def test_pick_asks_level_one_on_that_path_only(self):
         seen = {}
 
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             seen.update(argv=argv, request=json.loads(data))
-            return json.dumps({"state": "selected", "route": {"provider": "openai", "model": "gpt-6.3-terra"}})
+            return json.dumps({"state": "selected", "route": {"provider": "openai", "model": "gpt-6.3-terra",
+                                                              "paid_overflow": "unknown"}})
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             self.assertEqual(live_check.pick_for_path("openai", host("openai/gpt-6.3-terra")),
-                             ("openai/gpt-6.3-terra", None))
+                             ("openai/gpt-6.3-terra", None, "unknown"))
         request = seen["request"]
         self.assertEqual((request["work_kind"], request["task"]), ("testing", {"files": "1-2", "spec": "exact",
                                                                               "risk": "reversible"}))
         self.assertEqual(request["constraints"], {"allowed_harnesses": [live_check.PATHS["openai"]]})
         self.assertIn(str(ROOT / "scripts" / "select.py"), seen["argv"])
+        self.assertIn("-I", seen["argv"])
+        self.assertNotIn("name", json.dumps(request["models"]))
 
         def no_pick(argv, cwd=None, timeout=120, data=None, env=None):
             return json.dumps({"state": "no_selection", "reason": "no_eligible_route", "route": None})
         with mock.patch.object(live_check, "_run", side_effect=no_pick):
-            self.assertEqual(live_check.pick_for_path("openai", []), (None, "no_eligible_route"))
+            self.assertEqual(live_check.pick_for_path("openai", []), (None, "no_eligible_route", None))
+        for odd in ("[]", '{"state": "selected", "route": []}', '{"state": "selected", "route": {"provider": 1}}'):
+            with mock.patch.object(live_check, "_run", return_value=odd):
+                pick, reason, _ = live_check.pick_for_path("openai", [])
+            self.assertIsNone(pick, odd)
+            self.assertTrue(reason, odd)
 
 
 if __name__ == "__main__":
