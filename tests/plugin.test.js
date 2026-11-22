@@ -70,7 +70,7 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.match(system[1].text, /show .*notice.*chat/i)
   assert.match(system[1].text, /files.*spec.*risk/i)
   assert.doesNotMatch(system[1].text, /permitted native controls|existing selection/)
-  assert.match(system[1].text, /unless the user named a model/)
+  assert.match(system[1].text, /unless the user or your active skill named an exact model/)
   assert.match(system[1].text, /subagent model note/)
   assert.match(system[1].text, /no launch or spending authority/)
   assert.match(system[1].text, /override a native denial/)
@@ -339,7 +339,7 @@ print("{}")
 })
 
 test("enabled failures explain known reasons without exposing untrusted exclusion data", async () => {
-  const generic = "vibe-workflow: Smart Router found no eligible route. Check routing settings or account availability. Continuing with your client's existing selection."
+  const generic = "vibe-workflow: Smart Router found no eligible route. Check routing settings or account availability."
   const f = await fixture(`from pathlib import Path
 print(Path("answer.json").read_text())
 `)
@@ -362,7 +362,8 @@ print(Path("answer.json").read_text())
       const answer = JSON.parse((await f.execute(undefined, `ses_${reason}_${exclusion}`)).content)
       assert.equal(answer.reason, reason)
       assert.equal(answer.route, null)
-      assert.match(answer.notice, /^vibe-workflow:.*Continuing with your client's existing selection\.$/)
+      assert.match(answer.notice, /^vibe-workflow: Smart Router found no eligible route\. .*\.$/)
+      assert.doesNotMatch(answer.notice, /existing selection/)
       if (action instanceof RegExp) assert.match(answer.notice, action)
       else assert.equal(answer.notice, action)
       assert.ok(!answer.notice.includes("PRIVATE-SENTINEL"))
@@ -973,4 +974,15 @@ test("no note after unload", async (t) => {
   await n.cleanup?.()
   const { tools } = await n.step()
   assert.equal(tools.subagent.input.properties.model.description, NEVER)
+})
+
+test("cleanup during an in-flight step leaves an annotated schema alone", async (t) => {
+  const n = await noted(true)
+  t.after(async () => rm(n.root, { recursive: true }))
+  const tools = schema()
+  tools.subagent.input.properties.model.description = `${NEVER} ${MODEL_NOTE}`
+  const running = n.step(tools)
+  await n.cleanup?.()
+  await running
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
 })

@@ -32,7 +32,7 @@ const ROUTER_ENTRY = "vibe-workflow-smart-router"
 const ROUTER_INSTRUCTION =
   "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
   "describing the task by its facts: files, spec, risk. " +
-  "Use its recommendation unless the user named a model. " +
+  "Use its recommendation unless the user or your active skill named an exact model. " +
   "If no recommendation is available, show its notice in chat when present, then follow the vibe-workflow subagent model note. " +
   "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
   "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
@@ -54,7 +54,7 @@ function failureAdvice(answer) {
     answer.reason === "no_eligible_route" && actions.has(excluded)
       && exclusions.every((entry) => entry?.reason === excluded) ? excluded : "generic"
   const action = actions.get(cause) ?? "Check routing settings or account availability."
-  return [cause, `vibe-workflow: Smart Router found no eligible route. ${action} Continuing with your client's existing selection.`]
+  return [cause, `vibe-workflow: Smart Router found no eligible route. ${action}`]
 }
 const input = {
   type: "object", additionalProperties: false, required: ["v", "work_kind", "task"],
@@ -288,7 +288,10 @@ export default {
       const model = event?.tools?.subagent?.input?.properties?.model
       if (typeof model?.description !== "string") return
       const bare = model.description.replace(` ${MODEL_NOTE}`, "")
-      const wanted = !closed && await onboarded() && !closed ? `${bare} ${MODEL_NOTE}` : bare
+      const on = !closed && await onboarded()
+      // Cleanup may run while settings are read; after it, the schema is no longer ours to touch.
+      if (closed) return
+      const wanted = on ? `${bare} ${MODEL_NOTE}` : bare
       try { if (model.description !== wanted) model.description = wanted } catch {}
     }
     await ctx.session.hook("context", async (event) => {

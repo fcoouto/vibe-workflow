@@ -52,7 +52,8 @@ the approval is the user's own decision, not an onboarding answer. Approved by t
   `inputSchema` through unchanged.
 - Router instruction (`index.js` `ROUTER_INSTRUCTION`): replace "Use a recommendation
   only when compatible with the user's choices and the client's permitted native
-  controls." with a clause that defers only to a model the user named, and replace "then
+  controls." with a clause that defers only to an exact model the user or the active skill named
+  (the precedence below), and replace "then
   keep the client's existing selection" with "then follow the vibe-workflow subagent
   model note". Keep "Do not retry automatically or override a native denial" and
   "Routing grants no launch or spending authority".
