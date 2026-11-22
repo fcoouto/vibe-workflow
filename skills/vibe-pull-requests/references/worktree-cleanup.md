@@ -39,16 +39,20 @@ nothing if any does:
 
 ## Order
 
-1. Tell the user first: "Merge confirmed. Cleaning up now: branch <name> and worktree
-   <path>. I will first move this chat to the main project folder <primary path> so it
-   keeps working, then check the result from there." When the client cannot move a
-   session, the removal tool itself makes the move, or the session is not in this
-   worktree, say instead: "I will check the
-   result from the main project folder <primary path> afterwards." If the client cannot
-   move a session and the session is in this worktree, also give the warning from step 5
-   now and ask before removing, before step 3 changes anything. If the user declines,
-   stop; nothing has changed. The session's own directory disappears at the end, so the
-   chat must leave it first.
+1. Tell the user first, before anything changes. Get the primary checkout's path first: the
+   first `worktree` line of `git worktree list --porcelain`. If the table below says not to
+   remove this worktree, stop here; nothing has changed. Then say: "Merge confirmed.
+   Cleaning up now: branch <name> and worktree <path>. I will first move this chat to the
+   main project folder <primary path> so it keeps working, then check the result from
+   there."
+   - When the client cannot move a session (table below), the removal tool itself makes the
+     move, or the session is not in this worktree, replace the last sentence with: "I will
+     check the result from the main project folder <primary path> afterwards."
+   - If the client cannot move a session and the session is in this worktree, also say this
+     chat will stop working once the worktree is removed and a new chat in <primary path>
+     will be needed, then ask before removing, before step 3 changes anything. If the user
+     declines, stop; nothing has changed.
+   - The session's own directory disappears at the end, so the chat must leave it first.
 2. Capture the absolute common git dir (`git rev-parse --path-format=absolute --git-common-dir`) and the branch
    name. Check that the primary checkout is on the default branch with
    `git --git-dir=<common git dir> symbolic-ref --short HEAD`; if it is not, stop.
