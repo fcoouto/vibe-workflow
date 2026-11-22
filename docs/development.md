@@ -375,7 +375,7 @@ description to 2048 characters (bundled function `OZ`, constant `Y0`), moving th
 2.3.2 is verified; if `event.tools` changes shape, the hook changes nothing.
 
 Observed live (OpenCode 2.3.2, 22 November 2026, `scripts/live_check.py` on the server's
-default model, branch `feat/subagent-model-note` at `aeb4503`, only Smart Router saved,
+default model, branch `feat/subagent-model-note` at `aeb4503` (rebased as `ccd4d57`), only Smart Router saved,
 as off), one session per prompt:
 
 - "Use a subagent to count the lines in README.md": the agent dispatched `general` with
