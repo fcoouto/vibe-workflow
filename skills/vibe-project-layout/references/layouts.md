@@ -44,6 +44,7 @@ src/             # the plugin's JavaScript modules
 runtime/         # Python library that ships; imported, never run directly
 scripts/         # command entry points
 skills/<id>/     # one folder per skill: SKILL.md and references/
+assets/         # shipped non-code files, listed in the export inventory
 tests/
 docs/
 ```
@@ -63,6 +64,8 @@ docs/
 ```
 
 A new file belongs to one package. Code two packages need goes in `shared/`, not copied.
+A new test goes in its package's `tests/`. A repo-wide doc goes in `docs/`; a package's
+doc stays in the package. A shipped asset goes inside the package that ships it.
 
 ## Folders a convention owns
 

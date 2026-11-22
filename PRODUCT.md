@@ -65,8 +65,8 @@ overlapping behavior.
   on when it is off and the user is an admin. Advisory, and not yet observed live.
 - Project layout: the `vibe-project-layout` skill tells agents where a new file goes
   (framework paths, then the project's recorded layout, then the nearest comparable
-  file, then example layouts) and, on request, restructures through `safe-refactor`
-  with a user-approved move map. It is always registered and has no setting. In any
+  file, then example layouts) and, on request, restructures with a user-approved move
+  map, through `safe-refactor` when it is installed. It is always registered and has no setting. In any
   onboarded project the `writing-plans` note gains one sentence pointing to it.
   Advisory, and not yet observed live.
 

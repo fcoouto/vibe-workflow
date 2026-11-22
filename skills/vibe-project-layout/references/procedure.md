@@ -16,8 +16,8 @@ Put a new file where the first of these answers:
    (see Recording the layout).
 3. The nearest comparable existing file or folder: put the file beside what it most
    resembles, with the same naming.
-4. The [example layouts](layouts.md). Group by module or domain, and use layers only
-   inside a domain. Domain grouping only breaks the tie when 1 to 3 are silent.
+4. The [example layouts](layouts.md), only when 1 to 3 are silent: there, group by module
+   or domain, with layers only inside a domain.
 
 Tests and docs follow the project's own convention, whether mirrored, colocated or flat.
 Never force one on a project that uses another. Test discovery outranks mirroring.
@@ -39,7 +39,8 @@ Run this only when the user asks for it, or approves your proposal.
 2. **Write the source-to-destination map.** One line per move, with the references that
    break and how each is fixed. Mark anything unusual.
 3. **Get it approved.** Show the map to the user. Nothing moves before they approve it.
-4. **Move.** Hand the approved moves to the `safe-refactor` skill. Use `git mv` so history
+4. **Move.** Hand the approved moves to the `safe-refactor` skill when it is installed;
+   otherwise make them yourself, one map line at a time. Use `git mv` so history
    survives, and fix every reference the map listed.
 5. **Check.** Run the project's tests and any build or export check. Fix what the move
    broke, and nothing else.
@@ -53,9 +54,10 @@ dead files as findings; never delete them.
 ## Recording the layout
 
 With the user's approval, write the project's placement rules into its existing agent
-instructions file (`AGENTS.md`, or the file the project already uses): about ten lines
-that say where new code, tests, scripts and docs go, plus any exception worth knowing.
-Record rules, never a file listing, because a listing ages. When a restructure changes
-the layout, update those lines in the same pull request. When the project has no
-recorded layout yet, offer once, at the end of the task, to record the layout you
-followed.
+instructions file (`AGENTS.md`, or the file the project already uses), under a
+`## Project layout` heading; reuse a layout section the file already has. If the project
+has no agent instructions file, ask before creating one. Keep it to about ten lines that
+say where new code, tests, scripts and docs go, plus any exception worth knowing. Record
+rules, never a file listing, because a listing ages. When a restructure changes the
+layout, update those lines in the same pull request. When the project has no recorded
+layout yet, offer once, at the end of the task, to record the layout you followed.
