@@ -89,12 +89,16 @@ at 128 like the old map. Hosts without the entry API skip it.
 
 ### Version tripwire
 
-- A tracked record, `tests/opencode-verified.json`:
-  `{"version": "2.3.2", "verified": "2026-11-22", "models": ["claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5"]}`.
-  Not exported (`scripts/manifest.py` stays unchanged).
+- A tracked record, `tests/opencode-verified.json`, shaped
+  `{"version": "<x.y.z>", "verified": "<YYYY-MM-DD>", "models": ["claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5"]}`.
+  Not exported (`scripts/manifest.py` stays unchanged). Only a passing live check
+  writes `version` and `verified` (builder-check call: no hand-written first record;
+  PR #366's probes used a marker and `claude-agent/sonnet`, not these notes and models).
+  The implementation ships the record produced by its own live check run; before that
+  run the record holds only `models`.
 - `tests/test_opencode_version.py`: skips when `opencode` is not on `PATH`; otherwise
-  runs `opencode --version` (prints `opencode v2.3.2`), and fails when its version differs
-  from the record. The failure message names the installed and recorded versions and the
+  runs `opencode --version` (prints `opencode v2.3.2`), and fails when the record has no
+  `version` or its version differs from the installed one. The failure message names the installed and recorded versions and the
   command to run: `python3 -B scripts/live_check.py --injection`.
 - The record must also be refreshed when the injected texts or the hook change: plans
   that touch them include a live check step.
@@ -107,8 +111,15 @@ at 128 like the old map. Hosts without the entry API skip it.
   "Do not call any tools. Quote verbatim the description of the model parameter in your
   subagent tool's input schema." (via `opencode run --standalone --archived -m <model>`
   in the clone, the form the probes used).
+- Isolation (builder-check call): the run must load only the checkout's packaged
+  plugin, never the user's installed copy, which could carry the same notes and make a
+  broken checkout pass. Run it with a private, empty OpenCode config directory (as the
+  council live check did), keeping the user's own logins. If a model cannot run that
+  way, it fails; the check never falls back to the user's config.
 - A model passes when its reply contains `MODEL_NOTE` and `ROUTER_NOTE` verbatim,
-  after normalizing escaped quotes and whitespace.
+  after normalizing escaped quotes and whitespace, and its run made no tool call
+  (builder-check call: a tool call fails that model and is reported; the prompt plus
+  this check is the guard, since blocking tools could also hide the schema).
 - It prints a JSON summary per model (pass, and the first 200 characters of a failing
   reply). Only when every model passes does it rewrite the record's `version` (from
   `opencode --version`) and `verified` (today); the agent commits that change. Any
@@ -121,7 +132,8 @@ at 128 like the old map. Hosts without the entry API skip it.
   further question, when `tests/test_opencode_version.py` fails or a plan touching the
   injection calls for it. Scope: one short first-call prompt per recorded model, no
   tools, on the user's subscription logins. Other live checks still need explicit
-  authorization.
+  authorization. Paid overflow follows each account's own setting, as in any session;
+  the check adds no paid provider.
 - Recorded as one line in `AGENTS.md` next to the inference rule, and in
   `docs/development.md`.
 - When the live check fails, the agent stops and tells the user: agents no longer
