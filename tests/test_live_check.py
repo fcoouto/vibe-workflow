@@ -174,7 +174,7 @@ class InjectionTest(unittest.TestCase):
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             seen.update(argv=argv, cwd=cwd, data=data, env=env)
             return "\n".join([json.dumps({"type": "text", "part": {"id": "p1", "type": "text", "text": "quoted"}}),
-                              "not json", json.dumps({"part": {"id": "t1", "type": "tool"}})])
+                              "not json", json.dumps({"type": "tool_use", "part": {"id": "t1", "type": "tool"}})])
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"PWD": "/elsewhere", "HOME": "/h"})
         self.assertEqual(seen["cwd"], Path("/clone"))
@@ -192,10 +192,10 @@ class InjectionTest(unittest.TestCase):
         self.assertEqual(env["XDG_CONFIG_HOME"], folder)
 
     def test_run_model_joins_streamed_deltas_and_keeps_growing_snapshots(self):
-        lines = [{"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "NEVER se"}},
-                 {"part": {"id": "p1", "type": "text", "text": "t this"}},
-                 {"part": {"id": "p2", "type": "text", "text": "abc"}},
-                 {"part": {"id": "p2", "type": "text", "text": "abcdef"}}]
+        lines = [{"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "NEVER se"}},
+                 {"type": "text", "part": {"id": "p1", "type": "text", "text": "t this"}},
+                 {"type": "text", "part": {"id": "p2", "type": "text", "text": "abc"}},
+                 {"type": "text", "part": {"id": "p2", "type": "text", "text": "abcdef"}}]
         calls = []
 
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
@@ -211,7 +211,7 @@ class InjectionTest(unittest.TestCase):
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             calls.append((argv, env))
             if argv[1] == "run":
-                return json.dumps({"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
+                return json.dumps({"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
             raise subprocess.CalledProcessError(1, argv)
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
@@ -231,6 +231,21 @@ class InjectionTest(unittest.TestCase):
                     live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
                 prepare.assert_not_called()
                 runner.assert_not_called()
+
+    def test_run_model_reads_opencode_events_as_they_arrive(self):
+        # OpenCode 2.3.2 `run --format json`: one event per line; tool results nest text that is not the reply.
+        note = SHELL_ANSWER["reply"]
+        lines = [{"type": "step_start", "sessionID": "ses_x", "part": {"id": "prt_1", "type": "step-start"}},
+                 {"type": "tool_use", "sessionID": "ses_x", "part": {"id": "toolu_1", "type": "tool", "state": {
+                     "metadata": {"content": [{"type": "text", "text": "Switched"}, {"type": "text", "text": note}]}}}},
+                 {"type": "step_finish", "sessionID": "ses_x", "part": {"id": "prt_2", "type": "step-finish"}},
+                 {"type": "text", "sessionID": "ses_x", "part": {"id": "prt_3", "type": "text", "text": "Quoted."}}]
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            return "\n".join(json.dumps(line) for line in lines) if argv[1] == "run" else ""
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
+        self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("Quoted.", 1, "ses_x"))
 
     def test_shell_probe_passes_only_with_the_note_and_one_tool_call(self):
         self.assertTrue(live_check.shell_probe_passes(SHELL_ANSWER["reply"], 1))

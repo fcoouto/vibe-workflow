@@ -130,27 +130,24 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
     # caller's input out of the prompt.
     out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", prompt],
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
+    # One event per line. Only top-level `text` events are the model's reply; a `tool_use` event is one tool call,
+    # and the text nested in its result is the tool's output, not the reply.
     texts, tools, sessions = {}, set(), []
-
-    def walk(value):
-        if isinstance(value, dict):
-            kind, key = value.get("type"), value.get("id") or id(value)
-            session = value.get("sessionID")
-            if isinstance(session, str) and session.startswith("ses") and session not in sessions:
-                sessions.append(session)
-            if kind == "text" and isinstance(value.get("text"), str):
-                # Parts arrive either as growing snapshots or as deltas under the same id.
-                seen, text = texts.get(key, ""), value["text"]
-                texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
-            elif kind in ("tool", "tool_use", "tool-call"):
-                tools.add(key)
-            for child in value.values():
-                walk(child)
-        elif isinstance(value, list):
-            for child in value:
-                walk(child)
     for event in _events(out):
-        walk(event)
+        if not isinstance(event, dict):
+            continue
+        session, part = event.get("sessionID"), event.get("part")
+        if isinstance(session, str) and session.startswith("ses") and session not in sessions:
+            sessions.append(session)
+        if not isinstance(part, dict):
+            continue
+        key = part.get("id") or id(part)
+        if event.get("type") == "text" and isinstance(part.get("text"), str):
+            # Parts arrive either as growing snapshots or as deltas under the same id.
+            seen, text = texts.get(key, ""), part["text"]
+            texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
+        elif event.get("type") == "tool_use":
+            tools.add(key)
     session, deleted = (sessions[0] if sessions else None), False
     if session:
         # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
