@@ -344,6 +344,12 @@ class PathTest(unittest.TestCase):
                          [{"action": "*", "resource": "*", "effect": "deny"},
                           {"action": "shell", "resource": "git switch -c vibe-injection-probe", "effect": "allow"}])
 
+    def test_the_allowed_command_is_literal_so_it_cannot_widen(self):
+        # `*` and `?` are the only wildcards, and `* ` at the end would also allow the command with any arguments.
+        allowed = [rule["resource"] for rule in live_check.SHELL_PERMISSIONS if rule["effect"] == "allow"]
+        self.assertEqual(allowed, [live_check.SHELL_COMMAND])
+        self.assertFalse(set(live_check.SHELL_COMMAND) & set("*?"))
+
     def test_only_the_shell_probe_runs_under_those_rules(self):
         self.check()
         by_prompt = {}
