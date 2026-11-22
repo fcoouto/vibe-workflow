@@ -48,7 +48,13 @@ record keeps the models used, so a weekly price change never swaps a working mod
 made no tool call. With git workflow also on, one more prompt on the `claude-agent` path's model
 runs exactly one `git switch -c vibe-injection-probe` in the clone, a primary checkout. It passes only when
 that is the session's single tool call, the `vibe-workflow:` primary-checkout note is in that call's result
-(the hook delivered it), and the model's reply quotes it (the model saw it). The clone runs no Git hooks
+(the hook delivered it), and the model's reply quotes it (the model saw it). That run has a config folder of its
+own with two OpenCode V2 permission rules (`SHELL_PERMISSIONS`): deny every `shell` command, then allow that one
+exact command (the last matching rule wins), so any other command is refused before it runs. The note probes
+keep the empty config and no rules, because denying tools might hide the subagent tool's schema, which they
+read. The tool-call count is still checked afterwards. Observed live (OpenCode 2.3.2, 22 November 2026,
+`claude-agent/haiku`, asked to run the allowed command and then `ls`): the allowed command ran with the note,
+and `ls` failed with a permission error. The clone runs no Git hooks
 (`core.hooksPath=/dev/null`) and every Git call drops inherited `GIT_*` variables. It proves the `execute.after` hook still appends notes to tool results (the PR and skill-load
 notes use the same path); it does not cover the skill-load notes themselves, because the isolated config
 has no superpowers skills. `opencode run --format json` (2.3.2) prints one event per line: the reply is

@@ -260,12 +260,16 @@ class PathTest(unittest.TestCase):
         self.path = self.folder / "record.json"
         self.path.write_text(json.dumps({"models": RECORDED}))
         self.calls = []
+        self.configs = []
         prepare = mock.patch.object(live_check, "prepare", return_value=self.folder / "project")
         prepare.start()
         self.addCleanup(prepare.stop)
 
     def runner(self, project, model, env, prompt=live_check.INJECTION_PROMPT):
         self.calls.append((model, prompt))
+        # The check removes its config folders when it ends, so read what this run would have loaded now.
+        config = Path(env["XDG_CONFIG_HOME"]) / "opencode" / "opencode.json"
+        self.configs.append((prompt, json.loads(config.read_text()) if config.exists() else None))
         if prompt == live_check.SHELL_PROMPT:
             return SHELL_ANSWER
         return {"reply": " ".join(self.NOTES), "tool_calls": 0}
@@ -332,6 +336,21 @@ class PathTest(unittest.TestCase):
         features = {key for entry in live_check.INJECTION_SETTINGS["features"] for key in entry}
         self.assertEqual(features, {"smart_router", "git_workflow"})
         self.assertIn("\ngit switch -c vibe-injection-probe\n", live_check.SHELL_PROMPT)
+
+    def test_the_shell_probe_rules_deny_every_command_but_its_own(self):
+        # OpenCode V2 uses the last matching rule, so the exception must follow the blanket deny.
+        self.assertEqual(live_check.SHELL_PERMISSIONS,
+                         [{"action": "shell", "resource": "*", "effect": "deny"},
+                          {"action": "shell", "resource": "git switch -c vibe-injection-probe", "effect": "allow"}])
+
+    def test_only_the_shell_probe_runs_under_those_rules(self):
+        self.check()
+        by_prompt = {}
+        for prompt, config in self.configs:
+            by_prompt.setdefault(prompt, []).append(config)
+        self.assertEqual(by_prompt[live_check.INJECTION_PROMPT], [None, None, None])
+        self.assertEqual([config["permissions"] for config in by_prompt[live_check.SHELL_PROMPT]],
+                         [live_check.SHELL_PERMISSIONS])
 
     def test_an_unlisted_model_is_picked_once_on_its_path_and_recorded_after_all_pass(self):
         listed = ["claude-agent/haiku", "openai/gpt-6.3-terra", "opencode-go/claude-haiku-5-5"]

@@ -101,6 +101,10 @@ SHELL_PROBE_PATH = "claude-agent"
 SHELL_COMMAND = "git switch -c vibe-injection-probe"
 SHELL_PROMPT = ("Run exactly this one shell command, and no other tool call:\n" + SHELL_COMMAND + "\n"
                 "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
+# OpenCode V2 permissions: the last matching rule wins, so the one allowed command follows the blanket deny. A model
+# that runs anything else is refused before it runs, instead of being caught by the tool-call count afterwards.
+SHELL_PERMISSIONS = [{"action": "shell", "resource": "*", "effect": "deny"},
+                     {"action": "shell", "resource": SHELL_COMMAND, "effect": "allow"}]
 SHELL_NOTE = re.compile(r"vibe-workflow: the primary checkout \(.+?\) is now on vibe-injection-probe\. "
                         r"Never touch the primary checkout")
 
@@ -140,6 +144,15 @@ def isolated_env(config_home):
     # GIT_* variables could point Git somewhere other than the throwaway clone.
     env = {name: value for name, value in os.environ.items() if not name.startswith(("OPENCODE", "GIT_"))}
     return {**env, "XDG_CONFIG_HOME": str(config_home)}
+
+
+def shell_probe_env(work, project):
+    """The probe's environment: a config home of its own, holding only the shell rules (the note probes keep an empty one)."""
+    config_home = work / "shell-config"
+    (config_home / "opencode").mkdir(parents=True)
+    (config_home / "opencode" / "opencode.json").write_text(
+        json.dumps({"$schema": "https://opencode.ai/config.json", "permissions": SHELL_PERMISSIONS}, indent=2) + "\n")
+    return {**isolated_env(config_home), "PWD": str(project)}
 
 
 def _events(output):
@@ -333,7 +346,7 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
                                 "excerpt": "" if passed else answer["reply"][:200],
                                 "session_left": None if answer.get("deleted", True) else answer.get("session")})
             model = chosen[SHELL_PROBE_PATH][0]
-            answer = _answer(runner, project, model, env, prompt=SHELL_PROMPT)
+            answer = _answer(runner, project, model, shell_probe_env(work, project), prompt=SHELL_PROMPT)
             passed = shell_probe_passes(answer)
             results.append({"path": SHELL_PROBE_PATH, "model": model, "probe": "shell-note", "pass": passed,
                             "outcome": "delivered" if passed else "not_delivered",
