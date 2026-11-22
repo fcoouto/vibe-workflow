@@ -101,9 +101,10 @@ SHELL_PROBE_PATH = "claude-agent"
 SHELL_COMMAND = "git switch -c vibe-injection-probe"
 SHELL_PROMPT = ("Run exactly this one shell command, and no other tool call:\n" + SHELL_COMMAND + "\n"
                 "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
-# OpenCode V2 permissions: the last matching rule wins, so the one allowed command follows the blanket deny. A model
-# that runs anything else is refused before it runs, instead of being caught by the tool-call count afterwards.
-SHELL_PERMISSIONS = [{"action": "shell", "resource": "*", "effect": "deny"},
+# OpenCode V2 permissions: the last matching rule wins, so the one allowed command follows the blanket deny of every
+# action. A model that calls any other tool or command is refused before it runs, instead of being caught by the
+# tool-call count afterwards.
+SHELL_PERMISSIONS = [{"action": "*", "resource": "*", "effect": "deny"},
                      {"action": "shell", "resource": SHELL_COMMAND, "effect": "allow"}]
 SHELL_NOTE = re.compile(r"vibe-workflow: the primary checkout \(.+?\) is now on vibe-injection-probe\. "
                         r"Never touch the primary checkout")

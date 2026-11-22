@@ -337,10 +337,11 @@ class PathTest(unittest.TestCase):
         self.assertEqual(features, {"smart_router", "git_workflow"})
         self.assertIn("\ngit switch -c vibe-injection-probe\n", live_check.SHELL_PROMPT)
 
-    def test_the_shell_probe_rules_deny_every_command_but_its_own(self):
-        # OpenCode V2 uses the last matching rule, so the exception must follow the blanket deny.
+    def test_the_shell_probe_rules_deny_every_action_but_its_one_command(self):
+        # OpenCode V2 uses the last matching rule, so the exception must follow the blanket deny. The deny covers every
+        # action (edit, webfetch, skill, ...), not only shell, because the probe allows no other tool call at all.
         self.assertEqual(live_check.SHELL_PERMISSIONS,
-                         [{"action": "shell", "resource": "*", "effect": "deny"},
+                         [{"action": "*", "resource": "*", "effect": "deny"},
                           {"action": "shell", "resource": "git switch -c vibe-injection-probe", "effect": "allow"}])
 
     def test_only_the_shell_probe_runs_under_those_rules(self):
