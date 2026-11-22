@@ -64,185 +64,11 @@ test("registers onboarding and keeps the native tool and existing context untouc
   const event = { system, tools: h.tools, permissions, options: {} }
   await h.hooks.get("context")(event)
   assert.equal(system[0].text, "Other plugin instructions")
-  assert.equal(system.length, 2)
-  assert.match(system[1].text, /advisory/i)
-  assert.match(system[1].text, /before delegating/i)
-  assert.match(system[1].text, /show .*notice.*chat/i)
-  assert.match(system[1].text, /files.*spec.*risk/i)
-  assert.doesNotMatch(system[1].text, /permitted native controls|existing selection/)
-  assert.match(system[1].text, /unless the user or your active skill named an exact model/)
-  assert.match(system[1].text, /subagent model note/)
-  assert.match(system[1].text, /no launch or spending authority/)
-  assert.match(system[1].text, /override a native denial/)
+  assert.equal(system.length, 1)
+  assert.ok(system.every((part) => !/smart_router_select/.test(part.text)))
   assert.equal(event.permissions, permissions)
   assert.equal(event.tools, h.tools)
   assert.deepEqual(event.options, {})
-})
-
-// OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so the
-// router instruction also goes into a durable session instruction entry, which that provider does receive.
-async function routed(enabled, entries) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "router-entry-")))
-  if (enabled !== null) await preference(root, enabled)
-  const h = host(root)
-  const calls = []
-  if (entries !== null) h.ctx.session.instructions = { entry: {
-    put: async (input) => {
-      calls.push(["put", input])
-      if (entries === "failing") throw Error("host refused")
-      if (typeof entries === "object") await entries.put
-    },
-    remove: (input) => {
-      calls.push(["remove", input])
-      if (entries === "throwing") throw Error("host torn down")
-      return Promise.resolve()
-    },
-  } }
-  const cleanup = await (await load()).setup(h.ctx)
-  // OpenCode 2.3.2 passes the model as { id, providerID, variant }; no provider stands for an older host.
-  const step = async (sessionID = "ses_a", providerID) => {
-    const system = []
-    const model = providerID ? { id: "model", providerID, variant: null } : undefined
-    await h.hooks.get("context")({ system, sessionID, options: {}, ...(model && { model }) })
-    return system.map((part) => part.text)
-  }
-  return { root, calls, step, cleanup }
-}
-
-test("the router instruction is put once per session as an entry and stays in the system prompt", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  const first = await r.step()
-  assert.equal(first.length, 1)
-  assert.match(first[0], /before delegating/i)
-  assert.equal(r.calls.length, 1)
-  const [kind, input] = r.calls[0]
-  assert.equal(kind, "put")
-  assert.equal(input.sessionID, "ses_a")
-  assert.match(input.key, /^[a-z0-9][a-z0-9._-]*$/)
-  assert.equal(input.value, first[0])
-  // Other providers keep the instruction in every system prompt, as before the entry existed.
-  assert.deepEqual(await r.step(), first)
-  assert.equal(r.calls.length, 1)
-  assert.equal((await r.step("ses_b")).length, 1)
-  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["put", "ses_b"]])
-})
-
-test("only claude-agent, or an unknown provider, gets the entry; every provider keeps the push", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  for (const [sessionID, provider] of [["ses_openai", "openai"], ["ses_go", "opencode-go"],
-    ["ses_claude", "claude-agent"], ["ses_unknown", undefined]]) {
-    assert.equal((await r.step(sessionID, provider)).length, 1)
-  }
-  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_claude"], ["put", "ses_unknown"]])
-})
-
-test("a session that leaves claude-agent keeps its entry and the push", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  await r.step("ses_a", "claude-agent")
-  assert.equal((await r.step("ses_a", "openai")).length, 1)
-  assert.deepEqual(r.calls.map(([name]) => name), ["put"])
-})
-
-test("unloading removes the entries this load put, and a step without a session id makes no entry calls", async (t) => {
-  const r = await routed(true, "working")
-  t.after(() => rm(r.root, { recursive: true }))
-  assert.equal((await r.step(null)).length, 1)
-  assert.deepEqual(r.calls, [])
-  await r.step("ses_a")
-  await r.step("ses_b")
-  await preference(r.root, false)
-  await r.step("ses_b")
-  await r.cleanup()
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
-    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_b"], ["remove", "ses_a"]])
-})
-
-test("a put still running at unload is removed once it lands, and that step adds nothing", async (t) => {
-  let land
-  const r = await routed(true, { put: new Promise((resolve) => { land = resolve }) })
-  t.after(() => rm(r.root, { recursive: true }))
-  const step = r.step()
-  for (let tick = 0; tick < 1000 && !r.calls.length; tick++) await new Promise((resolve) => setTimeout(resolve, 1))
-  assert.equal(r.calls.length, 1)
-  await r.cleanup()
-  land()
-  assert.deepEqual(await step, [])
-  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]), [["put", "ses_a"], ["remove", "ses_a"]])
-})
-
-test("a remove that throws at unload does not stop the rest of the cleanup", async (t) => {
-  const r = await routed(true, "throwing")
-  t.after(() => rm(r.root, { recursive: true }))
-  await r.step("ses_a")
-  await r.step("ses_b")
-  await r.cleanup()
-  assert.deepEqual(r.calls.map(([name, { sessionID }]) => [name, sessionID]),
-    [["put", "ses_a"], ["put", "ses_b"], ["remove", "ses_a"], ["remove", "ses_b"]])
-})
-
-test("a failing put is retried on the next step", async (t) => {
-  const r = await routed(true, "failing")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  await r.step()
-  await r.step()
-  assert.deepEqual(r.calls.map(([name]) => name), ["put", "put"])
-})
-
-test("settings that become invalid remove an entry this load put", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  await r.step()
-  await preference(r.root, "malformed")
-  assert.deepEqual(await r.step(), [])
-  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
-})
-
-test("entry state is bounded: the oldest session is forgotten and put again when seen", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  for (let index = 0; index <= 128; index++) await r.step(`ses_${index}`)
-  assert.equal(r.calls.length, 129)
-  await r.step("ses_128")
-  assert.equal(r.calls.length, 129)
-  await r.step("ses_0")
-  assert.deepEqual(r.calls.at(-1), ["put", r.calls[0][1]])
-})
-
-test("turning Smart Router off removes the session entry once", async (t) => {
-  const r = await routed(true, "working")
-  t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-  await r.step()
-  await preference(r.root, false)
-  assert.deepEqual(await r.step(), [])
-  assert.deepEqual(await r.step(), [])
-  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove"])
-  assert.deepEqual(r.calls[1][1], { sessionID: "ses_a", key: r.calls[0][1].key })
-  await preference(r.root, true)
-  assert.equal((await r.step()).length, 1)
-  assert.deepEqual(r.calls.map(([name]) => name), ["put", "remove", "put"])
-})
-
-test("an opted-out project clears a leftover entry; an unonboarded one makes no entry calls", async (t) => {
-  for (const [enabled, expected] of [[false, ["remove"]], [null, []]]) {
-    const r = await routed(enabled, "working")
-    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-    assert.deepEqual(await r.step(), [])
-    assert.deepEqual(await r.step(), [])
-    assert.deepEqual(r.calls.map(([name]) => name), expected)
-  }
-})
-
-test("without working session entries the router instruction stays in the system prompt every step", async (t) => {
-  for (const entries of [null, "failing"]) {
-    const r = await routed(true, entries)
-    t.after(async () => { await r.cleanup?.(); await rm(r.root, { recursive: true }) })
-    assert.equal((await r.step()).length, 1)
-    assert.equal((await r.step()).length, 1)
-  }
 })
 
 test("a host without models returns no authority without creating state", async () => {
@@ -884,31 +710,46 @@ const MODEL_NOTE = "vibe-workflow: your human partner asks you to set the subage
   "this project; this is the explicit request that tool requires. Use the first that applies: a model they or your " +
   "active skill name exactly; Smart Router's recommendation, when on; the tier your skill or plan calls for, on this " +
   "session's provider. Otherwise leave it unset."
+const ROUTER_NOTE = "Smart Router is on: when no exact model is named, consult smart_router_select first, describing " +
+  "the task by its facts: files, spec, risk. If it has no recommendation, show its notice in chat when present. Do not " +
+  "retry automatically or override a native denial; routing grants no launch or spending authority."
+const FULL = `NEVER set this unless the user explicitly asks for a particular model or variant. ${MODEL_NOTE} ${ROUTER_NOTE}`
 const NEVER = "NEVER set this unless the user explicitly asks for a particular model or variant."
 const schema = () => ({ subagent: { description: "Spawns an agent in a child session.", input: { type: "object",
   properties: { model: { type: "string", description: NEVER } } } } })
 
-async function noted(settings, { git = false } = {}) {
+async function noted(settings, { git = false, entries } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "model-note-")))
   if (git) execFileSync("git", ["init", "-q"], { cwd: root })
   if (settings !== null) await preference(root, settings)
   const h = host(root)
+  const calls = []
+  if (entries) h.ctx.session.instructions = { entry: {
+    put: async (input) => { calls.push(["put", input]) },
+    remove: (input) => {
+      calls.push(["remove", input])
+      if (entries === "throwing") throw Error("host torn down")
+      return entries === "rejecting" ? Promise.reject(Error("refused")) : Promise.resolve()
+    },
+  } }
   const cleanup = await (await load()).setup(h.ctx)
-  const step = async (tools = schema()) => {
+  // OpenCode 2.3.2 passes the model as { id, providerID, variant }; no provider stands for an older host.
+  const step = async (tools = schema(), { sessionID = "ses_a", providerID } = {}) => {
     const system = []
-    await h.hooks.get("context")({ system, tools, sessionID: "ses_a", options: {} })
+    const model = providerID ? { id: "model", providerID, variant: null } : undefined
+    await h.hooks.get("context")({ system, tools, sessionID, options: {}, ...(model && { model }) })
     return { tools, system }
   }
-  return { root, step, cleanup, hook: h.hooks.get("context"),
+  return { root, step, cleanup, calls, hook: h.hooks.get("context"),
     done: async () => { await cleanup?.(); await rm(root, { recursive: true }) } }
 }
 
 test("onboarded projects get the model note once on the subagent model parameter", async (t) => {
-  for (const enabled of [false, true]) {
+  for (const [enabled, expected] of [[false, `${NEVER} ${MODEL_NOTE}`], [true, FULL]]) {
     const n = await noted(enabled)
     t.after(n.done)
     const { tools } = await n.step()
-    assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+    assert.equal(tools.subagent.input.properties.model.description, expected)
     assert.equal(tools.subagent.description, "Spawns an agent in a child session.")
   }
 })
@@ -932,7 +773,7 @@ test("appends the note once when the host reuses the schema", async (t) => {
   t.after(n.done)
   const tools = schema()
   for (let i = 0; i < 3; i++) await n.step(tools)
-  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+  assert.equal(tools.subagent.input.properties.model.description, FULL)
 })
 
 test("removes the note when the project is no longer onboarded", async (t) => {
@@ -953,8 +794,7 @@ test("a frozen model schema is left alone and the hook still runs", async (t) =>
   Object.freeze(tools.subagent.input.properties.model)
   const { system } = await n.step(tools)
   assert.equal(tools.subagent.input.properties.model.description, NEVER)
-  assert.equal(system.length, 1)
-  assert.match(system[0].text, /before delegating/i)
+  assert.deepEqual(system, [])
 })
 
 test("missing or odd tool shapes are a no-op", async (t) => {
@@ -969,14 +809,13 @@ test("missing or odd tool shapes are a no-op", async (t) => {
   }
 })
 
-test("an event without tools still gets the router instruction", async (t) => {
+test("an event without tools stays without tools", async (t) => {
   const n = await noted(true)
   t.after(n.done)
   const event = { system: [], sessionID: "ses_a", options: {} }
   await n.hook(event)
   assert.equal("tools" in event, false)
-  assert.equal(event.system.length, 1)
-  assert.match(event.system[0].text, /before delegating/i)
+  assert.deepEqual(event.system, [])
 })
 
 test("no note after unload", async (t) => {
@@ -996,4 +835,78 @@ test("cleanup during an in-flight step leaves an annotated schema alone", async 
   await n.cleanup?.()
   await running
   assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+})
+
+test("router on adds the router note after the model note", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const { tools } = await n.step()
+  assert.equal(tools.subagent.input.properties.model.description, FULL)
+})
+
+test("router off keeps only the model note", async (t) => {
+  const n = await noted(false)
+  t.after(n.done)
+  const { tools } = await n.step()
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+})
+
+test("turning the router off removes its note from a reused schema", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const tools = schema()
+  await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, FULL)
+  await preference(n.root, false)
+  await n.step(tools)
+  assert.equal(tools.subagent.input.properties.model.description, `${NEVER} ${MODEL_NOTE}`)
+})
+
+test("the router instruction is never pushed", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  for (const providerID of ["claude-agent", "openai", "opencode-go", undefined]) {
+    const { system } = await n.step(schema(), { providerID })
+    assert.deepEqual(system, [])
+  }
+})
+
+test("no entry is put for any provider", async (t) => {
+  const n = await noted(true, { entries: "working" })
+  t.after(n.done)
+  for (const providerID of ["claude-agent", "openai", "opencode-go", undefined]) {
+    await n.step(schema(), { sessionID: `ses_${providerID}`, providerID })
+  }
+  assert.ok(n.calls.every(([kind]) => kind !== "put"))
+})
+
+test("a leftover router entry is removed once per session, whatever its provider", async (t) => {
+  const n = await noted(true, { entries: "working" })
+  t.after(n.done)
+  // An older version kept the entry after a session left claude-agent, so its first step here may be on any provider.
+  for (const [sessionID, providerID] of [["ses_c", "claude-agent"], ["ses_c", "claude-agent"], ["ses_u", undefined],
+    ["ses_o", "openai"], ["ses_g", "opencode-go"], ["ses_c", "openai"]]) await n.step(schema(), { sessionID, providerID })
+  assert.deepEqual(n.calls.map(([kind, input]) => [kind, input.sessionID, input.key]),
+    ["ses_c", "ses_u", "ses_o", "ses_g"].map((id) => ["remove", id, "vibe-workflow-smart-router"]))
+  n.calls.length = 0
+  for (let i = 0; i < 129; i++) await n.step(schema(), { sessionID: `ses_${i}`, providerID: "claude-agent" })
+  await n.step(schema(), { sessionID: "ses_0", providerID: "claude-agent" })
+  assert.equal(n.calls.length, 130)
+  assert.equal(n.calls.at(-1)[1].sessionID, "ses_0")
+})
+
+test("an unonboarded router makes no entry calls", async (t) => {
+  const n = await noted(null, { entries: "working" })
+  t.after(n.done)
+  await n.step(schema(), { providerID: "claude-agent" })
+  assert.deepEqual(n.calls, [])
+})
+
+test("a throwing or missing entry API never breaks the step", async (t) => {
+  for (const entries of ["throwing", "rejecting", undefined]) {
+    const n = await noted(true, { entries })
+    t.after(n.done)
+    const { tools } = await n.step(schema(), { providerID: "claude-agent" })
+    assert.equal(tools.subagent.input.properties.model.description, FULL)
+  }
 })

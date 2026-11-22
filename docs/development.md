@@ -23,7 +23,23 @@ checkout's package into a throwaway clone, runs one API-created session through 
 (inference on the default model), prints the tool calls, `vibe-workflow:` notes, replies and
 title as JSON, and removes the session and clone afterwards (`--keep` keeps them). It is never
 exported. `--origin` sets the clone's remote for `gh` lookups; use a throwaway or local URL, because
-the session's agent could fetch from or push to it. Keep each Python module within 1000 lines.
+the session's agent could fetch from or push to it.
+
+`python3 -B scripts/live_check.py --injection` proves agents still receive the injected notes. In a
+throwaway clone with Smart Router on, it asks each model in `tests/opencode-verified.json` to quote
+the subagent tool's `model` parameter, one first-call prompt with no tools, through
+`opencode run --standalone` with a private, empty config directory (so an installed copy of the
+plugin cannot load) and `PWD` set to the clone (OpenCode takes its directory from `PWD`, not the
+process's working directory), with every `OPENCODE*` variable removed (they can point at another
+config or the caller's session). The record's models must be exactly the approved three
+(`APPROVED_MODELS`); changing them needs the user's approval. Each run's session is deleted afterwards
+(`--archived` only hides it). A model passes only when its reply contains both notes verbatim and it
+made no tool call. Only when every model passes does it write the installed OpenCode version and
+today's date into the record; commit that change. `tests/test_opencode_version.py` fails whenever
+the installed OpenCode differs from the recorded version, so the suite turns red right after an
+OpenCode update. The user pre-authorized agents to run `--injection` without asking when that test
+fails or a plan changes the injected notes (`AGENTS.md`); other live checks still need explicit
+authorization. If it fails, stop and tell the user. Keep each Python module within 1000 lines.
 There is no linter, type checker, package manager, CI or release process here.
 Test native readers only with synthetic transports and isolated private homes.
 Report deterministic package checks separately from observed native execution.
@@ -314,35 +330,25 @@ Sonnet treated as binding. Observed on the same version:
 The code reading is of the compiled 2.3.2 binary, so there is no source file or line;
 the bundled function is named `ClaudeInstructions.register`.
 
-So the Smart Router instruction is still pushed on every step, for every provider,
-and only `claude-agent` sessions also get the entry `vibe-workflow-smart-router`,
-which they read from the second step on. A host that names no provider gets the
-entry too; a session that switches away from `claude-agent` keeps it. Other
-providers make no `put` calls, so an `opencode-go` session gets no entry in its tool
-results unless it ran on `claude-agent` first. Turning Smart Router off still calls
-`remove` for sessions on any provider; removing a key a session never had sends the
-model nothing (observed once on `opencode-go/claude-haiku-5-5`, two tool steps, no
-update). A failed put is retried on the next step. Hosts without the entry API keep
-only the push. The pull request fallback note is still only pushed. The design came
-from a council run, recorded in
-`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`.
-Known gaps:
+Until the change below, the Smart Router instruction was pushed on every step for every
+provider, and `claude-agent` sessions also got the entry `vibe-workflow-smart-router`,
+read from the second step on, following a council run
+(`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`), which
+found that no channel reached a `claude-agent` session's first model call.
 
-- No channel reaches a `claude-agent` session's first model call.
-- A session that moves from `claude-agent` to `opencode-go` gets its entry, and later
-  any removal notice, appended to a tool result there.
+PR #366's probes found one: the `subagent` tool's `model` parameter description, edited
+in the `context` hook, reaches `claude-agent`, `openai` and `opencode-go` on the first
+call. The design `docs/superpowers/specs/2026-11-22-router-on-subagent-tool-design.md`
+makes it the router instruction's only channel: when Smart Router is on, `ROUTER_NOTE`
+follows the subagent model note there. The system push and the entry are gone, and no
+`put` is made. A session that still holds the old entry has it removed once per plugin
+load, at its first step, on any provider (the old plugin kept the entry after a session
+left `claude-agent`), when the project has a Smart Router choice saved (at most 128
+sessions remembered).
+The pull request fallback note is still only pushed. The live check described above
+(`--injection`) verifies delivery; the history below records the replaced design.
 
-- Entries are durable but the plugin's record of them is in memory (at most 128
-  sessions). Unloading removes the entries that load put; a crash does not, and a
-  reload forgets them. After a reload, an opted-out project removes a session's
-  entry at its next step, but an unonboarded or invalid one leaves it, to avoid an
-  entry call for every session in projects that never used Smart Router.
-- Turning Smart Router off removes the entry at that session's next step, and the
-  model hears of it from the step after.
-
-Other versions are unverified.
-
-Observed live after the change (OpenCode 2.3.2, 21 November 2026, export of
+Observed live for the replaced design (OpenCode 2.3.2, 21 November 2026, export of
 `f790b44` loaded as a project-local copy with its plugin id changed, in the same
 throwaway repository, `claude-agent/sonnet`): after one shell step, Sonnet quoted the
 instruction from a `<system-update>`. With Smart Router then turned off, the same
@@ -390,6 +396,16 @@ Not observed: the session's own model and provider (the script does not record t
 so the same-provider rule was not checked; Smart Router on; a user-named or
 skill-named exact model; `claude-agent` sessions; and sessions started from the desktop
 or terminal client.
+
+With Smart Router on, `ROUTER_NOTE` follows this note on the same parameter (see "Context
+instructions on claude-agent"). Observed live (OpenCode 2.3.2, 22 November 2026,
+`scripts/live_check.py --injection`, branch `feat/router-on-subagent-tool`): on the first
+call, `claude-agent/haiku`, `openai/gpt-6.1-terra` and `opencode-go/claude-haiku-5-5` each
+quoted both notes verbatim with no tool call, and the check recorded 2.3.2 in
+`tests/opencode-verified.json`. The first attempt failed for every model because the
+server booted in the caller's directory (OpenCode reads `PWD`, not the process's working
+directory), so the clone's plugin never loaded; the check failed and recorded nothing,
+as it should.
 
 ## Vibe council: what is known
 
