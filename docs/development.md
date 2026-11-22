@@ -34,7 +34,15 @@ process's working directory), with every `OPENCODE*` variable removed (they can 
 config or the caller's session). The record's models must be exactly the approved three
 (`APPROVED_MODELS`); changing them needs the user's approval. Each run's session is deleted afterwards
 (`--archived` only hides it). A model passes only when its reply contains both notes verbatim and it
-made no tool call. Only when every model passes does it write the installed OpenCode version and
+made no tool call. With git workflow also on, one more prompt on `claude-agent/haiku` (`SHELL_PROBE_MODEL`)
+runs exactly one `git switch -c vibe-injection-probe` in the clone, a primary checkout. It passes only when
+that is the session's single tool call, the `vibe-workflow:` primary-checkout note is in that call's result
+(the hook delivered it), and the model's reply quotes it (the model saw it). The clone runs no Git hooks
+(`core.hooksPath=/dev/null`) and every Git call drops inherited `GIT_*` variables. It proves the `execute.after` hook still appends notes to tool results (the PR and skill-load
+notes use the same path); it does not cover the skill-load notes themselves, because the isolated config
+has no superpowers skills. `opencode run --format json` (2.3.2) prints one event per line: the reply is
+the top-level `text` events, a tool call is one `tool_use` event, and text nested in a tool result is not
+the reply. Only when every model and the probe pass does it write the installed OpenCode version and
 today's date into the record; commit that change. `tests/test_opencode_version.py` fails whenever
 the installed OpenCode differs from the recorded version, so the suite turns red right after an
 OpenCode update. The user pre-authorized agents to run `--injection` without asking when that test

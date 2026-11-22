@@ -169,3 +169,12 @@ at 128 like the old map. Hosts without the entry API skip it.
   it instead of the process's working directory), gives `opencode run` empty stdin, merges
   streamed text parts, deletes each run's session, and refuses a record whose models are not
   exactly the approved three (`APPROVED_MODELS`).
+
+## Shell-note probe (2026-11-22)
+
+Approved by the user after #371: the event notes (PR and skill-load notes, added to tool results by the
+`execute.after` hook) had no live check, so an OpenCode update that broke that hook would pass
+`--injection`. The check now also runs one prompt on `claude-agent/haiku` that may make exactly one
+shell call, `git switch -c vibe-injection-probe` in the throwaway clone, and requires the model to quote
+the primary-checkout note. A failing probe blocks the record like a failing model. This is detection
+only; no fallback delivery was added.

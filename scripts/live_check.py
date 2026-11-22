@@ -73,7 +73,16 @@ INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of th
                     "subagent tool's input schema.")
 # The user pre-authorized the injection check for exactly these models; a different list needs their approval.
 APPROVED_MODELS = ("claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5")
-INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}}]}
+INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}},
+                                                {"git_workflow": {"enabled": True}}]}
+# One shell-note probe proves the execute.after hook still appends its notes to tool results: a branch switch in
+# the clone (a primary checkout) must come back with the primary-checkout note.
+SHELL_PROBE_MODEL = "claude-agent/haiku"
+SHELL_COMMAND = "git switch -c vibe-injection-probe"
+SHELL_PROMPT = ("Run exactly this one shell command, and no other tool call:\n" + SHELL_COMMAND + "\n"
+                "Then quote verbatim every line of that command's result that starts with vibe-workflow:")
+SHELL_NOTE = re.compile(r"vibe-workflow: the primary checkout \(.+?\) is now on vibe-injection-probe\. "
+                        r"Never touch the primary checkout")
 
 
 def note_texts(index_source):
@@ -95,12 +104,21 @@ def injection_passes(reply, tool_calls, notes):
     return tool_calls == 0 and all(normalize(note) in quoted for note in notes)
 
 
+def shell_probe_passes(answer):
+    """The hook delivered the note (it is in the one exact command's result) and the model saw it (it quotes it)."""
+    tools = answer.get("tools") or []
+    if answer.get("tool_calls") != 1 or len(tools) != 1 or (tools[0].get("command") or "").strip() != SHELL_COMMAND:
+        return False
+    return all(SHELL_NOTE.search(normalize(text)) for text in (tools[0].get("output"), answer.get("reply")))
+
+
 def isolated_env(config_home):
     """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not.
 
     OPENCODE_* variables can point at another config (OPENCODE_CONFIG, _DIR, _CONTENT) or the caller's session.
     """
-    env = {name: value for name, value in os.environ.items() if not name.startswith("OPENCODE")}
+    # GIT_* variables could point Git somewhere other than the throwaway clone.
+    env = {name: value for name, value in os.environ.items() if not name.startswith(("OPENCODE", "GIT_"))}
     return {**env, "XDG_CONFIG_HOME": str(config_home)}
 
 
@@ -112,33 +130,37 @@ def _events(output):
             continue
 
 
-def run_model(project, model, env):
+def run_model(project, model, env, prompt=INJECTION_PROMPT):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
     # caller's input out of the prompt.
-    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
+    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", prompt],
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
-    texts, tools, sessions = {}, set(), []
-
-    def walk(value):
-        if isinstance(value, dict):
-            kind, key = value.get("type"), value.get("id") or id(value)
-            session = value.get("sessionID")
-            if isinstance(session, str) and session.startswith("ses") and session not in sessions:
-                sessions.append(session)
-            if kind == "text" and isinstance(value.get("text"), str):
-                # Parts arrive either as growing snapshots or as deltas under the same id.
-                seen, text = texts.get(key, ""), value["text"]
-                texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
-            elif kind in ("tool", "tool_use", "tool-call"):
-                tools.add(key)
-            for child in value.values():
-                walk(child)
-        elif isinstance(value, list):
-            for child in value:
-                walk(child)
+    # One event per line. Only top-level `text` events are the model's reply; a `tool_use` event is one tool call,
+    # and the text nested in its result is the tool's output, not the reply.
+    texts, tools, sessions = {}, {}, []
     for event in _events(out):
-        walk(event)
+        if not isinstance(event, dict):
+            continue
+        session, part = event.get("sessionID"), event.get("part")
+        if isinstance(session, str) and session.startswith("ses") and session not in sessions:
+            sessions.append(session)
+        if not isinstance(part, dict):
+            continue
+        key = part.get("id") or id(part)
+        if event.get("type") == "text" and isinstance(part.get("text"), str):
+            # Parts arrive either as growing snapshots or as deltas under the same id.
+            seen, text = texts.get(key, ""), part["text"]
+            texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
+        elif event.get("type") == "tool_use" and key not in tools:
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            given = state.get("input") if isinstance(state.get("input"), dict) else {}
+            content = (state.get("metadata") or {}).get("content") if isinstance(state.get("metadata"), dict) else None
+            texts_out = [item.get("text", "") for item in content if isinstance(item, dict)] if isinstance(content, list) else []
+            if isinstance(state.get("output"), str):
+                texts_out.append(state["output"])
+            tools[key] = {"command": given.get("command") if isinstance(given.get("command"), str) else None,
+                          "output": "\n".join(text for text in texts_out if isinstance(text, str))}
     session, deleted = (sessions[0] if sessions else None), False
     if session:
         # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
@@ -148,7 +170,8 @@ def run_model(project, model, env):
             deleted = True
         except (subprocess.SubprocessError, OSError):
             pass
-    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "session": session, "deleted": deleted}
+    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "tools": list(tools.values()),
+            "session": session, "deleted": deleted}
 
 
 def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
@@ -175,6 +198,14 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
             passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
             results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200],
                             "session_left": None if answer.get("deleted", True) else answer.get("session")})
+        try:
+            answer = runner(project, SHELL_PROBE_MODEL, isolated_env(config_home), prompt=SHELL_PROMPT)
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            answer = {"reply": f"run failed: {error}", "tool_calls": 0}
+        passed = shell_probe_passes(answer)
+        results.append({"model": SHELL_PROBE_MODEL, "probe": "shell-note", "pass": passed,
+                        "excerpt": "" if passed else answer["reply"][:200],
+                        "session_left": None if answer.get("deleted", True) else answer.get("session")})
     finally:
         shutil.rmtree(work, ignore_errors=True)
     version = parse_version(version_text)
@@ -217,6 +248,9 @@ def summarize(messages):
 
 
 def _run(argv, cwd=None, timeout=120, data=None, env=None):
+    # Inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, ...) would point Git away from the paths given here.
+    if env is None:
+        env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     return subprocess.run(argv, cwd=cwd, input=data, capture_output=True, text=True, timeout=timeout,
                           check=True, env=env).stdout
 
@@ -234,6 +268,8 @@ def prepare(work, settings=None, origin=None):
     package, project = work / "package", work / "project"
     _run([sys.executable, "-B", str(ROOT / "scripts" / "package.py"), "--output", str(package)], cwd=ROOT)
     _run(["git", "clone", "-q", str(ROOT), str(project)])
+    # The session may run Git in the clone; no global or repository hook may run there.
+    _run(["git", "config", "core.hooksPath", "/dev/null"], cwd=project)
     with open(project / ".git" / "info" / "exclude", "a") as exclude:
         exclude.write("\n.opencode/\n")
     plugin = project / ".opencode" / "plugins" / "live-check"

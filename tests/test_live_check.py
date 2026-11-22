@@ -112,6 +112,12 @@ class VersionTest(unittest.TestCase):
                     live_check.read_record(path)
 
 
+SHELL_NOTE_TEXT = ("vibe-workflow: the primary checkout (/x/project) is now on vibe-injection-probe. Never touch "
+                   "the primary checkout; tell the user, and do task work in a worktree.")
+SHELL_ANSWER = {"reply": SHELL_NOTE_TEXT, "tool_calls": 1,
+                "tools": [{"command": "git switch -c vibe-injection-probe", "output": "Switched\n" + SHELL_NOTE_TEXT}]}
+
+
 class InjectionTest(unittest.TestCase):
     NOTES = live_check.note_texts((ROOT / "index.js").read_text())
 
@@ -141,10 +147,11 @@ class InjectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "record.json"
             path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
-            approved = mock.patch.object(live_check, "APPROVED_MODELS", ("a/one", "b/two"))
+            approved = mock.patch.multiple(live_check, APPROVED_MODELS=("a/one", "b/two"), SHELL_PROBE_MODEL="a/one")
             approved.start()
             self.addCleanup(approved.stop)
-            passing = lambda project, model, env: {"reply": model_note + " " + router_note, "tool_calls": 0}  # noqa: E731
+            passing = lambda project, model, env, prompt=live_check.INJECTION_PROMPT: (  # noqa: E731
+                SHELL_ANSWER if prompt == live_check.SHELL_PROMPT else {"reply": model_note + " " + router_note, "tool_calls": 0})
             with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
                 summary = live_check.check_injection(path, runner=passing, version_text="opencode v2.3.2\n",
                                                      today="2026-11-22")
@@ -152,8 +159,8 @@ class InjectionTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()),
                              {"models": ["a/one", "b/two"], "version": "2.3.2", "verified": "2026-11-22"})
             before = path.read_bytes()
-            failing = lambda project, model, env: ({"reply": "nothing here", "tool_calls": 0}  # noqa: E731
-                                                   if model == "b/two" else passing(project, model, env))
+            failing = lambda project, model, env, prompt=live_check.INJECTION_PROMPT: (  # noqa: E731
+                {"reply": "nothing here", "tool_calls": 0} if model == "b/two" else passing(project, model, env, prompt))
             with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
                 summary = live_check.check_injection(path, runner=failing, version_text="opencode v2.4.0\n",
                                                      today="2026-12-01")
@@ -169,7 +176,7 @@ class InjectionTest(unittest.TestCase):
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             seen.update(argv=argv, cwd=cwd, data=data, env=env)
             return "\n".join([json.dumps({"type": "text", "part": {"id": "p1", "type": "text", "text": "quoted"}}),
-                              "not json", json.dumps({"part": {"id": "t1", "type": "tool"}})])
+                              "not json", json.dumps({"type": "tool_use", "part": {"id": "t1", "type": "tool"}})])
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"PWD": "/elsewhere", "HOME": "/h"})
         self.assertEqual(seen["cwd"], Path("/clone"))
@@ -178,19 +185,19 @@ class InjectionTest(unittest.TestCase):
         self.assertEqual(seen["data"], "")
         self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("quoted", 1, None))
 
-    def test_isolated_env_drops_opencode_overrides(self):
+    def test_isolated_env_drops_opencode_and_git_overrides(self):
         overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_CONFIG_DIR": "/x", "OPENCODE_CONFIG_CONTENT": "{}",
-                     "OPENCODE_SESSION_ID": "ses_parent"}
+                     "OPENCODE_SESSION_ID": "ses_parent", "GIT_DIR": "/elsewhere/.git", "GIT_CONFIG_GLOBAL": "/g"}
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, overrides):
             env = live_check.isolated_env(Path(folder))
-        self.assertFalse([name for name in env if name.startswith("OPENCODE")])
+        self.assertFalse([name for name in env if name.startswith(("OPENCODE", "GIT_"))])
         self.assertEqual(env["XDG_CONFIG_HOME"], folder)
 
     def test_run_model_joins_streamed_deltas_and_keeps_growing_snapshots(self):
-        lines = [{"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "NEVER se"}},
-                 {"part": {"id": "p1", "type": "text", "text": "t this"}},
-                 {"part": {"id": "p2", "type": "text", "text": "abc"}},
-                 {"part": {"id": "p2", "type": "text", "text": "abcdef"}}]
+        lines = [{"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "NEVER se"}},
+                 {"type": "text", "part": {"id": "p1", "type": "text", "text": "t this"}},
+                 {"type": "text", "part": {"id": "p2", "type": "text", "text": "abc"}},
+                 {"type": "text", "part": {"id": "p2", "type": "text", "text": "abcdef"}}]
         calls = []
 
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
@@ -206,7 +213,7 @@ class InjectionTest(unittest.TestCase):
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             calls.append((argv, env))
             if argv[1] == "run":
-                return json.dumps({"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
+                return json.dumps({"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
             raise subprocess.CalledProcessError(1, argv)
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
@@ -226,6 +233,70 @@ class InjectionTest(unittest.TestCase):
                     live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
                 prepare.assert_not_called()
                 runner.assert_not_called()
+
+    def test_run_model_reads_opencode_events_as_they_arrive(self):
+        # OpenCode 2.3.2 `run --format json`: one event per line; tool results nest text that is not the reply.
+        note = SHELL_ANSWER["reply"]
+        lines = [{"type": "step_start", "sessionID": "ses_x", "part": {"id": "prt_1", "type": "step-start"}},
+                 {"type": "tool_use", "sessionID": "ses_x", "part": {"id": "toolu_1", "type": "tool", "state": {
+                     "input": {"command": "git switch -c vibe-injection-probe"}, "metadata": {"content": [{"type": "text", "text": "Switched"}, {"type": "text", "text": note}]}}}},
+                 {"type": "step_finish", "sessionID": "ses_x", "part": {"id": "prt_2", "type": "step-finish"}},
+                 {"type": "text", "sessionID": "ses_x", "part": {"id": "prt_3", "type": "text", "text": "Quoted."}}]
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            return "\n".join(json.dumps(line) for line in lines) if argv[1] == "run" else ""
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
+        self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("Quoted.", 1, "ses_x"))
+        self.assertEqual(answer["tools"][0]["command"], "git switch -c vibe-injection-probe")
+        self.assertIn(note, answer["tools"][0]["output"])
+
+    def test_shell_probe_needs_the_exact_command_and_the_note_in_its_result_and_reply(self):
+        self.assertTrue(live_check.shell_probe_passes(SHELL_ANSWER))
+        tool = SHELL_ANSWER["tools"][0]
+        for broken in ({**SHELL_ANSWER, "tools": [{**tool, "output": "Switched to a new branch"}]},
+                       {**SHELL_ANSWER, "tools": [{**tool, "command": "git switch -c vibe-injection-probe && ls"}]},
+                       {**SHELL_ANSWER, "tools": [tool, tool], "tool_calls": 2},
+                       {**SHELL_ANSWER, "tools": [], "tool_calls": 0},
+                       {**SHELL_ANSWER, "reply": "Switched to a new branch 'vibe-injection-probe'"}):
+            self.assertFalse(live_check.shell_probe_passes(broken), broken)
+
+    def test_the_shell_probe_runs_once_on_an_approved_model_with_git_workflow_on(self):
+        self.assertIn(live_check.SHELL_PROBE_MODEL, live_check.APPROVED_MODELS)
+        features = {key for entry in live_check.INJECTION_SETTINGS["features"] for key in entry}
+        self.assertEqual(features, {"smart_router", "git_workflow"})
+        self.assertIn("\ngit switch -c vibe-injection-probe\n", live_check.SHELL_PROMPT)
+
+    def test_a_failing_shell_probe_blocks_the_record(self):
+        model_note, router_note = self.NOTES
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "record.json"
+            path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
+            before = path.read_bytes()
+            calls = []
+
+            def runner(project, model, env, prompt=live_check.INJECTION_PROMPT):
+                calls.append((model, prompt))
+                if prompt == live_check.SHELL_PROMPT:
+                    return {**SHELL_ANSWER, "tools": [{**SHELL_ANSWER["tools"][0], "output": "no note came back"}]}
+                return {"reply": model_note + " " + router_note, "tool_calls": 0}
+            with mock.patch.multiple(live_check, APPROVED_MODELS=("a/one", "b/two"), SHELL_PROBE_MODEL="a/one"), \
+                    mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
+                summary = live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
+            self.assertFalse(summary["recorded"])
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual([call for call in calls if call[1] == live_check.SHELL_PROMPT], [("a/one", live_check.SHELL_PROMPT)])
+            shell = [item for item in summary["results"] if item.get("probe") == "shell-note"]
+            self.assertEqual(len(shell), 1)
+            self.assertFalse(shell[0]["pass"])
+
+    def test_the_prepared_clone_runs_no_git_hooks(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"GIT_DIR": "/nonexistent/.git"}):
+            project = live_check.prepare(Path(folder).resolve())
+            clean = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+            hooks = subprocess.run(["git", "config", "core.hooksPath"], cwd=project, capture_output=True, text=True,
+                                   env=clean)
+        self.assertEqual(hooks.stdout.strip(), "/dev/null")
 
     def test_the_cli_offers_injection(self):
         run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],
