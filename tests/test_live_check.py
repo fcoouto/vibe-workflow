@@ -141,6 +141,9 @@ class InjectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "record.json"
             path.write_text(json.dumps({"models": ["a/one", "b/two"]}))
+            approved = mock.patch.object(live_check, "APPROVED_MODELS", ("a/one", "b/two"))
+            approved.start()
+            self.addCleanup(approved.stop)
             passing = lambda project, model, env: {"reply": model_note + " " + router_note, "tool_calls": 0}  # noqa: E731
             with mock.patch.object(live_check, "prepare", return_value=Path(folder) / "project"):
                 summary = live_check.check_injection(path, runner=passing, version_text="opencode v2.3.2\n",
@@ -173,7 +176,56 @@ class InjectionTest(unittest.TestCase):
         self.assertEqual(seen["env"]["PWD"], "/clone")
         self.assertEqual(seen["env"]["HOME"], "/h")
         self.assertEqual(seen["data"], "")
-        self.assertEqual(answer, {"reply": "quoted", "tool_calls": 1})
+        self.assertEqual((answer["reply"], answer["tool_calls"], answer["session"]), ("quoted", 1, None))
+
+    def test_isolated_env_drops_opencode_overrides(self):
+        overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_CONFIG_DIR": "/x", "OPENCODE_CONFIG_CONTENT": "{}",
+                     "OPENCODE_SESSION_ID": "ses_parent"}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, overrides):
+            env = live_check.isolated_env(Path(folder))
+        self.assertFalse([name for name in env if name.startswith("OPENCODE")])
+        self.assertEqual(env["XDG_CONFIG_HOME"], folder)
+
+    def test_run_model_joins_streamed_deltas_and_keeps_growing_snapshots(self):
+        lines = [{"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "NEVER se"}},
+                 {"part": {"id": "p1", "type": "text", "text": "t this"}},
+                 {"part": {"id": "p2", "type": "text", "text": "abc"}},
+                 {"part": {"id": "p2", "type": "text", "text": "abcdef"}}]
+        calls = []
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            calls.append(argv)
+            return "\n".join(json.dumps(line) for line in lines) if argv[1] == "run" else ""
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
+        self.assertEqual(answer["reply"], "NEVER set this\nabcdef")
+
+    def test_run_model_deletes_its_session(self):
+        calls = []
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            calls.append((argv, env))
+            if argv[1] == "run":
+                return json.dumps({"sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
+            raise subprocess.CalledProcessError(1, argv)
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
+        delete, env = calls[1]
+        self.assertEqual(delete[:4], ["opencode", "session", "delete", "ses_x"])
+        self.assertEqual(env["PWD"], "/clone")
+        self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False))
+
+    def test_refuses_an_unapproved_model_list_before_any_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "record.json"
+            for models in (["claude-agent/haiku"], list(live_check.APPROVED_MODELS) + ["openrouter/paid"],
+                           list(live_check.APPROVED_MODELS[:2]) + [live_check.APPROVED_MODELS[0]]):
+                path.write_text(json.dumps({"models": models}))
+                runner = mock.Mock()
+                with mock.patch.object(live_check, "prepare") as prepare, self.assertRaisesRegex(ValueError, "approv"):
+                    live_check.check_injection(path, runner=runner, version_text="opencode v2.3.2\n")
+                prepare.assert_not_called()
+                runner.assert_not_called()
 
     def test_the_cli_offers_injection(self):
         run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "live_check.py"), "--help"],

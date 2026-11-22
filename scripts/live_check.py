@@ -71,6 +71,8 @@ def version_problem(installed_text, record):
 
 INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of the model parameter in your "
                     "subagent tool's input schema.")
+# The user pre-authorized the injection check for exactly these models; a different list needs their approval.
+APPROVED_MODELS = ("claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5")
 INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}}]}
 
 
@@ -94,8 +96,12 @@ def injection_passes(reply, tool_calls, notes):
 
 
 def isolated_env(config_home):
-    """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not."""
-    return {**os.environ, "XDG_CONFIG_HOME": str(config_home)}
+    """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not.
+
+    OPENCODE_* variables can point at another config (OPENCODE_CONFIG, _DIR, _CONTENT) or the caller's session.
+    """
+    env = {name: value for name, value in os.environ.items() if not name.startswith("OPENCODE")}
+    return {**env, "XDG_CONFIG_HOME": str(config_home)}
 
 
 def _events(output):
@@ -112,13 +118,18 @@ def run_model(project, model, env):
     # caller's input out of the prompt.
     out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
-    texts, tools = {}, set()
+    texts, tools, sessions = {}, set(), []
 
     def walk(value):
         if isinstance(value, dict):
             kind, key = value.get("type"), value.get("id") or id(value)
+            session = value.get("sessionID")
+            if isinstance(session, str) and session.startswith("ses") and session not in sessions:
+                sessions.append(session)
             if kind == "text" and isinstance(value.get("text"), str):
-                texts[key] = value["text"]
+                # Parts arrive either as growing snapshots or as deltas under the same id.
+                seen, text = texts.get(key, ""), value["text"]
+                texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
             elif kind in ("tool", "tool_use", "tool-call"):
                 tools.add(key)
             for child in value.values():
@@ -128,12 +139,25 @@ def run_model(project, model, env):
                 walk(child)
     for event in _events(out):
         walk(event)
-    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools)}
+    session, deleted = (sessions[0] if sessions else None), False
+    if session:
+        # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
+        try:
+            _run(["opencode", "session", "delete", session, "--standalone"], cwd=project, timeout=60, data="",
+                 env={**env, "PWD": str(project)})
+            deleted = True
+        except (subprocess.SubprocessError, OSError):
+            pass
+    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "session": session, "deleted": deleted}
 
 
 def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
     """Ask each recorded model to quote the subagent model parameter; record the version only if all pass."""
     record = read_record(record_path)
+    models = record["models"]
+    if len(set(models)) != len(models) or sorted(models) != sorted(APPROVED_MODELS):
+        raise ValueError(f"the record's models {models} are not the approved list {list(APPROVED_MODELS)}; "
+                         "changing them needs the user's approval")
     notes = note_texts((ROOT / "index.js").read_text())
     if version_text is None:
         version_text = _run(["opencode", "--version"], timeout=30)
@@ -149,7 +173,8 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
             except (subprocess.SubprocessError, OSError, ValueError) as error:
                 answer = {"reply": f"run failed: {error}", "tool_calls": 0}
             passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
-            results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200]})
+            results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200],
+                            "session_left": None if answer.get("deleted", True) else answer.get("session")})
     finally:
         shutil.rmtree(work, ignore_errors=True)
     version = parse_version(version_text)

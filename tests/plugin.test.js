@@ -880,13 +880,14 @@ test("no entry is put for any provider", async (t) => {
   assert.ok(n.calls.every(([kind]) => kind !== "put"))
 })
 
-test("a leftover router entry is removed once per claude-agent or unknown-provider session", async (t) => {
+test("a leftover router entry is removed once per session, whatever its provider", async (t) => {
   const n = await noted(true, { entries: "working" })
   t.after(n.done)
+  // An older version kept the entry after a session left claude-agent, so its first step here may be on any provider.
   for (const [sessionID, providerID] of [["ses_c", "claude-agent"], ["ses_c", "claude-agent"], ["ses_u", undefined],
     ["ses_o", "openai"], ["ses_g", "opencode-go"], ["ses_c", "openai"]]) await n.step(schema(), { sessionID, providerID })
-  assert.deepEqual(n.calls, [["remove", { sessionID: "ses_c", key: "vibe-workflow-smart-router" }],
-    ["remove", { sessionID: "ses_u", key: "vibe-workflow-smart-router" }]])
+  assert.deepEqual(n.calls.map(([kind, input]) => [kind, input.sessionID, input.key]),
+    ["ses_c", "ses_u", "ses_o", "ses_g"].map((id) => ["remove", id, "vibe-workflow-smart-router"]))
   n.calls.length = 0
   for (let i = 0; i < 129; i++) await n.step(schema(), { sessionID: `ses_${i}`, providerID: "claude-agent" })
   await n.step(schema(), { sessionID: "ses_0", providerID: "claude-agent" })

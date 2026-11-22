@@ -262,13 +262,12 @@ export default {
         return rest
       } }) })
     await registerSkill(ctx, "vibe-project-layout")
-    // Earlier versions put the router instruction as a durable session entry for claude-agent; remove a leftover one
-    // once per session. Never awaited and never throws.
+    // Earlier versions put the router instruction as a durable session entry and kept it after a session left
+    // claude-agent, so remove a leftover one once per session on any provider. Never awaited and never throws.
     const forgotten = new Set()
     function forgetEntry(event, state) {
-      const sessionID = event?.sessionID, provider = event?.model?.providerID
+      const sessionID = event?.sessionID
       if ((state !== "on" && state !== "off") || typeof sessionID !== "string" || forgotten.has(sessionID)) return
-      if (typeof provider === "string" && provider !== "claude-agent") return
       forgotten.add(sessionID)
       if (forgotten.size > MAX_NOTICE_SESSIONS) forgotten.delete(forgotten.values().next().value)
       try { ctx.session.instructions?.entry?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {}) } catch {}

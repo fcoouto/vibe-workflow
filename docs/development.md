@@ -30,7 +30,10 @@ throwaway clone with Smart Router on, it asks each model in `tests/opencode-veri
 the subagent tool's `model` parameter, one first-call prompt with no tools, through
 `opencode run --standalone` with a private, empty config directory (so an installed copy of the
 plugin cannot load) and `PWD` set to the clone (OpenCode takes its directory from `PWD`, not the
-process's working directory). A model passes only when its reply contains both notes verbatim and it
+process's working directory), with every `OPENCODE*` variable removed (they can point at another
+config or the caller's session). The record's models must be exactly the approved three
+(`APPROVED_MODELS`); changing them needs the user's approval. Each run's session is deleted afterwards
+(`--archived` only hides it). A model passes only when its reply contains both notes verbatim and it
 made no tool call. Only when every model passes does it write the installed OpenCode version and
 today's date into the record; commit that change. `tests/test_opencode_version.py` fails whenever
 the installed OpenCode differs from the recorded version, so the suite turns red right after an
@@ -339,8 +342,9 @@ call. The design `docs/superpowers/specs/2026-11-22-router-on-subagent-tool-desi
 makes it the router instruction's only channel: when Smart Router is on, `ROUTER_NOTE`
 follows the subagent model note there. The system push and the entry are gone, and no
 `put` is made. A session that still holds the old entry has it removed once per plugin
-load, at its first step, when the project has a Smart Router choice saved and the
-session runs on `claude-agent` or names no provider (at most 128 sessions remembered).
+load, at its first step, on any provider (the old plugin kept the entry after a session
+left `claude-agent`), when the project has a Smart Router choice saved (at most 128
+sessions remembered).
 The pull request fallback note is still only pushed. The live check described above
 (`--injection`) verifies delivery; the history below records the replaced design.
 
