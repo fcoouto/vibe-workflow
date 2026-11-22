@@ -910,3 +910,10 @@ test("a throwing or missing entry API never breaks the step", async (t) => {
     assert.equal(tools.subagent.input.properties.model.description, FULL)
   }
 })
+
+test("a host without the tool hook gets no pull request push", async (t) => {
+  const n = await noted(JSON.stringify({ version: 1, features: [{ git_workflow: { enabled: true } }] }), { git: true })
+  t.after(n.done)
+  const { system } = await n.step()
+  assert.deepEqual(system, [])
+})

@@ -345,7 +345,9 @@ follows the subagent model note there. The system push and the entry are gone, a
 load, at its first step, on any provider (the old plugin kept the entry after a session
 left `claude-agent`), when the project has a Smart Router choice saved (at most 128
 sessions remembered).
-The pull request fallback note is still only pushed. The live check described above
+The pull request fallback push, sent only when the `execute.after` tool hook could not
+register, was removed: the hook is observed on 2.2.6 and 2.3.2, and the push never reached
+`claude-agent`. Onboarding still reports `guard_unavailable` on such a host. The live check described above
 (`--injection`) verifies delivery; the history below records the replaced design.
 
 Observed live for the replaced design (OpenCode 2.3.2, 21 November 2026, export of

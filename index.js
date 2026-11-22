@@ -288,11 +288,6 @@ export default {
       const { state } = await project.inspect()
       if (state === "off") notices.clear()
       await noteModel(event, state === "on")
-      if (closed) return
-      if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {
-        event.system.push({ type: "text", text:
-          "vibe-workflow: open pull requests as [BLOCKED] drafts and follow the vibe-pull-requests skill." })
-      }
       if (!closed) forgetEntry(event, state)
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
