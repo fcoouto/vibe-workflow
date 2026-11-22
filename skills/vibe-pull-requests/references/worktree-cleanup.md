@@ -41,9 +41,14 @@ nothing if any does:
 
 1. Tell the user first: "Merge confirmed. Cleaning up now: branch <name> and worktree
    <path>. I will first move this chat to the main project folder <primary path> so it
-   keeps working, then check the result from there." Drop the move sentence when the
-   client cannot move a session (step 5). The session's own directory disappears at the
-   end, so the chat must leave it first.
+   keeps working, then check the result from there." When the client cannot move a
+   session, the removal tool itself makes the move, or the session is not in this
+   worktree, say instead: "I will check the
+   result from the main project folder <primary path> afterwards." If the client cannot
+   move a session and the session is in this worktree, also give the warning from step 5
+   now and ask before removing, before step 3 changes anything. If the user declines,
+   stop; nothing has changed. The session's own directory disappears at the end, so the
+   chat must leave it first.
 2. Capture the absolute common git dir (`git rev-parse --path-format=absolute --git-common-dir`) and the branch
    name. Check that the primary checkout is on the default branch with
    `git --git-dir=<common git dir> symbolic-ref --short HEAD`; if it is not, stop.
@@ -67,14 +72,18 @@ nothing if any does:
      already deleted and the worktree remains, detached. Leave the worktree in place.
    - If the client has no way to move a session, tell the user this chat will stop working
      once the worktree is removed and that they will need a new chat in <primary path>.
-     Then ask before removing. If they decline, stop and leave the worktree in place.
+     Then ask before removing. Step 1 does this before anything changes; if it did not,
+     do it now, and if the user declines, stop, report that the local branch is already
+     deleted and the worktree remains, detached, and leave it in place.
 6. Remove the worktree as the last action that changes anything, with the client's own
    mechanism and never with force (table below). Do this only after step 5 confirmed the
-   move, found none was needed, or the user agreed to remove without one.
+   move, found none was needed, the removal tool itself makes the move, or the user
+   agreed to remove without one.
 7. Verify with read-only commands that name the primary checkout's path, because your own
    directory is gone: `git -C <primary> worktree list` and
-   `git -C <primary> branch --list <branch>`. Report what they show, or say it could not
-   be verified. Never claim cleanup from step 6 alone.
+   `git -C <primary> branch --list <branch>`. If the removal tool made the move (step 5),
+   also print the working directory; it must be the primary checkout's path. Report what
+   they show, or say it could not be verified. Never claim cleanup from step 6 alone.
 
 Metadata operations that leave the primary checkout's files, HEAD and index alone
 (`git --git-dir=… branch -d`, `git worktree remove`, `git -C <primary> worktree list`)
@@ -86,5 +95,5 @@ do not count as touching it.
 |---|---|---|
 | OpenCode | Call `session_move` alone with the primary checkout's absolute path. The move applies only after that call returns, so never put `worktree_remove` or anything that needs the new folder in the same call. Then run `pwd` in a separate call; it must print the primary checkout's path. | `worktree_remove` with the worktree's directory (it needs `edit` permission on it). Never `force`. Its docs describe removing the worktree only; step 7 verifies the result. |
 | Claude Code | No separate move: the `ExitWorktree` call in step 6 returns the session to the original folder. Confirm the folder in step 7. | `ExitWorktree` with the remove action. It may already have removed a clean worktree on exit; then there is nothing to do. |
-| Codex | Not applicable: you do not remove Codex-managed worktrees, so there is nothing to move for. For a worktree you made yourself there is no known mechanism: ask before removing. This row is unverified. | Codex removes its own managed worktrees past a limit. Do not remove Codex-managed worktrees yourself. This row is unverified. |
+| Codex | Not applicable: you do not remove Codex-managed worktrees, so there is nothing to move for. For a worktree you made yourself there is no known mechanism: ask before removing. This row is unverified. | Codex removes its own managed worktrees past a limit. Do not remove Codex-managed worktrees yourself. For a worktree you made yourself, use the last row. This row is unverified. |
 | Any other client, or no tool | No known mechanism: ask before removing. | `git worktree remove <path>`, run from outside the worktree and without `--force`. |
