@@ -35,7 +35,11 @@ config or the caller's session). The record holds exactly one model per subscrip
 `config/routes.json` (`claude-agent`, `openai`, `opencode-go`); a record with another provider, a missing
 path or two models on one path is refused before any prompt. Before running, the check reads OpenCode's
 model list with `opencode api get /api/model --standalone` (no model call). A recorded model that is
-still listed is used as is. One that is gone is replaced by one level-1 Smart Router pick on its path
+still listed is used as is; one still listed but filtered out (disabled, deprecated, no tool use) stops
+the check without a pick. An unreadable or empty list stops it as `models_unavailable`. The check
+refuses to run unless `config/routes.json` holds exactly the three authorized paths, each billed as
+`included_subscription`, so a new route never extends the authorization. One that is gone is replaced
+by one level-1 Smart Router pick on its path, reported with its paid-overflow status
 (`allowed_harnesses`, the user's state folder for scores and account facts); a pick that fails, lands on
 another path or is not listed is reported as `could_not_select`, nothing runs and nothing is recorded.
 The user pre-authorized that pick (council `51429ec7c824_router-engine-required`). Picks are sticky: the
