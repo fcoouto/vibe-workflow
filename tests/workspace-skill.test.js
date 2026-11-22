@@ -21,6 +21,7 @@ test("registers the workspace skill after onboarding with its bundled files", as
     ["vibe-prepare-my-workspace", "vibe-prepare-my-workspace"],
     ["vibe-pull-requests", "vibe-pull-requests"],
     ["vibe-council", "vibe-council"],
+    ["vibe-project-layout", "vibe-project-layout"],
   ])
   const skill = skills[1]
   assert.match(skill.path, /skills\/vibe-prepare-my-workspace\/SKILL\.md$/)

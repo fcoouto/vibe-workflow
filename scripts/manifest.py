@@ -14,6 +14,8 @@ FILES = (
     "skills/vibe-council/SKILL.md", "skills/vibe-council/references/procedure.md",
     "skills/vibe-council/references/brief-template.md",
     "skills/vibe-council/references/record-template.md",
+    "skills/vibe-project-layout/SKILL.md", "skills/vibe-project-layout/references/procedure.md",
+    "skills/vibe-project-layout/references/layouts.md",
     "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
     "skills/vibe-pull-requests/references/pull-request-template.md",
     "skills/vibe-pull-requests/references/worktree-cleanup.md",

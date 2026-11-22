@@ -25,6 +25,14 @@ cleanup rules, adapted from the earlier plugin's post-merge cleanup
 carried over: git and the client already refuse unsafe removals, and GitHub's own
 setting covers remote branches.
 
+`skills/vibe-project-layout/` adds the placement and restructure guidance: a short
+skill, its procedure and a few example layouts. Its source is the analyze, plan,
+approve, move flow of the Composio `file-organizer` skill
+(https://github.com/ComposioHQ/awesome-claude-skills/blob/master/file-organizer/SKILL.md),
+rewritten for code projects. Duplicate finding, date folders, archiving, deletion and
+the personal-folder material were not carried over. `pr-advice.js` adds one sentence
+pointing to the skill on a `writing-plans` load.
+
 Follow-up development-only checks: `tests/verify_group.py`,
 `tests/verify_native_loading.py`, `tests/verify_cancel.mjs` and
 `tests/test_verification.py`. The runtime allowlist is unchanged.
