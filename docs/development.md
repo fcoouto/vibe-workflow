@@ -31,10 +31,17 @@ the subagent tool's `model` parameter, one first-call prompt with no tools, thro
 `opencode run --standalone` with a private, empty config directory (so an installed copy of the
 plugin cannot load) and `PWD` set to the clone (OpenCode takes its directory from `PWD`, not the
 process's working directory), with every `OPENCODE*` variable removed (they can point at another
-config or the caller's session). The record's models must be exactly the approved three
-(`APPROVED_MODELS`); changing them needs the user's approval. Each run's session is deleted afterwards
+config or the caller's session). The record holds exactly one model per subscription path in
+`config/routes.json` (`claude-agent`, `openai`, `opencode-go`); a record with another provider, a missing
+path or two models on one path is refused before any prompt. Before running, the check reads OpenCode's
+model list with `opencode api get /api/model --standalone` (no model call). A recorded model that is
+still listed is used as is. One that is gone is replaced by one level-1 Smart Router pick on its path
+(`allowed_harnesses`, the user's state folder for scores and account facts); a pick that fails, lands on
+another path or is not listed is reported as `could_not_select`, nothing runs and nothing is recorded.
+The user pre-authorized that pick (council `51429ec7c824_router-engine-required`). Picks are sticky: the
+record keeps the models used, so a weekly price change never swaps a working model. Each run's session is deleted afterwards
 (`--archived` only hides it). A model passes only when its reply contains both notes verbatim and it
-made no tool call. With git workflow also on, one more prompt on `claude-agent/haiku` (`SHELL_PROBE_MODEL`)
+made no tool call. With git workflow also on, one more prompt on the `claude-agent` path's model
 runs exactly one `git switch -c vibe-injection-probe` in the clone, a primary checkout. It passes only when
 that is the session's single tool call, the `vibe-workflow:` primary-checkout note is in that call's result
 (the hook delivered it), and the model's reply quotes it (the model saw it). The clone runs no Git hooks
@@ -42,7 +49,7 @@ that is the session's single tool call, the `vibe-workflow:` primary-checkout no
 notes use the same path); it does not cover the skill-load notes themselves, because the isolated config
 has no superpowers skills. `opencode run --format json` (2.3.2) prints one event per line: the reply is
 the top-level `text` events, a tool call is one `tool_use` event, and text nested in a tool result is not
-the reply. Only when every model and the probe pass does it write the installed OpenCode version and
+the reply. Only when every model and the probe pass does it write the models used, the installed OpenCode version and
 today's date into the record; commit that change. `tests/test_opencode_version.py` fails whenever
 the installed OpenCode differs from the recorded version, so the suite turns red right after an
 OpenCode update. The user pre-authorized agents to run `--injection` without asking when that test

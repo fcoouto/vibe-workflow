@@ -10,7 +10,7 @@ Source provenance and the exact extraction inventory live in `docs/dependencies.
 - Selection never launches, admits, reserves quota or grants a spend permit.
 - Keep tasks, agent roles, reviews, permissions and execution with the caller.
 - Use separate task worktrees. Do not install, activate, publish or run inference without explicit authorization.
-- Exception: when `tests/test_opencode_version.py` fails, or a plan changes the injected notes, run `python3 -B scripts/live_check.py --injection` without asking; if it fails, stop and tell the user.
+- Exception: when `tests/test_opencode_version.py` fails, or a plan changes the injected notes, run `python3 -B scripts/live_check.py --injection` without asking. It may replace a retired recorded model with one level-1 Smart Router pick on that subscription path. If it fails, stop and tell the user.
 - Write a failing test before nontrivial behavior changes. Validate, commit, then run affected tests.
 - Require independent behavior/security review for nontrivial work; report unavailable checks honestly.
 
