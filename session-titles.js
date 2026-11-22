@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises"
 import { resolve } from "node:path"
-import { artifact, defaultRun, readFacts } from "./session-facts.js"
+import { classify } from "./pr-advice.js"
+import { artifact, branchOf, defaultRun, readFacts } from "./session-facts.js"
 
 export const MARK = "\uFFFB"
 export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
@@ -25,6 +26,8 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 const MAX_SESSIONS = 128
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
+const SHELLS = new Set(["bash", "shell"])
+const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
@@ -138,6 +141,18 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
+  // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
+  async function record(sessionID) {
+    if (!await on()) return
+    await load(sessionID)
+    const entry = sessions.get(sessionID), task = entry?.task
+    if (!task || entry.silenced || (await ctx.session.get({ sessionID })).parentID) return
+    const branch = await branchOf({ top: task.top, run })
+    if (!branch || task.remembered === branch || sessions.get(sessionID) !== entry || entry.task !== task) return
+    task.remembered = branch
+    await save(sessionID, entry)
+  }
+
   async function evaluate(sessionID, ended) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
@@ -175,10 +190,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const stream = await ctx.event.subscribe({ types: TYPES, signal: controller.signal })
     await ctx.tool.hook("execute.after", async (event) => {
       try {
-        const path = event?.input?.path
-        if (event.tool !== "write" || event.status !== "completed" || typeof event.sessionID !== "string"
-          || typeof path !== "string" || !ARTIFACT.test(path)) return
-        await enqueue(event.sessionID, () => bind(event.sessionID, path))
+        if (event.status !== "completed" || typeof event.sessionID !== "string") return
+        const input = event.input
+        if (event.tool === "write") {
+          if (typeof input?.path === "string" && ARTIFACT.test(input.path)) await enqueue(event.sessionID, () => bind(event.sessionID, input.path))
+        } else if (SHELLS.has(event.tool) && typeof input?.command === "string" &&
+          classify(input.command).some(({ kind }) => RECORDING.has(kind))) {
+          await enqueue(event.sessionID, () => record(event.sessionID))
+        }
       } catch {}
     })
     ;(async () => {

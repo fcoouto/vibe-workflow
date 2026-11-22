@@ -44,6 +44,17 @@ const lines = (text) => text.split("\n").filter(Boolean)
 const codeOf = (error) => typeof error?.code === "string" ? error.code : error?.killed ? "timeout"
   : Number.isInteger(error?.code) ? `exit:${error.code}` : "error"
 
+// The branch checked out in `top`, for a tool-time record: null when detached, on the default branch or unreadable.
+export async function branchOf({ top, run = defaultRun }) {
+  try {
+    const status = await run("git", ["status", "--porcelain=v2", "--branch", "-uno"], { cwd: top, timeout: 2000 })
+    const head = status.match(/^# branch\.head (.+)$/m)?.[1]
+    if (!head || head === "(detached)") return null
+    const base = (await run("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], { cwd: top, timeout: 2000 }).catch(() => "")).trim()
+    return head === (base || "origin/main").replace(/^origin\//, "") ? null : head
+  } catch { return null }
+}
+
 export async function readFacts({ top, plan, remembered = null, fallback, run = defaultRun }) {
   const git = (cwd, ...args) => run("git", args, { cwd, timeout: 2000 })
   const exists = await stat(top).then((info) => info.isDirectory(), () => false)

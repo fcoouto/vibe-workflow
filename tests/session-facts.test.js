@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { artifact, declaredPaths, defaultRun, readFacts } from "../session-facts.js"
+import { artifact, branchOf, declaredPaths, defaultRun, readFacts } from "../session-facts.js"
 
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" })
 const tmp = (t) => {
@@ -128,6 +128,18 @@ test("readFacts uses the remembered branch and fallback when top is gone", async
   got = await readFacts({ top, remembered: null, fallback: main, run })
   assert.equal(got.head, null)
   assert.equal(calls.length, 1)
+})
+
+test("branchOf is the checked-out branch, never the default branch, a detached head or a failed read", async (t) => {
+  const { top, main, root } = setup(t)
+  assert.equal(await branchOf({ top }), null)
+  git(top, "switch", "-q", "-c", "feat/x")
+  assert.equal(await branchOf({ top }), "feat/x")
+  git(top, "switch", "-q", "--detach")
+  git(main, "switch", "-q", "main")
+  assert.equal(await branchOf({ top: main }), null)
+  assert.equal(await branchOf({ top: join(root, "missing") }), null)
+  assert.equal(await branchOf({ top, run: async () => { throw new Error("x") } }), null)
 })
 
 test("readFacts reports which read failed, as codes without messages", async (t) => {

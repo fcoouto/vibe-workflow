@@ -117,8 +117,13 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     for (const [name, handler] of calls.hook) if (name === "execute.after") await handler(event)
     return event
   }
+  const shell = async (command, sessionID = "ses_1", more = {}) => {
+    const event = { tool: "shell", status: "completed", sessionID, input: { command }, ...more }
+    for (const [name, handler] of calls.hook) if (name === "execute.after") await handler(event)
+    return event
+  }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
-  return { root, ctx, calls, facts, titles, preference, write, emit, storage, registered: titlesFor, subscribed: () => subscribed,
+  return { root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
@@ -557,4 +562,75 @@ test("the saved diag counts declared and changed plan paths", async (t) => {
   await h.end()
   const { diag } = h.storage.data.get(KEY)
   assert.deepEqual([diag.declared, diag.done], [2, 1])
+})
+
+const statusCalls = (h) => h.calls.run.filter((call) => call[1] === "status").length
+
+test("a push, PR create or PR merge records the bound checkout's branch, with or without an upstream", async (t) => {
+  for (const command of ["git push origin HEAD", "rtk git push -u origin feat/x", "git -C /elsewhere push", "gh pr create --draft",
+    "gh pr merge 5 --merge", "cd /x && git push"]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, { branch: "feat/x", upstream: false })
+    await h.shell(command)
+    assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x", command)
+    assert.deepEqual(h.calls.update, [], "the title is not written at tool time")
+  }
+})
+
+test("merge and cleanup inside one turn still reach cell 5 once the branch was recorded at merge time", async (t) => {
+  const flow = async (record) => {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.branch = "feat/x"
+    if (record) await h.shell("gh pr merge 5 --merge")
+    rmSync(h.root, { recursive: true, force: true })
+    h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+    await h.end()
+    return h.titles.get("ses_1")
+  }
+  assert.equal(await flow(true), compose("Fix login flow", 5, false))
+  assert.equal(await flow(false), compose("Fix login flow", 1, true))
+})
+
+test("a command that is not a push, PR create or PR merge, or that failed, reads nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.shell("git status")
+  await h.shell("gh pr view 5")
+  await h.shell("git push", "ses_1", { status: "error" })
+  await h.shell("git push", "ses_9")
+  assert.equal(statusCalls(h), 0)
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
+})
+
+test("a child session records nothing", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  storage.data.set("session-titles/child_1", { location: h.root, at: 1, last: null, silenced: false,
+    task: { top: h.root, spec: `${h.root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false } })
+  await h.shell("git push", "child_1")
+  assert.equal(statusCalls(h), 0)
+  assert.equal(storage.data.get("session-titles/child_1").task.remembered, null)
+})
+
+test("the default branch and a detached checkout are never recorded", async (t) => {
+  for (const branch of ["main", null]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.branch = branch
+    await h.shell("git push")
+    assert.equal(h.storage.data.get(KEY).task.remembered, null, String(branch))
+  }
+})
+
+test("with the feature off or a failing read, a push does no work and never throws", async (t) => {
+  const off = await host(t, { state: "off" })
+  await off.shell("git push")
+  assert.equal(off.calls.run.length, 0)
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.fail = true
+  await h.shell("git push")
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
 })
