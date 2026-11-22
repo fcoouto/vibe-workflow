@@ -160,3 +160,12 @@ at 128 like the old map. Hosts without the entry API skip it.
 
 - Test names and fixture layout, the normalizing function, how `live_check.py` runs
   `opencode run` and parses its output, and the summary's exact JSON keys.
+
+## Amended after the final review (2026-11-22)
+
+- Leftover entries are removed once per session on any provider (the old plugin kept the
+  entry after a session left `claude-agent`), still only where Smart Router has a saved choice.
+- The live check drops every `OPENCODE*` variable, sets `PWD` to the clone (OpenCode reads
+  it instead of the process's working directory), gives `opencode run` empty stdin, merges
+  streamed text parts, deletes each run's session, and refuses a record whose models are not
+  exactly the approved three (`APPROVED_MODELS`).
