@@ -206,7 +206,10 @@ test("skillNote states the onboarding decision for the finishing and worktree sk
 
 const PLAN = "vibe-workflow: your human partner pre-approved the execution method you recommend; treat it as already " +
   "supplied, name it, and do not ask which one to use. Still ask them to review the plan, and wait for that review before " +
-  "implementing. An explicit request from your human partner in this session overrides this."
+  "implementing. Before you fill in each task's Files block, follow the vibe-project-layout skill: put every new file " +
+  "and test where the project's recorded layout says. If a file belongs elsewhere or a folder needs splitting, propose it " +
+  "as its own task for your human partner to approve, never as a silent move. " +
+  "An explicit request from your human partner in this session overrides this."
 test("skillNote pre-approves the recommended execution method in any onboarded project", async () => {
   for (const settings of [on, { state: "off" }, { state: "not_onboarded" }, null]) {
     const { skillNote } = advisor(settings)

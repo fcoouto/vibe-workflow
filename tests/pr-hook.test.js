@@ -225,6 +225,7 @@ test("a writing-plans load gets the method pre-approval when any feature is onbo
   }
   const router = await fixture(t, { settings: JSON.stringify({ version: 1, features: [{ smart_router: { enabled: false } }] }) })
   assert.match((await load(router.hooks)).content[1].text, /^\n\nvibe-workflow: your human partner pre-approved the execution method/)
+  assert.match((await load(router.hooks)).content[1].text, /follow the vibe-project-layout skill/)
   const fresh = await fixture(t, { settings: null })
   assert.equal((await load(fresh.hooks)).content.length, 1)
 })
