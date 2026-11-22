@@ -86,7 +86,7 @@ different from the approved future onboarding default below.
 - Distinguish the saved preference from actual readiness.
 - If an enabled router cannot recommend an eligible route, post a brief
   `vibe-workflow`-identified notice with a relevant corrective action, then
-  continue with the client's existing selection.
+  continue without a recommendation.
 - Ask about future capabilities only when those capabilities are available.
 
 ### Planned evaluations, not available capabilities

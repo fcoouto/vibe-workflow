@@ -899,7 +899,8 @@ async function noted(settings, { git = false } = {}) {
     await h.hooks.get("context")({ system, tools, sessionID: "ses_a", options: {} })
     return { tools, system }
   }
-  return { root, step, cleanup, done: async () => { await cleanup?.(); await rm(root, { recursive: true }) } }
+  return { root, step, cleanup, hook: h.hooks.get("context"),
+    done: async () => { await cleanup?.(); await rm(root, { recursive: true }) } }
 }
 
 test("onboarded projects get the model note once on the subagent model parameter", async (t) => {
@@ -959,13 +960,23 @@ test("a frozen model schema is left alone and the hook still runs", async (t) =>
 test("missing or odd tool shapes are a no-op", async (t) => {
   const n = await noted(true)
   t.after(n.done)
-  const odd = [undefined, new Map([["subagent", schema().subagent]]), {}, { subagent: { input: null } },
+  const odd = [new Map([["subagent", schema().subagent]]), {}, { subagent: { input: null } },
     { subagent: { input: { properties: { model: { description: 7 } } } } }]
   for (const tools of odd) {
     const before = JSON.stringify(tools instanceof Map ? [...tools] : tools)
     await n.step(tools)
     assert.equal(JSON.stringify(tools instanceof Map ? [...tools] : tools), before)
   }
+})
+
+test("an event without tools still gets the router instruction", async (t) => {
+  const n = await noted(true)
+  t.after(n.done)
+  const event = { system: [], sessionID: "ses_a", options: {} }
+  await n.hook(event)
+  assert.equal("tools" in event, false)
+  assert.equal(event.system.length, 1)
+  assert.match(event.system[0].text, /before delegating/i)
 })
 
 test("no note after unload", async (t) => {

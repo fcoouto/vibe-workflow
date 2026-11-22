@@ -182,5 +182,5 @@ exactly as written, apart from the markers and the saved choice's place.
    Finish with one line: **Run onboarding again to change them.**
 
 Do not install anything, modify unrelated settings or ask about unshipped
-capabilities. When an enabled selector returns a fallback `notice`, show it
-before continuing with the client's existing selection and permissions.
+capabilities. When an enabled selector returns a fallback `notice`, show it,
+then continue without a recommendation, within the client's permissions.
