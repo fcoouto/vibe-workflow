@@ -55,6 +55,12 @@ test("declaredPaths reads path-like backticked tokens inside Files blocks only",
   assert.deepEqual(declaredPaths("no files here"), [])
 })
 
+test("declaredPaths also reads paths on the Files line itself", () => {
+  assert.deepEqual(declaredPaths("**Files:** Modify `a/b.md` (`FEATURES`), `tests/c.js`\n\nText `x.js`\n"), ["a/b.md", "tests/c.js"])
+  assert.deepEqual(declaredPaths("**Files:** Modify `a.js:10-20`\n- Test: `t.js`\n\nText `x.js`\n"), ["a.js", "t.js"])
+  assert.deepEqual(declaredPaths("**Files:** none here\n\nText `x.js`\n"), [])
+})
+
 test("readFacts follows the checkout through detached, branch, pushed and default states", async (t) => {
   const { top, main } = setup(t)
   const { calls, run } = recorder()

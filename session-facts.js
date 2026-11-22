@@ -19,14 +19,15 @@ export function artifact(path) {
 export function declaredPaths(planText) {
   const found = new Set()
   let inside = false
+  const read = (text) => {
+    for (const [, token] of text.matchAll(/`([^`]+)`/g)) {
+      if (/[./]/.test(token)) found.add(token.replace(/:\d+(?:-\d+)?$/, ""))
+    }
+  }
   for (const line of planText.split("\n")) {
     if (line.trim() === "") inside = false
-    else if (line.startsWith("**Files:**")) inside = true
-    else if (inside) {
-      for (const [, token] of line.matchAll(/`([^`]+)`/g)) {
-        if (/[./]/.test(token)) found.add(token.replace(/:\d+(?:-\d+)?$/, ""))
-      }
-    }
+    else if (line.startsWith("**Files:**")) { inside = true; read(line.slice("**Files:**".length)) }
+    else if (inside) read(line)
   }
   return [...found]
 }
