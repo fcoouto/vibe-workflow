@@ -40,9 +40,9 @@ permission still applies. The choices live in `.vibe-workflow/settings.json`. In
 linked worktree, the Smart Router file stays in the worktree and the git
 workflow choices are saved in the main checkout.
 
-In an onboarded project, agents also pick each subagent's model: one you name,
-else Smart Router's pick when it is on, else the tier their workflow calls for,
-on the same provider.
+In an onboarded project, agents set each subagent's model when one applies: a
+model you or their skill name, else Smart Router's pick when it is on, else
+their workflow's tier, on the same provider.
 
 Reminders are advisory, not enforced. Agents open PRs as `[BLOCKED]` drafts, mark
 them `[READY]`, keep the main checkout on a current `main`, and clean up only
