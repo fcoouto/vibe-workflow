@@ -341,10 +341,10 @@ in the `context` hook, reaches `claude-agent`, `openai` and `opencode-go` on the
 call. The design `docs/superpowers/specs/2026-11-22-router-on-subagent-tool-design.md`
 makes it the router instruction's only channel: when Smart Router is on, `ROUTER_NOTE`
 follows the subagent model note there. The system push and the entry are gone, and no
-`put` is made. A session that still holds the old entry has it removed once per plugin
-load, at its first step, on any provider (the old plugin kept the entry after a session
-left `claude-agent`), when the project has a Smart Router choice saved (at most 128
-sessions remembered).
+`put` is made. For a while each session's leftover entry was removed at its first step;
+on 22 November 2026 OpenCode's `instruction_entry` table held 47 removed entries and one
+active, in an archived test session that was then deleted, so that cleanup was removed
+too and the plugin makes no entry calls.
 The pull request fallback push, sent only when the `execute.after` tool hook could not
 register, was removed: the hook is observed on 2.2.6 and 2.3.2, and the push never reached
 `claude-agent`. Onboarding still reports `guard_unavailable` on such a host. The live check described above

@@ -28,7 +28,6 @@ const actions = new Map([
   ["account_changed", "Check the selected account before requesting another recommendation."],
   ["selector_unavailable", "Check that Python and the plugin package are available, then try again."],
 ])
-const ROUTER_ENTRY = "vibe-workflow-smart-router"
 // OpenCode's subagent tool says never to set `model` unless the user asks; onboarded projects ask. It rides on the
 // parameter itself: the claude-agent bridge cuts the tool description at 2048 characters but passes the schema whole.
 const MODEL_NOTE =
@@ -262,16 +261,6 @@ export default {
         return rest
       } }) })
     await registerSkill(ctx, "vibe-project-layout")
-    // Earlier versions put the router instruction as a durable session entry and kept it after a session left
-    // claude-agent, so remove a leftover one once per session on any provider. Never awaited and never throws.
-    const forgotten = new Set()
-    function forgetEntry(event, state) {
-      const sessionID = event?.sessionID
-      if ((state !== "on" && state !== "off") || typeof sessionID !== "string" || forgotten.has(sessionID)) return
-      forgotten.add(sessionID)
-      if (forgotten.size > MAX_NOTICE_SESSIONS) forgotten.delete(forgotten.values().next().value)
-      try { ctx.session.instructions?.entry?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {}) } catch {}
-    }
     // The host may hand the same schema object to every step, so strip the note before deciding to add it.
     async function noteModel(event, routerOn) {
       const model = event?.tools?.subagent?.input?.properties?.model
@@ -288,7 +277,6 @@ export default {
       const { state } = await project.inspect()
       if (state === "off") notices.clear()
       await noteModel(event, state === "on")
-      if (!closed) forgetEntry(event, state)
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
     await ctx.session.hook("http.response", async (event) => {
@@ -322,7 +310,6 @@ export default {
       prAdvice.close()
       titles.close()
       notices.clear()
-      forgotten.clear()
       for (const stop of active) stop()
     }
   },
