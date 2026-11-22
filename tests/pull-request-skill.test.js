@@ -52,6 +52,14 @@ test("skill files never point to Superpowers or claim enforcement", async () => 
   }
 })
 
+test("the cleanup reference moves the session before it removes the worktree", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  for (const phrase of ["Move the session", "session_move", "ask before removing", "Remove the worktree"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  assert.ok(text.indexOf("Move the session") < text.indexOf("Remove the worktree"))
+})
+
 test("the cleanup reference states the checks, the order, the mapping and the no-force rules", async () => {
   const text = await read("references/worktree-cleanup.md")
   for (const phrase of ["worktree_cleanup", "previous_enabled", "previous_worktree_cleanup", "gh pr view", "defaultBranchRef",
