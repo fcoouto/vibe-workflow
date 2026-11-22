@@ -52,6 +52,17 @@ It reports whether superpowers, caveman, ponytail, impeccable, context7, rtk,
 graphify, git, gh and Python are present and current. It installs or updates
 only what you approve, and backs up your OpenCode config first.
 
+## Keep files organized
+
+Ask: **“Use `vibe-project-layout` to decide where this goes.”**
+
+It follows the layout your project already has: a path the framework requires, then
+the layout recorded in your agent instructions file, then the nearest similar file.
+Example layouts only fill the gaps. On request it plans a restructure and hands the
+moves to the `safe-refactor` skill, and it moves nothing without your approval. In
+onboarded projects, loading `writing-plans` also reminds the agent to place new files
+this way.
+
 ## Ask the council
 
 Ask: **“Use `vibe-council` to review this plan.”** or run

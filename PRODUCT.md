@@ -63,6 +63,12 @@ overlapping behavior.
   client's own tool, never forcing and never touching the primary checkout. Remote
   branch deletion is GitHub's own setting; onboarding reads it and offers to turn it
   on when it is off and the user is an admin. Advisory, and not yet observed live.
+- Project layout: the `vibe-project-layout` skill tells agents where a new file goes
+  (framework paths, then the project's recorded layout, then the nearest comparable
+  file, then example layouts) and, on request, restructures through `safe-refactor`
+  with a user-approved move map. It is always registered and has no setting. In any
+  onboarded project the `writing-plans` note gains one sentence pointing to it.
+  Advisory, and not yet observed live.
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
