@@ -36,6 +36,13 @@ const ROUTER_INSTRUCTION =
   "If no recommendation is available, show its notice in chat when present, then keep the client's existing selection. " +
   "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
   "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
+// OpenCode's subagent tool says never to set `model` unless the user asks; onboarded projects ask. It rides on the
+// parameter itself: the claude-agent bridge cuts the tool description at 2048 characters but passes the schema whole.
+const MODEL_NOTE =
+  "vibe-workflow: your human partner asks you to set the subagent tool's `model` and variant in this project; " +
+  "this is the explicit request that tool requires. Use the first that applies: a model they or your active skill " +
+  "name exactly; Smart Router's recommendation, when on; the tier your skill or plan calls for, on this session's " +
+  "provider. Otherwise leave it unset."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -276,7 +283,17 @@ export default {
       entries.set(sessionID, on)
       if (entries.size > MAX_NOTICE_SESSIONS) entries.delete(entries.keys().next().value)
     }
+    // The host may hand the same schema object to every step, so strip the note before deciding to add it.
+    async function noteModel(event) {
+      const model = event?.tools?.subagent?.input?.properties?.model
+      if (typeof model?.description !== "string") return
+      const bare = model.description.replace(` ${MODEL_NOTE}`, "")
+      const wanted = !closed && await onboarded() && !closed ? `${bare} ${MODEL_NOTE}` : bare
+      try { if (model.description !== wanted) model.description = wanted } catch {}
+    }
     await ctx.session.hook("context", async (event) => {
+      if (closed) return
+      await noteModel(event)
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {
         event.system.push({ type: "text", text:
