@@ -374,6 +374,23 @@ description to 2048 characters (bundled function `OZ`, constant `Y0`), moving th
 "Available subagents:" list first, but passes the input schema whole. Only OpenCode
 2.3.2 is verified; if `event.tools` changes shape, the hook changes nothing.
 
+Observed live (OpenCode 2.3.2, 22 November 2026, `scripts/live_check.py` on the server's
+default model, branch `feat/subagent-model-note` at `aeb4503`, only Smart Router saved,
+as off), one session per prompt:
+
+- "Use a subagent to count the lines in README.md": the agent dispatched `general` with
+  no `model`. No skill, plan or named model applied, so this is the note's "Otherwise
+  leave it unset".
+- The same task after loading `subagent-driven-development` and following its model
+  guidance: the agent read the settings, said Smart Router was off so the skill's tier
+  applied ("single-file mechanical task → cheap model"), looked models up with the
+  `models` tool, and dispatched with `model: "openrouter/tencent/hy4-flash"`.
+
+Not observed: the session's own model and provider (the script does not record them),
+so the same-provider rule was not checked; Smart Router on; a user-named or
+skill-named exact model; `claude-agent` sessions; and sessions started from the desktop
+or terminal client.
+
 ## Vibe council: what is known
 
 Observed live (OpenCode 2.2.6, 21 November 2026, export of `7e47e58`). The exported
