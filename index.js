@@ -29,13 +29,6 @@ const actions = new Map([
   ["selector_unavailable", "Check that Python and the plugin package are available, then try again."],
 ])
 const ROUTER_ENTRY = "vibe-workflow-smart-router"
-const ROUTER_INSTRUCTION =
-  "Before delegating work, consult smart_router_select for an advisory provider/model/effort recommendation, " +
-  "describing the task by its facts: files, spec, risk. " +
-  "Use its recommendation unless the user or your active skill named an exact model. " +
-  "If no recommendation is available, show its notice in chat when present, then follow the vibe-workflow subagent model note. " +
-  "Do not retry automatically or override a native denial. Routing grants no launch or spending authority. " +
-  "The caller retains task ownership, native execution, reviews, permissions, continuation, and results."
 // OpenCode's subagent tool says never to set `model` unless the user asks; onboarded projects ask. It rides on the
 // parameter itself: the claude-agent bridge cuts the tool description at 2048 characters but passes the schema whole.
 const MODEL_NOTE =
@@ -43,6 +36,12 @@ const MODEL_NOTE =
   "this is the explicit request that tool requires. Use the first that applies: a model they or your active skill " +
   "name exactly; Smart Router's recommendation, when on; the tier your skill or plan calls for, on this session's " +
   "provider. Otherwise leave it unset."
+// Smart Router's instruction rides on the same parameter: it reaches every provider from the first call, which the
+// system prompt (dropped by claude-agent) and session entries (one step late) never did.
+const ROUTER_NOTE =
+  "Smart Router is on: when no exact model is named, consult smart_router_select first, describing the task by its " +
+  "facts: files, spec, risk. If it has no recommendation, show its notice in chat when present. Do not retry " +
+  "automatically or override a native denial; routing grants no launch or spending authority."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -263,59 +262,38 @@ export default {
         return rest
       } }) })
     await registerSkill(ctx, "vibe-project-layout")
-    // OpenCode 2.3.2's claude-agent provider copies the system prompt before plugin context hooks run, so text
-    // pushed here never reaches it. A durable session instruction entry does, from the next step on.
-    const entries = new Map()
-    // Never awaited and never throws: it also runs from the unload cleanup.
-    const drop = (sessionID) => {
+    // Earlier versions put the router instruction as a durable session entry and kept it after a session left
+    // claude-agent, so remove a leftover one once per session on any provider. Never awaited and never throws.
+    const forgotten = new Set()
+    function forgetEntry(event, state) {
+      const sessionID = event?.sessionID
+      if ((state !== "on" && state !== "off") || typeof sessionID !== "string" || forgotten.has(sessionID)) return
+      forgotten.add(sessionID)
+      if (forgotten.size > MAX_NOTICE_SESSIONS) forgotten.delete(forgotten.values().next().value)
       try { ctx.session.instructions?.entry?.remove({ sessionID, key: ROUTER_ENTRY })?.catch?.(() => {}) } catch {}
     }
-    async function entry(sessionID, on) {
-      const api = ctx.session.instructions?.entry
-      if (!api || typeof sessionID !== "string" || entries.get(sessionID) === on) return
-      try {
-        if (on) await api.put({ sessionID, key: ROUTER_ENTRY, value: ROUTER_INSTRUCTION })
-        else await api.remove({ sessionID, key: ROUTER_ENTRY })
-      } catch { return }
-      // A put that lands after unload would otherwise stay on the host with nothing left to remove it.
-      if (closed) { if (on) drop(sessionID); return }
-      entries.delete(sessionID)
-      entries.set(sessionID, on)
-      if (entries.size > MAX_NOTICE_SESSIONS) entries.delete(entries.keys().next().value)
-    }
     // The host may hand the same schema object to every step, so strip the note before deciding to add it.
-    async function noteModel(event) {
+    async function noteModel(event, routerOn) {
       const model = event?.tools?.subagent?.input?.properties?.model
       if (typeof model?.description !== "string") return
-      const bare = model.description.replace(` ${MODEL_NOTE}`, "")
+      const bare = model.description.replace(` ${ROUTER_NOTE}`, "").replace(` ${MODEL_NOTE}`, "")
       const on = !closed && await onboarded()
       // Cleanup may run while settings are read; after it, the schema is no longer ours to touch.
       if (closed) return
-      const wanted = on ? `${bare} ${MODEL_NOTE}` : bare
+      const wanted = bare + (on ? ` ${MODEL_NOTE}` : "") + (on && routerOn ? ` ${ROUTER_NOTE}` : "")
       try { if (model.description !== wanted) model.description = wanted } catch {}
     }
     await ctx.session.hook("context", async (event) => {
       if (closed) return
-      await noteModel(event)
+      const { state } = await project.inspect()
+      if (state === "off") notices.clear()
+      await noteModel(event, state === "on")
       if (closed) return
       if (!prAdvice.registered && (await gitWorkflow.inspect()).state === "on") {
         event.system.push({ type: "text", text:
           "vibe-workflow: open pull requests as [BLOCKED] drafts and follow the vibe-pull-requests skill." })
       }
-      const preference = await project.inspect()
-      const sessionID = event?.sessionID
-      if (preference.state === "off") notices.clear()
-      if (closed) return
-      if (preference.state !== "on") {
-        if (preference.state === "off" || entries.get(sessionID) === true) await entry(sessionID, false)
-        return
-      }
-      // Only claude-agent needs the entry; opencode-go would show it inside a tool result. A host that names
-      // no provider gets it too. A session that leaves claude-agent keeps its entry.
-      const provider = event?.model?.providerID
-      if (typeof provider !== "string" || provider === "claude-agent") await entry(sessionID, true)
-      // Every other provider reads the system prompt, and the entry applies only from the next step.
-      if (!closed) event.system.push({ type: "text", text: ROUTER_INSTRUCTION })
+      if (!closed) forgetEntry(event, state)
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
     await ctx.session.hook("http.response", async (event) => {
@@ -349,9 +327,7 @@ export default {
       prAdvice.close()
       titles.close()
       notices.clear()
-      // Entries outlive the plugin; remove the ones this load put so no session asks for a missing tool.
-      for (const [sessionID, on] of entries) if (on) drop(sessionID)
-      entries.clear()
+      forgotten.clear()
       for (const stop of active) stop()
     }
   },

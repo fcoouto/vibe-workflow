@@ -13,15 +13,20 @@ if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname
     del sys.path[0]
 
 import argparse  # noqa: E402
+import datetime  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 from pathlib import Path  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import os  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = 'id: "vibe-workflow",'
 LIVE_ID = 'id: "vibe-workflow-live",'
+RECORD = ROOT / "tests" / "opencode-verified.json"
+INJECTION_COMMAND = "python3 -B scripts/live_check.py --injection"
 GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=live-check",
        "-c", "user.email=live-check@example.invalid", "-c", "commit.gpgsign=false"]
 
@@ -30,6 +35,154 @@ def rename_plugin_id(text):
     if text.count(PLUGIN_ID) != 1:
         raise ValueError("expected exactly one plugin id")
     return text.replace(PLUGIN_ID, LIVE_ID)
+
+
+def parse_version(text):
+    match = re.fullmatch(r"opencode v(\d+\.\d+\.\d+)\s*", text or "")
+    return match.group(1) if match else None
+
+
+def read_record(path):
+    """The live-verified record: `models` always, `version` and `verified` once a live check passed."""
+    try:
+        record = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        raise ValueError(f"no live-verified record at {path}") from None
+    except (OSError, ValueError) as error:
+        raise ValueError(f"unreadable live-verified record {path}: {error}") from None
+    models = record.get("models") if isinstance(record, dict) else None
+    if not isinstance(models, list) or not models or not all(isinstance(model, str) and model for model in models):
+        raise ValueError(f"live-verified record {path} needs a non-empty list of model ids under 'models'")
+    return record
+
+
+def version_problem(installed_text, record):
+    """None when the installed OpenCode is the live-verified one; otherwise what to tell the operator."""
+    installed, verified = parse_version(installed_text), record.get("version")
+    if installed is None:
+        return f"could not read the OpenCode version from {installed_text!r}; run `{INJECTION_COMMAND}`"
+    if not verified:
+        return f"OpenCode {installed} has no live-verified injection yet; run `{INJECTION_COMMAND}`"
+    if installed != verified:
+        return (f"OpenCode {installed} differs from the live-verified {verified}; run `{INJECTION_COMMAND}` "
+                "to check that agents still receive the injected notes")
+    return None
+
+
+INJECTION_PROMPT = ("Do not call any tools. Quote verbatim the description of the model parameter in your "
+                    "subagent tool's input schema.")
+# The user pre-authorized the injection check for exactly these models; a different list needs their approval.
+APPROVED_MODELS = ("claude-agent/haiku", "openai/gpt-6.1-terra", "opencode-go/claude-haiku-5-5")
+INJECTION_SETTINGS = {"version": 1, "features": [{"smart_router": {"enabled": True}}]}
+
+
+def note_texts(index_source):
+    """MODEL_NOTE and ROUTER_NOTE as index.js defines them: `const NAME =` then "+"-joined double-quoted literals."""
+    def one(name):
+        match = re.search(r"const " + name + r' =\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)', index_source)
+        if not match:
+            raise ValueError(f"index.js defines no {name}")
+        return "".join(json.loads(literal) for literal in re.findall(r'"(?:[^"\\]|\\.)*"', match.group(1)))
+    return one("MODEL_NOTE"), one("ROUTER_NOTE")
+
+
+def normalize(text):
+    return re.sub(r"\s+", " ", (text or "").replace('\\"', '"')).strip()
+
+
+def injection_passes(reply, tool_calls, notes):
+    quoted = normalize(reply)
+    return tool_calls == 0 and all(normalize(note) in quoted for note in notes)
+
+
+def isolated_env(config_home):
+    """The user's logins stay (HOME, data dirs); their OpenCode config, and so their installed plugins, do not.
+
+    OPENCODE_* variables can point at another config (OPENCODE_CONFIG, _DIR, _CONTENT) or the caller's session.
+    """
+    env = {name: value for name, value in os.environ.items() if not name.startswith("OPENCODE")}
+    return {**env, "XDG_CONFIG_HOME": str(config_home)}
+
+
+def _events(output):
+    for line in output.splitlines():
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue
+
+
+def run_model(project, model, env):
+    """One first-call prompt on one model in an isolated private server; text parts form the reply."""
+    # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
+    # caller's input out of the prompt.
+    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", INJECTION_PROMPT],
+               cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
+    texts, tools, sessions = {}, set(), []
+
+    def walk(value):
+        if isinstance(value, dict):
+            kind, key = value.get("type"), value.get("id") or id(value)
+            session = value.get("sessionID")
+            if isinstance(session, str) and session.startswith("ses") and session not in sessions:
+                sessions.append(session)
+            if kind == "text" and isinstance(value.get("text"), str):
+                # Parts arrive either as growing snapshots or as deltas under the same id.
+                seen, text = texts.get(key, ""), value["text"]
+                texts[key] = text if text.startswith(seen) else seen if seen.startswith(text) else seen + text
+            elif kind in ("tool", "tool_use", "tool-call"):
+                tools.add(key)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+    for event in _events(out):
+        walk(event)
+    session, deleted = (sessions[0] if sessions else None), False
+    if session:
+        # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
+        try:
+            _run(["opencode", "session", "delete", session, "--standalone"], cwd=project, timeout=60, data="",
+                 env={**env, "PWD": str(project)})
+            deleted = True
+        except (subprocess.SubprocessError, OSError):
+            pass
+    return {"reply": "\n".join(texts.values()), "tool_calls": len(tools), "session": session, "deleted": deleted}
+
+
+def check_injection(record_path=RECORD, runner=run_model, version_text=None, today=None):
+    """Ask each recorded model to quote the subagent model parameter; record the version only if all pass."""
+    record = read_record(record_path)
+    models = record["models"]
+    if len(set(models)) != len(models) or sorted(models) != sorted(APPROVED_MODELS):
+        raise ValueError(f"the record's models {models} are not the approved list {list(APPROVED_MODELS)}; "
+                         "changing them needs the user's approval")
+    notes = note_texts((ROOT / "index.js").read_text())
+    if version_text is None:
+        version_text = _run(["opencode", "--version"], timeout=30)
+    work = Path(tempfile.mkdtemp(prefix="vibe-injection-check-")).resolve()
+    results = []
+    try:
+        project = prepare(work, INJECTION_SETTINGS)
+        config_home = work / "config"
+        config_home.mkdir()
+        for model in record["models"]:
+            try:
+                answer = runner(project, model, isolated_env(config_home))
+            except (subprocess.SubprocessError, OSError, ValueError) as error:
+                answer = {"reply": f"run failed: {error}", "tool_calls": 0}
+            passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
+            results.append({"model": model, "pass": passed, "excerpt": "" if passed else answer["reply"][:200],
+                            "session_left": None if answer.get("deleted", True) else answer.get("session")})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    version = parse_version(version_text)
+    recorded = bool(version) and all(item["pass"] for item in results)
+    if recorded:
+        record.update(version=version, verified=today or datetime.date.today().isoformat())
+        Path(record_path).write_text(json.dumps(record, indent=2) + "\n")
+    return {"version": version, "results": results, "recorded": recorded}
 
 
 def _note(text):
@@ -63,9 +216,9 @@ def summarize(messages):
     return events
 
 
-def _run(argv, cwd=None, timeout=120, data=None):
+def _run(argv, cwd=None, timeout=120, data=None, env=None):
     return subprocess.run(argv, cwd=cwd, input=data, capture_output=True, text=True, timeout=timeout,
-                          check=True).stdout
+                          check=True, env=env).stdout
 
 
 def _api(*args, data=None, timeout=60):
@@ -126,12 +279,19 @@ def check(prompts, settings=None, origin=None, keep=False, wait=900):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prompt", action="append", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--prompt", action="append")
+    mode.add_argument("--injection", action="store_true", help="check that agents receive the injected notes on "
+                      "every recorded model; records the OpenCode version only if all pass (pre-authorized)")
     parser.add_argument("--settings", type=json.loads)
     parser.add_argument("--origin", help="origin URL for gh lookups; use a throwaway or local URL, since the "
                         "session's agent could fetch from or push to it")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    if args.injection:
+        summary = check_injection()
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0 if summary["recorded"] else 1
     print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep), indent=2, ensure_ascii=False))
     return 0
 
