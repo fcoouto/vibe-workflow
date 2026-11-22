@@ -48,7 +48,19 @@ record keeps the models used, so a weekly price change never swaps a working mod
 made no tool call. With git workflow also on, one more prompt on the `claude-agent` path's model
 runs exactly one `git switch -c vibe-injection-probe` in the clone, a primary checkout. It passes only when
 that is the session's single tool call, the `vibe-workflow:` primary-checkout note is in that call's result
-(the hook delivered it), and the model's reply quotes it (the model saw it). The clone runs no Git hooks
+(the hook delivered it), and the model's reply quotes it (the model saw it). That run has a config folder of its
+own with two OpenCode V2 permission rules (`SHELL_PERMISSIONS`): deny every action, then allow that one exact
+`shell` command (the last matching rule wins), so a command or tool call the rules see is refused before it
+runs. The note probes keep the empty config and no rules, because denying tools might hide the subagent tool's
+schema, which they read. The rules reduce what a misbehaving model can do; they do not guarantee it, and the
+check does not rely on them. The shell rule matches what OpenCode's command scanner extracts, not the whole
+input (a review of 2.3.2 found it skips shell declarations), and OpenCode still loads configuration outside the
+private folder (ancestor directories of the clone and managed policies), which this check does not control. The
+repository ships no OpenCode config or agent rules, so the clone adds none. What guarantees the single command is
+the check afterwards: exactly one tool call whose command is exactly the allowed one. Observed live (OpenCode 2.3.2, 22 November
+2026, `claude-agent/haiku`, asked to run the allowed command and then `ls`): the allowed command ran with the
+note, and `ls` failed with a permission error. Session deletion stays best effort: each run deletes its own
+session by ID, and one that cannot be deleted is reported in its result as `session_left`, never swept. The clone runs no Git hooks
 (`core.hooksPath=/dev/null`) and every Git call drops inherited `GIT_*` variables. It proves the `execute.after` hook still appends notes to tool results (the PR and skill-load
 notes use the same path); it does not cover the skill-load notes themselves, because the isolated config
 has no superpowers skills. `opencode run --format json` (2.3.2) prints one event per line: the reply is
@@ -93,8 +105,10 @@ live run of the hook:
 Observed live (OpenCode 2.2.6, 19 November 2026, plugin at `77274f2`): after the
 fix, a note reaches the model after `gh pr edit <n> --title "[READY] ..."` (case 3),
 after `git push` once a pull request was created or readied in the session (case 2)
-and after `gh pr create` (case 1). Cases 4 (`gh pr merge`) and 5 (checkout in the
-primary) share the same append path but have not been observed. Other OpenCode
+and after `gh pr create` (case 1). Case 4 (`gh pr merge`) shares the same append path
+but has not been observed. Case 5 (checkout in the primary) is observed on every
+`--injection` run: the shell probe's `git switch -c` returned the note (OpenCode 2.3.2,
+22 November 2026). Other OpenCode
 versions are unverified. To repeat the check, run one matching command and look for
 a `vibe-workflow:` line in its result.
 
