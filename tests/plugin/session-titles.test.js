@@ -75,8 +75,9 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     t.after(() => rmSync(made, { recursive: true, force: true }))
   }
   directory ??= root
-  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [] }
-  const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], active: 0 }
+  const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
+    active: [], parents: {}, activeFail: false, activeWrap: false, activeRaw: undefined }
   const preference = { state }
   let stream, subscribed
   const ctx = {
@@ -87,7 +88,15 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
         calls.get.push(sessionID)
         if (facts.failGet) throw Error("get")
         return { id: sessionID, title: titles.get(sessionID) ?? "Fix login flow", location: { directory },
-          ...(sessionID.startsWith("child") && { parentID: "ses_1" }) }
+          ...((facts.parents[sessionID] ?? (sessionID.startsWith("child") ? "ses_1" : undefined)) && {
+            parentID: facts.parents[sessionID] ?? "ses_1" }) }
+      },
+      active: async () => {
+        calls.active++
+        if (facts.activeFail) throw Error("active")
+        if (facts.activeRaw !== undefined) return facts.activeRaw
+        const running = Object.fromEntries(facts.active.map((id) => [id, { type: "running" }]))
+        return facts.activeWrap ? { data: running } : running
       },
       update: async ({ sessionID, title }) => {
         calls.update.push([sessionID, title])
@@ -334,6 +343,64 @@ test("a turn start during a slow evaluation ends without WAITING", async (t) => 
   release()
   await settle()
   assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ Fix login flow")
+})
+
+test("a root turn that ends while a child runs shows the meter without WAITING", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["child_1"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  h.facts.active = []
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a grandchild counts; another root's child, the root itself and a chain past 5 steps do not", async (t) => {
+  const waiting = compose("Fix login flow", 1, true), quiet = compose("Fix login flow", 1, false)
+  const chain = { d1: "ses_1", d2: "d1", d3: "d2", d4: "d3", d5: "d4", d6: "d5" }
+  for (const [parents, active, label] of [
+    [{ grand_1: "child_1" }, ["grand_1"], quiet],
+    [{ child_9: "ses_2" }, ["child_9"], waiting],
+    [{}, ["ses_1"], waiting],
+    [chain, ["d5"], quiet],
+    [chain, ["d6"], waiting],
+  ]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, { parents, active })
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), label, JSON.stringify({ parents, active }))
+  }
+})
+
+test("active result shapes and failures", async (t) => {
+  const waiting = compose("Fix login flow", 1, true)
+  for (const [set, label] of [
+    [{ activeWrap: true, active: ["child_1"] }, compose("Fix login flow", 1, false)],
+    [{ active: ["child_1"], activeFail: true }, waiting],
+    [{ activeRaw: null }, waiting],
+    [{ activeRaw: "x" }, waiting],
+    [{ activeRaw: { data: 5 } }, waiting],
+  ]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, set)
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(set))
+  }
+})
+
+test("only a root turn end reads the active sessions", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.start()
+  await h.end("ses_2")
+  await h.write(SPEC, "child_1")
+  await h.end("child_1")
+  assert.equal(h.calls.active, 0)
+  await h.end()
+  assert.equal(h.calls.active, 1)
 })
 
 test("a rename during slow fact reads is kept", async (t) => {

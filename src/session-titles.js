@@ -25,6 +25,7 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 }
 
 const MAX_SESSIONS = 128
+const MAX_HOPS = 5
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const SHELLS = new Set(["bash", "shell"])
@@ -143,6 +144,32 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
+  // The top of a session's parent chain; itself when it has no parent, null when a read fails or the chain is too long.
+  async function rootOf(sessionID) {
+    try {
+      let id = sessionID
+      for (let hops = 0; hops <= MAX_HOPS; hops++) {
+        const { parentID } = await ctx.session.get({ sessionID: id })
+        if (typeof parentID !== "string") return id
+        id = parentID
+      }
+    } catch {}
+    return null
+  }
+
+  // Whether the root itself, or a session below it, is running now. Any failure reads as "nothing runs".
+  async function activity(rootID) {
+    const none = { children: false, self: false }
+    try {
+      const result = await ctx.session.active()
+      const map = result && typeof result === "object" ? (result.data && typeof result.data === "object" ? result.data : result) : {}
+      const running = Object.keys(map).filter((id) => map[id] && typeof map[id] === "object")
+      let children = false
+      for (const id of running) if (id !== rootID && await rootOf(id) === rootID) { children = true; break }
+      return { children, self: running.includes(rootID) }
+    } catch { return none }
+  }
+
   // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
   async function record(sessionID) {
     if (!await on()) return
@@ -175,11 +202,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
+    const busy = ended ? await activity(sessionID) : null
     const title = (await ctx.session.get({ sessionID })).title ?? ""
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
-    const next = compose(topic, cells, ended && cells < 5)
+    const next = compose(topic, cells, ended && cells < 5 && !busy.children)
     if (next !== title) await ctx.session.update({ sessionID, title: next })
     if (sessions.get(sessionID) !== entry || entry.task !== task) return
     Object.assign(task, { cells, fresh: false })
