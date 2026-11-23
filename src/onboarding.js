@@ -9,7 +9,7 @@ const output = (value) => ({ content: JSON.stringify({ client: "opencode", ...va
 const snapshotPattern = /^[a-f0-9]{64}$/
 
 export async function registerSkill(ctx, skill) {
-  const path = fileURLToPath(new URL(`./skills/${skill}/SKILL.md`, import.meta.url))
+  const path = fileURLToPath(new URL(`../skills/${skill}/SKILL.md`, import.meta.url))
   const [, description, content] = new RegExp(`^---\\nname: ${skill}\\ndescription: ([^\\n]+)\\n---\\n([\\s\\S]+)$`)
     .exec(await readFile(path, "utf8"))
   await ctx.skill.transform((editor) => editor.add({ id: skill, name: skill, path, description, content }))
