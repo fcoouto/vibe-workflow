@@ -148,7 +148,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!await on()) return
     await load(sessionID)
     const entry = sessions.get(sessionID), task = entry?.task
-    if (!task || entry.silenced || (await ctx.session.get({ sessionID })).parentID) return
+    if (controller.signal.aborted || !task || entry.silenced || (await ctx.session.get({ sessionID })).parentID) return
     const branch = await branchOf({ top: task.top, run })
     if (!branch || task.remembered === branch || sessions.get(sessionID) !== entry || entry.task !== task) return
     task.remembered = branch

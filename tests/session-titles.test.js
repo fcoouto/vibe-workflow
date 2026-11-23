@@ -106,6 +106,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       await facts.gate
       return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
     }
+    if (args[0] === "status") await facts.statusGate
     if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` +
       (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
     if (args[0] === "rev-parse") return "origin/main\n"
@@ -575,10 +576,50 @@ test("the saved diag keeps only a known PR state, and its instance id survives a
   assert.match(diag.instance, /^[a-z0-9]{1,16}$/)
   h.facts.prs = { "feat/x": [{ state: "OPEN", title: "x" }] }
   await h.end()
-  assert.equal(storage.data.get(KEY).diag.pr, "OPEN")
+  const open = structuredClone(storage.data.get(KEY).diag)
+  assert.equal(open.pr, "OPEN")
   const again = await host(t, { storage, root: h.root })
+  const writes = storage.calls.set
   await again.start()
-  assert.equal(storage.data.get(KEY).diag.instance, diag.instance, "a valid saved diag is kept on load, not dropped")
+  assert.ok(storage.calls.set > writes, "the restarted host loaded the record and saved it again")
+  assert.deepEqual(storage.data.get(KEY).diag, open, "the whole valid diag survives the reload, not dropped or rebuilt")
+})
+
+test("a push whose record was still loading when the plugin closed does no git read and no write", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: null,
+    task: { top: h.root, spec: `${h.root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false } })
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const get = storage.get
+  storage.get = async (key) => { await gate; return get(key) }
+  const pending = h.shell("git push")
+  await settle()
+  h.registered.close()
+  release()
+  await pending
+  await settle()
+  assert.equal(statusCalls(h), 0)
+  assert.equal(storage.calls.set, 0)
+  assert.equal(storage.data.get(KEY).task.remembered, null)
+})
+
+test("a push whose git read was still running when the plugin closed saves nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  const writes = h.storage.calls.set
+  let release
+  h.facts.statusGate = new Promise((resolve) => { release = resolve })
+  const pending = h.shell("git push")
+  await settle()
+  assert.equal(statusCalls(h), 1, "the read started")
+  h.registered.close()
+  release()
+  await pending
+  await settle()
+  assert.equal(h.storage.calls.set, writes)
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
 })
 
 test("the saved diag counts declared and changed plan paths", async (t) => {
