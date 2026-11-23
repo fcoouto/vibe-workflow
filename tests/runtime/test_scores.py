@@ -103,6 +103,20 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(scores.version('claude-haiku-4-5-20251001'), (4, 5))
         self.assertEqual(scores.version('gpt-²-sol'), ())
 
+    def test_date_suffixed_catalog_entry_scores_the_plain_name(self):
+        cache = parse(model('deepseek/deepseek-v4.1-flash', None, prompt='0.00000005', completion='0.0000002'),
+                      model('deepseek/deepseek-v4.1-flash-1017', 32.6, prompt='0.00000014', completion='0.00000063'),
+                      model('qwen/qwen3.8-max-0902', 33.7), model('meta/muse-spark-1.3', 36.6),
+                      model('x/twin-0902', 40), model('x/twin-1017', 41))
+        found = scores.lookup(cache, 'deepseek-v4-1-flash', None)
+        self.assertEqual((found['score'], found['score_source'], found['price']),
+                         (32.6, 'openrouter', scores_price(0.05, 0.2)))
+        self.assertEqual(scores.lookup(cache, 'qwen3-8-max', None)['score'], 33.7)
+        self.assertIsNone(scores.lookup(cache, 'muse-spark-1-3-contributor', None))
+        self.assertIsNone(scores.lookup(cache, 'twin', None))
+        ctx = parse(model('x/long-8192', 50))
+        self.assertIsNone(scores.lookup(ctx, 'long', None))
+
     def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
         few = [model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)]

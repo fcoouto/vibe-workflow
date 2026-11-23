@@ -109,6 +109,19 @@ def _result(entry, source, priced):
                 creator=entry['creator'])
 
 
+def _month_day(candidate, key):
+    suffix = candidate[len(key) + 1:] if candidate.startswith(f'{key}-') else ''
+    return len(suffix) == 4 and suffix.isascii() and suffix.isdigit() \
+        and 1 <= int(suffix[:2]) <= 12 and 1 <= int(suffix[2:]) <= 31
+
+
+def _dated(models, key, creator):
+    """The one scored entry named key plus an MMDD suffix; None when there is none or more than one."""
+    found = [entry for entry in models.values() if entry['score'] is not None
+             and creator in (None, entry['creator']) and _month_day(entry['key'], key)]
+    return found[0] if len(found) == 1 else None
+
+
 def lookup(cache, key, creator):
     models = cache.get('models', {})
     if creator is not None:
@@ -120,6 +133,11 @@ def lookup(cache, key, creator):
         own = matches[0] if matches else None
     if own is not None and own['score'] is not None:
         return _result(own, 'openrouter', own)
+    dated = _dated(models, key, creator)
+    if dated is not None:
+        # Price comes from the plain entry when it exists, as the family path does for its own price.
+        source = own if own is not None else dated
+        return _result(dict(dated, input=source['input'], output=source['output']), 'openrouter', source)
     # A model never borrows from a newer version of itself.
     members = [entry for entry in models.values() if entry['family'] == family_key(key)
                and entry['score'] is not None and creator in (None, entry['creator'])
