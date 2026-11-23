@@ -9,7 +9,7 @@ CLAUDE = 'opencode-claude-subscription'
 
 def result(state, reason=None, **extra):
     return dict(dict(state=state, reason=reason, route=None, alternatives=[], excluded=[], level=None,
-                     attribution=scores.ATTRIBUTION), **extra, admission=False, reservation=False,
+                     attribution=scores.ATTRIBUTION, below_level=False), **extra, admission=False, reservation=False,
                 spend_permit=False)
 
 
@@ -167,8 +167,13 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now)
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
-    chosen = _confirm(routing.order(pool['candidates'], level, scores.anchor(pool['cache'])), pool, 3)
+    anchor = scores.anchor(pool['cache'])
+    ordered = routing.order(pool['candidates'], level, anchor) if anchor is not None else []
+    below = False
+    if not ordered and pool['candidates']:
+        ordered, below = routing.strongest(pool['candidates']), True
+    chosen = _confirm(ordered, pool, 3)
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
-                    route=chosen[0] if chosen else None, alternatives=chosen[1:])
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))
     return _refresh_flag(answer, pool)
