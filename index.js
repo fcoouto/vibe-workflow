@@ -63,6 +63,18 @@ function failureAdvice(answer) {
   const action = actions.get(cause) ?? "Check routing settings or account availability."
   return [cause, `vibe-workflow: Smart Router found no eligible route. ${action}`]
 }
+// The subagent tool's `model` takes provider/model#effort; agents must not rebuild it from the route string.
+const modelRef = (pick) => {
+  if (!pick || typeof pick !== "object") return pick
+  const { provider, model, effort } = pick
+  if (typeof provider !== "string" || !provider || typeof model !== "string" || !model) return pick
+  const variant = typeof effort === "string" && effort ? `#${effort}` : ""
+  return { ...pick, model_ref: `${provider}/${model}${variant}` }
+}
+function withModelRef(answer) {
+  return { ...answer, ...(answer.route !== undefined && { route: modelRef(answer.route) }),
+    ...(Array.isArray(answer.alternatives) && { alternatives: answer.alternatives.map(modelRef) }) }
+}
 const input = {
   type: "object", additionalProperties: false, required: ["v", "work_kind", "task"],
   properties: {
@@ -89,7 +101,8 @@ const definitions = "Rate the task, not the project, by what a mistake in it wou
   "an exact plan, otherwise prose."
 const description = "Get an advisory provider/model/effort choice. Does not launch or authorize execution. " +
   "Describe the task by its observable facts, levels in order: " +
-  Object.entries(rubric).map(([key, values]) => `${key}: ${values.join(" | ")}`).join("; ") + ". " + definitions
+  Object.entries(rubric).map(([key, values]) => `${key}: ${values.join(" | ")}`).join("; ") + ". " + definitions +
+  " Pass a pick's model_ref as the subagent tool's model."
 
 export default {
   id: "vibe-workflow",
@@ -253,7 +266,7 @@ export default {
             if (notices.size > MAX_NOTICE_SESSIONS) notices.delete(notices.keys().next().value)
           }
         }
-        return { content: JSON.stringify({ ...answer, notice }) }
+        return { content: JSON.stringify({ ...withModelRef(answer), notice }) }
       },
     }))
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
