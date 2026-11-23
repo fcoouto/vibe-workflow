@@ -33,7 +33,7 @@ const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
-export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun }) {
+export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000 }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
@@ -157,17 +157,21 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     return null
   }
 
-  // Whether the root itself, or a session below it, is running now. Any failure reads as "nothing runs".
+  // Whether the root itself, or a session below it, is running now. A failure, or no answer within `deadline` ms
+  // for the whole read, counts as "nothing runs", so a stuck host call cannot hold the session's queue.
   async function activity(rootID) {
-    const none = { children: false, self: false }
-    try {
+    let timer
+    const read = async () => {
       const result = await ctx.session.active()
       const map = result && typeof result === "object" ? (result.data && typeof result.data === "object" ? result.data : result) : {}
-      const running = Object.keys(map).filter((id) => map[id] && typeof map[id] === "object")
+      const running = Object.keys(map).filter((id) => map[id]?.type === "running")
       let children = false
       for (const id of running) if (id !== rootID && await rootOf(id) === rootID) { children = true; break }
       return { children, self: running.includes(rootID) }
-    } catch { return none }
+    }
+    try {
+      return await Promise.race([read(), new Promise((_, stop) => { timer = setTimeout(() => stop(Error("deadline")), deadline) })])
+    } catch { return { children: false, self: false } } finally { clearTimeout(timer) }
   }
 
   // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
@@ -215,6 +219,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
     const busy = ended ? await activity(sessionID) : null
     const title = (await ctx.session.get({ sessionID })).title ?? ""
+    if (controller.signal.aborted || (fromChild && busy.self)) return
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept

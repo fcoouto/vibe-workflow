@@ -68,7 +68,7 @@ function memoryStorage({ failing = false } = {}) {
 }
 
 async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
-  storage = memoryStorage(), root, located = true } = {}) {
+  storage = memoryStorage(), root, located = true, deadline } = {}) {
   if (!root) {
     root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
     const made = root
@@ -77,7 +77,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   directory ??= root
   const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], active: 0 }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
-    active: [], parents: {}, activeFail: false, activeWrap: false, activeRaw: undefined }
+    active: [], parents: {}, activeFail: false, activeWrap: false, activeRaw: undefined, activeHang: false }
   const preference = { state }
   let stream, subscribed
   const ctx = {
@@ -94,6 +94,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       active: async () => {
         calls.active++
         if (facts.activeFail) throw Error("active")
+        if (facts.activeHang) await new Promise(() => {})
         if (facts.activeRaw !== undefined) return facts.activeRaw
         const running = Object.fromEntries(facts.active.map((id) => [id, { type: "running" }]))
         return facts.activeWrap ? { data: running } : running
@@ -121,7 +122,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     if (args[0] === "rev-parse") return "origin/main\n"
     return facts.changed.join("\n")
   }
-  const titlesFor = await registerSessionTitles(ctx, { run, settings: { inspect: async () => preference },
+  const titlesFor = await registerSessionTitles(ctx, { run, ...(deadline && { deadline }), settings: { inspect: async () => preference },
     gitWorkflow: { inspect: async () => ({ state: gitState, project: project ?? root, worktree_cleanup: cleanup }) } })
   t.after(() => titlesFor.close())
   const write = async (path, sessionID = "ses_1", more = {}) => {
@@ -467,6 +468,62 @@ test("a child's end under an unbound or silenced root does no read and no rename
   const writes = silenced.calls.update.length
   await silenced.end("child_1")
   assert.equal(silenced.calls.update.length, writes)
+})
+
+test("only an entry that says it is running counts", async (t) => {
+  for (const [raw, label] of [
+    [{ child_1: { type: "idle" } }, compose("Fix login flow", 1, true)],
+    [{ data: { child_1: {} } }, compose("Fix login flow", 1, true)],
+    [{ child_1: { type: "running" } }, compose("Fix login flow", 1, false)],
+  ]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.activeRaw = raw
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(raw))
+  }
+})
+
+test("a child-triggered evaluation writes nothing once the root is running again", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["child_1"]
+  await h.end()
+  const writes = h.calls.update.length
+  h.facts.active = []
+  let release
+  h.facts.gate = new Promise((done) => { release = done })
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "child_1" } })
+  await settle()
+  assert.ok(h.calls.gh.length > 0, "the evaluation is waiting on its fact reads")
+  h.facts.active = ["ses_1"]
+  release()
+  await settle()
+  assert.equal(h.calls.update.length, writes)
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
+test("an evaluation still reading facts when the plugin closes renames nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  let release
+  h.facts.gate = new Promise((done) => { release = done })
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await settle()
+  assert.ok(h.calls.gh.length > 0, "the evaluation is waiting on its fact reads")
+  h.registered.close()
+  release()
+  await settle()
+  assert.deepEqual(h.calls.update, [])
+})
+
+test("a hanging active read is cut off and reads as nothing running", async (t) => {
+  const h = await host(t, { deadline: 30 })
+  await h.write(SPEC)
+  h.facts.activeHang = true
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await new Promise((done) => setTimeout(done, 200))
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
 })
 
 test("a rename during slow fact reads is kept", async (t) => {
