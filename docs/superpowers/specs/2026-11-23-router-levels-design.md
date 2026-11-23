@@ -12,7 +12,7 @@ reviews plans; implementing a detailed plan goes to a small model.
 Why now: `docs/advisor-evaluation.md` found that on hard tasks implementing a
 detailed written plan, Haiku 5.5 alone matched Opus 5.5 alone (67.0% and 65.2% of
 hidden tests, 6 runs per condition and task) at about 5% of the cost. Today those
-tasks are classed level 2 (`files: 3+`) and go to Sonnet- or Terra-class models.
+tasks are classed level 2 (`files: 3+`) and go to level-2 models.
 Separately, today's floors are shares of the best model on the user's own plans,
 so they move when a frontier model ships or when a plan's quota runs out, and they
 mean different things for different users. A level-1 request limited to the Go
@@ -131,15 +131,21 @@ today's behaviour, where a pool-relative floor always lets something through.
 
 ### Task level
 
-`level = max(base[work_kind], files, spec, risk)` stays, with one exception: when
-`spec` is `exact`, `files: 3+` no longer raises the level. `cross-system` still
-raises it to 3, and `risk` is unchanged. Both council members proposed exactly this
-limit; the evidence covers multi-file plans in one repository, not cross-system
-work.
+`level = max(base[work_kind], files, spec, risk)` stays, with exceptions when `spec`
+is `exact`:
 
-Define `exact` in the tool's rubric text: a written plan that names the files to
-change and the tests or check that prove completion. The rubric lives in the tool
-`description` built in `index.js`; `ROUTER_NOTE` is not changed.
+- For every work kind, `files: 3+` no longer raises the level.
+- For `implementation` and `testing`, `risk` no longer raises the level either, so
+  implementing an exact plan stays at level 1 even in critical code. Quality comes
+  from level-3 design and plan reviews and a level-3 review of each critical diff
+  (`2026-11-23-stakes-sized-reviews-design.md`). Decided by the council
+  (`00e94efeee57_cost-quality-balance`), majority, weighted quality 60, cost 40.
+- `cross-system` still raises any task to 3. The user kept it, with the narrower
+  definition: changes in more than one repository or deployed service that must stay
+  compatible with each other.
+
+The definitions of `exact`, `risk` and `cross-system` go into the tool's rubric text;
+their wording is in the stakes design. `ROUTER_NOTE` is not changed.
 
 ### Score matching for suffixed names
 
@@ -196,7 +202,9 @@ user's planning goes to Fable 5.2 instead of Opus; the user accepted this.
   kept, and no current model triggers it.
 - Nothing at the level: `selected`, the strongest runnable model, `below_level:
   true`, and one notice per session and level.
-- `spec: exact` with `files: 3+` is level 1; with `cross-system` it is level 3.
+- `spec: exact` with `files: 3+` is level 1; implementation or testing with `spec:
+  exact` and `risk: critical` is level 1; review with `risk: critical` is level 3;
+  anything `cross-system` is level 3.
 - The two date-suffix matches above, a key with two dated entries staying unscored,
   and `muse-spark-1.3-contributor` staying unscored.
 - The council's seat pick is unchanged.
