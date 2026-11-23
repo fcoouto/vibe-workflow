@@ -117,6 +117,13 @@ class ScoresTest(unittest.TestCase):
         ctx = parse(model('x/long-8192', 50))
         self.assertIsNone(scores.lookup(ctx, 'long', None))
 
+    def test_date_match_borrows_the_dated_price_when_the_plain_entry_has_none(self):
+        cache = parse(model('deepseek/deepseek-v4.1-flash', None, prompt=None, completion=None),
+                      model('deepseek/deepseek-v4.1-flash-1017', 32.6, prompt='0.00000014', completion='0.00000063'))
+        found = scores.lookup(cache, 'deepseek-v4-1-flash', 'deepseek')
+        self.assertEqual((found['score'], found['score_source'], found['price']),
+                         (32.6, 'openrouter', scores_price(0.14, 0.63)))
+
     def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
         few = [model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)]

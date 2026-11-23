@@ -135,9 +135,9 @@ def lookup(cache, key, creator):
         return _result(own, 'openrouter', own)
     dated = _dated(models, key, creator)
     if dated is not None:
-        # Price comes from the plain entry when it exists, as the family path does for its own price.
-        source = own if own is not None else dated
-        return _result(dict(dated, input=source['input'], output=source['output']), 'openrouter', source)
+        # Same price rule as the family path: the plain entry's own price when it has both, else the dated one's.
+        priced = own if own is not None and own['input'] is not None and own['output'] is not None else dated
+        return _result(dict(dated, input=priced['input'], output=priced['output']), 'openrouter', dated)
     # A model never borrows from a newer version of itself.
     members = [entry for entry in models.values() if entry['family'] == family_key(key)
                and entry['score'] is not None and creator in (None, entry['creator'])
