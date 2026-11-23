@@ -230,6 +230,16 @@ with `main`, which no live run saw. Smart Router's own check can now report
 fix itself). The old "not set up yet" implied an action for the first reason, so the
 wording is "not ready yet", with a separate hint for the second.
 
+## Levels and reviews
+
+Level bars come from the public score catalog, not a fixed model list. `scores.anchor(cache)`
+takes the third-highest per-lab best score; `routing.bars(anchor)` turns it into the level 1,
+2 and 3 floors (0.55, 0.80 and 1 times the anchor). A selector answer picked below its
+requested level carries `below_level: true`, and `index.js` shows that notice once per session
+per level. Design and plan reviews are sized to the stakes. The specs are
+`docs/superpowers/specs/2026-11-23-router-levels-design.md` and
+`docs/superpowers/specs/2026-11-23-stakes-sized-reviews-design.md`.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
