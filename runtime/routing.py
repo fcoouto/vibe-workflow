@@ -42,10 +42,16 @@ def task_level(work_kind, task):
     if type(tokens) is not int or not 0 <= tokens <= 10**9:
         raise ValueError('invalid_request')
     levels = [BASE[work_kind]]
+    exact = task.get('spec') == 'exact'
     for fact, values in FACTS.items():
         if task.get(fact) not in values:
             raise ValueError('invalid_request')
-        levels.append(values.index(task[fact]) + 1)
+        level = values.index(task[fact]) + 1
+        if exact and fact == 'files' and task[fact] == '3+':
+            level = 1
+        if exact and fact == 'risk' and work_kind in ('implementation', 'testing'):
+            level = 1
+        levels.append(level)
     return max(levels)
 
 

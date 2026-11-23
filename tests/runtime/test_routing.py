@@ -27,8 +27,21 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.task_level('implementation', FACTS), 1)
         self.assertEqual(routing.task_level('review', FACTS), 2)
         self.assertEqual(routing.task_level('planning', FACTS), 3)
-        self.assertEqual(routing.task_level('implementation', dict(FACTS, files='3+')), 2)
-        self.assertEqual(routing.task_level('implementation', dict(FACTS, risk='critical')), 3)
+        self.assertEqual(routing.task_level('implementation', dict(FACTS, files='3+')), 1)
+        self.assertEqual(routing.task_level('implementation', dict(FACTS, risk='critical')), 1)
+
+    def test_exact_spec_exceptions(self):
+        level = routing.task_level
+        self.assertEqual(level('implementation', dict(FACTS, files='3+')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, risk='critical')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, risk='shared', files='3+')), 1)
+        self.assertEqual(level('testing', dict(FACTS, risk='critical')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, files='cross-system')), 3)
+        self.assertEqual(level('implementation', dict(FACTS, spec='prose', risk='critical')), 3)
+        self.assertEqual(level('implementation', dict(FACTS, spec='prose', files='3+')), 2)
+        self.assertEqual(level('review', dict(FACTS, risk='critical')), 3)
+        self.assertEqual(level('review', dict(FACTS, files='3+')), 2)
+        self.assertEqual(level('writing', dict(FACTS, risk='critical')), 3)
 
     def test_missing_or_unknown_facts_are_rejected(self):
         bad = [{k: v for k, v in FACTS.items() if k != 'risk'}, dict(FACTS, files='many'),
