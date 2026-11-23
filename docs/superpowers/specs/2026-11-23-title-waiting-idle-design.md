@@ -12,14 +12,21 @@ Today `WAITING` is `ended && cells < 5` at the end of every root turn (`src/sess
 design accepted this ("a root turn can end while a background child still runs; the label then
 shows until the child's report wakes the session"). This change reverses that decision.
 
-Cause, verified in the code and the screenshot; the host facts below were read on OpenCode 2.3.2
-(server) and the V2 OpenAPI document, not yet exercised by the plugin:
+Cause, verified in the code and the screenshot:
 
 - A root turn ends (`session.execution.succeeded`) while a background child session still runs.
-- `GET /api/session/active` lists the sessions currently running, children included (a child with a
-  `parentID` appeared in it). `Session.Info` carries `parentID`.
 - The plugin already receives the start and end events of children and ignores them (a child has no
   binding).
+
+Amendment, 2026-11-23, after the first live run: the original design read `ctx.session.active()`.
+The real plugin context (OpenCode 2.3.2) has no such method; its session methods are `hook`, `list`,
+`create`, `get`, `remove`, `switchAgent`, `switchModel`, `prompt`, `generate`, `command`, `compact`,
+`synthetic`, `interrupt`, `update`, `move`, `wait`, `context` and `instructions`. The code caught the
+error and fell back to "nothing runs", so the live run still showed `WAITING` while a subagent ran.
+Verified from inside the plugin on the same version, with no model call: `ctx.session.list({ parentID,
+limit, order })` returns `{ data, cursor }` of full session objects and an unknown parent gives an empty
+list; `Session.Info.time` carries `busy` and `idle` (a session that is processing has `busy` and no
+`idle`, a fresh one has neither). The design below uses those.
 
 ## Goals
 
@@ -58,9 +65,14 @@ Cause, verified in the code and the screenshot; the host facts below were read o
 
 ## Design
 
-1. `running(rootID)`: read `ctx.session.active()`; for each active session other than the root, walk
-   `parentID` upward with `ctx.session.get` (at most 5 hops) and keep it when the chain reaches
-   `rootID`. The result is whether any descendant runs. A missing method, an error or an odd shape
+1. `activity(rootID)`: list the root's children with `ctx.session.list({ parentID: rootID, limit: 50,
+   order: "desc" })` and call a child running when `time.busy` is a number, `time.idle` is not a number at
+   or after it, and `time.updated` is less than 10 minutes old (a crash can leave `busy` set for good;
+   the age rule keeps that from hiding the label forever). Only direct children count: a running
+   grandchild implies a running child in practice. The root itself is running by the same test on
+   `ctx.session.get` (only the child-triggered path needs it). In a child-triggered evaluation the child
+   that just ended is treated as not running, so a host that updates `time.idle` a moment after the end
+   event cannot hide the label. A missing method, an error, an odd shape or no answer within 3 seconds
    returns "none running".
 2. In `evaluate(sessionID, ended)`, the label becomes `ended && cells < 5 && !(await running(sessionID))`.
    The check runs only after the existing guards (bound, not silenced, not fresh).
@@ -79,16 +91,19 @@ note change, so the live injection check is not triggered. The tests live under 
 
 ## Known gaps (accepted until the live check says otherwise)
 
+- A child that has run for over 10 minutes without any update reads as not running, so `WAITING`
+  may show during a very long silent child (today's behavior).
 - A short flash of `WAITING` if the child's end event is handled before the host marks the woken
   root active; the root's own start event removes it.
-- Grandchildren beyond 5 hops are ignored.
+- Only direct children count; a running grandchild under an idle child is ignored. The walk up to
+  the root for a child-end event still follows at most 5 parent steps.
 - A child that runs after its root's turn ended and never ends (a stuck child) keeps the label off
   until it ends or is removed.
 
 ## Left to the builder
 
-The exact shape of `ctx.session.active()`'s result (the HTTP route returns an object keyed by session
-id, `{ type: "running" }` each), the walk's depth bound, and the test fake.
+The test fake and the exact constants (page size 50, age 10 minutes, deadline 3 seconds, which are
+this design's calls).
 
 ## Proof expected
 
@@ -96,8 +111,8 @@ id, `{ type: "running" }` each), the walk's depth bound, and the test fake.
   still writes `WAITING`.
 - When that child ends and the root is idle, the label appears; when the root is active again, nothing
   is written.
-- A grandchild counts; a running session of another root does not.
-- A missing or failing `active` leaves today's behavior.
+- A running child counts; an idle or stale one, a child of another root and the root itself do not.
+- A missing or failing `list`, or one that hangs past the deadline, leaves today's behavior.
 - A child end for an unbound root, or a session with no parent, does no work.
-- Live (needs the user's approval for inference): the real `ctx.session.active` exists and lists
-  children, and a real subagent turn shows no `WAITING` while it runs and `WAITING` after it ends.
+- Live (the user approved one inference session): a real subagent turn shows no `WAITING` while it
+  runs and `WAITING` after it ends. The first live run, on the `active()` design, failed this check.

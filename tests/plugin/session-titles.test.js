@@ -75,11 +75,18 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     t.after(() => rmSync(made, { recursive: true, force: true }))
   }
   directory ??= root
-  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], active: 0 }
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], list: 0 }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
-    active: [], parents: {}, activeFail: false, activeWrap: false, activeRaw: undefined, activeHang: false }
+    active: [], finished: [], stale: [], parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
   const preference = { state }
   let stream, subscribed
+  const parentOf = (id) => facts.parents[id] ?? (id.startsWith("child") ? "ses_1" : undefined)
+  const timeOf = (id) => {
+    const old = facts.stale.includes(id) ? 11 * 60 * 1000 : 0, now = Date.now()
+    return { created: now - old - 5000, updated: now - old,
+      ...(facts.active.includes(id) && { busy: now - old }),
+      ...(facts.finished.includes(id) && { busy: now - 2000, idle: now - 1000 }) }
+  }
   const ctx = {
     ...(located && { location: { directory: root } }), storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
@@ -87,17 +94,17 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       get: async ({ sessionID }) => {
         calls.get.push(sessionID)
         if (facts.failGet) throw Error("get")
-        return { id: sessionID, title: titles.get(sessionID) ?? "Fix login flow", location: { directory },
-          ...((facts.parents[sessionID] ?? (sessionID.startsWith("child") ? "ses_1" : undefined)) && {
-            parentID: facts.parents[sessionID] ?? "ses_1" }) }
+        return { id: sessionID, title: titles.get(sessionID) ?? "Fix login flow", location: { directory }, time: timeOf(sessionID),
+          ...(parentOf(sessionID) && { parentID: parentOf(sessionID) }) }
       },
-      active: async () => {
-        calls.active++
-        if (facts.activeFail) throw Error("active")
-        if (facts.activeHang) await new Promise(() => {})
-        if (facts.activeRaw !== undefined) return facts.activeRaw
-        const running = Object.fromEntries(facts.active.map((id) => [id, { type: "running" }]))
-        return facts.activeWrap ? { data: running } : running
+      list: async ({ parentID }) => {
+        calls.list++
+        if (facts.listFail) throw Error("list")
+        if (facts.listHang) await new Promise(() => {})
+        if (facts.listRaw !== undefined) return facts.listRaw
+        const ids = [...new Set([...facts.active, ...facts.finished, ...Object.keys(facts.parents), "child_1"])]
+        const items = ids.filter((id) => parentOf(id) === parentID).map((id) => ({ id, parentID, time: timeOf(id) }))
+        return facts.listArray ? items : { data: items, cursor: { previous: null, next: null } }
       },
       update: async ({ sessionID, title }) => {
         calls.update.push([sessionID, title])
@@ -357,52 +364,17 @@ test("a root turn that ends while a child runs shows the meter without WAITING",
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
 })
 
-test("a grandchild counts; another root's child, the root itself and a chain past 5 steps do not", async (t) => {
-  const waiting = compose("Fix login flow", 1, true), quiet = compose("Fix login flow", 1, false)
-  const chain = { d1: "ses_1", d2: "d1", d3: "d2", d4: "d3", d5: "d4", d6: "d5" }
-  for (const [parents, active, label] of [
-    [{ grand_1: "child_1" }, ["grand_1"], quiet],
-    [{ child_9: "ses_2" }, ["child_9"], waiting],
-    [{}, ["ses_1"], waiting],
-    [chain, ["d5"], quiet],
-    [chain, ["d6"], waiting],
-  ]) {
-    const h = await host(t)
-    await h.write(SPEC)
-    Object.assign(h.facts, { parents, active })
-    await h.end()
-    assert.equal(h.titles.get("ses_1"), label, JSON.stringify({ parents, active }))
-  }
-})
-
-test("active result shapes and failures", async (t) => {
-  const waiting = compose("Fix login flow", 1, true)
-  for (const [set, label] of [
-    [{ activeWrap: true, active: ["child_1"] }, compose("Fix login flow", 1, false)],
-    [{ active: ["child_1"], activeFail: true }, waiting],
-    [{ activeRaw: null }, waiting],
-    [{ activeRaw: "x" }, waiting],
-    [{ activeRaw: { data: 5 } }, waiting],
-  ]) {
-    const h = await host(t)
-    await h.write(SPEC)
-    Object.assign(h.facts, set)
-    await h.end()
-    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(set))
-  }
-})
-
-test("the active sessions are read only for a bound root's turn end and the end of a session below it", async (t) => {
+test("the children are listed only for a bound root's turn end and the end of a session below it", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
   await h.start()
   await h.end("ses_2")
   await h.write(SPEC, "child_1")
-  assert.equal(h.calls.active, 0, "a start, an unbound parentless end and a write read nothing")
+  assert.equal(h.calls.list, 0, "a start, an unbound parentless end and a write read nothing")
   await h.end()
-  assert.equal(h.calls.active, 1)
+  assert.equal(h.calls.list, 1)
   await h.end("child_1")
-  assert.equal(h.calls.active, 3, "the child's end reads once to decide and once for the label")
+  assert.equal(h.calls.list, 3, "the child's end reads once to decide and once for the label")
 })
 
 test("the label appears when the last running child ends and the root is idle", async (t) => {
@@ -470,20 +442,6 @@ test("a child's end under an unbound or silenced root does no read and no rename
   assert.equal(silenced.calls.update.length, writes)
 })
 
-test("only an entry that says it is running counts", async (t) => {
-  for (const [raw, label] of [
-    [{ child_1: { type: "idle" } }, compose("Fix login flow", 1, true)],
-    [{ data: { child_1: {} } }, compose("Fix login flow", 1, true)],
-    [{ child_1: { type: "running" } }, compose("Fix login flow", 1, false)],
-  ]) {
-    const h = await host(t)
-    await h.write(SPEC)
-    h.facts.activeRaw = raw
-    await h.end()
-    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(raw))
-  }
-})
-
 test("a child-triggered evaluation writes nothing once the root is running again", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
@@ -517,10 +475,57 @@ test("an evaluation still reading facts when the plugin closes renames nothing",
   assert.deepEqual(h.calls.update, [])
 })
 
-test("a hanging active read is cut off and reads as nothing running", async (t) => {
+test("a running child counts; an idle, finished or stale one, another root's child and the root itself do not", async (t) => {
+  const waiting = compose("Fix login flow", 1, true), quiet = compose("Fix login flow", 1, false)
+  for (const [set, label] of [
+    [{ active: ["child_1"] }, quiet],
+    [{ parents: { child_9: "ses_2" }, active: ["child_9"] }, waiting],
+    [{ active: ["ses_1"] }, waiting],
+    [{ finished: ["child_1"] }, waiting],
+    [{ active: ["child_1"], stale: ["child_1"] }, waiting],
+    [{ parents: { grand_1: "child_1" }, active: ["grand_1"] }, waiting],
+    [{ parents: { grand_1: "child_1" }, active: ["child_1", "grand_1"] }, quiet],
+  ]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, set)
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(set))
+  }
+})
+
+test("list result shapes and failures", async (t) => {
+  const waiting = compose("Fix login flow", 1, true)
+  for (const [set, label] of [
+    [{ listArray: true, active: ["child_1"] }, compose("Fix login flow", 1, false)],
+    [{ active: ["child_1"], listFail: true }, waiting],
+    [{ listRaw: null }, waiting],
+    [{ listRaw: "x" }, waiting],
+    [{ listRaw: { data: 5 } }, waiting],
+    [{ listRaw: { data: [{ id: "child_1" }, null, { time: 5 }] } }, waiting],
+  ]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, set)
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), label, JSON.stringify(set))
+  }
+})
+
+test("a child still listed as running at its own end event does not hide the label", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["child_1"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  await h.end("child_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a hanging list read is cut off and reads as nothing running", async (t) => {
   const h = await host(t, { deadline: 30 })
   await h.write(SPEC)
-  h.facts.activeHang = true
+  h.facts.listHang = true
   h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
   await new Promise((done) => setTimeout(done, 200))
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))

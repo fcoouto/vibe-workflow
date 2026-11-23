@@ -76,3 +76,10 @@
 
 - Execution method: Native (two tasks in one file with shared helpers; a fresh reviewer for the whole branch afterwards).
 - After Task 2: an independent review of the branch, then the live check described in the spec's "Proof expected" (needs the user's approval for inference), then a pull request.
+
+## Amendment, 2026-11-23 (after the first live run)
+
+The live run showed that the real plugin context has no `ctx.session.active()`. `activity` now lists the root's
+children with `ctx.session.list({ parentID, limit: 50, order: "desc" })` and reads `Session.Info.time` (`busy`,
+`idle`, `updated`); `evaluate`'s third parameter is the id of the session that ended (or `null`). Only direct
+children count. See the amendment in the spec for the verified host facts and the reasons.

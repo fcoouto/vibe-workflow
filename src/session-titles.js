@@ -26,6 +26,8 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 
 const MAX_SESSIONS = 128
 const MAX_HOPS = 5
+const MAX_CHILDREN = 50
+const STALE_MS = 10 * 60 * 1000
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const SHELLS = new Set(["bash", "shell"])
@@ -157,17 +159,23 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     return null
   }
 
-  // Whether the root itself, or a session below it, is running now. A failure, or no answer within `deadline` ms
-  // for the whole read, counts as "nothing runs", so a stuck host call cannot hold the session's queue.
-  async function activity(rootID) {
+  // Whether a child of the root, or with `withSelf` the root itself, is running now. A session runs when it became busy
+  // and has not gone idle since; the age rule keeps a busy mark left by a crash from hiding the label for good.
+  // `ended` is a session that just ended and counts as idle whatever the host still says. A failure, or no answer
+  // within `deadline` ms for the whole read, counts as "nothing runs", so a stuck host call cannot hold the session's queue.
+  async function activity(rootID, { ended = null, withSelf = false } = {}) {
     let timer
+    const running = (info, now) => {
+      const time = info?.time
+      return typeof time?.busy === "number" && !(typeof time.idle === "number" && time.idle >= time.busy) &&
+        now - (typeof time.updated === "number" ? time.updated : time.busy) < STALE_MS
+    }
     const read = async () => {
-      const result = await ctx.session.active()
-      const map = result && typeof result === "object" ? (result.data && typeof result.data === "object" ? result.data : result) : {}
-      const running = Object.keys(map).filter((id) => map[id]?.type === "running")
-      let children = false
-      for (const id of running) if (id !== rootID && await rootOf(id) === rootID) { children = true; break }
-      return { children, self: running.includes(rootID) }
+      const now = Date.now()
+      const page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
+      const items = Array.isArray(page) ? page : page?.data
+      const children = Array.isArray(items) && items.some((info) => info?.id !== ended && running(info, now))
+      return { children, self: withSelf && running(await ctx.session.get({ sessionID: rootID }), now) }
     }
     try {
       return await Promise.race([read(), new Promise((_, stop) => { timer = setTimeout(() => stop(Error("deadline")), deadline) })])
@@ -190,10 +198,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   async function wakeRoot(sessionID) {
     if (!await on()) return
     const root = await rootOf(sessionID)
-    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, true))
+    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, sessionID))
   }
 
-  async function evaluate(sessionID, ended, fromChild = false) {
+  async function evaluate(sessionID, ended, fromChild = null) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
       await load(sessionID)
@@ -201,7 +209,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
     if (fromChild) {
-      const now = await activity(sessionID)
+      const now = await activity(sessionID, { ended: fromChild, withSelf: true })
       if (now.children || now.self) return
     }
     let cells = task.cells
@@ -217,7 +225,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
-    const busy = ended ? await activity(sessionID) : null
+    const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
     const title = (await ctx.session.get({ sessionID })).title ?? ""
     if (controller.signal.aborted || (fromChild && busy.self)) return
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
