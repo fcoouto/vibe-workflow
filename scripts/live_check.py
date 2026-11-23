@@ -26,7 +26,7 @@ import os  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = 'id: "vibe-workflow",'
 LIVE_ID = 'id: "vibe-workflow-live",'
-RECORD = ROOT / "tests" / "opencode-verified.json"
+RECORD = ROOT / "tests" / "tooling" / "opencode-verified.json"
 INJECTION_COMMAND = "python3 -B scripts/live_check.py --injection"
 GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=live-check",
        "-c", "user.email=live-check@example.invalid", "-c", "commit.gpgsign=false"]

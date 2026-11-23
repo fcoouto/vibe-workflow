@@ -60,9 +60,9 @@ rerunning native probes or changing files.
 Checks are opt-in and excluded from the runtime export:
 
 ```sh
-python3 -I -B tests/verify_group.py --evidence ABSOLUTE_PRIVATE_DIRECTORY
-python3 -I -B tests/verify_native_loading.py --export dist --evidence ABSOLUTE_PRIVATE_DIRECTORY
-node tests/verify_cancel.mjs ABSOLUTE_EXPORT ABSOLUTE_PRIVATE_HOME
+python3 -I -B tests/tooling/verify_group.py --evidence ABSOLUTE_PRIVATE_DIRECTORY
+python3 -I -B tests/tooling/verify_native_loading.py --export dist --evidence ABSOLUTE_PRIVATE_DIRECTORY
+node tests/tooling/verify_cancel.mjs ABSOLUTE_EXPORT ABSOLUTE_PRIVATE_HOME
 ```
 
 Use a fresh directory per run. The cancellation verifier requires a stripped

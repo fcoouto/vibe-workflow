@@ -18,7 +18,7 @@ const info = (over = {}) => ({ id: "gpt-x", modelID: "gpt-x", providerID: "opena
 const listed = (...data) => ({ location: { directory: "/project" }, data })
 
 async function load() {
-  const module = await import("../index.js").catch(() => null)
+  const module = await import("../../index.js").catch(() => null)
   assert.ok(module?.default?.setup, "standalone V2 plugin is missing")
   return module.default
 }
@@ -97,7 +97,7 @@ async function fixture(body, models = listed(info()), extra = {}) {
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })
-    await copyFile(new URL(`../${name}`, import.meta.url), target)
+    await copyFile(new URL(`../../${name}`, import.meta.url), target)
   }
   await writeFile(join(root, "scripts", "select.py"), body)
   await preference(root, true)

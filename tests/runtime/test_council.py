@@ -7,7 +7,7 @@ import sys
 import unittest
 
 from runtime import council, scores
-from tests import test_selector as sel
+from tests.runtime import test_selector as sel
 
 NOW = 2_000_000
 
@@ -168,7 +168,7 @@ class PickTest(unittest.TestCase):
                 council.pick(request, state_dir=self.root, source=self.source, fetch=self.fetch, now=sel.NOW)
 
     def test_cli_pick_failure_is_failed(self):
-        script = Path(__file__).resolve().parents[1] / "scripts" / "select.py"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "select.py"
         done = subprocess.run([sys.executable, "-B", str(script), "--state-dir", str(self.root), "--council-pick"],
                               input=b'{"v": 1, "count": 9}', capture_output=True, timeout=60)
         self.assertEqual(json.loads(done.stdout), {"state": "failed"})

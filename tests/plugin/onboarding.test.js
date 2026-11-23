@@ -28,7 +28,7 @@ async function fixture(t, permission = async () => {}, prepare) {
     ...(permission && { permission: { assert: async (request) => { assertCalls.push(request); await permission(request) } } }),
     session: { hook: async () => {} },
   }
-  const cleanup = await (await import("../index.js")).default.setup(ctx)
+  const cleanup = await (await import("../../index.js")).default.setup(ctx)
   t.after(() => cleanup?.())
   assert.ok(tool.has("vibe_workflow_onboard"), "onboarding tool is missing")
   const invocation = { sessionID: "ses_fixture", messageID: "msg_fixture", id: "call_fixture", agent: "build",
@@ -394,7 +394,7 @@ test("only apply with enabled true lets the setup check fetch scores", async (t)
   for (const name of ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md"]) {
     await mkdir(join(root, name, ".."), { recursive: true })
-    await copyFile(new URL(`../${name}`, import.meta.url), join(root, name))
+    await copyFile(new URL(`../../${name}`, import.meta.url), join(root, name))
   }
   await writeFile(join(root, "scripts", "select.py"), `import json, sys
 from pathlib import Path

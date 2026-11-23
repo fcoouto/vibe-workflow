@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-from tests.verify_native_loading import inspect_result
+from tests.tooling.verify_native_loading import inspect_result
 
 
 class LoadingProofTest(unittest.TestCase):

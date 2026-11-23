@@ -35,9 +35,9 @@ rewritten for code projects. Duplicate finding, date folders, archiving, deletio
 the personal-folder material were not carried over. `src/skill-advice.js` adds one sentence
 pointing to the skill on a `writing-plans` load.
 
-Follow-up development-only checks: `tests/verify_group.py`,
-`tests/verify_native_loading.py`, `tests/verify_cancel.mjs` and
-`tests/test_verification.py`. The runtime allowlist is unchanged.
+Follow-up development-only checks: `tests/tooling/verify_group.py`,
+`tests/tooling/verify_native_loading.py`, `tests/tooling/verify_cancel.mjs` and
+`tests/tooling/test_verification.py`. The runtime allowlist is unchanged.
 Current export guidance uses `dist/` directly; the inventory below records
 the original extraction, not subsequent development-only verification records.
 

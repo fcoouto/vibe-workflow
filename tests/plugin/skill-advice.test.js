@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { createSkillAdvisor } from "../src/skill-advice.js"
+import { createSkillAdvisor } from "../../src/skill-advice.js"
 
 const on = { state: "on", agent_merge: false }
 function advisor(settings = on, extra = {}) {

@@ -107,8 +107,8 @@ Credentials and state are left untouched either way.
 ## Development
 
 ```sh
-python3 -B -m unittest discover -s tests
-node --test tests/*.test.js
+python3 -B -m unittest discover -s tests -t .
+node --test "tests/**/*.test.js"
 python3 -B scripts/validate.py
 python3 -B scripts/package.py --output dist
 python3 -B scripts/validate.py --root dist

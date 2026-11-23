@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, strip } from "../src/session-titles.js"
+import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, strip } from "../../src/session-titles.js"
 
 test("compose and strip", () => {
   assert.equal(compose("Fix auth", 2, true), "￻▰▰▱▱▱ WAITING · Fix auth")

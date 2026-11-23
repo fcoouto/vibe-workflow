@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { test } from "node:test"
 
-const root = new URL("../skills/vibe-council/", import.meta.url)
+const root = new URL("../../skills/vibe-council/", import.meta.url)
 const read = (name) => readFile(new URL(name, root), "utf8")
 const hasAll = (text, phrases) => {
   for (const phrase of phrases) assert.ok(text.includes(phrase), `missing: ${phrase}`)
@@ -24,7 +24,7 @@ test("procedure carries the process, roster and failure rules", async () => {
 })
 
 test("the README says councils keep the scores fresh", async () => {
-  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8")
+  const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8")
   const section = readme.slice(readme.indexOf("## Ask the council"), readme.indexOf("## Scores"))
   assert.match(section.replace(/\s+/g, " "), /refresh(es)? them in the background about weekly/)
 })
@@ -34,7 +34,7 @@ test("no council file hard-sets a seat", async () => {
     const text = await read(name)
     for (const id of ["gpt-6-astra", "claude-agent/opus", "claude-fable-5-2"]) assert.ok(!text.includes(id), `${name}: ${id}`)
   }
-  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8")
+  const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8")
   for (const id of ["gpt-6-astra", "claude-agent/opus", "claude-fable-5-2"]) assert.ok(!readme.includes(id), `README.md: ${id}`)
 })
 
