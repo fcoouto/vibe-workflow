@@ -28,7 +28,8 @@
 - A cache with fewer than three scored labs (small or partial catalogs) must still yield an anchor: the lowest of the labs present. Test in Task 2.
 - Caller constraints (`allowed_harnesses`, `allowed_models`) that leave only below-bar candidates must return the strongest of those, marked `below_level`, never `no_selection`. Test in Task 3.
 - A below-level answer whose final account recheck drops every route must keep today's empty-result reason, never `selected` with a null route. Test in Task 3.
-- A second below-level answer at the same level in one session must not repeat the notice; a different level must. Test in Task 5.
+- A second below-level answer at the same level in one session must not repeat the notice, even after a normal pick in between; a different level must. Test in Task 5.
+- With nothing qualifying, the near clause must not admit a cheap candidate just below the bar as an unmarked pick. Test in Task 2.
 
 ---
 
@@ -71,7 +72,7 @@ In `test_level_is_max_of_base_and_facts`, the two lines for `implementation` wit
 ### Task 2: Catalog anchor and level bars
 
 **Files:**
-- Modify: `runtime/scores.py` (add `anchor`), `runtime/routing.py` (`BAR`, `FRONTIER`, `bars`, `order`, `strongest`, `seats`)
+- Modify: `runtime/scores.py` (add `anchor`), `runtime/routing.py` (`BAR`, `FRONTIER`, `bars`, `order`, `strongest`, `seats`), `runtime/selector.py:170` (pass the anchor)
 - Test: `tests/runtime/test_scores.py`, `tests/runtime/test_routing.py`
 
 **Interfaces:**
@@ -80,7 +81,7 @@ In `test_level_is_max_of_base_and_facts`, the two lines for `implementation` wit
   - `scores.anchor(cache: dict) -> float | None`: per lab, the best own score; lab = `creator` with a leading `~` removed; entries whose creator is `openrouter` skipped; returns the third-highest lab best, or the lowest lab best when fewer than three labs are scored, or `None` when nothing is scored.
   - `routing.BAR = (0.55, 0.80, 1.0)`, `routing.FRONTIER = 0.90` (council seats only); `RATIO` is removed.
   - `routing.bars(anchor: float) -> tuple[float, float, float]`.
-  - `routing.order(candidates: list, level: int, anchor: float) -> list`: floor = `bars(anchor)[level - 1]`; `ok`, `near` and sort as today; `[]` when nothing qualifies.
+  - `routing.order(candidates: list, level: int, anchor: float) -> list`: floor = `bars(anchor)[level - 1]`; `ok`, `near` and sort as today, except that when `ok` is empty the result is `[]` (the near clause only widens a non-empty `ok`).
   - `routing.strongest(candidates: list) -> list`: sorted by the existing `_strongest_first`.
   - `routing.seats` uses `FRONTIER` where it used `RATIO[2]`; behaviour unchanged.
 
@@ -122,15 +123,19 @@ def test_nothing_clears_returns_empty_and_strongest_orders_by_score(self):
     low = candidates(['luna', 'haiku'])
     self.assertEqual(routing.order(low, 2, ANCHOR), [])
     self.assertEqual([c['route'] for c in routing.strongest(low)], ['haiku', 'luna'])
+
+def test_near_clause_never_stands_alone(self):
+    free = dict(route='free', score=0.98 * routing.bars(100)[0], price=0, released=0)
+    self.assertEqual(routing.order([free], 1, 100), [])
 ```
 
 Rewrite `test_near_clause_needs_both_conditions` with `floor = routing.bars(100)[0]` and pass `100` as the anchor to `order`. In every other `order` call in the file (tie-break and borrowed-score tests), pass the highest candidate score in that test as the anchor, so every candidate clears level 1 and the test still checks only ordering.
 
 - [ ] **Step 2: Run** `python3 -B -m unittest tests.runtime.test_scores tests.runtime.test_routing -v`. Expected: FAIL (`anchor`, `bars`, `strongest` missing; golden picks differ).
 
-- [ ] **Step 3: Implement** the interfaces above.
+- [ ] **Step 3: Implement** the interfaces above. In `runtime/selector.py:170`, call `routing.order(pool['candidates'], level, scores.anchor(pool['cache']))`, so the suite stays green before Task 3.
 
-- [ ] **Step 4: Run** the same command plus `python3 -B -m unittest tests.runtime.test_council -v`. Expected: PASS; council tests unchanged.
+- [ ] **Step 4: Run** `python3 -B -m unittest discover -s tests -t .`. Expected: PASS, council and selector tests unchanged.
 
 - [ ] **Step 5: Commit** `feat: anchor level bars on the top three labs in the catalog`.
 
@@ -142,7 +147,7 @@ Rewrite `test_near_clause_needs_both_conditions` with `floor = routing.bars(100)
 
 **Interfaces:**
 - Consumes: `scores.anchor`, `routing.order(candidates, level, anchor)`, `routing.strongest` (Task 2).
-- Produces: every answer from `selector.select` carries `below_level: bool` (default `False` in `result`); `True` only when candidates existed, none cleared the bar, and the strongest were returned instead.
+- Produces: every answer from `selector.select` carries `below_level: bool` (default `False` in `result`); `True` only when candidates existed, none cleared the bar (or `scores.anchor` returned `None`), and the strongest were returned instead.
 
 - [ ] **Step 1: Write the failing tests.** Add a body with three strong labs:
 
@@ -156,12 +161,12 @@ Tests (use `Fetch(BODY3)`, `work_kind="implementation"`, `TASK`):
 - `test_cheap_model_below_the_bar_is_not_picked`: models `[model("opencode-go", "glm-5.3-flash"), model("opencode-go", "claude-haiku-5-5")]` → `route["model"] == "claude-haiku-5-5"`, `below_level is False`, and `glm-5.3-flash` not among the alternatives.
 - `test_nothing_at_the_level_returns_the_strongest_marked`: models `[model("opencode-go", "glm-5.3-flash")]` → `state == "selected"`, `route["model"] == "glm-5.3-flash"`, `below_level is True`, `level == 1`.
 - `test_constraints_leaving_only_low_candidates_fall_back`: models glm and haiku, `constraints=dict(allowed_models=["glm-5.3-flash"])` → selected glm, `below_level is True`.
-- `test_below_level_recheck_failure_keeps_the_empty_reason`: one-model case with `self.source.change = True` → `state == "no_selection"`, `route is None`, reason as `_empty_reason` gives today.
+- `test_below_level_recheck_failure_keeps_the_empty_reason`: one-model case with `self.source.change = True` → `state == "no_selection"`, `route is None`, `reason == "no_eligible_route"`, `below_level is False`.
 - In `test_selects_cheapest_qualifying_and_two_alternatives`, assert `result["below_level"] is False`.
 
 - [ ] **Step 2: Run** `python3 -B -m unittest tests.runtime.test_selector -v`. Expected: FAIL.
 
-- [ ] **Step 3: Implement.** In `_select`: `anchor = scores.anchor(pool['cache'])`; `ordered = routing.order(pool['candidates'], level, anchor)`; if `ordered` is empty and candidates exist, `ordered = routing.strongest(pool['candidates'])` and `below = True`; confirm as today; `below_level=below and bool(chosen)` in the answer. Add `below_level=False` to `result`'s defaults.
+- [ ] **Step 3: Implement.** In `_select`: `anchor = scores.anchor(pool['cache'])`; `ordered = routing.order(pool['candidates'], level, anchor)` when `anchor` is not `None`, else `[]`; if `ordered` is empty and candidates exist, `ordered = routing.strongest(pool['candidates'])` and `below = True`; confirm as today; `below_level=below and bool(chosen)` in the answer. Add `below_level=False` to `result`'s defaults.
 
 - [ ] **Step 4: Run** `python3 -B -m unittest discover -s tests -t .`. Expected: PASS (council included).
 
@@ -174,7 +179,7 @@ Tests (use `Fetch(BODY3)`, `work_kind="implementation"`, `TASK`):
 - Test: `tests/runtime/test_scores.py`
 
 **Interfaces:**
-- Produces: `scores.lookup(cache, key, creator)` unchanged in signature. When the exact entry is missing or unscored, it first looks for a unique scored entry (same creator when `creator` is given) whose key is `key` plus one `-` and exactly four digits. Found: score from it, `score_source='openrouter'`, price from the exact entry when that entry exists, otherwise from the dated one. Not found or ambiguous: the existing family fallback, unchanged.
+- Produces: `scores.lookup(cache, key, creator)` unchanged in signature. When the exact entry is missing or unscored, it first looks for a unique scored entry (same creator when `creator` is given) whose key is `key` plus one `-` and four digits that read as a month and day (`MMDD`, month 01-12, day 01-31). Found: score from it, `score_source='openrouter'`, price from the exact entry when that entry exists, otherwise from the dated one. Not found or ambiguous: the existing family fallback, unchanged.
 
 - [ ] **Step 1: Write the failing test** `test_date_suffixed_catalog_entry_scores_the_plain_name`:
 
@@ -189,7 +194,11 @@ self.assertEqual((found['score'], found['score_source'], found['price']),
 self.assertEqual(scores.lookup(cache, 'qwen3-8-max', None)['score'], 33.7)
 self.assertIsNone(scores.lookup(cache, 'muse-spark-1-3-contributor', None))
 self.assertIsNone(scores.lookup(cache, 'twin', None))
+ctx = parse(model('x/long-8192', 50))
+self.assertIsNone(scores.lookup(ctx, 'long', None))
 ```
+
+Today's effect: DeepSeek V4.1 Flash (32.6) and Qwen3.8 Max (33.7, blended price about 3) stay below the level-1 bar and outside the near clause, so no pick changes.
 
 - [ ] **Step 2: Run** `python3 -B -m unittest tests.runtime.test_scores -v`. Expected: FAIL.
 - [ ] **Step 3: Implement** in `lookup`, before the family fallback.
@@ -204,11 +213,11 @@ self.assertIsNone(scores.lookup(cache, 'twin', None))
 
 **Interfaces:**
 - Consumes: `below_level` and `level` on the selector answer (Task 3).
-- Produces: `description` = today's text + `" "` + the definitions paragraph copied verbatim from the stakes design's "Texts" section (the block after "Tool description, appended after the rubric"). Notice for `state === "selected" && below_level === true`: cause `` `below_level_${level}` ``, message exactly `` `vibe-workflow: No model on your plans reaches this task's level ${level}; Smart Router recommended the strongest available. Tell your human partner.` ``, deduplicated per session per cause like failure notices. A selected answer without `below_level` keeps clearing the session's set, as today.
+- Produces: `description` = today's text + `" "` + the definitions paragraph copied verbatim from the stakes design's "Texts" section (the block after "Tool description, appended after the rubric"). Notice for `state === "selected" && below_level === true`: cause `` `below_level_${level}` ``, message exactly `` `vibe-workflow: No model on your plans reaches this task's level ${level}; Smart Router recommended the strongest available. Tell your human partner.` ``, deduplicated per session per cause like failure notices. A selected answer without `below_level` clears only the session's failure causes; `below_level_*` causes stay seen for the whole session. A below-level answer clears nothing.
 
 - [ ] **Step 1: Write the failing tests.**
   - In `the tool describes its input and rubric`: assert `tool.description.length < 2048`, `/critical = a mistake could lose real money/`, `/cross-system = changes in more than one repository or deployed service that must stay compatible with each other/`, `/To review a design or plan, use work_kind planning/`, and no match for `/haiku|opus|sonnet|fable|astra|terra|luna|gemini/i`.
-  - New `below-level answers get one notice per session and level`: with the `answer.json` fixture used by `notices deduplicate per session…`, write `{state: "selected", below_level: true, level: 3, route: {...}}`; first call → notice equals the message above with `level 3`; second call same session → `null`; switch to `level: 2` → notice; a different session → notice.
+  - New `below-level answers get one notice per session and level`: with the `answer.json` fixture used by `notices deduplicate per session…`, write `{state: "selected", reason: null, below_level: true, level: 3, route: {provider: "invented", model: "invented", effort: "high"}, admission: false, reservation: false, spend_permit: false}`; first call → notice equals the message above with `level 3`; second call same session → `null`; a normal selected answer (no `below_level`) in between, then level 3 again → still `null`; switch to `level: 2` → notice; a different session → notice. The existing `notices deduplicate…` test must still pass unchanged.
 - [ ] **Step 2: Run** `node --test tests/plugin/plugin.test.js`. Expected: FAIL.
 - [ ] **Step 3: Implement** in `index.js`; keep `ROUTER_NOTE` and `MODEL_NOTE` untouched.
 - [ ] **Step 4: Run** `node --test "tests/**/*.test.js"`. Expected: PASS.
@@ -221,7 +230,7 @@ self.assertIsNone(scores.lookup(cache, 'twin', None))
 - Test: `tests/plugin/skill-advice.test.js`, `tests/plugin/pr-hook.test.js`
 
 **Interfaces:**
-- Produces: a `brainstorming` entry with `gate: "onboarded"` whose note is the stakes design's `brainstorming` note verbatim (its last sentence is `OVERRIDE`); the `writing-plans` note gains the stakes design's added step verbatim, inserted after "never as a silent move. " and before `OVERRIDE`.
+- Produces: a `brainstorming` entry with `gate: "onboarded"` whose note is the stakes design's `brainstorming` note verbatim (its last sentence is `OVERRIDE`); the `writing-plans` note gains the stakes design's added step verbatim, inserted after "never as a silent move. " and before `OVERRIDE`, followed by one space (the step ends "must decide." and `OVERRIDE` follows after a single space).
 
 - [ ] **Step 1: Write the failing tests.**
   - `skill-advice.test.js`: add a `DESIGN` constant with the exact brainstorming note; new test mirroring the writing-plans one: onboarded → `skillNote("superpowers:brainstorming") === DESIGN` and `skillNote("brainstorming") === DESIGN`; not onboarded or failing → `null`. Update `PLAN` with the added step. Remove `"brainstorming"` from the two "returns null" loops; use `"brainstorming-old"` instead.
@@ -237,10 +246,10 @@ self.assertIsNone(scores.lookup(cache, 'twin', None))
 **Files:**
 - Modify: `docs/development.md`, `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`, possibly `tests/tooling/opencode-verified.json` (written by the check)
 
-- [ ] **Step 1:** In `docs/development.md`, add a short "Levels and reviews" paragraph pointing to both specs and naming `scores.anchor`, `routing.bars` and `below_level`. In the auto-selection design's "Ranking rule" section, add one line: superseded by `2026-11-23-router-levels-design.md`.
+- [ ] **Step 1:** In `docs/development.md`, add a short "Levels and reviews" paragraph pointing to both specs and naming `scores.anchor`, `routing.bars` and `below_level`. In the auto-selection design, add one line to the "Task description" section (the task-level rule) and one to the "Ranking rule" section: superseded by `2026-11-23-router-levels-design.md`.
 - [ ] **Step 2: Run** `python3 -B scripts/validate.py`, `python3 -B -m unittest discover -s tests -t .`, `node --test "tests/**/*.test.js"`, `python3 -B scripts/package.py --output <new path>`, `python3 -B scripts/validate.py --root <new path>`. Expected: all pass.
 - [ ] **Step 3: Commit** `docs: record the level anchor and stakes-sized reviews`.
-- [ ] **Step 4: Run** `python3 -B scripts/live_check.py --injection` (pre-authorized by `AGENTS.md`: this plan changes injected notes). Expected: every model and the shell probe pass. If it fails, stop and tell the user. If it updates `tests/tooling/opencode-verified.json`, commit that change.
+- [ ] **Step 4: Run** `python3 -B scripts/live_check.py --injection` (pre-authorized by `AGENTS.md`: this plan changes the skill-load notes, which are injected notes, though `ROUTER_NOTE` and `MODEL_NOTE` stay unchanged). Its shell probe covers the `execute.after` path the skill notes ride on; it does not read the new texts, which Task 8 covers. Expected: every model and the shell probe pass. If it fails, stop and tell the user. If it updates `tests/tooling/opencode-verified.json`, commit that change.
 
 ### Task 8: Live prompt cases (only after the user's explicit OK)
 
