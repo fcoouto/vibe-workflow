@@ -204,7 +204,7 @@ test("below-level answers get one notice per session and level", async () => {
     route: { provider: "invented", model: "invented", effort: "high" }, admission: false, reservation: false, spend_permit: false })
   const normal = JSON.stringify({ state: "selected", reason: null, route: { provider: "invented", model: "invented", effort: "high" },
     admission: false, reservation: false, spend_permit: false })
-  const message = (level) => `vibe-workflow: No model on your plans reaches this task's level ${level}; Smart Router recommended the strongest available. Tell your human partner.`
+  const message = (level) => `vibe-workflow: Smart Router could not confirm a level ${level} match for this request and recommended the strongest available. Tell your human partner.`
   const execute = async (id) => JSON.parse((await f.execute(undefined, id)).content)
   try {
     await writeFile(answerFile, below(3))

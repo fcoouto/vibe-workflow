@@ -133,7 +133,7 @@ def lookup(cache, key, creator):
         own = matches[0] if matches else None
     if own is not None and own['score'] is not None:
         return _result(own, 'openrouter', own)
-    dated = _dated(models, key, creator)
+    dated = _dated(models, key, creator if own is None else own['creator'])
     if dated is not None:
         # Same price rule as the family path: the plain entry's own price when it has both, else the dated one's.
         priced = own if own is not None and own['input'] is not None and own['output'] is not None else dated
@@ -171,10 +171,13 @@ def anchor(cache):
     """Third-highest lab's best own score (lowest lab's when fewer than three); None when nothing is scored."""
     best = {}
     for entry in cache.get('models', {}).values():
-        if entry['score'] is None or entry['creator'] == 'openrouter':
+        creator, score = entry.get('creator'), entry.get('score')
+        if type(creator) is not str or type(score) not in (int, float) or not 0 <= score <= 100:
             continue
-        lab = entry['creator'].removeprefix('~')
-        best[lab] = max(best.get(lab, entry['score']), entry['score'])
+        lab = creator.removeprefix('~')
+        if lab in ('', 'openrouter'):
+            continue
+        best[lab] = max(best.get(lab, score), score)
     ranked = sorted(best.values(), reverse=True)
     if not ranked:
         return None

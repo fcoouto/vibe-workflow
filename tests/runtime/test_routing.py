@@ -64,6 +64,10 @@ class RoutingTest(unittest.TestCase):
     def test_bars_follow_the_anchor(self):
         self.assertEqual(routing.bars(61.4), (61.4 * 0.55, 61.4 * 0.80, 61.4))
 
+    def test_exact_cutoff_qualifies(self):
+        item = dict(route='r', score=50.4, price=1, released=1, creator='a', key='k')
+        self.assertEqual([c['route'] for c in routing.order([item], 2, 63)], ['r'])
+
     def test_nothing_clears_returns_empty_and_strongest_orders_by_score(self):
         low = candidates(['luna', 'haiku'])
         self.assertEqual(routing.order(low, 2, ANCHOR), [])

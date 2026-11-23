@@ -173,6 +173,9 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     if not ordered and pool['candidates']:
         ordered, below = routing.strongest(pool['candidates']), True
     chosen = _confirm(ordered, pool, 3)
+    if chosen and not below and not any(item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
+                                        for item in chosen):
+        chosen = []
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))

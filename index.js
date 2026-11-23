@@ -46,7 +46,7 @@ const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", 
   risk: ["reversible", "shared", "critical"] }
 
 const belowLevelAdvice = (level) => [`below_level_${level}`,
-  `vibe-workflow: No model on your plans reaches this task's level ${level}; Smart Router recommended the strongest available. Tell your human partner.`]
+  `vibe-workflow: Smart Router could not confirm a level ${level} match for this request and recommended the strongest available. Tell your human partner.`]
 // A selected pick without below_level ends the session's failure notices; below-level notices last the session.
 const forgetFailures = (notices, sessionID) => {
   const seen = notices.get(sessionID)

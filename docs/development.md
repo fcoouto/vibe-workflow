@@ -234,8 +234,10 @@ wording is "not ready yet", with a separate hint for the second.
 
 Level bars come from the public score catalog, not a fixed model list. `scores.anchor(cache)`
 takes the third-highest per-lab best score; `routing.bars(anchor)` turns it into the level 1,
-2 and 3 floors (0.55, 0.80 and 1 times the anchor). A selector answer picked below its
-requested level carries `below_level: true`, and `index.js` shows that notice once per session
+2 and 3 floors (0.55, 0.80 and 1 times the anchor). When the anchor has
+fewer than three labs it is the lowest lab's best score; with no scores it is `None` and selection
+falls back to the strongest available. `below_level: true` marks that strongest-available fallback
+(an ordinary near-clause pick can score slightly below the bar without setting it), and `index.js` shows that notice once per session
 per level. Design and plan reviews are sized to the stakes. The specs are
 `docs/superpowers/specs/2026-11-23-router-levels-design.md` and
 `docs/superpowers/specs/2026-11-23-stakes-sized-reviews-design.md`.

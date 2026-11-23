@@ -162,6 +162,21 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual((result["state"], result["reason"], result["route"], result["below_level"]),
                          ("no_selection", "no_eligible_route", None, False))
 
+    def test_failed_recheck_never_leaves_an_unmarked_below_bar_pick(self):
+        class OnePath(Facts):
+            def billing(self, route, now):
+                fact = super().billing(route, now)
+                if route["path"] == "opencode-claude-subscription" and self.reads[route["path"]] > 1:
+                    fact["producer"] = "invented:changed"
+                return fact
+        self.source = OnePath()
+        self.fetch = Fetch(body(("openai/gpt-6-2-sol", 10, 3, 15, 80), ("google/gemini-4-neon", 20, 3, 15, 70),
+                                ("anthropic/claude-opus-5-5", 30, 4, 20, 60), ("z-ai/glm-5-3-flash", 40, 0.1, 0.5, 59)))
+        result = self.run_select(self.request(task=dict(files="1-2", spec="exact", risk="critical"), models=[
+            model("claude-agent", "claude-opus-5-5"), model("opencode-go", "glm-5.3-flash")]))
+        self.assertEqual((result["state"], result["route"], result["below_level"], result["level"]),
+                         ("no_selection", None, False, 3))
+
     def test_only_openrouter_scores_fall_back_without_an_anchor(self):
         self.fetch = Fetch(body(("openrouter/openai/gpt-6-2-sol", 10, 3, 15, 78)))
         result = self.run_select(self.request(work_kind="implementation",

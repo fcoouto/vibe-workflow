@@ -165,6 +165,23 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(scores.anchor(parse(model('a/x', 70), model('b/y', 62))), 62)
         self.assertIsNone(scores.anchor(parse(model('a/x', None))))
 
+    def test_anchor_ignores_malformed_creators_and_aggregator_aliases(self):
+        base = parse(model('a/x', 70), model('b/y', 62.1), model('c/z', 61.4))
+        self.assertEqual(scores.anchor(parse(model('a/x', 70), model('b/y', 62.1), model('c/z', 61.4),
+                                             model('~openrouter/auto', 99))), 61.4)
+        for creator in (None, '', 5):
+            cache = dict(base, models=dict(base['models'], bad=dict(key='k', creator=creator, score=99.0)))
+            self.assertEqual(scores.anchor(cache), 61.4)
+        for score in (float('nan'), float('inf'), -1, 101, True, '9'):
+            cache = dict(base, models=dict(base['models'], bad=dict(key='k', creator='d', score=score)))
+            self.assertEqual(scores.anchor(cache), 61.4)
+
+    def test_dated_match_stays_with_the_plain_entrys_creator(self):
+        cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+        self.assertIsNone(scores.lookup(cache, 'small', None))
+        self.assertEqual(scores.lookup(parse(model('lab-b/small', None), model('lab-b/small-0902', 88)),
+                                       'small', None)['score'], 88)
+
 
 def scores_price(inp, out):
     return (3 * inp + out) / 4

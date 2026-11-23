@@ -13,6 +13,7 @@ BAR = (0.55, 0.80, 1.0)
 FRONTIER = 0.90
 NEAR_SCORE = 0.97
 NEAR_PRICE = 0.5
+TOLERANCE = 1e-9
 EFFORTS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
 
 
@@ -83,7 +84,7 @@ def bars(anchor):
 
 
 def order(candidates, level, anchor):
-    floor = bars(anchor)[level - 1]
+    floor = bars(anchor)[level - 1] - TOLERANCE
     ok = [item for item in candidates if item['score'] >= floor]
     if not ok:
         return []
