@@ -31,7 +31,7 @@ python3 -B scripts/package.py --output dist
 - `scripts/` holds command entry points. Only `select.py` ships; `validate`, `package`, `manifest` and `live_check` are development tools.
 - `tests/` is named after the module under test (`<module>.test.js`, `test_<module>.py`), one flat folder for both languages.
 - `skills/<id>/` holds `SKILL.md` plus `references/`; `docs/` holds specs and plans under `superpowers/` and council records under `vibe-council/`.
-- A new shipped file must be added to `package.json` `files` and `scripts/manifest.py` in the same change.
+- A new shipped file must be covered by `package.json` `files` (a directory entry covers the files inside it) and listed in `scripts/manifest.py` in the same change.
 
 The active extraction task retains its original pinned policy and local-only
 delivery constraints in its plan, design and private ledger. This shorter product

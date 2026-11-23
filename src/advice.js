@@ -21,7 +21,7 @@ function appendNote(event, note) {
   } catch {}
 }
 
-// The hook is unverified on the installed host: every field is read defensively and a missing one keeps the note silent.
+// The host's event shape varies by version: every field is read defensively and a missing one keeps the note silent.
 export async function registerAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout }) {
   const advisor = createAdvisor({ settings, primary, checkout })
   const skills = createSkillAdvisor({ settings, onboarded })
