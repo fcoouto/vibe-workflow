@@ -187,6 +187,12 @@ class ScoresTest(unittest.TestCase):
         cache['models']['lab-a/small']['creator'] = None
         self.assertIsNone(scores.lookup(cache, 'small', 'lab-a'))
 
+    def test_invalid_plain_row_creator_never_widens_the_dated_match(self):
+        for creator in ('', None):
+            cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+            cache['models']['lab-a/small']['creator'] = creator
+            self.assertIsNone(scores.lookup(cache, 'small', None), creator)
+
 
 def scores_price(inp, out):
     return (3 * inp + out) / 4
