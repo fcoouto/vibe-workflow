@@ -563,6 +563,24 @@ test("a malformed stored diag is dropped and replaced at the next save", async (
   assert.deepEqual(storage.data.get(KEY).diag, merged)
 })
 
+test("the saved diag keeps only a known PR state, and its instance id survives a reload even when Math.random returns 0", async (t) => {
+  t.mock.method(Math, "random", () => 0)
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  await h.write(SPEC)
+  h.facts.prs = { "feat/x": [{ state: "https://token@example.invalid", title: "x" }] }
+  await h.end()
+  const diag = { ...storage.data.get(KEY).diag }
+  assert.equal(diag.pr, null, "an unknown PR state is never stored")
+  assert.match(diag.instance, /^[a-z0-9]{1,16}$/)
+  h.facts.prs = { "feat/x": [{ state: "OPEN", title: "x" }] }
+  await h.end()
+  assert.equal(storage.data.get(KEY).diag.pr, "OPEN")
+  const again = await host(t, { storage, root: h.root })
+  await again.start()
+  assert.equal(storage.data.get(KEY).diag.instance, diag.instance, "a valid saved diag is kept on load, not dropped")
+})
+
 test("the saved diag counts declared and changed plan paths", async (t) => {
   const h = await host(t)
   mkdirSync(join(h.root, "docs/superpowers/plans"), { recursive: true })
@@ -581,11 +599,12 @@ test("a push, PR create or PR merge records the bound checkout's branch, with or
   for (const command of ["git push origin HEAD", "rtk git push -u origin feat/x", "git -C /elsewhere push", "gh pr create --draft",
     "gh pr merge 5 --merge", "cd /x && git push"]) {
     const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-elsewhere-")))
-    t.after(() => rmSync(elsewhere, { recursive: true, force: true }))
+    const commandDir = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-command-")))
+    t.after(() => { rmSync(elsewhere, { recursive: true, force: true }); rmSync(commandDir, { recursive: true, force: true }) })
     const h = await host(t, { directory: elsewhere })
     await h.write(`${h.root}/${SPEC}`)
     Object.assign(h.facts, { branch: "feat/x", upstream: false })
-    await h.shell(command, "ses_1", { input: { command, workdir: elsewhere } })
+    await h.shell(command, "ses_1", { input: { command, workdir: commandDir } })
     assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x", command)
     assert.deepEqual(h.calls.update, [], "the title is not written at tool time")
     const status = h.calls.status.at(-1)

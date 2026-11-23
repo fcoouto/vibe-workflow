@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import { resolve } from "node:path"
 import { classify } from "./pr-advice.js"
@@ -58,7 +59,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   const text = (value) => value === null || typeof value === "string"
-  const instance = Math.random().toString(36).slice(2, 10)
+  const instance = randomUUID().slice(0, 8)
   const STEPS = ["status", "diff", "plan", "pr"]
   const PR_STATES = ["OPEN", "MERGED", "CLOSED"]
   const short = (value) => value === null || (typeof value === "string" && value.length <= 200)
