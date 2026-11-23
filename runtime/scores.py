@@ -149,6 +149,20 @@ def load(state_dir):
     return value
 
 
+def anchor(cache):
+    """Third-highest lab's best own score (lowest lab's when fewer than three); None when nothing is scored."""
+    best = {}
+    for entry in cache.get('models', {}).values():
+        if entry['score'] is None or entry['creator'] == 'openrouter':
+            continue
+        lab = entry['creator'].removeprefix('~')
+        best[lab] = max(best.get(lab, entry['score']), entry['score'])
+    ranked = sorted(best.values(), reverse=True)
+    if not ranked:
+        return None
+    return ranked[2] if len(ranked) >= 3 else ranked[-1]
+
+
 def _scored(cache, key):
     return any(entry['key'] == key and entry['score'] is not None for entry in cache['models'].values())
 

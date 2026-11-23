@@ -167,7 +167,7 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now)
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
-    chosen = _confirm(routing.order(pool['candidates'], level), pool, 3)
+    chosen = _confirm(routing.order(pool['candidates'], level, scores.anchor(pool['cache'])), pool, 3)
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:])

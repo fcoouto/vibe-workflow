@@ -131,6 +131,19 @@ class ScoresTest(unittest.TestCase):
                       dict(id='a/nocreated', pricing='x'))
         self.assertEqual(list(cache['models']), ['a/ok'])
 
+    def test_anchor_is_the_third_lab_best(self):
+        cache = parse(model('a/x-1', 70), model('a/x-2', 65), model('b/y', 62.1), model('c/z', 61.4),
+                      model('d/w', 50), model('~a/x-latest', 99), model('openrouter/auto', 99))
+        self.assertEqual(scores.anchor(cache), 61.4)
+        newer = parse(model('a/x-1', 80), model('b/y', 62.1), model('c/z', 61.4), model('d/w', 50))
+        self.assertEqual(scores.anchor(newer), 61.4)
+        entrant = parse(model('a/x-1', 70), model('b/y', 62.1), model('c/z', 61.4), model('e/v', 63))
+        self.assertEqual(scores.anchor(entrant), 62.1)
+
+    def test_anchor_with_fewer_labs(self):
+        self.assertEqual(scores.anchor(parse(model('a/x', 70), model('b/y', 62))), 62)
+        self.assertIsNone(scores.anchor(parse(model('a/x', None))))
+
 
 def scores_price(inp, out):
     return (3 * inp + out) / 4
