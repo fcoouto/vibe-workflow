@@ -37,19 +37,32 @@ test("skillNote states the onboarding decision for the finishing and worktree sk
   assert.equal(await merges.skillNote("superpowers:using-git-worktrees"), WORKTREE)
   assert.equal(await user.skillNote("using-git-worktrees"), WORKTREE)
   const { skillNote, calls } = advisor()
-  for (const skill of ["brainstorming", "finishing-a-development-branch-old", "using-git-worktrees-x", undefined, 7]) {
+  for (const skill of ["brainstorming-old", "finishing-a-development-branch-old", "using-git-worktrees-x", undefined, 7]) {
     assert.equal(await skillNote(skill), null)
   }
   assert.equal(calls.settings, 0)
 })
 
+const PLAN_STEP = "After your self-review and before you ask for theirs, unless the plan's risk is reversible, dispatch one " +
+  "fresh reviewer, once, with the spec and plan paths only. Ask it for, ranked: spec requirements with no task, misordered " +
+  "tasks, failure modes no test covers, and steps a cheap implementer could misread; \"nothing important\" is a valid " +
+  "answer. Set its model as planning work (level 3); without Smart Router, the top tier. Fix what it finds yourself, " +
+  "without a second review; bring your human partner only what they must decide."
 const PLAN = "vibe-workflow: your human partner pre-approved the execution method you recommend; treat it as already " +
   "supplied, name it, and do not ask which one to use. Still ask them to review the plan, and wait for that review before " +
   "implementing. Before you fill in each task's Files block, follow the vibe-project-layout skill: put every new file " +
   "and test where the project's recorded layout says. If a file belongs elsewhere or a folder needs splitting, propose it " +
-  "as its own task for your human partner to approve, never as a silent move. " +
-  "An explicit request from your human partner in this session overrides this."
+  "as its own task for your human partner to approve, never as a silent move. " + PLAN_STEP + " " + LAST
+const DESIGN = "vibe-workflow: your human partner asks that the design check match the stakes. Run the builder check for a " +
+  "project, and also for a small change where a mistake could lose real money, expose credentials, break production or " +
+  "users' data, or cannot be undone. Other small changes skip it, as the skill says. Add one request to its prompt: " +
+  "\"Then list up to five flaws in the approach that would cost most: a wrong choice, a gap, an unhandled risk. No " +
+  "rewrites.\" Give the reviewer the document path only, for one pass, and sort its flaws into the same three piles. " +
+  "Set its model as planning work (level 3); without Smart Router, the top tier. " + LAST
+const MODEL_NAME = /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i
+
 test("skillNote pre-approves the recommended execution method in any onboarded project", async () => {
+  assert.doesNotMatch(PLAN, MODEL_NAME)
   for (const settings of [on, { state: "off" }, { state: "not_onboarded" }, null]) {
     const { skillNote } = advisor(settings)
     assert.equal(await skillNote("superpowers:writing-plans"), PLAN)
@@ -60,7 +73,20 @@ test("skillNote pre-approves the recommended execution method in any onboarded p
   const failing = advisor(on, { onboarded: async () => { throw new Error("boom") } })
   assert.equal(await failing.skillNote("writing-plans"), null)
   const { skillNote, calls } = advisor(on, { isOnboarded: false })
-  for (const skill of ["writing-plans-old", "brainstorming", "toString", "__proto__"]) assert.equal(await skillNote(skill), null)
+  for (const skill of ["writing-plans-old", "brainstorming-old", "toString", "__proto__"]) assert.equal(await skillNote(skill), null)
   assert.equal(calls.settings, 0)
   assert.equal(calls.onboarded, undefined)
+})
+
+test("skillNote sends the stakes-sized design review in any onboarded project", async () => {
+  assert.doesNotMatch(DESIGN, MODEL_NAME)
+  for (const settings of [on, { state: "off" }, { state: "not_onboarded" }, null]) {
+    const { skillNote } = advisor(settings)
+    assert.equal(await skillNote("superpowers:brainstorming"), DESIGN)
+    assert.equal(await skillNote("brainstorming"), DESIGN)
+  }
+  const fresh = advisor(on, { isOnboarded: false })
+  assert.equal(await fresh.skillNote("brainstorming"), null)
+  const failing = advisor(on, { onboarded: async () => { throw new Error("boom") } })
+  assert.equal(await failing.skillNote("brainstorming"), null)
 })
