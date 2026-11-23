@@ -8,7 +8,7 @@ import { test } from "node:test"
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "vibe-project-")))
   t.after(() => rm(root, { recursive: true }))
-  const module = await import("../project.js").catch((error) => {
+  const module = await import("../src/project.js").catch((error) => {
     if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
   })
   assert.ok(module?.createProjectSettings, "project-settings interface is missing")

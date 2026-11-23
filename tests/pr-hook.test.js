@@ -19,11 +19,11 @@ async function fixture(t, { hook = true, settings = { enabled: true, agent_merge
     await writeFile(join(root, ".vibe-workflow", "settings.json"),
       typeof settings === "string" ? settings : JSON.stringify({ version: 1, features: [{ git_workflow: settings }] }))
   }
-  const hooks = new Map(), contexts = [], tools = new Map()
+  const hooks = new Map(), registrations = [], contexts = [], tools = new Map()
   const ctx = {
     location: { directory: root }, options: { state_dir: join(root, "state") },
     tool: { transform: async (apply) => apply({ add: (entry) => tools.set(entry.name, entry) }),
-      ...(hook && { hook: async (name, handler) => hooks.set(name, handler) }) },
+      ...(hook && { hook: async (name, handler) => { registrations.push(name); hooks.set(name, handler) } }) },
     skill: { transform: async (apply) => apply({ add: () => {} }) },
     permission: { assert: async () => {} },
     session: { hook: async (name, handler) => { if (name === "context") contexts.push(handler) } },
@@ -36,14 +36,15 @@ async function fixture(t, { hook = true, settings = { enabled: true, agent_merge
     return event
   }
   const context = async () => { const event = { system: [] }; for (const handler of contexts) await handler(event); return event.system.map((entry) => entry.text) }
-  return { root, hooks, fire, context, cleanup, tools }
+  return { root, hooks, registrations, fire, context, cleanup, tools }
 }
 
 const create = 'gh pr create --draft --title "[BLOCKED] a"'
 
 test("registers only when the host provides tool.hook", async (t) => {
-  const { hooks } = await fixture(t)
+  const { hooks, registrations } = await fixture(t)
   assert.deepEqual([...hooks.keys()], ["execute.after"])
+  assert.deepEqual(registrations, ["execute.after"], "skill and shell advice share one registration")
   const without = await fixture(t, { hook: false })
   assert.equal(without.hooks.size, 0)
 })

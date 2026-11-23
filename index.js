@@ -4,11 +4,11 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createRoster, registerCouncil } from "./council.js"
-import { registerOnboarding, registerSkill } from "./onboarding.js"
-import { registerPrAdvice } from "./pr-advice.js"
-import { createProjectSettings } from "./project.js"
-import { registerSessionTitles } from "./session-titles.js"
+import { createRoster, registerCouncil } from "./src/council.js"
+import { registerOnboarding, registerSkill } from "./src/onboarding.js"
+import { registerAdvice } from "./src/advice.js"
+import { createProjectSettings } from "./src/project.js"
+import { registerSessionTitles } from "./src/session-titles.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
@@ -239,7 +239,7 @@ export default {
     const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
     const onboarded = async () => (await Promise.all([project, gitWorkflow, sessionTitles].map((item) => item.inspect())))
       .some(({ state }) => state === "on" || state === "off")
-    const prAdvice = await registerPrAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
+    const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
@@ -248,7 +248,7 @@ export default {
       return result
     } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
-    () => prAdvice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
+    () => advice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
     () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
@@ -307,7 +307,7 @@ export default {
     return () => {
       closed = true
       subscription.abort()
-      prAdvice.close()
+      advice.close()
       titles.close()
       notices.clear()
       for (const stop of active) stop()
