@@ -7,7 +7,7 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const [exportArg, evidenceArg] = process.argv.slice(2)
-assert.ok(exportArg && evidenceArg, "usage: node tests/verify_cancel.mjs EXPORT EVIDENCE")
+assert.ok(exportArg && evidenceArg, "usage: node tests/tooling/verify_cancel.mjs EXPORT EVIDENCE")
 const root = resolve(evidenceArg)
 await mkdir(root, { recursive: true, mode: 0o700 })
 assert.equal(await realpath(root), root)

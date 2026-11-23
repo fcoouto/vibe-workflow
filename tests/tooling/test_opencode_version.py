@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("live_check", ROOT / "scripts" / "live_check.py")
 live_check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(live_check)
