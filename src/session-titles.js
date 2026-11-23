@@ -25,6 +25,10 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 }
 
 const MAX_SESSIONS = 128
+const MAX_HOPS = 5
+const MAX_CHILDREN = 50
+const MAX_PAGES = 4
+const STALE_MS = 10 * 60 * 1000
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const SHELLS = new Set(["bash", "shell"])
@@ -32,7 +36,7 @@ const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
-export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun }) {
+export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000 }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
@@ -143,6 +147,54 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
+  // The top of a session's parent chain; itself when it has no parent, null when a read fails or the chain is too long.
+  async function rootOf(sessionID) {
+    try {
+      let id = sessionID
+      for (let hops = 0; hops <= MAX_HOPS; hops++) {
+        const { parentID } = await ctx.session.get({ sessionID: id })
+        if (typeof parentID !== "string") return id
+        id = parentID
+      }
+    } catch {}
+    return null
+  }
+
+  // Whether a child of the root, or with `withSelf` the root itself, is running now. A session runs when it became busy
+  // and has not gone idle since. For a child the age rule (newest of `updated` and `busy`) keeps a busy mark left by a
+  // crash from hiding the label for good; the root has none, because `updated` does not move during a tool call and a
+  // root inside a long one is still running (a root stuck busy only skips a write that did not exist before). `ended` ({ id, at }) is a session whose end event arrived at `at`: that run counts as
+  // idle whatever the host still says, but a run that began after `at` does not. The two reads are independent and
+  // share one deadline of `deadline` ms; what has not answered by then, or failed, counts as "nothing runs", so a stuck
+  // host call cannot hold the session's queue.
+  async function activity(rootID, { ended = null, withSelf = false } = {}) {
+    const finite = (value) => typeof value === "number" && Number.isFinite(value)
+    const busy = (time) => finite(time?.busy) && !(finite(time.idle) && time.idle >= time.busy)
+    const running = (info, now) => busy(info?.time) && now - Math.max(info.time.busy, finite(info.time.updated) ? info.time.updated : 0) < STALE_MS
+    const childRuns = async () => {
+      const now = Date.now()
+      let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
+      for (let pages = 1; ; pages++) {
+        const items = Array.isArray(page) ? page : page?.data
+        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && running(info, now) &&
+          !(ended && info.id === ended.id && info.time.busy <= ended.at))) return true
+        const next = page?.cursor?.next
+        if (typeof next !== "string" || pages >= MAX_PAGES) return false
+        page = await ctx.session.list({ cursor: next, limit: MAX_CHILDREN })
+      }
+    }
+    const rootRuns = async () => withSelf && busy((await ctx.session.get({ sessionID: rootID })).time)
+    const result = { children: false, self: false }
+    let timer
+    await Promise.race([
+      Promise.all([childRuns().then((value) => { result.children = value }, () => {}),
+        rootRuns().then((value) => { result.self = value }, () => {})]),
+      new Promise((done) => { timer = setTimeout(done, deadline) }),
+    ])
+    clearTimeout(timer)
+    return { ...result }
+  }
+
   // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
   async function record(sessionID) {
     if (!await on()) return
@@ -155,13 +207,28 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
-  async function evaluate(sessionID, ended) {
+  // A session below a bound root ended: the root may now be idle with nothing running, so it re-evaluates its label.
+  // `created` is the end event's own time: a late delivery must not push the cutoff past a run that restarted since.
+  // It is used only when it is within 5 minutes of now, so a different unit or clock can never hide the label.
+  async function wakeRoot(sessionID, created) {
+    const received = Date.now()
+    const at = typeof created === "number" && Math.abs(created - received) <= 5 * 60 * 1000 ? created : received
+    if (!await on()) return
+    const root = await rootOf(sessionID)
+    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, { id: sessionID, at }))
+  }
+
+  async function evaluate(sessionID, ended, fromChild = null) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
       await load(sessionID)
     }
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
+    if (fromChild) {
+      const now = await activity(sessionID, { ended: fromChild, withSelf: true })
+      if (now.children || now.self) return
+    }
     let cells = task.cells
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
@@ -175,11 +242,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
+    const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
     const title = (await ctx.session.get({ sessionID })).title ?? ""
+    if (controller.signal.aborted || (fromChild && busy.self)) return
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
-    const next = compose(topic, cells, ended && cells < 5)
+    const next = compose(topic, cells, ended && cells < 5 && !busy.children)
     if (next !== title) await ctx.session.update({ sessionID, title: next })
     if (sessions.get(sessionID) !== entry || entry.task !== task) return
     Object.assign(task, { cells, fresh: false })
@@ -208,6 +277,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           const sessionID = event?.data?.sessionID
           if (typeof sessionID === "string" && TYPES.includes(event.type)) {
             enqueue(sessionID, () => evaluate(sessionID, event.type !== TYPES[0]))
+            if (event.type !== TYPES[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }
         }
       } catch {}

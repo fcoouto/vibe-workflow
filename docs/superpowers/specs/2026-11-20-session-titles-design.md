@@ -153,8 +153,10 @@ project, removed afterwards:
 - Added at the end of a turn when the session is bound and not done; removed at
   `session.execution.started`. When you see `WAITING`, the session has stopped and needs
   you to move it.
-- A root turn can end while a background child still runs; the label then shows until
-  the child's report wakes the session (seconds to minutes). Accepted.
+- A root turn can end while a background child still runs. Since 2026-11-23 (issue #379) the
+  label is not added while any child session of the root runs, and it appears when the
+  last one ends and the root stays idle; see `2026-11-23-title-waiting-idle-design.md`. This
+  replaces the earlier decision to accept the label during a child's run.
 
 ### Topic and guards
 
