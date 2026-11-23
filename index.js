@@ -45,6 +45,15 @@ const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_model
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
 
+const belowLevelAdvice = (level) => [`below_level_${level}`,
+  `vibe-workflow: No model on your plans reaches this task's level ${level}; Smart Router recommended the strongest available. Tell your human partner.`]
+// A selected pick without below_level ends the session's failure notices; below-level notices last the session.
+const forgetFailures = (notices, sessionID) => {
+  const seen = notices.get(sessionID)
+  if (!seen) return
+  for (const cause of seen) if (!cause.startsWith("below_level_")) seen.delete(cause)
+  if (!seen.size) notices.delete(sessionID)
+}
 function failureAdvice(answer) {
   const exclusions = Array.isArray(answer.excluded) ? answer.excluded : []
   const excluded = exclusions[0]?.reason
@@ -67,9 +76,20 @@ const input = {
     constraints: { type: "object" },
   },
 }
+// Read by the agent where it asks for a model; the stakes design's "Texts" section owns the wording.
+const definitions = "Rate the task, not the project, by what a mistake in it would cost, not by its size. risk: critical = " +
+  "a mistake could lose real money, expose credentials, break production or users' data, or cannot be undone by a " +
+  "revert, including config, flags, helpers or fixtures that feed such a path; shared = it changes code, data or " +
+  "interfaces that other work depends on; reversible = local and undone by a revert. Unsure whether it is critical: " +
+  "say critical. spec: exact = a written plan names the files, the expected behavior and the checks that tell success " +
+  "from failure; prose = described in words; open = approach undecided. files: files changed; cross-system = changes " +
+  "in more than one repository or deployed service that must stay compatible with each other. Implementing or testing " +
+  "an exact plan stays at level 1 unless cross-system; its reviews carry the risk. To review a design or plan, use " +
+  "work_kind planning. To review a diff, give the risk and files of the work reviewed, spec exact if it was built from " +
+  "an exact plan, otherwise prose."
 const description = "Get an advisory provider/model/effort choice. Does not launch or authorize execution. " +
   "Describe the task by its observable facts, levels in order: " +
-  Object.entries(rubric).map(([key, values]) => `${key}: ${values.join(" | ")}`).join("; ") + "."
+  Object.entries(rubric).map(([key, values]) => `${key}: ${values.join(" | ")}`).join("; ") + ". " + definitions
 
 export default {
   id: "vibe-workflow",
@@ -219,9 +239,10 @@ export default {
           refreshLater(refresh)
         }
         let notice = null
-        if (answer.state === "selected") notices.delete(sessionID)
+        const belowLevel = answer.state === "selected" && answer.below_level === true && Number.isSafeInteger(answer.level)
+        if (answer.state === "selected" && !belowLevel) forgetFailures(notices, sessionID)
         else if (!closed && !signal?.aborted) {
-          const [cause, message] = failureAdvice(answer)
+          const [cause, message] = belowLevel ? belowLevelAdvice(answer.level) : failureAdvice(answer)
           const identified = typeof sessionID === "string" && sessionID.length > 0 && sessionID.length <= 256
           const seen = identified ? notices.get(sessionID) ?? new Set() : new Set()
           if (!seen.has(cause)) notice = message
