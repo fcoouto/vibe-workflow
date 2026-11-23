@@ -1,6 +1,6 @@
 {
   "name": "vibe-workflow",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "On-demand advisory subscription selector for OpenCode V2",
   "type": "module",
   "exports": { ".": "./index.js" },
