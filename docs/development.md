@@ -17,7 +17,9 @@ python3 -B scripts/package.py --output dist
 python3 -B scripts/validate.py --root dist
 ```
 
-Use a new output path for each export. For a live check of plugin behavior, run
+Run Python tests with `-t .`: without it the suite refuses to load. The quoted Node glob needs
+Node 22 or newer (Node expands it; older versions cannot). Use a new output path for each
+export. For a live check of plugin behavior, run
 `python3 -B scripts/live_check.py --prompt "..." [--settings '<settings JSON>']`: it loads this
 checkout's package into a throwaway clone, runs one API-created session through `opencode api`
 (inference on the default model), prints the tool calls, `vibe-workflow:` notes, replies and

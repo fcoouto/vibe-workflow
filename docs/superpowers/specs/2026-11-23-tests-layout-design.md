@@ -64,11 +64,13 @@ Why the `-t .` is required (measured on a throwaway copy): without it, Python im
 folder as the top-level name `runtime` and finds only 114 of the 215 tests, with failures.
 With it, all 215 are found and every test is imported as `tests.<folder>.<module>`, so
 `tests/__init__.py` (the `HOME` isolation) always runs first. Today a single test file that
-does not import `tests` runs against the real home; a selective run no longer can. A small
-guard file, `tests/tooling/test_layout.py`, fails with the right command in its message when
-the suite is started the old way: it asserts its own module name starts with `tests.` and
-that `HOME` is not the account's real home. The Node glob must be quoted so Node expands
-it, not the shell.
+does not import `tests` runs against the real home; a selective run no longer can. To make the
+old way fail loudly, `tests/runtime/__init__.py` and `tests/tooling/__init__.py` raise an
+`ImportError` naming the right command when imported as a top-level package (which also stops
+`tests/runtime` shadowing the shipped `runtime`), full or filtered. A small test file,
+`tests/tooling/test_layout.py`, pins that refusal with a subprocess run and asserts that `HOME`
+is not the account's real home. The Node glob must be quoted so Node expands it, not the shell,
+which needs Node 22 or newer; `docs/development.md` says so.
 
 References the move breaks (all fixed in this PR):
 
