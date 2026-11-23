@@ -146,7 +146,14 @@ Phased restructure of this repo, driven by the skill, each its own PR with its o
    touch this: its sentence goes into `pr-advice.js` as it stands today.
 2. `tests/` and then `runtime/`, decided when each is planned. `runtime/` and `scripts/`
    stay separate and the dev tools stay in `scripts/` (council I9); nested Python
-   subpackages stay deferred (I11).
+   subpackages stay deferred (I11). Decided 2026-11-23: `tests/` is grouped by domain (PR
+   #380). `runtime/` stays flat. An `ast` count that includes function-level imports found
+   two import cycles (`claude_usage` and `native_catalog`; `routing_observations` and
+   `opencode_account`), so the routing and accounts clusters depend on each other and any
+   split would be cyclic, or layered rather than by domain. A split would also rewrite
+   24 imports, the validator's single-level rule, `scripts/manifest.py`, `scripts/select.py`
+   and nine test strings in the shipped router's import surface, with no behavior gain.
+   Revisit when the cycles are gone or `runtime/` passes about 25 modules.
 
 ## Not verified
 
