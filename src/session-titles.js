@@ -182,13 +182,24 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
-  async function evaluate(sessionID, ended) {
+  // A session below a bound root ended: the root may now be idle with nothing running, so it re-evaluates its label.
+  async function wakeRoot(sessionID) {
+    if (!await on()) return
+    const root = await rootOf(sessionID)
+    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, true))
+  }
+
+  async function evaluate(sessionID, ended, fromChild = false) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
       await load(sessionID)
     }
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
+    if (fromChild) {
+      const now = await activity(sessionID)
+      if (now.children || now.self) return
+    }
     let cells = task.cells
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
@@ -236,6 +247,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           const sessionID = event?.data?.sessionID
           if (typeof sessionID === "string" && TYPES.includes(event.type)) {
             enqueue(sessionID, () => evaluate(sessionID, event.type !== TYPES[0]))
+            if (event.type !== TYPES[0] && !sessions.has(sessionID)) wakeRoot(sessionID).catch(() => {})
           }
         }
       } catch {}

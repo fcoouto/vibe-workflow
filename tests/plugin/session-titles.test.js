@@ -391,16 +391,82 @@ test("active result shapes and failures", async (t) => {
   }
 })
 
-test("only a root turn end reads the active sessions", async (t) => {
+test("the active sessions are read only for a bound root's turn end and the end of a session below it", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
   await h.start()
   await h.end("ses_2")
   await h.write(SPEC, "child_1")
-  await h.end("child_1")
-  assert.equal(h.calls.active, 0)
+  assert.equal(h.calls.active, 0, "a start, an unbound parentless end and a write read nothing")
   await h.end()
   assert.equal(h.calls.active, 1)
+  await h.end("child_1")
+  assert.equal(h.calls.active, 3, "the child's end reads once to decide and once for the label")
+})
+
+test("the label appears when the last running child ends and the root is idle", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["child_1"]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  h.facts.active = []
+  await h.end("child_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("with two children running, only the last to end writes the label", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { parents: { child_2: "ses_1" }, active: ["child_1", "child_2"] })
+  await h.end()
+  const writes = h.calls.update.length
+  h.facts.active = ["child_2"]
+  await h.end("child_1")
+  assert.equal(h.calls.update.length, writes)
+  h.facts.active = []
+  await h.end("child_2")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a child's end writes nothing while the root is running again", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["child_1"]
+  await h.end()
+  const [writes, lookups] = [h.calls.update.length, h.calls.gh.length]
+  h.facts.active = ["ses_1"]
+  await h.end("child_1")
+  assert.equal(h.calls.update.length, writes)
+  assert.equal(h.calls.gh.length, lookups)
+})
+
+test("a failed or interrupted child counts as ended", async (t) => {
+  for (const type of ["session.execution.failed", "session.execution.interrupted"]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.active = ["child_1"]
+    await h.end()
+    h.facts.active = []
+    await h.emit(type, "child_1")
+    assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true), type)
+  }
+})
+
+test("a child's end under an unbound or silenced root does no read and no rename", async (t) => {
+  const unbound = await host(t)
+  await unbound.end("child_1")
+  assert.deepEqual(unbound.calls.update, [])
+  assert.deepEqual(unbound.calls.run, [])
+  const silenced = await host(t)
+  await silenced.write(SPEC)
+  await silenced.end()
+  silenced.titles.set("ses_1", "My own title")
+  await silenced.end("child_1")
+  assert.equal(silenced.titles.get("ses_1"), "My own title")
+  const writes = silenced.calls.update.length
+  await silenced.end("child_1")
+  assert.equal(silenced.calls.update.length, writes)
 })
 
 test("a rename during slow fact reads is kept", async (t) => {
