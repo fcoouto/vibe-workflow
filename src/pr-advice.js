@@ -177,25 +177,6 @@ const NOTES = {
     "merge only a [READY] pull request whose evidence is current.",
 }
 
-const OVERRIDE = "An explicit request from your human partner in this session overrides this."
-const SKILL_NOTES = {
-  "writing-plans": { gate: "onboarded", note: () => "vibe-workflow: your human partner pre-approved the execution " +
-    "method you recommend; treat it as already supplied, name it, and do not ask which one to use. Still ask them to " +
-    "review the plan, and wait for that review before implementing. Before you fill in each task's Files block, " +
-    "follow the vibe-project-layout skill: put every new file and test where the project's recorded layout says. If a " +
-    "file belongs elsewhere or a folder needs splitting, propose it as its own task for your human partner to " +
-    "approve, never as a silent move. " + OVERRIDE },
-  "finishing-a-development-branch": { gate: "git_workflow", note: (state) => "vibe-workflow: your human partner's declared integration choice, set " +
-    "during onboarding: push the branch and open a pull request, following the vibe-pull-requests skill ([BLOCKED] " +
-    "draft, then [READY]). Skip the options menu and do not ask; the skill's other steps still apply. " +
-    (state.agent_merge === true ? "You may merge it yourself once it is [READY] and its evidence is current. "
-      : "Stop at [READY] and tell your human partner it awaits their merge. ") +
-    (state.worktree_cleanup === true ? "After a confirmed merge, follow the worktree cleanup steps in vibe-pull-requests. "
-      : "Keep the worktree after the merge. ") + OVERRIDE },
-  "using-git-worktrees": { gate: "git_workflow", note: () => "vibe-workflow: your human partner's declared worktree preference, set during " +
-    "onboarding: always work in a worktree, never in the primary checkout. Do not ask for consent. " + OVERRIDE },
-}
-
 function mergeNote(auto, agentMerge, primaryPath, cleanup) {
   const where = primaryPath ? ` (${primaryPath})` : ""
   const when = auto ? "once the auto-merge completes" : "if this merge landed on main"
@@ -213,21 +194,11 @@ function remember(map, key, value) {
   if (map.size > MAX_SESSIONS) map.delete(map.keys().next().value)
 }
 
-export function createAdvisor({ settings, onboarded = async () => false, primary, checkout }) {
+export function createAdvisor({ settings, primary, checkout }) {
   const armed = new Map()
   const branches = new Map()
   return {
     clear() { armed.clear(); branches.clear() },
-    async skillNote(skill) {
-      try {
-        const entry = typeof skill === "string" && Object.hasOwn(SKILL_NOTES, skill.split(/[:/]/).pop()) &&
-          SKILL_NOTES[skill.split(/[:/]/).pop()]
-        if (!entry) return null
-        if (entry.gate === "onboarded") return await onboarded() === true ? entry.note() : null
-        const state = await settings()
-        return state?.state === "on" ? entry.note(state) : null
-      } catch { return null }
-    },
     async advise(event, sessionID) {
       try {
         if (!event || !SHELLS.has(event.tool) || !event.ok || typeof event.command !== "string") return null
@@ -271,7 +242,7 @@ export function createAdvisor({ settings, onboarded = async () => false, primary
   }
 }
 
-async function defaultCheckout(directory) {
+export async function defaultCheckout(directory) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
   try {
     const { stdout } = await exec("git", ["-C", directory, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"],
@@ -279,52 +250,4 @@ async function defaultCheckout(directory) {
     const [top, branch] = stdout.trimEnd().split("\n")
     return top && branch ? { top: await realpath(top), branch } : null
   } catch { return null }
-}
-
-// The host gives the model `result.content` (a string, or text parts) and falls back to `result.output` only when
-// `content` is empty, so the note goes into `content`. Any shape not listed here is left alone.
-function appendNote(event, note) {
-  try {
-    const result = event.result
-    const text = `\n\n${note}`
-    if (typeof result === "string") event.result = `${result}${text}`
-    else if (result && typeof result === "object") {
-      const { content, output } = result
-      if (typeof content === "string") event.result = { ...result, content: `${content}${text}` }
-      else if (Array.isArray(content) && content.length) {
-        event.result = { ...result, content: [...content, { type: "text", text }] }
-      } else if (output !== undefined) {
-        const base = typeof output === "string" ? output : JSON.stringify(output)
-        if (base !== undefined) event.result = { ...result, content: [{ type: "text", text: `${base}${text}` }] }
-      }
-    }
-  } catch {}
-}
-
-// The hook is unverified on the installed host: every field is read defensively and a missing one keeps the note silent.
-export async function registerPrAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout }) {
-  const advisor = createAdvisor({ settings, onboarded, primary, checkout })
-  let closed = false
-  const close = () => { closed = true; advisor.clear() }
-  if (typeof ctx.tool?.hook !== "function") return { registered: false, close }
-  try {
-    await ctx.tool.hook("execute.after", async (event) => {
-      try {
-        if (closed) return
-        const input = event?.input ?? event?.args
-        if (event?.tool === "skill") {
-          const note = event.status === "completed" ? await advisor.skillNote(input?.id ?? input?.name) : null
-          if (note) appendNote(event, note)
-          return
-        }
-        if (typeof input?.command !== "string") return
-        const exits = [event.result?.metadata?.exit, event.result?.metadata?.exitCode, event.exitCode, event.metadata?.exit]
-        const ok = event.status === "completed" && !exits.some((code) => typeof code === "number" && code !== 0)
-        const note = await advisor.advise({ tool: event.tool, command: input.command, ok,
-          directory: input.workdir ?? input.cwd ?? ctx.location?.directory }, event.sessionID ?? event.session?.id)
-        if (note) appendNote(event, note)
-      } catch {}
-    })
-  } catch { return { registered: false, close } }
-  return { registered: true, close }
 }

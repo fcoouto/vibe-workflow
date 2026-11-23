@@ -6,5 +6,5 @@
   "exports": { ".": "./index.js" },
   "private": true,
   "license": "MIT",
-  "files": ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "skills/vibe-onboard-project", "skills/vibe-prepare-my-workspace", "skills/vibe-pull-requests", "skills/vibe-council", "skills/vibe-project-layout", "runtime", "scripts/select.py", "config", "README.md", "LICENSE", "assets/logo.png"]
+  "files": ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "skills/vibe-onboard-project", "skills/vibe-prepare-my-workspace", "skills/vibe-pull-requests", "skills/vibe-council", "skills/vibe-project-layout", "runtime", "scripts/select.py", "config", "README.md", "LICENSE", "assets/logo.png"]
 }

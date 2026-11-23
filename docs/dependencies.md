@@ -14,7 +14,9 @@ upgrade records, run directories and `workflow.py` were not carried over.
 
 `src/pr-advice.js` and `skills/vibe-pull-requests/` add the pull request guidance: a
 classifier and advisor for `gh pr` and `git` shell commands, the skill, its
-procedure and template. Sources are the earlier plugin's PR lifecycle
+procedure and template. `src/skill-advice.js` holds the notes added when a skill loads,
+and `src/advice.js` registers the one `execute.after` hook that routes tool events to
+both advisors. Sources are the earlier plugin's PR lifecycle
 (`policies/08-merge-readiness.md`), `templates/pull-request.md`, the onboarding
 merge question and the primary checkout stability design. Managed delivery, the
 GitHub App, merge queue and repository enforcement were not carried over.
@@ -30,7 +32,7 @@ skill, its procedure and a few example layouts. Its source is the analyze, plan,
 approve, move flow of the Composio `file-organizer` skill
 (https://github.com/ComposioHQ/awesome-claude-skills/blob/master/file-organizer/SKILL.md),
 rewritten for code projects. Duplicate finding, date folders, archiving, deletion and
-the personal-folder material were not carried over. `src/pr-advice.js` adds one sentence
+the personal-folder material were not carried over. `src/skill-advice.js` adds one sentence
 pointing to the skill on a `writing-plans` load.
 
 Follow-up development-only checks: `tests/verify_group.py`,
