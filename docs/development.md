@@ -242,6 +242,14 @@ per level. Design and plan reviews are sized to the stakes. The specs are
 `docs/superpowers/specs/2026-11-23-router-levels-design.md` and
 `docs/superpowers/specs/2026-11-23-stakes-sized-reviews-design.md`.
 
+Observed live (OpenCode 2.3.2, 23 November 2026, branch at 02fb0c8, `scripts/live_check.py --prompt`, Smart Router on):
+in three prompts asking the agent to call `smart_router_select` once per delegation it would make, with no edits
+or subagents, the ratings were as expected. Case 1 (order-sizing plan): plan review as planning and critical,
+implementer as implementation, exact and critical, diff review as review, critical. Case 2 (one-word typo): no
+delegation and no plan review. Case 3 (a config default read by order sizing): rated critical. Caveat: `--prompt`
+mode also loads the user's installed plugin, whose copy answered the tool with the old rule, so these runs verify
+the agents' ratings, not the new levels, which unit tests cover. Dispatch of the reviews was not observed.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
