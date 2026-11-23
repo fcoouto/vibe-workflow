@@ -120,8 +120,44 @@ print(json.dumps(dict(state="selected", route=dict(provider="invented", model="i
 `)
   try {
     const answer = JSON.parse((await f.execute()).content)
-    assert.deepEqual(answer.route, { provider: "invented", model: "invented-model", effort: "high" })
+    assert.deepEqual(answer.route, { provider: "invented", model: "invented-model", effort: "high",
+      model_ref: "invented/invented-model#high" })
     for (const key of ["admission", "reservation", "spend_permit"]) assert.equal(answer[key], false)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("each selected pick carries a model_ref for the subagent tool's model", async () => {
+  const f = await fixture(`from pathlib import Path
+print(Path("answer.json").read_text())
+`)
+  try {
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({
+      state: "selected", reason: null, route: { provider: "p", model: "m", effort: "high" },
+      alternatives: [{ provider: "q", model: "n" }, { provider: "", model: "x" }, null],
+      admission: false, reservation: false, spend_permit: false,
+    }))
+    const answer = JSON.parse((await f.execute()).content)
+    assert.equal(answer.route.model_ref, "p/m#high")
+    assert.equal(answer.alternatives[0].model_ref, "q/n")
+    assert.ok(!("model_ref" in answer.alternatives[1]))
+    assert.equal(answer.alternatives[2], null)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("model_ref skips a null route and leaves no-selection answers unchanged", async () => {
+  const f = await fixture(`from pathlib import Path
+print(Path("answer.json").read_text())
+`)
+  try {
+    const selectorAnswer = { state: "no_selection", reason: "no_recommendation", route: null,
+      admission: false, reservation: false, spend_permit: false }
+    await writeFile(join(f.root, "answer.json"), JSON.stringify(selectorAnswer))
+    const answer = JSON.parse((await f.execute(undefined, "ses_null_route")).content)
+    assert.equal(answer.route, null)
+    assert.equal(answer.state, "no_selection")
+    assert.equal(answer.reason, "no_recommendation")
+    assert.ok(!("model_ref" in answer))
+    assert.equal(answer.alternatives, undefined)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -415,6 +451,7 @@ test("the tool describes its input and rubric", async () => {
   assert.equal(tool.input.properties.task.properties.context_tokens.minimum, 0)
   assert.match(tool.description, /files: 1-2 \| 3\+ \| cross-system/)
   assert.ok(tool.description.length < 2048)
+  assert.match(tool.description, /Pass a pick's model_ref as the subagent tool's model\./)
   assert.match(tool.description, /critical = a mistake could lose real money/)
   assert.match(tool.description, /cross-system = changes in more than one repository or deployed service that must stay compatible with each other/)
   assert.match(tool.description, /To review a design or plan, use work_kind planning/)
