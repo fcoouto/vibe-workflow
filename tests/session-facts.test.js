@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { artifact, declaredPaths, defaultRun, readFacts } from "../src/session-facts.js"
+import { artifact, branchOf, declaredPaths, defaultRun, readFacts } from "../src/session-facts.js"
 
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" })
 const tmp = (t) => {
@@ -53,6 +53,12 @@ test("declaredPaths reads path-like backticked tokens inside Files blocks only",
   const plan = "Intro `not/this.js`\n\n**Files:**\n- Create: `a.js`\n- Modify: `b/c.js:10-20` (`FEATURES`), through `impeccable`\n- Test: `tests/a.test.js`\n\nText `x.js`\n\n**Files:**\n- Modify: `a.js`, `README.md`\n"
   assert.deepEqual(declaredPaths(plan), ["a.js", "b/c.js", "tests/a.test.js", "README.md"])
   assert.deepEqual(declaredPaths("no files here"), [])
+})
+
+test("declaredPaths also reads paths on the Files line itself", () => {
+  assert.deepEqual(declaredPaths("**Files:** Modify `a/b.md` (`FEATURES`), `tests/c.js`\n\nText `x.js`\n"), ["a/b.md", "tests/c.js"])
+  assert.deepEqual(declaredPaths("**Files:** Modify `a.js:10-20`\n- Test: `t.js`\n\nText `x.js`\n"), ["a.js", "t.js"])
+  assert.deepEqual(declaredPaths("**Files:** none here\n\nText `x.js`\n"), [])
 })
 
 test("readFacts follows the checkout through detached, branch, pushed and default states", async (t) => {
@@ -122,6 +128,56 @@ test("readFacts uses the remembered branch and fallback when top is gone", async
   got = await readFacts({ top, remembered: null, fallback: main, run })
   assert.equal(got.head, null)
   assert.equal(calls.length, 1)
+})
+
+test("branchOf is the checked-out branch, never the default branch, a detached head or a failed read", async (t) => {
+  const { top, main, root } = setup(t)
+  assert.equal(await branchOf({ top }), null)
+  git(top, "switch", "-q", "-c", "feat/x")
+  assert.equal(await branchOf({ top }), "feat/x")
+  git(top, "switch", "-q", "--detach")
+  git(main, "switch", "-q", "main")
+  assert.equal(await branchOf({ top: main }), null)
+  assert.equal(await branchOf({ top: join(root, "missing") }), null)
+  assert.equal(await branchOf({ top, run: async () => { throw new Error("x") } }), null)
+})
+
+test("readFacts reports which read failed, as codes without messages", async (t) => {
+  const { top, main } = setup(t)
+  const failing = (status, gh) => async (command, args, options) => {
+    if (command === "gh") throw gh
+    if (args[0] === "status") throw status
+    return defaultRun(command, args, options)
+  }
+  const missing = Object.assign(new Error("spawn git ENOENT /secret/path"), { code: "ENOENT" })
+  const slow = Object.assign(new Error("Command failed: gh https://token@example.invalid"), { killed: true })
+  let got = await readFacts({ top, remembered: "feat/x", fallback: main, run: failing(missing, slow) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "ENOENT" }, { step: "pr", code: "timeout" }])
+  assert.doesNotMatch(JSON.stringify(got.errors), /secret|token|spawn/)
+  got = await readFacts({ top, remembered: "feat/x", fallback: main,
+    run: failing(Object.assign(new Error("x"), { code: 128 }), new SyntaxError("Unexpected token")) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "exit:128" }, { step: "pr", code: "error" }])
+  got = await readFacts({ top, remembered: "feat/x", fallback: main,
+    run: failing(Object.assign(new Error("x"), { code: "has space /secret" }), Object.assign(new Error("y"), { code: "ERR_X", killed: true })) })
+  assert.deepEqual(got.errors, [{ step: "status", code: "error" }, { step: "pr", code: "timeout" }])
+  assert.deepEqual((await readFacts({ top, fallback: main, run: recorder().run })).errors, [])
+})
+
+test("readFacts reports a failed diff and a missing plan by step and code", async (t) => {
+  const { top, main } = setup(t)
+  const run = async (command, args, options) => {
+    if (args[0] === "diff") throw Object.assign(new Error("fatal: bad revision /secret/path"), { code: 129 })
+    return defaultRun(command, args, options)
+  }
+  const got = await readFacts({ top, plan: "docs/superpowers/plans/missing.md", fallback: main, run })
+  assert.deepEqual(got.errors, [{ step: "diff", code: "exit:129" }, { step: "plan", code: "ENOENT" }])
+  assert.doesNotMatch(JSON.stringify(got.errors), /secret|revision/)
+})
+
+test("git is told not to take optional locks, so a tool-time read never writes the index", async () => {
+  const env = await defaultRun(process.execPath, ["-e", "process.stdout.write(String(process.env.GIT_OPTIONAL_LOCKS))"],
+    { cwd: tmpdir(), timeout: 5000 })
+  assert.equal(env, "0")
 })
 
 test("readFacts resolves without rejecting outside a usable repository", async (t) => {

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import { resolve } from "node:path"
-import { artifact, defaultRun, readFacts } from "./session-facts.js"
+import { classify } from "./pr-advice.js"
+import { artifact, branchOf, defaultRun, readFacts } from "./session-facts.js"
 
 export const MARK = "\uFFFB"
 export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
@@ -25,6 +27,8 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 const MAX_SESSIONS = 128
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
+const SHELLS = new Set(["bash", "shell"])
+const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
@@ -55,6 +59,22 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   const text = (value) => value === null || typeof value === "string"
+  const instance = randomUUID().slice(0, 8)
+  const STEPS = ["status", "diff", "plan", "pr"]
+  const PR_STATES = ["OPEN", "MERGED", "CLOSED"]
+  const short = (value) => value === null || (typeof value === "string" && value.length <= 200)
+  const count = (value) => Number.isInteger(value) && value >= 0
+  const KEYS = ["instance", "exists", "branch", "upstream", "head", "pr", "declared", "done", "errors"]
+  // Only these fields, within these bounds, are kept: a stored record can never smuggle anything else into the next save.
+  function diagOf(value) {
+    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !KEYS.includes(key))) return null
+    const { instance: id, exists, branch, upstream, head, pr, declared, done, errors } = value
+    if (typeof id !== "string" || !/^[a-z0-9]{1,16}$/.test(id) || typeof exists !== "boolean" || typeof upstream !== "boolean" ||
+      ![branch, head].every(short) || !(pr === null || PR_STATES.includes(pr)) || !count(declared) || !count(done) || !Array.isArray(errors) || errors.length > 5 ||
+      !errors.every((error) => error && Object.keys(error).length === 2 && STEPS.includes(error.step) &&
+        typeof error.code === "string" && /^[\w:]{1,40}$/.test(error.code))) return null
+    return { instance: id, exists, branch, upstream, head, pr, declared, done, errors: errors.map(({ step, code }) => ({ step, code })) }
+  }
   function restore(task) {
     if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
       typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
@@ -71,7 +91,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const record = await storage?.get(KEY + sessionID)
       if (record?.location !== where) return
       const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
-        silenced: record.silenced === true }
+        silenced: record.silenced === true, diag: diagOf(record.diag) }
       if (!entry.task && !entry.silenced) return
       keep(sessionID, entry)
       saved.set(sessionID, JSON.stringify(entry))
@@ -91,7 +111,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         return
       }
       await storage.set(KEY + sessionID, { location: where, at: Date.now(), task: entry.task, last: entry.last,
-        silenced: entry.silenced })
+        silenced: entry.silenced, diag: entry.diag ?? null })
       saved.set(sessionID, snapshot)
       if (known) return
       const entries = []
@@ -114,12 +134,24 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const top = await realpath(found.top).catch(() => found.top)
     const file = top + absolute.slice(found.top.length)
     await load(sessionID)
-    const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false }
+    const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false, diag: null }
     const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true }
     if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
     else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
     else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
     keep(sessionID, entry)
+    await save(sessionID, entry)
+  }
+
+  // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
+  async function record(sessionID) {
+    if (!await on()) return
+    await load(sessionID)
+    const entry = sessions.get(sessionID), task = entry?.task
+    if (controller.signal.aborted || !task || entry.silenced || (await ctx.session.get({ sessionID })).parentID) return
+    const branch = await branchOf({ top: task.top, run })
+    if (!branch || task.remembered === branch || sessions.get(sessionID) !== entry || entry.task !== task) return
+    task.remembered = branch
     await save(sessionID, entry)
   }
 
@@ -136,6 +168,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered,
         fallback: project ?? task.top, run })
       if (facts.head && facts.head === facts.branch) task.remembered = facts.head
+      const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
+      entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
+        pr: PR_STATES.includes(facts.pr?.state) ? facts.pr.state : null, declared: facts.declared.length,
+        done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
@@ -156,10 +192,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const stream = await ctx.event.subscribe({ types: TYPES, signal: controller.signal })
     await ctx.tool.hook("execute.after", async (event) => {
       try {
-        const path = event?.input?.path
-        if (event.tool !== "write" || event.status !== "completed" || typeof event.sessionID !== "string"
-          || typeof path !== "string" || !ARTIFACT.test(path)) return
-        await enqueue(event.sessionID, () => bind(event.sessionID, path))
+        if (event.status !== "completed" || typeof event.sessionID !== "string") return
+        const input = event.input
+        if (event.tool === "write") {
+          if (typeof input?.path === "string" && ARTIFACT.test(input.path)) await enqueue(event.sessionID, () => bind(event.sessionID, input.path))
+        } else if (SHELLS.has(event.tool) && typeof input?.command === "string" &&
+          classify(input.command).some(({ kind }) => RECORDING.has(kind))) {
+          await enqueue(event.sessionID, () => record(event.sessionID))
+        }
       } catch {}
     })
     ;(async () => {

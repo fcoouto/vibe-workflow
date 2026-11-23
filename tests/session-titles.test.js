@@ -75,7 +75,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     t.after(() => rmSync(made, { recursive: true, force: true }))
   }
   directory ??= root
-  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [] }
+  const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [] }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null }
   const preference = { state }
   let stream, subscribed
@@ -97,13 +97,16 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     },
     ...(events && { event: { subscribe: ({ types, signal }) => { subscribed = { types, signal }; return stream = pushable(signal) } } }),
   }
-  const run = async (command, args) => {
+  const run = async (command, args, options) => {
     calls.run.push([command, ...args])
+    if (args[0] === "status") calls.status.push({ args, cwd: options?.cwd })
+    if (command === "gh") calls.gh.push(options?.cwd)
     if (facts.fail) throw Error("run")
     if (command === "gh") {
       await facts.gate
       return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
     }
+    if (args[0] === "status") await facts.statusGate
     if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` +
       (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
     if (args[0] === "rev-parse") return "origin/main\n"
@@ -117,8 +120,13 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     for (const [name, handler] of calls.hook) if (name === "execute.after") await handler(event)
     return event
   }
+  const shell = async (command, sessionID = "ses_1", more = {}) => {
+    const event = { tool: "shell", status: "completed", sessionID, input: { command }, ...more }
+    for (const [name, handler] of calls.hook) if (name === "execute.after") await handler(event)
+    return event
+  }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
-  return { root, ctx, calls, facts, titles, preference, write, emit, storage, registered: titlesFor, subscribed: () => subscribed,
+  return { root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
@@ -512,4 +520,201 @@ test("without a known location, storage is never used", async (t) => {
   await h.end()
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
   assert.deepEqual(storage.calls, { get: 0, set: 0, scan: 0 })
+})
+
+test("a saved record says what the last read saw and which read failed", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const { instance, ...seen } = h.storage.data.get(KEY).diag
+  assert.ok(typeof instance === "string" && instance.length > 0)
+  assert.deepEqual(seen, { exists: true, branch: "feat/x", upstream: true, head: "feat/x", pr: null, declared: 0, done: 0, errors: [] })
+  h.facts.fail = true
+  await h.end()
+  const { diag } = h.storage.data.get(KEY)
+  assert.ok(diag.errors.length > 0)
+  assert.deepEqual([diag.branch, diag.head], [null, "feat/x"])
+  assert.doesNotMatch(JSON.stringify(diag), /run/)
+})
+
+test("a malformed stored diag is dropped and replaced at the next save", async (t) => {
+  const task = (root) => ({ top: root, spec: `${root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false })
+  const ok = { instance: "a", exists: true, branch: null, upstream: false, head: null, pr: null, declared: 0, done: 0, errors: [] }
+  for (const diag of [{ instance: 5 }, "x", { ...ok, errors: "no" }, { ...ok, errors: [{ step: "nope", code: "x" }] },
+    { ...ok, branch: 3 }, { ...ok, extra: "x" }, { ...ok, declared: -1 }, { ...ok, done: 1.5 }, { ...ok, branch: "b".repeat(201) },
+    { ...ok, errors: [{ step: "pr", code: "has space and /secret/path" }] },
+    { ...ok, errors: Array.from({ length: 6 }, () => ({ step: "pr", code: "error" })) },
+    { ...ok, errors: [{ step: "pr", code: "error", message: "x" }] },
+    { ...ok, instance: "/Users/me/secret" }, { ...ok, instance: "" }, { ...ok, pr: "https://token@example.invalid" },
+    { ...ok, pr: "open" }]) {
+    const storage = memoryStorage()
+    const h = await host(t, { storage })
+    storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag, task: task(h.root) })
+    await h.start()
+    assert.equal(storage.data.get(KEY).diag, null, `a turn start keeps nothing from ${JSON.stringify(diag)}`)
+    await h.end()
+    const saved = storage.data.get(KEY).diag
+    assert.ok(typeof saved.instance === "string" && Array.isArray(saved.errors), JSON.stringify(diag))
+  }
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  const merged = { ...ok, pr: "MERGED", instance: "k3x9a7b2" }
+  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: merged, task: task(h.root) })
+  await h.start()
+  assert.deepEqual(storage.data.get(KEY).diag, merged)
+})
+
+test("the saved diag keeps only a known PR state, and its instance id survives a reload even when Math.random returns 0", async (t) => {
+  t.mock.method(Math, "random", () => 0)
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  await h.write(SPEC)
+  h.facts.prs = { "feat/x": [{ state: "https://token@example.invalid", title: "x" }] }
+  await h.end()
+  const diag = { ...storage.data.get(KEY).diag }
+  assert.equal(diag.pr, null, "an unknown PR state is never stored")
+  assert.match(diag.instance, /^[a-z0-9]{1,16}$/)
+  h.facts.prs = { "feat/x": [{ state: "OPEN", title: "x" }] }
+  await h.end()
+  const open = structuredClone(storage.data.get(KEY).diag)
+  assert.equal(open.pr, "OPEN")
+  const again = await host(t, { storage, root: h.root })
+  const writes = storage.calls.set
+  await again.start()
+  assert.ok(storage.calls.set > writes, "the restarted host loaded the record and saved it again")
+  assert.deepEqual(storage.data.get(KEY).diag, open, "the whole valid diag survives the reload, not dropped or rebuilt")
+})
+
+test("a push whose record was still loading when the plugin closed does no git read and no write", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  storage.data.set(KEY, { location: h.root, at: 1, last: null, silenced: false, diag: null,
+    task: { top: h.root, spec: `${h.root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false } })
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const get = storage.get
+  storage.get = async (key) => { await gate; return get(key) }
+  const pending = h.shell("git push")
+  await settle()
+  h.registered.close()
+  release()
+  await pending
+  await settle()
+  assert.equal(statusCalls(h), 0)
+  assert.equal(storage.calls.set, 0)
+  assert.equal(storage.data.get(KEY).task.remembered, null)
+})
+
+test("a push whose git read was still running when the plugin closed saves nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  const writes = h.storage.calls.set
+  let release
+  h.facts.statusGate = new Promise((resolve) => { release = resolve })
+  const pending = h.shell("git push")
+  await settle()
+  assert.equal(statusCalls(h), 1, "the read started")
+  h.registered.close()
+  release()
+  await pending
+  await settle()
+  assert.equal(h.storage.calls.set, writes)
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
+})
+
+test("the saved diag counts declared and changed plan paths", async (t) => {
+  const h = await host(t)
+  mkdirSync(join(h.root, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(join(h.root, PLAN), "**Files:** Modify `a.js`, `b.js`\n")
+  await h.write(SPEC)
+  await h.write(PLAN)
+  h.facts.changed = ["a.js"]
+  await h.end()
+  const { diag } = h.storage.data.get(KEY)
+  assert.deepEqual([diag.declared, diag.done], [2, 1])
+})
+
+const statusCalls = (h) => h.calls.run.filter((call) => call[1] === "status").length
+
+test("a push, PR create or PR merge records the bound checkout's branch, with or without an upstream", async (t) => {
+  for (const command of ["git push origin HEAD", "rtk git push -u origin feat/x", "git -C /elsewhere push", "gh pr create --draft",
+    "gh pr merge 5 --merge", "cd /x && git push"]) {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-elsewhere-")))
+    const commandDir = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-command-")))
+    t.after(() => { rmSync(elsewhere, { recursive: true, force: true }); rmSync(commandDir, { recursive: true, force: true }) })
+    const h = await host(t, { directory: elsewhere })
+    await h.write(`${h.root}/${SPEC}`)
+    Object.assign(h.facts, { branch: "feat/x", upstream: false })
+    await h.shell(command, "ses_1", { input: { command, workdir: commandDir } })
+    assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x", command)
+    assert.deepEqual(h.calls.update, [], "the title is not written at tool time")
+    const status = h.calls.status.at(-1)
+    assert.notEqual(h.root, elsewhere)
+    assert.equal(status.cwd, h.root, `${command} reads the bound checkout, not the session or command directory`)
+    assert.ok(status.args.includes("-uno"), command)
+  }
+})
+
+test("merge and cleanup inside one turn still reach cell 5 once the branch was recorded at merge time", async (t) => {
+  const flow = async (record) => {
+    const primary = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-primary-")))
+    t.after(() => rmSync(primary, { recursive: true, force: true }))
+    const h = await host(t, { cleanup: true, project: primary })
+    await h.write(SPEC)
+    h.facts.branch = "feat/x"
+    if (record) await h.shell("gh pr merge 5 --merge")
+    rmSync(h.root, { recursive: true, force: true })
+    h.facts.prs = { "feat/x": [{ state: "MERGED", title: "x" }] }
+    h.calls.gh.length = 0
+    await h.end()
+    assert.deepEqual(h.calls.gh, record ? [primary] : [], "the PR is looked up, from the existing primary checkout, only when the branch was recorded")
+    return h.titles.get("ses_1")
+  }
+  assert.equal(await flow(true), compose("Fix login flow", 5, false))
+  assert.equal(await flow(false), compose("Fix login flow", 1, true))
+})
+
+test("a command that is not a push, PR create or PR merge, or that failed, reads nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.shell("git status")
+  await h.shell("gh pr view 5")
+  await h.shell("git push", "ses_1", { status: "error" })
+  await h.shell("git push", "ses_9")
+  assert.equal(statusCalls(h), 0)
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
+})
+
+test("a child session records nothing", async (t) => {
+  const storage = memoryStorage()
+  const h = await host(t, { storage })
+  storage.data.set("session-titles/child_1", { location: h.root, at: 1, last: null, silenced: false,
+    task: { top: h.root, spec: `${h.root}/s.md`, plan: null, remembered: null, cells: 1, slug: "x", fresh: false } })
+  await h.shell("git push", "child_1")
+  assert.equal(statusCalls(h), 0)
+  assert.equal(storage.data.get("session-titles/child_1").task.remembered, null)
+})
+
+test("the default branch and a detached checkout are never recorded", async (t) => {
+  for (const branch of ["main", null]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.branch = branch
+    await h.shell("git push")
+    assert.equal(h.storage.data.get(KEY).task.remembered, null, String(branch))
+  }
+})
+
+test("with the feature off or a failing read, a push does no work and never throws", async (t) => {
+  const off = await host(t)
+  await off.write(SPEC)
+  off.preference.state = "off"
+  await off.shell("git push")
+  assert.equal(statusCalls(off), 0)
+  assert.equal(off.storage.data.get(KEY).task.remembered, null)
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.fail = true
+  await h.shell("git push")
+  assert.equal(h.storage.data.get(KEY).task.remembered, null)
 })
