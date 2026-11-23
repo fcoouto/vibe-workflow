@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { createRoster } from "../src/council.js"
+import { createRoster } from "../../src/council.js"
 
 const entry = (provider, id, over = {}) => ({ provider, id, model: id, family: "gpt", variants: ["high"], context: 1000,
   released: 100, name: id.toUpperCase(), ...over })

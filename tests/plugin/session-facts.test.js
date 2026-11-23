@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { artifact, branchOf, declaredPaths, defaultRun, readFacts } from "../src/session-facts.js"
+import { artifact, branchOf, declaredPaths, defaultRun, readFacts } from "../../src/session-facts.js"
 
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" })
 const tmp = (t) => {

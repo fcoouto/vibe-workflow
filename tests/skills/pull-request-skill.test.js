@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { test } from "node:test"
-import plugin from "../index.js"
+import plugin from "../../index.js"
 
-const root = new URL("../skills/vibe-pull-requests/", import.meta.url)
+const root = new URL("../../skills/vibe-pull-requests/", import.meta.url)
 const read = (name) => readFile(new URL(name, root), "utf8")
 
 async function registered() {

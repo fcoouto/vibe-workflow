@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { test } from "node:test"
 
-const root = new URL("../skills/vibe-project-layout/", import.meta.url)
+const root = new URL("../../skills/vibe-project-layout/", import.meta.url)
 const read = (name) => readFile(new URL(name, root), "utf8")
 const files = ["SKILL.md", "references/procedure.md", "references/layouts.md"]
 const hasAll = (text, phrases) => {
