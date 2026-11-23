@@ -6,6 +6,8 @@ it, keep new files consistent with it, and never push it toward the examples.
 Move, rename or delete nothing on your own.
 A single move or rename the user asks for directly needs no further approval when the
 user names the file and its destination: use `git mv`, fix its references, run the tests.
+Its references include any list that names it.
+Outside a git repository, or for an untracked file, use plain `mv`.
 Every other move needs the approved map in Restructure on request.
 
 ## Placement order
@@ -47,18 +49,20 @@ Run this only when the user asks for it, or approves your proposal.
    break and how each is fixed. Mark anything unusual. End the map with the change to the
    recorded layout, or "recorded layout: no change".
 3. **Get it approved.** Show the map to the user. Nothing moves before they approve it.
-4. **Move.** Load and follow the `safe-refactor` skill when it is installed;
+4. **Move.** Carry out the approved moves.
+   Load and follow the `safe-refactor` skill when it is installed;
    otherwise make them yourself, one map line at a time. Installed means the skill is
    in your available skills list. In both cases move with `git mv`
-   (plain `mv` outside a git repository) and fix every reference the map listed.
+   (plain `mv` outside a git repository, or for an untracked file) and fix every
+   reference the map listed.
 5. **Check.** Run the project's tests and any build or export check. Fix what the move
    broke, and nothing else.
 6. **Summarize.** Report what moved, what changed in references, and the test result. The
    approved map is the move log.
 
 Stop and ask when you meet a surprise: a file the map did not expect, a reference you
-cannot fix mechanically, a failing test that predates the move. Report suspected
-dead files as findings; never delete them.
+cannot fix mechanically, a failing test the baseline did not show and the move does
+not explain. Report suspected dead files as findings; never delete them.
 
 ## Recording the layout
 

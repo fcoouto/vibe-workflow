@@ -120,3 +120,24 @@ test("layouts tells the agent to add a shipped asset to a per-file list and read
   const text = await read("references/layouts.md")
   hasAll(text, ["Add it to that list when the list names files one by one.", "an example, not a rule."])
 })
+
+test("the stop rule does not treat a baseline failure as a surprise", async () => {
+  const text = await read("references/procedure.md")
+  hasAll(text, ["a failing test the baseline did not show"])
+  assert.doesNotMatch(text, /failing test\s+that predates the move/)
+})
+
+test("the approved moves are named before the hand-off says to make them yourself", async () => {
+  hasAll(await read("references/procedure.md"), ["Carry out the approved moves."])
+})
+
+test("a move outside a git repository or of an untracked file uses plain mv", async () => {
+  hasAll(await read("references/procedure.md"), [
+    "Outside a git repository, or for an untracked file, use plain `mv`.",
+    "(plain `mv` outside a git repository, or for an untracked file)",
+  ])
+})
+
+test("a direct move also fixes the lists that name the moved file", async () => {
+  hasAll(await read("references/procedure.md"), ["Its references include any list that names it."])
+})
