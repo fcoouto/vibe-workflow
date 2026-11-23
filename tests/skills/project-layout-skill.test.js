@@ -73,3 +73,50 @@ test("layouts has at most four example trees and the convention-owned folders", 
   assert.ok(trees >= 1 && trees <= 4, `trees: ${trees}`)
   hasAll(text, ["app/", "tests/", "skills/<id>/SKILL.md"])
 })
+
+test("procedure registers a new file in every list that names its neighbours", async () => {
+  hasAll(await read("references/procedure.md"), [
+    "Then register it.", "also name the new one", "no list names it",
+  ])
+})
+
+test("the recorded layout carries the lists a new file joins and the paths a tool pins", async () => {
+  hasAll(await read("references/procedure.md"), ["which lists a new file must be added to", "each path a tool pins"])
+})
+
+test("the entry allows a direct move and does not contradict the procedure", async () => {
+  const text = await read("SKILL.md")
+  hasAll(text, ["move nothing the user did not ask for directly"])
+  assert.ok(!text.includes("move nothing\nwithout a plan the user approved"), "unconditional ban remains")
+})
+
+test("a direct move has its own steps and every other move needs the map", async () => {
+  hasAll(await read("references/procedure.md"), [
+    "use `git mv`, fix its references, run the tests", "Every other move needs the approved map",
+  ])
+})
+
+test("the move step is observable: installed means listed, and git mv applies to both paths", async () => {
+  hasAll(await read("references/procedure.md"), [
+    "Load and follow the `safe-refactor` skill", "in your available skills list", "plain `mv` outside a git repository",
+  ])
+})
+
+test("a restructure starts with a test baseline", async () => {
+  hasAll(await read("references/procedure.md"), ["Run the project's tests before any move and note what already fails."])
+})
+
+test("the map ends with the change to the recorded layout", async () => {
+  hasAll(await read("references/procedure.md"), ["recorded layout: no change", "in the same change (commit or pull request)"])
+})
+
+test("a declined offer to record the layout is not repeated and the condition is observable", async () => {
+  hasAll(await read("references/procedure.md"), [
+    "do not offer again in this session", "no `## Project layout` or other layout section",
+  ])
+})
+
+test("layouts tells the agent to add a shipped asset to a per-file list and reads as a sentence", async () => {
+  const text = await read("references/layouts.md")
+  hasAll(text, ["Add it to that list when the list names files one by one.", "an example, not a rule."])
+})

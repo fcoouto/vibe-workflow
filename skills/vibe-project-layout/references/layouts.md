@@ -1,6 +1,6 @@
 # Example layouts
 
-Every tree here is an example, not rule. A project's own layout, a framework's required
+Every tree here is an example, not a rule. A project's own layout, a framework's required
 paths and a tool's conventions come first. Use these only when nothing else decides.
 
 ## Node or TypeScript app (example, not rule)
@@ -18,6 +18,7 @@ package.json
 
 A new test goes beside its domain's tests. A new doc goes in `docs/`. A shipped asset goes
 where the package's `files` list expects it.
+Add it to that list when the list names files one by one.
 
 ## Python package (example, not rule)
 
