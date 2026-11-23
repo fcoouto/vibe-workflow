@@ -210,8 +210,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   // A session below a bound root ended: the root may now be idle with nothing running, so it re-evaluates its label.
-  async function wakeRoot(sessionID) {
-    const at = Date.now()
+  // `created` is the end event's own time: a late delivery must not push the cutoff past a run that restarted since.
+  // It is used only when it is within 5 minutes of now, so a different unit or clock can never hide the label.
+  async function wakeRoot(sessionID, created) {
+    const received = Date.now()
+    const at = typeof created === "number" && Math.abs(created - received) <= 5 * 60 * 1000 ? created : received
     if (!await on()) return
     const root = await rootOf(sessionID)
     if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, { id: sessionID, at }))
@@ -276,7 +279,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           const sessionID = event?.data?.sessionID
           if (typeof sessionID === "string" && TYPES.includes(event.type)) {
             enqueue(sessionID, () => evaluate(sessionID, event.type !== TYPES[0]))
-            if (event.type !== TYPES[0] && !sessions.has(sessionID)) wakeRoot(sessionID).catch(() => {})
+            if (event.type !== TYPES[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }
         }
       } catch {}

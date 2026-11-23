@@ -74,7 +74,7 @@ list; `Session.Info.time` carries `busy` and `idle` (a session that is processin
    Rows without a string `id` are ignored. Only direct children count: a running grandchild implies a
    running child in practice. With `withSelf` the root is judged by the same rule on `ctx.session.get`
    (only the child-triggered path needs it).
-   In a child-triggered evaluation `ended` is `{ id, at }`, the session whose end event arrived at `at`:
+   In a child-triggered evaluation `ended` is `{ id, at }`, the session whose end event happened at `at` (the event's own `created` time when it is within 5 minutes of now, else the time it was received, so a late delivery cannot hide a restarted run and a different unit or clock cannot hide the label):
    that session is treated as idle while its `time.busy` is not after `at`, so a host that updates
    `time.idle` a moment after the end event cannot hide the label, and a run that started after the
    event still counts. The child list and the root read are independent and share one 3-second

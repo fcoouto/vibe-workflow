@@ -559,16 +559,30 @@ test("a running child on a later page of the list counts", async (t) => {
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
 })
 
-test("a child that started a new run after its end event keeps the label off", async (t) => {
+test("a terminal event delivered late does not hide a run that started after it happened", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
   h.facts.active = ["child_1"]
   await h.end()
   const writes = h.calls.update.length
-  h.facts.busyAgo = { child_1: -50 }
-  await h.end("child_1")
+  h.facts.busyAgo = { child_1: 500 }
+  h.push({ type: "session.execution.succeeded", created: Date.now() - 1000, data: { sessionID: "child_1" } })
+  await settle()
   assert.equal(h.calls.update.length, writes)
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
+test("an implausible event time falls back to the receipt time", async (t) => {
+  for (const created of [1, "x", Date.now() + 60 * 60 * 1000]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    h.facts.active = ["child_1"]
+    await h.end()
+    h.facts.busyAgo = { child_1: 1000 }
+    h.push({ type: "session.execution.succeeded", created, data: { sessionID: "child_1" } })
+    await settle()
+    assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true), String(created))
+  }
 })
 
 test("a failing child list does not hide that the root is running again", async (t) => {
