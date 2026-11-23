@@ -197,6 +197,31 @@ print(Path("answer.json").read_text())
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
+test("below-level answers get one notice per session and level", async () => {
+  const f = await fixture(echo)
+  const answerFile = join(f.root, "answer.json")
+  const below = (level) => JSON.stringify({ state: "selected", reason: null, below_level: true, level,
+    route: { provider: "invented", model: "invented", effort: "high" }, admission: false, reservation: false, spend_permit: false })
+  const normal = JSON.stringify({ state: "selected", reason: null, route: { provider: "invented", model: "invented", effort: "high" },
+    admission: false, reservation: false, spend_permit: false })
+  const message = (level) => `vibe-workflow: Smart Router could not confirm a level ${level} match for this request and recommended the strongest available. Tell your human partner.`
+  const execute = async (id) => JSON.parse((await f.execute(undefined, id)).content)
+  try {
+    await writeFile(answerFile, below(3))
+    assert.equal((await execute("one")).notice, message(3))
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, normal)
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, below(3))
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, below(2))
+    assert.equal((await execute("one")).notice, message(2))
+    assert.equal((await execute("two")).notice, message(2))
+    await writeFile(answerFile, below(3))
+    assert.equal((await execute("two")).notice, message(3))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
 test("notices deduplicate per session and reset after success or opt-out", async () => {
   const f = await fixture(`from pathlib import Path
 print(Path("answer.json").read_text())
@@ -389,6 +414,11 @@ test("the tool describes its input and rubric", async () => {
   assert.equal(tool.input.properties.task.additionalProperties, false)
   assert.equal(tool.input.properties.task.properties.context_tokens.minimum, 0)
   assert.match(tool.description, /files: 1-2 \| 3\+ \| cross-system/)
+  assert.ok(tool.description.length < 2048)
+  assert.match(tool.description, /critical = a mistake could lose real money/)
+  assert.match(tool.description, /cross-system = changes in more than one repository or deployed service that must stay compatible with each other/)
+  assert.match(tool.description, /To review a design or plan, use work_kind planning/)
+  assert.doesNotMatch(tool.description, /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
 })
 
 test("a malformed routes.json leaves the plugin loaded and routing empty", async () => {

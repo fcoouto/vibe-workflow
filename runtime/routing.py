@@ -9,9 +9,11 @@ CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'al
 FACTS = {'files': ('1-2', '3+', 'cross-system'), 'spec': ('exact', 'prose', 'open'),
          'risk': ('reversible', 'shared', 'critical')}
 BASE = dict(planning=3, review=2, investigation=2, implementation=1, testing=1, writing=1)
-RATIO = (0.55, 0.82, 0.90)
+BAR = (0.55, 0.80, 1.0)
+FRONTIER = 0.90
 NEAR_SCORE = 0.97
 NEAR_PRICE = 0.5
+TOLERANCE = 1e-9
 EFFORTS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
 
 
@@ -42,10 +44,16 @@ def task_level(work_kind, task):
     if type(tokens) is not int or not 0 <= tokens <= 10**9:
         raise ValueError('invalid_request')
     levels = [BASE[work_kind]]
+    exact = task.get('spec') == 'exact'
     for fact, values in FACTS.items():
         if task.get(fact) not in values:
             raise ValueError('invalid_request')
-        levels.append(values.index(task[fact]) + 1)
+        level = values.index(task[fact]) + 1
+        if exact and fact == 'files' and task[fact] == '3+':
+            level = 1
+        if exact and fact == 'risk' and work_kind in ('implementation', 'testing'):
+            level = 1
+        levels.append(level)
     return max(levels)
 
 
@@ -71,14 +79,24 @@ def effort_for(level, variants):
     return EFFORTS[above[0] if above else known[-1]]
 
 
-def order(candidates, level):
-    floor = max((item['score'] for item in candidates), default=0) * RATIO[level - 1]
+def bars(anchor):
+    return tuple(anchor * bar for bar in BAR)
+
+
+def order(candidates, level, anchor):
+    floor = bars(anchor)[level - 1] - TOLERANCE
     ok = [item for item in candidates if item['score'] >= floor]
-    cheapest = min((item['price'] for item in ok), default=0)
+    if not ok:
+        return []
+    cheapest = min(item['price'] for item in ok)
     near = [item for item in candidates if item['score'] >= NEAR_SCORE * floor
             and item['price'] <= NEAR_PRICE * cheapest]
     picked = {item['route']: item for item in ok + near}.values()
     return sorted(picked, key=_cheapest_first)
+
+
+def strongest(candidates):
+    return sorted(candidates, key=_strongest_first)
 
 
 def _cheapest_first(item):
@@ -109,7 +127,7 @@ def seats(candidates):
     for item in sorted(candidates, key=_strongest_first):
         kept.setdefault(_identity(item, bases), item)
     ranked = sorted(kept.values(), key=_strongest_first)
-    floor = RATIO[2] * max((item['score'] for item in ranked), default=0)
+    floor = FRONTIER * max((item['score'] for item in ranked), default=0)
     first, labs = [], set()
     for item in ranked:
         if item['score'] >= floor and item['creator'] is not None and item['creator'] not in labs:

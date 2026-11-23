@@ -57,6 +57,9 @@ def body(*rows):
 BODY = body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("anthropic/claude-sonnet-5-5", 20, 3, 15, 76),
             ("anthropic/claude-haiku-5-5", 30, 1, 5, 50), ("openai/gpt-6-2-sol", 40, 3, 15, 78),
             ("openai/gpt-6-3-sol", 50, 3, 15, None))
+BODY3 = body(("anthropic/claude-fable-5-2", 10, 8, 40, 64.6), ("openai/gpt-6-2-astra", 20, 8, 40, 62.1),
+             ("google/gemini-4-neon", 30, 4, 20, 61.4), ("anthropic/claude-haiku-5-5", 40, 0.1, 0.5, 36.5),
+             ("z-ai/glm-5-3-flash", 50, 0.03, 0.11, 27.8))
 
 
 def model(provider, name, **extra):
@@ -124,8 +127,73 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual([item["model"] for item in result["alternatives"]],
                          ["claude-sonnet-5-5", "claude-opus-5-5"])
         self.assertEqual(result["attribution"], "Scores: Artificial Analysis via OpenRouter")
+        self.assertIs(result["below_level"], False)
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
+
+    def test_cheap_model_below_the_bar_is_not_picked(self):
+        self.fetch = Fetch(BODY3)
+        result = self.run_select(self.request(work_kind="implementation", models=[
+            model("opencode-go", "glm-5.3-flash"), model("opencode-go", "claude-haiku-5-5")]))
+        self.assertEqual(result["route"]["model"], "claude-haiku-5-5")
+        self.assertIs(result["below_level"], False)
+        self.assertNotIn("glm-5.3-flash", [item["model"] for item in result["alternatives"]])
+
+    def test_nothing_at_the_level_returns_the_strongest_marked(self):
+        self.fetch = Fetch(BODY3)
+        result = self.run_select(self.request(work_kind="implementation",
+                                              models=[model("opencode-go", "glm-5.3-flash")]))
+        self.assertEqual((result["state"], result["route"]["model"], result["below_level"], result["level"]),
+                         ("selected", "glm-5.3-flash", True, 1))
+
+    def test_constraints_leaving_only_low_candidates_fall_back(self):
+        self.fetch = Fetch(BODY3)
+        result = self.run_select(self.request(work_kind="implementation", constraints=dict(
+            allowed_models=["glm-5.3-flash"]), models=[model("opencode-go", "glm-5.3-flash"),
+                                                       model("opencode-go", "claude-haiku-5-5")]))
+        self.assertEqual((result["state"], result["route"]["model"], result["below_level"]),
+                         ("selected", "glm-5.3-flash", True))
+
+    def test_below_level_recheck_failure_keeps_the_empty_reason(self):
+        self.fetch = Fetch(BODY3)
+        self.source.change = True
+        result = self.run_select(self.request(work_kind="implementation",
+                                              models=[model("opencode-go", "glm-5.3-flash")]))
+        self.assertEqual((result["state"], result["reason"], result["route"], result["below_level"]),
+                         ("no_selection", "no_eligible_route", None, False))
+
+    def test_failed_recheck_never_leaves_an_unmarked_below_bar_pick(self):
+        class OnePath(Facts):
+            def billing(self, route, now):
+                fact = super().billing(route, now)
+                if route["path"] == "opencode-claude-subscription" and self.reads[route["path"]] > 1:
+                    fact["producer"] = "invented:changed"
+                return fact
+        self.source = OnePath()
+        self.fetch = Fetch(body(("openai/gpt-6-2-sol", 10, 3, 15, 80), ("google/gemini-4-neon", 20, 3, 15, 70),
+                                ("anthropic/claude-opus-5-5", 30, 4, 20, 60), ("z-ai/glm-5-3-flash", 40, 0.1, 0.5, 59)))
+        result = self.run_select(self.request(task=dict(files="1-2", spec="exact", risk="critical"), models=[
+            model("claude-agent", "claude-opus-5-5"), model("opencode-go", "glm-5.3-flash")]))
+        self.assertEqual((result["state"], result["route"], result["below_level"], result["level"]),
+                         ("no_selection", None, False, 3))
+
+    def test_a_qualifying_route_is_confirmed_past_three_near_picks(self):
+        self.fetch = Fetch(body(("openai/gpt-6-2-sol", 10, 3, 15, 80), ("google/gemini-4-neon", 20, 3, 15, 70),
+                                ("anthropic/claude-opus-5-5", 30, 4, 20, 60), ("z-ai/glm-5-3-flash", 40, 0.1, 0.5, 59),
+                                ("z-ai/glm-5-3-air", 50, 0.1, 0.5, 59), ("z-ai/glm-5-3-lite", 60, 0.1, 0.5, 59)))
+        result = self.run_select(self.request(task=dict(files="1-2", spec="exact", risk="critical"), models=[
+            model("claude-agent", "claude-opus-5-5"), model("opencode-go", "glm-5.3-flash"),
+            model("opencode-go", "glm-5.3-air"), model("opencode-go", "glm-5.3-lite")]))
+        picks = [result["route"]] + result["alternatives"]
+        self.assertEqual((result["state"], result["below_level"], len(picks)), ("selected", False, 3))
+        self.assertIn("claude-opus-5-5", [item["model"] for item in picks])
+
+    def test_only_openrouter_scores_fall_back_without_an_anchor(self):
+        self.fetch = Fetch(body(("openrouter/openai/gpt-6-2-sol", 10, 3, 15, 78)))
+        result = self.run_select(self.request(work_kind="implementation",
+                                              models=[model("opencode-go", "gpt-6-2-sol")]))
+        self.assertEqual((result["state"], result["reason"], result["below_level"]), ("selected", None, True))
+        self.assertEqual(result["route"]["model"], "gpt-6-2-sol")
 
     def test_live_facts_stamped_after_the_clock_was_first_read_stay_eligible(self):
         clock = [NOW]

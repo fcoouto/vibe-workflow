@@ -109,6 +109,19 @@ def _result(entry, source, priced):
                 creator=entry['creator'])
 
 
+def _month_day(candidate, key):
+    suffix = candidate[len(key) + 1:] if candidate.startswith(f'{key}-') else ''
+    return len(suffix) == 4 and suffix.isascii() and suffix.isdigit() \
+        and 1 <= int(suffix[:2]) <= 12 and 1 <= int(suffix[2:]) <= 31
+
+
+def _dated(models, key, creator):
+    """The one scored entry named key plus an MMDD suffix; None when there is none or more than one."""
+    found = [entry for entry in models.values() if entry['score'] is not None
+             and creator in (None, entry['creator']) and _month_day(entry['key'], key)]
+    return found[0] if len(found) == 1 else None
+
+
 def lookup(cache, key, creator):
     models = cache.get('models', {})
     if creator is not None:
@@ -120,6 +133,18 @@ def lookup(cache, key, creator):
         own = matches[0] if matches else None
     if own is not None and own['score'] is not None:
         return _result(own, 'openrouter', own)
+    # An explicit creator always bounds the dated match. Without one, a plain row bounds it by its own creator;
+    # a plain row with no valid creator allows no dated match. Only with no plain row does the match span labs.
+    if creator is None and own is not None:
+        owner = own['creator']
+        creator_bound = owner if type(owner) is str and owner else False
+    else:
+        creator_bound = creator
+    dated = _dated(models, key, creator_bound) if creator_bound is not False else None
+    if dated is not None:
+        # Same price rule as the family path: the plain entry's own price when it has both, else the dated one's.
+        priced = own if own is not None and own['input'] is not None and own['output'] is not None else dated
+        return _result(dict(dated, input=priced['input'], output=priced['output']), 'openrouter', dated)
     # A model never borrows from a newer version of itself.
     members = [entry for entry in models.values() if entry['family'] == family_key(key)
                and entry['score'] is not None and creator in (None, entry['creator'])
@@ -147,6 +172,23 @@ def load(state_dir):
             or value['failures'] < 0:
         return None
     return value
+
+
+def anchor(cache):
+    """Third-highest lab's best own score (lowest lab's when fewer than three); None when nothing is scored."""
+    best = {}
+    for entry in cache.get('models', {}).values():
+        creator, score = entry.get('creator'), entry.get('score')
+        if type(creator) is not str or type(score) not in (int, float) or not 0 <= score <= 100:
+            continue
+        lab = creator.removeprefix('~')
+        if lab in ('', 'openrouter'):
+            continue
+        best[lab] = max(best.get(lab, score), score)
+    ranked = sorted(best.values(), reverse=True)
+    if not ranked:
+        return None
+    return ranked[2] if len(ranked) >= 3 else ranked[-1]
 
 
 def _scored(cache, key):

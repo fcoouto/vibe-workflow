@@ -11,6 +11,7 @@ PLANS = {
     'fable-5.1': (50.0, 10, 50), 'haiku': (36.5, 0.10, 0.50), 'luna': (27.9, 0.10, 0.50),
 }
 CLAUDE = ('fable-5.2', 'opus', 'sonnet', 'fable-5.1', 'haiku')
+ANCHOR = 61.4
 
 
 def candidates(names):
@@ -19,7 +20,7 @@ def candidates(names):
 
 
 def pick(names, level):
-    return routing.order(candidates(names), level)[0]['route']
+    return routing.order(candidates(names), level, ANCHOR)[0]['route']
 
 
 class RoutingTest(unittest.TestCase):
@@ -27,8 +28,21 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.task_level('implementation', FACTS), 1)
         self.assertEqual(routing.task_level('review', FACTS), 2)
         self.assertEqual(routing.task_level('planning', FACTS), 3)
-        self.assertEqual(routing.task_level('implementation', dict(FACTS, files='3+')), 2)
-        self.assertEqual(routing.task_level('implementation', dict(FACTS, risk='critical')), 3)
+        self.assertEqual(routing.task_level('implementation', dict(FACTS, files='3+')), 1)
+        self.assertEqual(routing.task_level('implementation', dict(FACTS, risk='critical')), 1)
+
+    def test_exact_spec_exceptions(self):
+        level = routing.task_level
+        self.assertEqual(level('implementation', dict(FACTS, files='3+')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, risk='critical')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, risk='shared', files='3+')), 1)
+        self.assertEqual(level('testing', dict(FACTS, risk='critical')), 1)
+        self.assertEqual(level('implementation', dict(FACTS, files='cross-system')), 3)
+        self.assertEqual(level('implementation', dict(FACTS, spec='prose', risk='critical')), 3)
+        self.assertEqual(level('implementation', dict(FACTS, spec='prose', files='3+')), 2)
+        self.assertEqual(level('review', dict(FACTS, risk='critical')), 3)
+        self.assertEqual(level('review', dict(FACTS, files='3+')), 2)
+        self.assertEqual(level('writing', dict(FACTS, risk='critical')), 3)
 
     def test_missing_or_unknown_facts_are_rejected(self):
         bad = [{k: v for k, v in FACTS.items() if k != 'risk'}, dict(FACTS, files='many'),
@@ -42,35 +56,49 @@ class RoutingTest(unittest.TestCase):
 
     def test_golden_two_plans(self):
         names = list(PLANS)
-        self.assertEqual(pick(names, 1), 'haiku')
-        self.assertEqual(pick(names, 2), 'sol')
-        self.assertEqual(pick(names, 3), 'sol')
+        self.assertEqual([pick(names, level) for level in (1, 2, 3)], ['haiku', 'terra', 'fable-5.2'])
 
     def test_golden_claude_only(self):
-        self.assertEqual([pick(CLAUDE, level) for level in (1, 2, 3)], ['haiku', 'sonnet', 'opus'])
+        self.assertEqual([pick(CLAUDE, level) for level in (1, 2, 3)], ['haiku', 'sonnet', 'fable-5.2'])
+
+    def test_bars_follow_the_anchor(self):
+        self.assertEqual(routing.bars(61.4), (61.4 * 0.55, 61.4 * 0.80, 61.4))
+
+    def test_exact_cutoff_qualifies(self):
+        item = dict(route='r', score=50.4, price=1, released=1, creator='a', key='k')
+        self.assertEqual([c['route'] for c in routing.order([item], 2, 63)], ['r'])
+
+    def test_nothing_clears_returns_empty_and_strongest_orders_by_score(self):
+        low = candidates(['luna', 'haiku'])
+        self.assertEqual(routing.order(low, 2, ANCHOR), [])
+        self.assertEqual([c['route'] for c in routing.strongest(low)], ['haiku', 'luna'])
+
+    def test_near_clause_never_stands_alone(self):
+        free = dict(route='free', score=0.98 * routing.bars(100)[0], price=0, released=0)
+        self.assertEqual(routing.order([free], 1, 100), [])
 
     def test_near_clause_needs_both_conditions(self):
-        floor = 100 * routing.RATIO[0]
+        floor = routing.bars(100)[0]
         base = dict(route='a', score=100, price=10, released=0)
         cheap_low = dict(route='b', score=0.96 * floor, price=2.5, released=0)
         near_dear = dict(route='c', score=0.98 * floor, price=6, released=0)
-        routes = [c['route'] for c in routing.order([base, cheap_low, near_dear], 1)]
+        routes = [c['route'] for c in routing.order([base, cheap_low, near_dear], 1, 100)]
         self.assertEqual(routes, ['a'])
         near_cheap = dict(route='d', score=0.98 * floor, price=4, released=0)
-        routes = [c['route'] for c in routing.order([base, near_cheap], 1)]
+        routes = [c['route'] for c in routing.order([base, near_cheap], 1, 100)]
         self.assertEqual(routes, ['d', 'a'])
 
     def test_ties_break_by_score_then_release_then_route(self):
         a = dict(route='a', score=50, price=1, released=1)
         b = dict(route='b', score=60, price=1, released=0)
-        self.assertEqual([c['route'] for c in routing.order([a, b], 1)], ['b', 'a'])
+        self.assertEqual([c['route'] for c in routing.order([a, b], 1, 60)], ['b', 'a'])
         c = dict(route='c', score=60, price=1, released=5)
-        self.assertEqual(routing.order([b, c], 1)[0]['route'], 'c')
+        self.assertEqual(routing.order([b, c], 1, 60)[0]['route'], 'c')
 
     def test_own_score_beats_a_borrowed_one_at_equal_price_and_score(self):
         borrowed = dict(route='a', score=60, price=1, released=9, score_source='family')
         own = dict(route='b', score=60, price=1, released=0, score_source='openrouter')
-        self.assertEqual([c['route'] for c in routing.order([borrowed, own], 1)], ['b', 'a'])
+        self.assertEqual([c['route'] for c in routing.order([borrowed, own], 1, 60)], ['b', 'a'])
 
     def test_effort_clamps_to_variants(self):
         self.assertEqual(routing.effort_for(2, ['low', 'medium', 'high']), 'medium')

@@ -9,7 +9,7 @@ CLAUDE = 'opencode-claude-subscription'
 
 def result(state, reason=None, **extra):
     return dict(dict(state=state, reason=reason, route=None, alternatives=[], excluded=[], level=None,
-                     attribution=scores.ATTRIBUTION), **extra, admission=False, reservation=False,
+                     attribution=scores.ATTRIBUTION, below_level=False), **extra, admission=False, reservation=False,
                 spend_permit=False)
 
 
@@ -136,18 +136,22 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
     return pool
 
 
-def _confirm(ordered, pool, limit):
-    """Recheck each account in order; a route whose account changed since eligibility is dropped."""
-    chosen = []
+def _confirm(ordered, pool, limit, qualifies=None):
+    """Recheck each account in order; a route whose account changed since eligibility is dropped.
+    With `qualifies`, keep checking past the limit until a qualifying route passes, and keep it among the picks."""
+    chosen, found = [], False
     for item in ordered:
+        if len(chosen) >= limit and (qualifies is None or found):
+            break
         current = int(time.time()) if pool['fixed'] is None else pool['fixed']
         fact = subscription_billing.fact(pool['source'], item, current)
         if subscription_billing.marker(fact, item, current) != item['account_marker']:
             pool['excluded'].append(dict(route=item['route'], reason='account_changed'))
-        else:
+        elif len(chosen) < limit:
             chosen.append(item)
-        if len(chosen) == limit:
-            break
+            found = found or bool(qualifies and qualifies(item))
+        elif qualifies(item):
+            chosen[-1], found = item, True
     return chosen
 
 
@@ -167,8 +171,16 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now)
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
-    chosen = _confirm(routing.order(pool['candidates'], level), pool, 3)
+    anchor = scores.anchor(pool['cache'])
+    ordered = routing.order(pool['candidates'], level, anchor) if anchor is not None else []
+    below = False
+    if not ordered and pool['candidates']:
+        ordered, below = routing.strongest(pool['candidates']), True
+    qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
+    chosen = _confirm(ordered, pool, 3, qualifies)
+    if qualifies and not any(qualifies(item) for item in chosen):
+        chosen = []
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
-                    route=chosen[0] if chosen else None, alternatives=chosen[1:])
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))
     return _refresh_flag(answer, pool)

@@ -140,6 +140,8 @@ Astra and Claude Fable 5.2, and the user's choices in conversation.
 
 ### Task description
 
+Superseded by `2026-11-23-router-levels-design.md`; the level rule below no longer applies.
+
 Input contract `v: 2`. Required: `work_kind` (unchanged enum) and `task`, an
 object with three required facts the caller can observe:
 
@@ -177,6 +179,8 @@ existing context-limit filter.
   and no family score is not recommended and is reported as `unscored`.
 
 ### Ranking rule
+
+Superseded by `2026-11-23-router-levels-design.md`; the ratios and order below no longer apply.
 
 ```text
 price(m) = (3 * input + output) / 4          # USD per million tokens

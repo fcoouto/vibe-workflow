@@ -230,6 +230,26 @@ with `main`, which no live run saw. Smart Router's own check can now report
 fix itself). The old "not set up yet" implied an action for the first reason, so the
 wording is "not ready yet", with a separate hint for the second.
 
+## Levels and reviews
+
+Level bars come from the public score catalog, not a fixed model list. `scores.anchor(cache)`
+takes the third-highest per-lab best score; `routing.bars(anchor)` turns it into the level 1,
+2 and 3 floors (0.55, 0.80 and 1 times the anchor). When the anchor has
+fewer than three labs it is the lowest lab's best score; with no scores it is `None` and selection
+falls back to the strongest available. `below_level: true` marks that strongest-available fallback
+(an ordinary near-clause pick can score slightly below the bar without setting it), and `index.js` shows that notice once per session
+per level. Design and plan reviews are sized to the stakes. The specs are
+`docs/superpowers/specs/2026-11-23-router-levels-design.md` and
+`docs/superpowers/specs/2026-11-23-stakes-sized-reviews-design.md`.
+
+Observed live (OpenCode 2.3.2, 23 November 2026, branch at 02fb0c8, `scripts/live_check.py --prompt`, Smart Router on):
+in three prompts asking the agent to call `smart_router_select` once per delegation it would make, with no edits
+or subagents, the ratings were as expected. Case 1 (order-sizing plan): plan review as planning and critical,
+implementer as implementation, exact and critical, diff review as review, critical. Case 2 (one-word typo): no
+delegation and no plan review. Case 3 (a config default read by order sizing): rated critical. Caveat: `--prompt`
+mode also loads the user's installed plugin, whose copy answered the tool with the old rule, so these runs verify
+the agents' ratings, not the new levels, which unit tests cover. Dispatch of the reviews was not observed.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;

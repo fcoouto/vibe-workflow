@@ -103,6 +103,27 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(scores.version('claude-haiku-4-5-20251001'), (4, 5))
         self.assertEqual(scores.version('gpt-²-sol'), ())
 
+    def test_date_suffixed_catalog_entry_scores_the_plain_name(self):
+        cache = parse(model('deepseek/deepseek-v4.1-flash', None, prompt='0.00000005', completion='0.0000002'),
+                      model('deepseek/deepseek-v4.1-flash-1017', 32.6, prompt='0.00000014', completion='0.00000063'),
+                      model('qwen/qwen3.8-max-0902', 33.7), model('meta/muse-spark-1.3', 36.6),
+                      model('x/twin-0902', 40), model('x/twin-1017', 41))
+        found = scores.lookup(cache, 'deepseek-v4-1-flash', None)
+        self.assertEqual((found['score'], found['score_source'], found['price']),
+                         (32.6, 'openrouter', scores_price(0.05, 0.2)))
+        self.assertEqual(scores.lookup(cache, 'qwen3-8-max', None)['score'], 33.7)
+        self.assertIsNone(scores.lookup(cache, 'muse-spark-1-3-contributor', None))
+        self.assertIsNone(scores.lookup(cache, 'twin', None))
+        ctx = parse(model('x/long-8192', 50))
+        self.assertIsNone(scores.lookup(ctx, 'long', None))
+
+    def test_date_match_borrows_the_dated_price_when_the_plain_entry_has_none(self):
+        cache = parse(model('deepseek/deepseek-v4.1-flash', None, prompt=None, completion=None),
+                      model('deepseek/deepseek-v4.1-flash-1017', 32.6, prompt='0.00000014', completion='0.00000063'))
+        found = scores.lookup(cache, 'deepseek-v4-1-flash', 'deepseek')
+        self.assertEqual((found['score'], found['score_source'], found['price']),
+                         (32.6, 'openrouter', scores_price(0.14, 0.63)))
+
     def test_payload_level_problems_raise(self):
         many = [model(f'a/m{i}', 1) for i in range(5001)]
         few = [model(f'a/m{i}', 1 if i < 40 else None) for i in range(100)]
@@ -130,6 +151,47 @@ class ScoresTest(unittest.TestCase):
         cache = parse(model('a/ok', 1), 'junk', dict(id=5), dict(id='bare'), dict(id='/'),
                       dict(id='a/nocreated', pricing='x'))
         self.assertEqual(list(cache['models']), ['a/ok'])
+
+    def test_anchor_is_the_third_lab_best(self):
+        cache = parse(model('a/x-1', 70), model('a/x-2', 65), model('b/y', 62.1), model('c/z', 61.4),
+                      model('d/w', 50), model('~a/x-latest', 99), model('openrouter/auto', 99))
+        self.assertEqual(scores.anchor(cache), 61.4)
+        newer = parse(model('a/x-1', 80), model('b/y', 62.1), model('c/z', 61.4), model('d/w', 50))
+        self.assertEqual(scores.anchor(newer), 61.4)
+        entrant = parse(model('a/x-1', 70), model('b/y', 62.1), model('c/z', 61.4), model('e/v', 63))
+        self.assertEqual(scores.anchor(entrant), 62.1)
+
+    def test_anchor_with_fewer_labs(self):
+        self.assertEqual(scores.anchor(parse(model('a/x', 70), model('b/y', 62))), 62)
+        self.assertIsNone(scores.anchor(parse(model('a/x', None))))
+
+    def test_anchor_ignores_malformed_creators_and_aggregator_aliases(self):
+        base = parse(model('a/x', 70), model('b/y', 62.1), model('c/z', 61.4))
+        self.assertEqual(scores.anchor(parse(model('a/x', 70), model('b/y', 62.1), model('c/z', 61.4),
+                                             model('~openrouter/auto', 99))), 61.4)
+        for creator in (None, '', 5):
+            cache = dict(base, models=dict(base['models'], bad=dict(key='k', creator=creator, score=99.0)))
+            self.assertEqual(scores.anchor(cache), 61.4)
+        for score in (float('nan'), float('inf'), -1, 101, True, '9'):
+            cache = dict(base, models=dict(base['models'], bad=dict(key='k', creator='d', score=score)))
+            self.assertEqual(scores.anchor(cache), 61.4)
+
+    def test_dated_match_stays_with_the_plain_entrys_creator(self):
+        cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+        self.assertIsNone(scores.lookup(cache, 'small', None))
+        self.assertEqual(scores.lookup(parse(model('lab-b/small', None), model('lab-b/small-0902', 88)),
+                                       'small', None)['score'], 88)
+
+    def test_explicit_creator_bounds_the_dated_match_despite_a_malformed_plain_row(self):
+        cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+        cache['models']['lab-a/small']['creator'] = None
+        self.assertIsNone(scores.lookup(cache, 'small', 'lab-a'))
+
+    def test_invalid_plain_row_creator_never_widens_the_dated_match(self):
+        for creator in ('', None):
+            cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+            cache['models']['lab-a/small']['creator'] = creator
+            self.assertIsNone(scores.lookup(cache, 'small', None), creator)
 
 
 def scores_price(inp, out):
