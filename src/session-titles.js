@@ -27,6 +27,7 @@ export function cellsFor({ changed, declared, pr, exists, cleanupOn, primary }) 
 const MAX_SESSIONS = 128
 const MAX_HOPS = 5
 const MAX_CHILDREN = 50
+const MAX_PAGES = 4
 const STALE_MS = 10 * 60 * 1000
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
@@ -160,26 +161,40 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   // Whether a child of the root, or with `withSelf` the root itself, is running now. A session runs when it became busy
-  // and has not gone idle since; the age rule keeps a busy mark left by a crash from hiding the label for good.
-  // `ended` is a session that just ended and counts as idle whatever the host still says. A failure, or no answer
-  // within `deadline` ms for the whole read, counts as "nothing runs", so a stuck host call cannot hold the session's queue.
+  // and has not gone idle since; the age rule (newest of `updated` and `busy`) keeps a busy mark left by a crash from
+  // hiding the label for good. `ended` ({ id, at }) is a session whose end event arrived at `at`: that run counts as
+  // idle whatever the host still says, but a run that began after `at` does not. The two reads are independent and
+  // share one deadline of `deadline` ms; what has not answered by then, or failed, counts as "nothing runs", so a stuck
+  // host call cannot hold the session's queue.
   async function activity(rootID, { ended = null, withSelf = false } = {}) {
-    let timer
+    const finite = (value) => typeof value === "number" && Number.isFinite(value)
     const running = (info, now) => {
       const time = info?.time
-      return typeof time?.busy === "number" && !(typeof time.idle === "number" && time.idle >= time.busy) &&
-        now - (typeof time.updated === "number" ? time.updated : time.busy) < STALE_MS
+      if (!finite(time?.busy) || (finite(time.idle) && time.idle >= time.busy)) return false
+      return now - Math.max(time.busy, finite(time.updated) ? time.updated : 0) < STALE_MS
     }
-    const read = async () => {
+    const childRuns = async () => {
       const now = Date.now()
-      const page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
-      const items = Array.isArray(page) ? page : page?.data
-      const children = Array.isArray(items) && items.some((info) => info?.id !== ended && running(info, now))
-      return { children, self: withSelf && running(await ctx.session.get({ sessionID: rootID }), now) }
+      let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
+      for (let pages = 1; ; pages++) {
+        const items = Array.isArray(page) ? page : page?.data
+        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && running(info, now) &&
+          !(ended && info.id === ended.id && info.time.busy <= ended.at))) return true
+        const next = page?.cursor?.next
+        if (typeof next !== "string" || pages >= MAX_PAGES) return false
+        page = await ctx.session.list({ cursor: next, limit: MAX_CHILDREN })
+      }
     }
-    try {
-      return await Promise.race([read(), new Promise((_, stop) => { timer = setTimeout(() => stop(Error("deadline")), deadline) })])
-    } catch { return { children: false, self: false } } finally { clearTimeout(timer) }
+    const rootRuns = async () => withSelf && running(await ctx.session.get({ sessionID: rootID }), Date.now())
+    const result = { children: false, self: false }
+    let timer
+    await Promise.race([
+      Promise.all([childRuns().then((value) => { result.children = value }, () => {}),
+        rootRuns().then((value) => { result.self = value }, () => {})]),
+      new Promise((done) => { timer = setTimeout(done, deadline) }),
+    ])
+    clearTimeout(timer)
+    return { ...result }
   }
 
   // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
@@ -196,9 +211,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
 
   // A session below a bound root ended: the root may now be idle with nothing running, so it re-evaluates its label.
   async function wakeRoot(sessionID) {
+    const at = Date.now()
     if (!await on()) return
     const root = await rootOf(sessionID)
-    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, sessionID))
+    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, { id: sessionID, at }))
   }
 
   async function evaluate(sessionID, ended, fromChild = null) {

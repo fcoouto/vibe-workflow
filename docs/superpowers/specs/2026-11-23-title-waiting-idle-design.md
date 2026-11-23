@@ -65,22 +65,29 @@ list; `Session.Info.time` carries `busy` and `idle` (a session that is processin
 
 ## Design
 
-1. `activity(rootID)`: list the root's children with `ctx.session.list({ parentID: rootID, limit: 50,
-   order: "desc" })` and call a child running when `time.busy` is a number, `time.idle` is not a number at
-   or after it, and `time.updated` is less than 10 minutes old (a crash can leave `busy` set for good;
-   the age rule keeps that from hiding the label forever). Only direct children count: a running
-   grandchild implies a running child in practice. The root itself is running by the same test on
-   `ctx.session.get` (only the child-triggered path needs it). In a child-triggered evaluation the child
-   that just ended is treated as not running, so a host that updates `time.idle` a moment after the end
-   event cannot hide the label. A missing method, an error, an odd shape or no answer within 3 seconds
-   returns "none running".
-2. In `evaluate(sessionID, ended)`, the label becomes `ended && cells < 5 && !(await running(sessionID))`.
-   The check runs only after the existing guards (bound, not silenced, not fresh).
+1. `activity(rootID, { ended, withSelf })`: list the root's children with `ctx.session.list({ parentID:
+   rootID, limit: 50, order: "desc" })` and follow `cursor.next` (with `{ cursor, limit }`) for at most 4
+   pages. A child runs when `time.busy` is a finite number, `time.idle` is not a finite number at or
+   after it, and the newest of `time.updated` and `time.busy` is less than 10 minutes old. The age
+   uses the newest of the two because a session that restarts sets `busy` without necessarily touching
+   `updated`; the age rule itself keeps a busy mark left by a crash from hiding the label for good.
+   Rows without a string `id` are ignored. Only direct children count: a running grandchild implies a
+   running child in practice. With `withSelf` the root is judged by the same rule on `ctx.session.get`
+   (only the child-triggered path needs it).
+   In a child-triggered evaluation `ended` is `{ id, at }`, the session whose end event arrived at `at`:
+   that session is treated as idle while its `time.busy` is not after `at`, so a host that updates
+   `time.idle` a moment after the end event cannot hide the label, and a run that started after the
+   event still counts. The child list and the root read are independent and share one 3-second
+   deadline; a read that failed or has not answered by then counts as "nothing runs", and the other
+   read's result is kept. A missing method or an odd shape does the same.
+2. In `evaluate(sessionID, ended, fromChild)`, after the facts are read, the label becomes
+   `ended && cells < 5 && !activity.children`. The check runs only after the existing guards (bound,
+   not silenced, not fresh) and nothing is written after the plugin closed.
 3. For the end of any session that is not itself bound (events already arrive for them), look up its
-   root by walking `parentID`; when that root has a binding, queue one more `evaluate(root, true)`
-   for the root's chain. That evaluation first confirms the root itself is not active (a woken root
-   writes its own end of turn) and then recomputes the label as in step 2. A session without a parent
-   does nothing.
+   root by walking `parentID` (at most 5 steps) when the feature is on; when that root has a binding,
+   queue one more evaluation of it for the root's chain, carrying `{ id, at }`. Before any fact read
+   it returns when a child still runs or the root itself runs (a woken root writes its own end of
+   turn), and it checks the root again before writing. A session without a parent does nothing.
 4. The saved record's `diag` is unchanged.
 5. Docs: update the "WAITING label" and "Known gaps" text of the 2026-11-20 design to point here.
 
@@ -93,6 +100,10 @@ note change, so the live injection check is not triggered. The tests live under 
 
 - A child that has run for over 10 minutes without any update reads as not running, so `WAITING`
   may show during a very long silent child (today's behavior).
+- Beyond 4 pages (200 children) a running child is not seen; a root with that many subagents reads as
+  not running while only an old one is active.
+- A sibling that starts while a child-triggered evaluation reads facts still gets the meter written
+  (without the label); the meter is correct either way.
 - A short flash of `WAITING` if the child's end event is handled before the host marks the woken
   root active; the root's own start event removes it.
 - Only direct children count; a running grandchild under an idle child is ignored. The walk up to
