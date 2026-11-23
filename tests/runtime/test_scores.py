@@ -182,6 +182,11 @@ class ScoresTest(unittest.TestCase):
         self.assertEqual(scores.lookup(parse(model('lab-b/small', None), model('lab-b/small-0902', 88)),
                                        'small', None)['score'], 88)
 
+    def test_explicit_creator_bounds_the_dated_match_despite_a_malformed_plain_row(self):
+        cache = parse(model('lab-a/small'), model('lab-b/small-0902', 88))
+        cache['models']['lab-a/small']['creator'] = None
+        self.assertIsNone(scores.lookup(cache, 'small', 'lab-a'))
+
 
 def scores_price(inp, out):
     return (3 * inp + out) / 4

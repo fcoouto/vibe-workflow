@@ -133,7 +133,10 @@ def lookup(cache, key, creator):
         own = matches[0] if matches else None
     if own is not None and own['score'] is not None:
         return _result(own, 'openrouter', own)
-    dated = _dated(models, key, creator if own is None else own['creator'])
+    # An explicit creator always bounds the dated match; the plain row's creator counts only without one.
+    bound = creator if creator is not None else own['creator'] if own is not None \
+        and type(own['creator']) is str and own['creator'] else None
+    dated = _dated(models, key, bound)
     if dated is not None:
         # Same price rule as the family path: the plain entry's own price when it has both, else the dated one's.
         priced = own if own is not None and own['input'] is not None and own['output'] is not None else dated
