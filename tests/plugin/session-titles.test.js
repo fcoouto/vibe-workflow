@@ -585,6 +585,19 @@ test("an implausible event time falls back to the receipt time", async (t) => {
   }
 })
 
+test("a root still inside a long silent tool call is not labeled when its child ends", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  const writes = h.calls.update.length
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  Object.assign(h.facts, { active: ["ses_1"], stale: ["ses_1"] })
+  await h.end("child_1")
+  assert.equal(h.calls.update.length, writes)
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
 test("a failing child list does not hide that the root is running again", async (t) => {
   const h = await host(t)
   await h.write(SPEC)

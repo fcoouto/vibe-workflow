@@ -161,18 +161,16 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   // Whether a child of the root, or with `withSelf` the root itself, is running now. A session runs when it became busy
-  // and has not gone idle since; the age rule (newest of `updated` and `busy`) keeps a busy mark left by a crash from
-  // hiding the label for good. `ended` ({ id, at }) is a session whose end event arrived at `at`: that run counts as
+  // and has not gone idle since. For a child the age rule (newest of `updated` and `busy`) keeps a busy mark left by a
+  // crash from hiding the label for good; the root has none, because `updated` does not move during a tool call and a
+  // root inside a long one is still running (a root stuck busy only skips a write that did not exist before). `ended` ({ id, at }) is a session whose end event arrived at `at`: that run counts as
   // idle whatever the host still says, but a run that began after `at` does not. The two reads are independent and
   // share one deadline of `deadline` ms; what has not answered by then, or failed, counts as "nothing runs", so a stuck
   // host call cannot hold the session's queue.
   async function activity(rootID, { ended = null, withSelf = false } = {}) {
     const finite = (value) => typeof value === "number" && Number.isFinite(value)
-    const running = (info, now) => {
-      const time = info?.time
-      if (!finite(time?.busy) || (finite(time.idle) && time.idle >= time.busy)) return false
-      return now - Math.max(time.busy, finite(time.updated) ? time.updated : 0) < STALE_MS
-    }
+    const busy = (time) => finite(time?.busy) && !(finite(time.idle) && time.idle >= time.busy)
+    const running = (info, now) => busy(info?.time) && now - Math.max(info.time.busy, finite(info.time.updated) ? info.time.updated : 0) < STALE_MS
     const childRuns = async () => {
       const now = Date.now()
       let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
@@ -185,7 +183,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         page = await ctx.session.list({ cursor: next, limit: MAX_CHILDREN })
       }
     }
-    const rootRuns = async () => withSelf && running(await ctx.session.get({ sessionID: rootID }), Date.now())
+    const rootRuns = async () => withSelf && busy((await ctx.session.get({ sessionID: rootID })).time)
     const result = { children: false, self: false }
     let timer
     await Promise.race([

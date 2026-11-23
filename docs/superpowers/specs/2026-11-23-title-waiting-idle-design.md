@@ -30,9 +30,9 @@ list; `Session.Info.time` carries `busy` and `idle` (a session that is processin
 
 ## Goals
 
-- At the end of a root turn, add `WAITING` only when no descendant session of that root is running.
+- At the end of a root turn, add `WAITING` only when no child session of that root is running.
   The meter is still written at every turn end, with or without the label.
-- When the last running descendant ends and the root stays idle, the label appears (a child that
+- When the last running child ends and the root stays idle, the label appears (a child that
   finishes without waking the root must not leave the title unlabeled for good).
 - When a child's report wakes the root, the existing start/end events decide, as today.
 
@@ -47,15 +47,17 @@ list; `Session.Info.time` carries `busy` and `idle` (a session that is processin
 ## Anti-goals
 
 - A title that never gets `WAITING` because a read failed or a child never reported: a failed or
-  missing `active` read counts as "nothing running" (today's behavior), never as "something runs".
-- A title write at tool time, or any extra work on turns of unbound sessions: the walk up the
-  parents happens only for a bound root's turn end and for the end of a session that has a parent.
+  missing `list` read counts as "nothing running" (today's behavior), never as "something runs".
+- A title write at tool time, or git and `gh` reads on turns of unbound sessions. The end of any session
+  (while the feature is on) costs one settings read and, for a session not already bound, one
+  `ctx.session.get` to find its parent; the child list is read only for a bound root's turn end and for
+  the end of a session below a bound root.
 - Blocking a turn: every read is bounded and failures are silent, like the rest of the plugin.
 
 ## Approaches
 
-- **A. Check the running descendants at the turn end, and re-evaluate the root when a child ends
-  (chosen).** One authoritative read of the host's active sessions; no state of our own to go stale.
+- **A. Check the running children at the turn end, and re-evaluate the root when a child ends
+  (chosen).** One read of the host's own session data (the child list and its `time` fields); no state of our own to go stale.
 - **B. Check only that the root itself is idle.** Rejected: the root's own turn has just ended, so
   this does not change the reported case. The child is what is still running.
 - **C. Track child starts and ends from events alone.** Rejected: one missed end event leaves a
@@ -72,8 +74,11 @@ list; `Session.Info.time` carries `busy` and `idle` (a session that is processin
    uses the newest of the two because a session that restarts sets `busy` without necessarily touching
    `updated`; the age rule itself keeps a busy mark left by a crash from hiding the label for good.
    Rows without a string `id` are ignored. Only direct children count: a running grandchild implies a
-   running child in practice. With `withSelf` the root is judged by the same rule on `ctx.session.get`
-   (only the child-triggered path needs it).
+   running child in practice. With `withSelf` the root is judged on `ctx.session.get` by `busy` and `idle`
+   alone, with no age rule: `time.updated` moves only at step boundaries, not during a tool call, so a
+   root inside a long tool call (a foreground subagent running past 10 minutes) is still running and
+   must not get a label; a root stuck busy only skips a write that did not exist before this change
+   (only the child-triggered path needs the root read).
    In a child-triggered evaluation `ended` is `{ id, at }`, the session whose end event happened at `at` (the event's own `created` time when it is within 5 minutes of now, else the time it was received, so a late delivery cannot hide a restarted run and a different unit or clock cannot hide the label):
    that session is treated as idle while its `time.busy` is not after `at`, so a host that updates
    `time.idle` a moment after the end event cannot hide the label, and a run that started after the
@@ -98,8 +103,9 @@ note change, so the live injection check is not triggered. The tests live under 
 
 ## Known gaps (accepted until the live check says otherwise)
 
-- A child that has run for over 10 minutes without any update reads as not running, so `WAITING`
-  may show during a very long silent child (today's behavior).
+- `time.updated` does not move during a tool call, so a child inside one tool call for over 10 minutes
+  (a long test run, or waiting on its own foreground subagent) reads as not running, and `WAITING` can
+  show while it works (today's behavior). This is more common than "a very long silent child" suggests.
 - Beyond 4 pages (200 children) a running child is not seen; a root with that many subagents reads as
   not running while only an old one is active.
 - A sibling that starts while a child-triggered evaluation reads facts still gets the meter written

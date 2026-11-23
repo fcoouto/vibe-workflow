@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-23-title-waiting-idle-design.md`
 
+> **Superseded in part:** the `ctx.session.active()` text in Global Constraints, Review Focus and Task 1, and "a grandchild counts", were replaced by the Amendment at the end of this file (and by the spec's Amendment): the real host has no `active()`, and only direct children count.
+
 ## Global Constraints
 
 - Standard library only; advisory only; the title is not written at tool time.

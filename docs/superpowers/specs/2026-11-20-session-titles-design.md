@@ -154,7 +154,7 @@ project, removed afterwards:
   `session.execution.started`. When you see `WAITING`, the session has stopped and needs
   you to move it.
 - A root turn can end while a background child still runs. Since 2026-11-23 (issue #379) the
-  label is not added while any descendant session of the root runs, and it appears when the
+  label is not added while any child session of the root runs, and it appears when the
   last one ends and the root stays idle; see `2026-11-23-title-waiting-idle-design.md`. This
   replaces the earlier decision to accept the label during a child's run.
 
