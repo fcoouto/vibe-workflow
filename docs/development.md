@@ -10,8 +10,8 @@ inference without authorization covering that action.
 Write behavior tests before nontrivial changes. Validate, commit, then run:
 
 ```sh
-python3 -B -m unittest discover -s tests
-node --test tests/*.test.js
+python3 -B -m unittest discover -s tests -t .
+node --test "tests/**/*.test.js"
 python3 -B scripts/validate.py
 python3 -B scripts/package.py --output dist
 python3 -B scripts/validate.py --root dist
@@ -26,7 +26,7 @@ exported. `--origin` sets the clone's remote for `gh` lookups; use a throwaway o
 the session's agent could fetch from or push to it.
 
 `python3 -B scripts/live_check.py --injection` proves agents still receive the injected notes. In a
-throwaway clone with Smart Router on, it asks each model in `tests/opencode-verified.json` to quote
+throwaway clone with Smart Router on, it asks each model in `tests/tooling/opencode-verified.json` to quote
 the subagent tool's `model` parameter, one first-call prompt with no tools, through
 `opencode run --standalone` with a private, empty config directory (so an installed copy of the
 plugin cannot load) and `PWD` set to the clone (OpenCode takes its directory from `PWD`, not the
@@ -66,7 +66,7 @@ notes use the same path); it does not cover the skill-load notes themselves, bec
 has no superpowers skills. `opencode run --format json` (2.3.2) prints one event per line: the reply is
 the top-level `text` events, a tool call is one `tool_use` event, and text nested in a tool result is not
 the reply. Only when every model and the probe pass does it write the models used, the installed OpenCode version and
-today's date into the record; commit that change. `tests/test_opencode_version.py` fails whenever
+today's date into the record; commit that change. `tests/tooling/test_opencode_version.py` fails whenever
 the installed OpenCode differs from the recorded version, so the suite turns red right after an
 OpenCode update. The user pre-authorized agents to run `--injection` without asking when that test
 fails or a plan changes the injected notes (`AGENTS.md`); other live checks still need explicit
@@ -437,7 +437,7 @@ instructions on claude-agent"). Observed live (OpenCode 2.3.2, 22 November 2026,
 `scripts/live_check.py --injection`, branch `feat/router-on-subagent-tool`): on the first
 call, `claude-agent/haiku`, `openai/gpt-6.1-terra` and `opencode-go/claude-haiku-5-5` each
 quoted both notes verbatim with no tool call, and the check recorded 2.3.2 in
-`tests/opencode-verified.json`. The first attempt failed for every model because the
+`tests/tooling/opencode-verified.json`. The first attempt failed for every model because the
 server booted in the caller's directory (OpenCode reads `PWD`, not the process's working
 directory), so the clone's plugin never loaded; the check failed and recorded nothing,
 as it should.
