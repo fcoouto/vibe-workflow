@@ -15,6 +15,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
 const MAX_NOTICE_SESSIONS = 128
 const MAX_PICKS = 64
+const SIZE_GROUPS = ["short", "long"]
 const FEEDBACK_HINT = "After the subagent reports, you may rate its work with smart_router_feedback and this pick_id."
 const blocked = () => ({
   state: "blocked", reason: "selector_unavailable", route: null, excluded: [],
@@ -141,9 +142,10 @@ export default {
     const notices = new Map()
     // session → Map(pick_id → { work_kind, size_group, refs }), bounded like notices.
     const picks = new Map()
-    // Bumped on every observed Smart Router off: a selection that started before it may not store its pick.
+    // Every path that observes Smart Router off calls this: notices and picks clear together, and a selection
+    // that started before it may not store its pick.
     let generation = 0
-    const forgetPicks = () => { generation += 1; picks.clear() }
+    const forgetOff = () => { notices.clear(); generation += 1; picks.clear() }
     const remember = (sessionID, pickID, pick) => {
       const book = picks.get(sessionID) ?? new Map()
       picks.delete(sessionID)
@@ -283,7 +285,7 @@ export default {
         const started = generation
         const preference = await project.inspect()
         if (preference.state !== "on") {
-          if (preference.state === "off") { notices.clear(); forgetPicks() }
+          if (preference.state === "off") forgetOff()
           const reason = preference.state === "off" ? "project_disabled" :
             preference.state === "not_onboarded" ? "project_not_onboarded" : "project_settings_invalid"
           return { content: JSON.stringify({ ...blocked(), state: "no_selection", reason, notice: null }) }
@@ -318,10 +320,10 @@ export default {
           const pickID = randomBytes(8).toString("hex")
           pickFields = { pick_id: pickID, feedback_hint: FEEDBACK_HINT }
           const after = await project.inspect()
-          if (after.state === "off") forgetPicks()
-          if (identified && !closed && generation === started && after.state === "on") {
-            const size_group = typeof answer.size_group === "string" ? answer.size_group : "short"
-            remember(sessionID, pickID, { work_kind: own.work_kind, size_group, refs: pickRefs(answer) })
+          if (after.state === "off") forgetOff()
+          // A size group the selector does not name is never guessed: such a pick is issued but cannot be rated.
+          if (identified && !closed && generation === started && after.state === "on" && SIZE_GROUPS.includes(answer.size_group)) {
+            remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs: pickRefs(answer) })
           }
         }
         return { content: JSON.stringify({ ...withModelRef(answer), ...pickFields, notice }) }
@@ -343,7 +345,7 @@ export default {
         const ignored = { content: JSON.stringify({ state: "ignored" }) }
         const refused = (reason) => ({ content: JSON.stringify({ state: "refused", reason }) })
         const preference = (await project.inspect()).state
-        if (preference === "off") forgetPicks()
+        if (preference === "off") forgetOff()
         const book = typeof sessionID === "string" && preference === "on" ? picks.get(sessionID) : undefined
         const pick = typeof request?.pick_id === "string" ? book?.get(request.pick_id) : undefined
         if (closed || !pick) return ignored
@@ -373,7 +375,7 @@ export default {
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
-      if (result.enabled === false) { notices.clear(); forgetPicks() }
+      if (result.enabled === false) forgetOff()
       return result
     } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
@@ -404,7 +406,7 @@ export default {
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       const { state } = await project.inspect()
-      if (state === "off") { notices.clear(); forgetPicks() }
+      if (state === "off") forgetOff()
       await noteModel(event, state === "on")
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.

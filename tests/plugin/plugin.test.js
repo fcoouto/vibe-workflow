@@ -978,8 +978,8 @@ else:
     sys.stdin.read()
     print(Path("answer.json").read_text())
 `
-async function pickFixture(reply) {
-  const f = await fixture(picking(reply), listed(info(), otherModel))
+async function pickFixture(reply, extra = {}) {
+  const f = await fixture(picking(reply), listed(info(), otherModel), extra)
   await writeFile(join(f.root, "answer.json"), JSON.stringify(picked))
   return f
 }
@@ -1149,17 +1149,67 @@ test("a selection without a session still gets a pick_id and the hint, and its c
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
-test("a selection without size_group is stored as short, and a ref without catalog_id cannot be rated", async () => {
+test("a ref without catalog_id cannot be rated", async () => {
   const f = await pickFixture()
   try {
-    const { size_group: _size, ...unsized } = picked
     const alternatives = [{ provider: "claude-agent", model: "other", feedback: { sessions: 0, adjustment: 0 } }]
-    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...unsized, alternatives }))
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, alternatives }))
     const answer = JSON.parse((await f.execute()).content)
     assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "claude-agent/other#high", rating: 4 }),
       { state: "refused", reason: "not_offered" })
     assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "recorded" })
-    assert.equal((await sentFeedback(f)).size_group, "short")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a size group the selector does not name is never guessed: the pick is issued but cannot be rated", async () => {
+  const f = await pickFixture()
+  try {
+    const { size_group: _size, ...unsized } = picked
+    for (const answer of [unsized, { ...picked, size_group: "medium" }]) {
+      await writeFile(join(f.root, "answer.json"), JSON.stringify(answer))
+      const issued = JSON.parse((await f.execute()).content)
+      assert.match(issued.pick_id, /^[0-9a-f]{16}$/)
+      assert.equal(issued.feedback_hint, FEEDBACK_HINT)
+      assert.deepEqual(await rate(f, { pick_id: issued.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    }
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a long pick is rated in the long size group", async () => {
+  const f = await pickFixture()
+  try {
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, size_group: "long" }))
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "recorded" })
+    assert.equal((await sentFeedback(f)).size_group, "long")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a selection that observes Smart Router off forgets the picks, so the old pick_id stays ignored after re-enabling", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("onboarding turning Smart Router off forgets the picks, so the old pick_id stays ignored after re-enabling", async () => {
+  const f = await pickFixture(undefined, { permission: { assert: async () => {} } })
+  try {
+    const pick_id = await pickOf(f)
+    const invocation = { sessionID: "ses_test", messageID: "m", id: "c", agent: "build", signal: new AbortController().signal }
+    const onboard = (input) => f.h.tools.get("vibe_workflow_onboard").execute({ v: 1, ...input }, invocation)
+      .then((r) => JSON.parse(r.content))
+    const preview = await onboard({ op: "preview", enabled: false })
+    const applied = await onboard({ op: "apply", enabled: false, expected_snapshot: preview.snapshot })
+    assert.notEqual(applied.state, "blocked")
+    assert.match(await readFile(join(f.root, ".vibe-workflow", "settings.json"), "utf8"), /"enabled": false/)
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
