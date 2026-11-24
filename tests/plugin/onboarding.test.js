@@ -205,27 +205,54 @@ test("a missing ctx.permission blocks git_workflow apply", async (t) => {
   await assert.rejects(stat(path), { code: "ENOENT" })
 })
 
-test("git_workflow apply from a linked worktree writes the main checkout only", async (t) => {
-  const denial = new Error("fixture native edit denied")
-  let linked
-  const prepare = async (root) => {
-    gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
-    linked = join(root, "linked")
-    gitIn(root, "worktree", "add", "--detach", linked)
-    return linked
+// A session in a subfolder of a linked worktree; main's own file is `path`, the worktree's is `own`.
+const inLinked = async (root) => {
+  gitIn(root, "commit", "--allow-empty", "-qm", "fixture")
+  const linked = join(root, "linked"), nested = join(linked, "nested")
+  gitIn(root, "worktree", "add", "--detach", linked)
+  await mkdir(nested)
+  return nested
+}
+
+test("from a linked worktree all three features save only in the worktree", async (t) => {
+  const { execute, path, root, assertCalls } = await fixture(t, async () => {}, inLinked)
+  const own = join(root, "linked", ".vibe-workflow", "settings.json")
+  for (const input of [{ feature: "smart_router", enabled: true },
+    { feature: "git_workflow", enabled: true, agent_merge: false, worktree_cleanup: true },
+    { feature: "session_titles", enabled: true }]) {
+    const preview = await execute({ op: "preview", ...input })
+    assert.equal(preview.root, join(root, "linked"))
+    assert.equal((await execute({ op: "apply", ...input, expected_snapshot: preview.snapshot })).state, "saved")
   }
-  const { execute, path, assertCalls, root } = await fixture(t, async () => {}, prepare)
+  await assert.rejects(stat(path), { code: "ENOENT" })
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [{ smart_router: { enabled: true } },
+    { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } }, { session_titles: { enabled: true } }])
+  assert.deepEqual(assertCalls.map(({ resources }) => resources), Array(3).fill(["../.vibe-workflow/settings.json"]))
+})
+
+test("the split case saves one complete file in the worktree", async (t) => {
+  const { execute, write, path, root } = await fixture(t, async () => {}, inLinked)
+  const git = { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: true } }
+  await write({ version: 1, features: [git, { session_titles: { enabled: true } }] })
+  const own = join(root, "linked", ".vibe-workflow", "settings.json"), before = await readFile(path, "utf8")
+  await mkdir(join(root, "linked", ".vibe-workflow"))
+  await writeFile(own, JSON.stringify({ version: 1, features: [{ smart_router: { enabled: true } }] }))
+  const current = await prefs(execute, { op: "preview" })
+  assert.deepEqual([current.previous_enabled, current.previous_agent_merge, current.previous_worktree_cleanup], [true, true, true])
+  const preview = await execute({ op: "preview", enabled: false })
+  assert.equal((await execute({ op: "apply", enabled: false, expected_snapshot: preview.snapshot })).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features,
+    [git, { session_titles: { enabled: true } }, { smart_router: { enabled: false } }])
+  assert.equal(await readFile(path, "utf8"), before)
+})
+
+test("a denied native edit from a linked worktree writes nothing", async (t) => {
+  const denial = new Error("fixture native edit denied")
+  const { execute, root } = await fixture(t, async () => { throw denial }, inLinked)
   const preview = await prefs(execute, { op: "preview" })
-  assert.deepEqual([preview.root, preview.project], [root, root])
-  const saved = await prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot })
-  assert.equal(saved.state, "saved")
-  assert.equal(JSON.parse(await readFile(path, "utf8")).features[0].git_workflow.enabled, true)
-  await assert.rejects(stat(join(linked, ".vibe-workflow")), { code: "ENOENT" })
-  assert.deepEqual(assertCalls.map(({ resources }) => resources), [["../.vibe-workflow/settings.json"]])
-  const denied = await fixture(t, async () => { throw denial }, prepare)
-  const again = await prefs(denied.execute, { op: "preview" })
-  await assert.rejects(prefs(denied.execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: again.snapshot }), denial)
-  await assert.rejects(stat(denied.path), { code: "ENOENT" })
+  await assert.rejects(prefs(execute, { op: "apply", enabled: true, agent_merge: false, worktree_cleanup: false, expected_snapshot: preview.snapshot }), denial)
+  await assert.rejects(stat(join(root, "linked", ".vibe-workflow")), { code: "ENOENT" })
+  await assert.rejects(stat(join(root, ".vibe-workflow")), { code: "ENOENT" })
 })
 
 test("every onboarding question has the same control-shaped form", async (t) => {
