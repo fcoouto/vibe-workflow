@@ -77,7 +77,9 @@ def _constrained(item, key, constraints):
 def _creator(cache, key, fixed=None):
     """The one identity rule: the creator of the model's own catalog row (exact key, else the unique date-suffix
     row), scored or not; else the plan's fixed creator; never a family-borrowed score donor. None when unknown."""
-    rows = [] if cache is None else list(cache.get('models', {}).values())
+    rows = [] if cache is None else [entry for entry in cache.get('models', {}).values()
+                                     if type(entry) is dict and type(entry.get('key')) is str
+                                     and type(entry.get('creator')) is str]
     exact = {entry['creator'] for entry in rows if entry['key'] == key}
     if not exact:
         exact = {entry['creator'] for entry in rows if scores._month_day(entry['key'], key)}
@@ -153,7 +155,7 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
     unique = {}
     for item in routing_paths.routes(models):
         unique.setdefault(item['route'], item)
-    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={}, labs={},
+    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={}, labs={}, named=set(),
                 allkeys=None, routed=[], had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
     if not unique:
         return dict(pool, reason='no_models')
@@ -195,6 +197,8 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
             creator = _creator(cache, key, scores.CREATOR.get(item['path']))
             # Without an identity of its own the score's creator still keys the card; it never names a lab.
             pool['creators'][item['route']] = creator or own['creator']
+            if creator is not None:
+                pool['named'].add(item['route'])
             pool['labs'][item['route']] = _known_lab(creator)
             pool['candidates'].append(dict(item, effort=effort,
                                            score=own['score'], score_source=own['score_source'], price=own['price'],
@@ -278,6 +282,9 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
     """A candidate with its feedback adjustment in `score`; the catalog score stays in `catalog_score`."""
     key, creator = pool['keys'][item['route']], pool['creators'][item['route']]
     family = scores.family_key(key)
+    if item['route'] not in pool['named']:
+        # An identity that only a score donor gave is not the model's own: recommend it, but it cannot be rated.
+        return dict(item, catalog_score=item['score'], feedback=dict(sessions=0, adjustment=0.0))
     try:
         facts = feedback.adjustment(store, key=key, creator=creator, family=family, work_kind=work_kind,
                                     size_group=size_group, anchor=anchor, now=pool['now'])

@@ -376,6 +376,28 @@ class SelectionTest(unittest.TestCase):
                       result["excluded"])
         self.assertNotIn("unmatched", result)
 
+    def test_a_malformed_cached_row_never_blocks_a_fixed_provider_pick(self):
+        self.warm()
+        path = self.root / scores.CACHE
+        cache = json.loads(path.read_text())
+        cache["models"]["junk/row"] = dict(next(iter(cache["models"].values())))
+        del cache["models"]["junk/row"]["key"]
+        path.write_text(json.dumps(cache))
+        for extra in ({}, dict(reviewing="claude-agent/claude-opus-5-5")):
+            with self.subTest(extra=extra):
+                result = self.run_select(self.request(**extra))
+                self.assertEqual((result["state"], result["reason"]), ("selected", None))
+
+    def test_a_donor_only_identity_is_recommended_but_not_rateable(self):
+        raw = body(("b/x-0", 80, 1, 5, 67), ("a/a-small", 50, 0.1, 0.5, 67), *REVIEW_TOP)
+        models = [model("opencode-go", "x-1"), model("openai", "x-1")]
+        result = select(dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="critical"),
+                             models=models), state_dir=self.root, source=Facts(), fetch=Fetch(raw), now=NOW)
+        picks = [result["route"]] + result["alternatives"]
+        self.assertEqual([item["model"] for item in picks], ["x-1"])
+        self.assertEqual(picks[0]["provider"], "opencode-go")
+        self.assertNotIn("catalog_id", picks[0])
+
     def test_unmatched_and_filter_share_one_catalog_snapshot(self):
         root = self.root
 
