@@ -74,12 +74,21 @@ def _constrained(item, key, constraints):
     return excluded(item, key, constraints.get('excluded_models', []))
 
 
+def _reviewing_ok(value):
+    """A model_ref (provider/model or provider/model#variant): exactly one slash before any #, both parts non-empty."""
+    if not routing._text(value):
+        return False
+    provider, slash, model_id = value.split('#', 1)[0].partition('/')
+    return bool(slash and provider and model_id) and '/' not in model_id
+
+
 def select(request, *, state_dir, source=None, fetch=None, now=None):
     # Only the caller's own fields are its mistake; everything after them is the selector's.
     try:
         if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 2 \
                 or not {'v', 'work_kind', 'task'} <= set(request) \
-                <= {'v', 'work_kind', 'task', 'models', 'constraints'}:
+                <= {'v', 'work_kind', 'task', 'models', 'constraints', 'reviewing'} \
+                or ('reviewing' in request and not _reviewing_ok(request['reviewing'])):
             raise ValueError('invalid_request')
         level = routing.task_level(request['work_kind'], request['task'])
         constraints = routing.check_constraints(request.get('constraints', {}))
@@ -87,10 +96,13 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         return result('blocked', 'invalid_request')
     unmatched = _unmatched_for(request.get('models', []), constraints.get('excluded_models', []), state_dir)
     try:
-        return _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now,
-                       unmatched=unmatched)
+        answer = _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now,
+                         unmatched=unmatched)
     except Exception:
-        return result('blocked', 'selector_unavailable', **_reported(unmatched))
+        answer = result('blocked', 'selector_unavailable', **_reported(unmatched))
+    if 'reviewing' in request:
+        answer.setdefault('reviewer_independent', False)
+    return answer
 
 
 def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None):
@@ -247,6 +259,14 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
     if not ordered and candidates:
         ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
+    reviewing = request.get('reviewing')
+    independent = False
+    if reviewing is not None and not below:
+        lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
+        other = [item for item in ordered if lab is not None and qualifies(item)
+                 and feedback._lab(item['catalog_id']['creator']) != lab]
+        if other:
+            ordered, independent = other, True
     chosen = _confirm(ordered, pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
@@ -256,6 +276,8 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
                     **_reported(unmatched))
     if chosen:
         answer['size_group'] = size
+    if reviewing is not None:
+        answer['reviewer_independent'] = independent and bool(chosen)
     return _refresh_flag(answer, pool)
 
 
@@ -309,6 +331,19 @@ def rater_id(entry, *, state_dir, model=None):
     if not (feedback._text(feedback.LAB, creator) and feedback._text(feedback.MODEL, key)):
         return None
     return dict(creator=creator, key=key)
+
+
+def review_lab(reviewing, models, *, state_dir):
+    """The canonical lab (leading ~ dropped) of the model a review names, or None when it cannot be named.
+    The request's models name it when they route, else the id does. Never raises."""
+    try:
+        provider, _, model_id = reviewing.split('#', 1)[0].partition('/')
+        entry = next((item for item in models if type(item) is dict and item.get('provider') == provider
+                      and item.get('id') == model_id), None)
+        creator = (_identity(entry, dict(provider=provider, id=model_id), state_dir) or (None, None))[0]
+    except Exception:
+        return None
+    return feedback._lab(creator) if feedback._text(feedback.LAB, creator) else None
 
 
 def _is_self(identity, rated):

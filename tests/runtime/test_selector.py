@@ -566,6 +566,78 @@ class SelectionTest(unittest.TestCase):
                          dict(state="failed"))
 
 
+REVIEW_TOP = (("a/a-top", 10, 3, 15, 70), ("b/b-top", 20, 3, 15, 68),
+              ("c/c-top", 30, 3, 15, 66), ("d/d-top", 40, 3, 15, 64))
+
+
+class ReviewingTest(unittest.TestCase):
+    """A review names the work's author; the pick then comes from another lab only when that still reaches the level."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.source = Facts()
+
+    def catalog(self, a_small=67, b_small=67, lab="a", extra=()):
+        return body((f"{lab}/a-small", 50, 0.1, 0.5, a_small), ("b/b-small", 60, 1, 5, b_small), *REVIEW_TOP, *extra)
+
+    def request(self, reviewing=None, models=None):
+        if models is None:
+            models = [model("opencode-go", "a-small"), model("opencode-go", "b-small")]
+        request = dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="critical"), models=models)
+        if reviewing is not None:
+            request["reviewing"] = reviewing
+        return request
+
+    def run_select(self, request, raw):
+        return select(request, state_dir=self.root, source=self.source, fetch=Fetch(raw), now=NOW)
+
+    def test_reviewing_prefers_another_lab(self):
+        raw = self.catalog()
+        self.assertEqual(self.run_select(self.request(), raw)["route"]["model"], "a-small")
+        result = self.run_select(self.request("opencode-go/a-small"), raw)
+        self.assertEqual((result["state"], result["route"]["model"], result["alternatives"],
+                          result["reviewer_independent"]), ("selected", "b-small", [], True))
+
+    def test_reviewing_never_lowers_the_level(self):
+        result = self.run_select(self.request("opencode-go/a-small"), self.catalog(b_small=50))
+        self.assertEqual((result["state"], result["route"]["model"], result["below_level"],
+                          result["reviewer_independent"]), ("selected", "a-small", False, False))
+
+    def test_reviewing_below_level_not_reordered(self):
+        result = self.run_select(self.request("opencode-go/b-small"), self.catalog(a_small=60, b_small=50))
+        self.assertEqual((result["state"], result["route"]["model"], result["below_level"],
+                          result["reviewer_independent"]), ("selected", "a-small", True, False))
+
+    def test_reviewing_unknown_lab(self):
+        result = self.run_select(self.request("x/unknown"), self.catalog())
+        self.assertEqual((result["state"], result["route"]["model"], result["reviewer_independent"]),
+                         ("selected", "a-small", False))
+
+    def test_reviewing_off_plan_model_resolves(self):
+        raw = self.catalog(extra=[("a/a-other", 70, 0.1, 0.5, 60)])
+        result = self.run_select(self.request("openai/a-other"), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_variant_and_alias(self):
+        result = self.run_select(self.request("opencode-go/a-small#high"), self.catalog(lab="~a"))
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_refused_shapes(self):
+        for bad in (7, "no-slash", "a/b/c", "/model", "provider/"):
+            with self.subTest(reviewing=bad):
+                result = self.run_select(self.request(bad), self.catalog())
+                self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
+        self.assertEqual(self.source.calls, [])
+
+    def test_reviewing_is_reported_on_early_answers(self):
+        result = self.run_select(self.request("opencode-go/a-small", models=[]), self.catalog())
+        self.assertEqual((result["state"], result["reviewer_independent"]), ("no_selection", False))
+
+    def test_no_reviewing_no_field(self):
+        self.assertNotIn("reviewer_independent", self.run_select(self.request(), self.catalog()))
+
+
 class RoutesTest(unittest.TestCase):
     def models(self):
         return [dict(provider=p, id=i, model=None, family=None, variants=["high"], context=1000, released=5)
