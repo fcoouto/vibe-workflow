@@ -152,21 +152,28 @@ def _unmatched(routed, catalog, entries):
             if not any(excluded(item, key, [entry]) for item, key in zip(routed, keys))]
 
 
-def _unmatched_for(models, entries, state_dir):
-    """Entries that name no route built from `models`, whatever its eligibility, quota or score. Never raises:
-    any failure means none are reported."""
+def _catalog_or_none(state_dir):
+    """The stored Claude catalog for alias resolution; None when it cannot be read, which only drops alias names."""
     try:
-        if not entries:
-            return []
         state_dir = Path(state_dir)
         if not state_dir.is_absolute() or state_dir.is_symlink():
-            return []
+            return None
+        return native_catalog.stored(state_dir / 'router.json', 'claude-code')
+    except Exception:
+        return None
+
+
+def _unmatched_for(models, entries, state_dir):
+    """Entries that name no route built from `models`, whatever its eligibility, quota or score. Models that do
+    not route leave nothing to match, so they report none."""
+    if not entries:
+        return []
+    try:
         routed = routing_paths.routes(models)
-        catalog = native_catalog.stored(state_dir / 'router.json', 'claude-code') \
-            if any(r['path'] == CLAUDE for r in routed) else None
-        return _unmatched(routed, catalog, entries)
     except Exception:
         return []
+    catalog = _catalog_or_none(state_dir) if any(r['path'] == CLAUDE for r in routed) else None
+    return _unmatched(routed, catalog, entries)
 
 
 def _reported(unmatched):

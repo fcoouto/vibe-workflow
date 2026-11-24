@@ -356,6 +356,15 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual((result["state"], result["reason"], result["unmatched"]),
                          ("blocked", "selector_unavailable", ["nope"]))
 
+    def test_unmatched_survives_an_unreadable_catalog(self):
+        for models in ([model("opencode-go", "glm-5.3-flash")], [model("claude-agent", "claude-opus-5-5")]):
+            with self.subTest(models=models):
+                result = select(self.request(models=models, constraints=dict(excluded_models=["nope"])),
+                                state_dir="relative-state", source=self.source, fetch=self.fetch, now=NOW)
+                self.assertEqual((result["state"], result["reason"], result["unmatched"]),
+                                 ("blocked", "selector_unavailable", ["nope"]))
+        self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
+
     def test_quota_excluded_route_named_by_catalog_key_is_matched(self):
         self.fetch = Fetch(FEEDBACK_BODY)
         self.source.exhausted.add("opencode-go-subscription")
