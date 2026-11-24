@@ -376,6 +376,21 @@ class SelectionTest(unittest.TestCase):
                       result["excluded"])
         self.assertNotIn("unmatched", result)
 
+    def test_unmatched_and_filter_share_one_catalog_snapshot(self):
+        root = self.root
+
+        class Fills(Facts):
+            def acquire_billing(self, routes, now):
+                super().acquire_billing(routes, now)
+                native_catalog.store_snapshot(root / "router.json", "claude-code", dict(
+                    binding=dict(client_version="1", connection="c", controls="x"),
+                    models=[dict(alias="sonnet", resolved="claude-sonnet-5-5", efforts=[])]))
+        self.source = Fills()
+        result = self.run_select(self.request(models=[model("claude-agent", "sonnet"), model("openai", "gpt-6-2-sol")],
+                                              constraints=dict(excluded_models=["claude-sonnet-5-5"])))
+        self.assertIn(dict(route="opencode-claude-subscription:sonnet", reason="constraint"), result["excluded"])
+        self.assertNotIn("unmatched", result)
+
     def test_allowed_fields_are_invalid_requests(self):
         for constraints in (dict(allowed_models=["claude-sonnet-5-5"]), dict(allowed_efforts=["low"]),
                             dict(allowed_harnesses=[PATHS[0]])):
@@ -605,9 +620,14 @@ class ReviewingTest(unittest.TestCase):
                           result["reviewer_independent"]), ("selected", "a-small", False, False))
 
     def test_reviewing_below_level_not_reordered(self):
-        result = self.run_select(self.request("opencode-go/b-small"), self.catalog(a_small=60, b_small=50))
-        self.assertEqual((result["state"], result["route"]["model"], result["below_level"],
-                          result["reviewer_independent"]), ("selected", "a-small", True, False))
+        raw = self.catalog(a_small=60, b_small=50)
+        plain = self.run_select(self.request(), raw)
+        result = self.run_select(self.request("opencode-go/a-small"), raw)
+        self.assertTrue(result["below_level"])
+        self.assertEqual((result["route"]["model"], [item["model"] for item in result["alternatives"]]),
+                         (plain["route"]["model"], [item["model"] for item in plain["alternatives"]]))
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+        self.assertEqual([item["model"] for item in result["alternatives"]], ["b-small"])
 
     def test_reviewing_unknown_lab(self):
         result = self.run_select(self.request("x/unknown"), self.catalog())
@@ -622,6 +642,39 @@ class ReviewingTest(unittest.TestCase):
     def test_reviewing_variant_and_alias(self):
         result = self.run_select(self.request("opencode-go/a-small#high"), self.catalog(lab="~a"))
         self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_alias_lab_counts_as_the_same_lab(self):
+        raw = self.catalog(lab="~a", extra=[("a/a-peer", 70, 0.2, 0.5, 67)])
+        models = [model("opencode-go", "a-small"), model("opencode-go", "a-peer"), model("opencode-go", "b-small")]
+        result = self.run_select(self.request("opencode-go/a-small", models=models), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_unscored_author_never_borrows_a_family_lab(self):
+        # The author is catalogued under lab a with no score; a family row of lab b must not name its lab.
+        raw = self.catalog(extra=[("a/a-x-1", 70, 1, 5, None), ("b/a-x-0", 80, 1, 5, 67)])
+        result = self.run_select(self.request("opencode-go/a-x-1"), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_openrouter_candidate_is_never_independent(self):
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("openrouter/o-small", 60, 1, 5, 67), *REVIEW_TOP)
+        models = [model("opencode-go", "a-small"), model("opencode-go", "o-small")]
+        result = self.run_select(self.request("opencode-go/a-small", models=models), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+
+    def test_reviewing_keeps_the_normal_pick_when_no_other_lab_confirms(self):
+        class Flaky(Facts):
+            def billing(self, route, now):
+                fact = super().billing(route, now)
+                if route["path"] == PATHS[1] and self.reads[PATHS[1]] > 1:
+                    fact["producer"] = "invented:changed"
+                return fact
+        self.source = Flaky()
+        raw = self.catalog(extra=[("openai/gpt-x", 70, 1, 5, 67)])
+        models = [model("opencode-go", "a-small"), model("openai", "gpt-x")]
+        result = self.run_select(self.request("opencode-go/a-small", models=models), raw)
+        self.assertEqual((result["state"], result["route"]["model"], result["reviewer_independent"]),
+                         ("selected", "a-small", False))
+        self.assertIn(dict(route=PATHS[1] + ":gpt-x", reason="account_changed"), result["excluded"])
 
     def test_reviewing_refused_shapes(self):
         for bad in (7, "no-slash", "a/b/c", "/model", "provider/"):

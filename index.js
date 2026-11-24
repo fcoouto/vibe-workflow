@@ -303,6 +303,12 @@ export default {
         const { models: _ignored, ...own } = request ?? {}
         const list = ctx.model ? await models() : []
         let answer = noModels()
+        if (!list.length) {
+          // No Python runs here: still say the review is not independent and which exclusions named nothing.
+          const entries = Array.isArray(own.constraints?.excluded_models) ? own.constraints.excluded_models : []
+          if (typeof own.reviewing === "string") answer.reviewer_independent = false
+          if (entries.length) answer.unmatched = [...new Set(entries.filter((entry) => typeof entry === "string"))]
+        }
         if (list.length) {
           const { refresh, ...rest } = await runRouter({ ...own, models: list.map(({ name, ...entry }) => entry) },
             { directory, stateDir: state, signal, operation: "select" })

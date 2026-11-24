@@ -74,6 +74,25 @@ test("registers onboarding and keeps the native tool and existing context untouc
   assert.deepEqual(event.options, {})
 })
 
+test("a host without models still reports reviewer_independent and every excluded entry as unmatched", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
+  try {
+    await preference(root, true)
+    const h = host(root, { state_dir: join(root, "absent") })
+    await (await load()).setup(h.ctx)
+    const run = async (extra) => JSON.parse((await h.tools.get("smart_router_select").execute(
+      { v: 2, work_kind: "review", task, ...extra }, { signal: new AbortController().signal })).content)
+    const answer = await run({ reviewing: "openai/gpt-x", constraints: { excluded_models: ["b", "a", "b"] } })
+    assert.equal(answer.reason, "no_models")
+    assert.equal(answer.reviewer_independent, false)
+    assert.deepEqual(answer.unmatched, ["b", "a"])
+    const plain = await run({})
+    assert.equal("reviewer_independent" in plain, false)
+    assert.equal("unmatched" in plain, false)
+    assert.equal("unmatched" in await run({ constraints: { excluded_models: [] } }), false)
+  } finally { await rm(root, { recursive: true }) }
+})
+
 test("a host without models returns no authority without creating state", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
   try {

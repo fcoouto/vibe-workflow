@@ -74,6 +74,31 @@ def _constrained(item, key, constraints):
     return excluded(item, key, constraints.get('excluded_models', []))
 
 
+def _plain_creator(cache, key):
+    """The creator of the one catalog row with this key, or None when there is none or several."""
+    found = {entry['creator'] for entry in cache.get('models', {}).values() if entry['key'] == key}
+    return found.pop() if len(found) == 1 else None
+
+
+def _catalog_creator(cache, key, fixed=None):
+    """The lab a model is catalogued under: its route's fixed creator, else its own catalog row. A creator that came
+    only from a family-borrowed donor never names the model's lab."""
+    if fixed is not None:
+        return fixed
+    own = scores.lookup(cache, key, None)
+    if own is None:
+        return None
+    return _plain_creator(cache, key) if own['score_source'] == 'family' else own['creator']
+
+
+def _known_lab(creator):
+    """The canonical lab of a creator, or None when it is not a real lab (unknown, malformed or openrouter)."""
+    if not feedback._text(feedback.LAB, creator):
+        return None
+    lab = feedback._lab(creator)
+    return None if lab == 'openrouter' else lab
+
+
 def _reviewing_ok(value):
     """A model_ref (provider/model or provider/model#variant): exactly one slash before any #, both parts non-empty."""
     if not routing._text(value):
@@ -94,7 +119,8 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         constraints = routing.check_constraints(request.get('constraints', {}))
     except (ValueError, TypeError, KeyError, RecursionError):
         return result('blocked', 'invalid_request')
-    unmatched = _unmatched_for(request.get('models', []), constraints.get('excluded_models', []), state_dir)
+    entries = constraints.get('excluded_models', [])
+    unmatched = _unmatched_for(request.get('models', []), entries, state_dir)
     try:
         answer = _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now,
                          unmatched=unmatched)
@@ -116,20 +142,23 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
     unique = {}
     for item in routing_paths.routes(models):
         unique.setdefault(item['route'], item)
-    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={},
-                had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
+    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={}, labs={},
+                allkeys=None, routed=[], had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
     if not unique:
         return dict(pool, reason='no_models')
     source = pool['source'] = source if source is not None else routing_observations.LocalSource(anchor)
     source.acquire_billing(list(unique.values()), now)
     # Readers stamp the facts they just acquired, so an earlier clock would see them as future.
     now = pool['now'] = int(time.time()) if fixed is None else fixed
+    # One route-to-key map per request, read after acquisition, serves both the exclusion filter and `unmatched`.
+    routed = pool['routed'] = list(unique.values())
+    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in routed) else None
+    allkeys = pool['allkeys'] = {item['route']: _key(item, catalog) for item in routed}
     kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
     pool.update(excluded=excluded, kept=len(kept))
     if not kept:
         return dict(pool, reason='no_eligible_route')
-    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
-    keys = pool['keys'] = {item['route']: _key(item, catalog) for item in kept}
+    keys = pool['keys'] = {item['route']: allkeys[item['route']] for item in kept}
     cache = scores.load(state_dir)
     had = _has_scores(cache)
     if not had:
@@ -151,17 +180,18 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
             excluded.append(dict(route=item['route'], reason='constraint'))
         else:
             pool['creators'][item['route']] = scores.CREATOR.get(item['path']) or own['creator']
+            pool['labs'][item['route']] = _known_lab(_catalog_creator(cache, key, scores.CREATOR.get(item['path'])))
             pool['candidates'].append(dict(item, effort=effort,
                                            score=own['score'], score_source=own['score_source'], price=own['price'],
                                            released=item['released'] or own['released']))
     return pool
 
 
-def _unmatched(routed, catalog, entries):
-    """Entries (request order, no duplicates) that name no route, whatever its eligibility, quota or score."""
-    keys = [_key(item, catalog) for item in routed]
+def _unmatched(routed, keys, entries):
+    """Entries (request order, no duplicates) that name no route, whatever its eligibility, quota or score.
+    `keys` maps each route name to its catalog key."""
     return [entry for entry in dict.fromkeys(entries)
-            if not any(excluded(item, key, [entry]) for item, key in zip(routed, keys))]
+            if not any(excluded(item, keys[item['route']], [entry]) for item in routed)]
 
 
 def _catalog_or_none(state_dir):
@@ -185,7 +215,7 @@ def _unmatched_for(models, entries, state_dir):
     except Exception:
         return []
     catalog = _catalog_or_none(state_dir) if any(r['path'] == CLAUDE for r in routed) else None
-    return _unmatched(routed, catalog, entries)
+    return _unmatched(routed, {item['route']: _key(item, catalog) for item in routed}, entries)
 
 
 def _reported(unmatched):
@@ -248,6 +278,8 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
 def _select(request, level, constraints, *, state_dir, source, fetch, now, unmatched):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
+    if pool['allkeys'] is not None:
+        unmatched = _unmatched(pool['routed'], pool['allkeys'], constraints.get('excluded_models', []))
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'], **_reported(unmatched))
     anchor = scores.anchor(pool['cache'])
@@ -260,14 +292,18 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
         ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
     reviewing = request.get('reviewing')
-    independent = False
+    independent, chosen = False, []
     if reviewing is not None and not below:
         lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
         other = [item for item in ordered if lab is not None and qualifies(item)
-                 and feedback._lab(item['catalog_id']['creator']) != lab]
-        if other:
-            ordered, independent = other, True
-    chosen = _confirm(ordered, pool, 3, qualifies)
+                 and pool['labs'].get(item['route']) not in (None, lab)]
+        chosen = _confirm(other, pool, 3, qualifies)
+        independent = bool(chosen)
+        if not chosen:
+            failed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
+            ordered = [item for item in ordered if item['route'] not in failed]
+    if not independent:
+        chosen = _confirm(ordered, pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
     reason = None if chosen else _empty_reason(pool)
@@ -282,11 +318,10 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
 
 
 def _cached_creator(key, state_dir):
-    """The catalog creator of a key, or None when unknown or the score cache cannot be read."""
+    """The lab a key is catalogued under, or None when unknown or the score cache cannot be read."""
     try:
         cache = scores.load(Path(state_dir))
-        own = scores.lookup(cache, key, None) if cache is not None else None
-        return own['creator'] if own else None
+        return _catalog_creator(cache, key) if cache is not None else None
     except Exception:
         return None
 
