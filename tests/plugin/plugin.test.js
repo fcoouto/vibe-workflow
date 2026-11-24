@@ -1736,3 +1736,26 @@ test("a storage write that never settles times out, so the queued clear and the 
     assert.deepEqual(storedKeys(storage), [`pick/${fresh}`])
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
+
+test("a clear that timed out does not remove a pick written after it, even when its scan resolves late", { timeout: 5000 }, async (t) => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    await pickOf(f)
+    await flush()
+    const release = storage.hold("scan")
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection") // queues a clear, whose scan now waits
+    while (storage.arrived("scan") < 2) await flush()
+    t.mock.timers.tick(5000) // the clear times out; the queue moves on
+    await flush()
+    await preference(f.root, true)
+    const fresh = await pickOf(f)
+    await flush()
+    assert.ok(storedKeys(storage).includes(`pick/${fresh}`))
+    release()
+    await flush()
+    assert.ok(storedKeys(storage).includes(`pick/${fresh}`), "the timed-out clear must not remove the new pick")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})

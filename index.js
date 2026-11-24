@@ -200,9 +200,15 @@ export default {
     const enqueue = (action) => {
       if (!store) return Promise.resolve(false)
       const run = queue.then(() => {
+        // The timeout cancels the operation: it runs no further pages or removals. A host call already in flight
+        // cannot be cancelled.
+        const op = { cancelled: false }
         let timer
-        const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(false), STORAGE_OP_TIMEOUT_MS) })
-        return Promise.race([Promise.resolve().then(action).then(() => true), timeout]).finally(() => clearTimeout(timer))
+        const timeout = new Promise((resolve) => {
+          timer = setTimeout(() => { op.cancelled = true; resolve(false) }, STORAGE_OP_TIMEOUT_MS)
+        })
+        return Promise.race([Promise.resolve().then(() => action(op)).then(() => true), timeout])
+          .finally(() => clearTimeout(timer))
       }).then((done) => done, () => false)
       queue = run
       return run
@@ -221,29 +227,37 @@ export default {
       if (!store || clearsPending) return null
       try { return pickFromRecord(await store.get(storedKey(pickID))) } catch { return null }
     }
-    // Every stored pick, one page at a time; a failing page ends the walk.
-    async function scanPicks(visit) {
+    // Every stored pick, one page at a time; a failing page ends the walk. A cancelled operation stops before each
+    // page and each entry, so no removal starts after its timeout.
+    async function scanPicks(op, visit) {
       let after
       for (;;) {
+        if (op.cancelled) return
         const page = await store.scan({ prefix: "pick/", limit: 100, ...(after !== undefined && { after }) })
-        for (const { key, value } of page.entries) await visit(key, value)
+        for (const { key, value } of page.entries) {
+          if (op.cancelled) return
+          await visit(key, value)
+        }
         if (!page.next || !page.entries.length) return
         after = page.next
       }
     }
-    async function clearStoredPicks() { await scanPicks((key) => store.remove(key)) }
+    async function clearStoredPicks(op) { await scanPicks(op, (key) => store.remove(key)) }
     // Drops expired and malformed picks, then the oldest rateable ones beyond MAX_STORED_PICKS. Clears storageDirty
     // only when nothing is left and no write was queued since the prune was.
-    async function pruneStoredPicks(writesWhenQueued) {
+    async function pruneStoredPicks(op, writesWhenQueued) {
       const live = []
-      await scanPicks(async (key, value) => {
+      await scanPicks(op, async (key, value) => {
         const pick = pickFromRecord(value)
         if (pick && Date.now() - pick.t <= PICK_TTL_MS) live.push({ key, t: pick.t })
         else await store.remove(key)
       })
       live.sort((a, b) => a.t - b.t)
-      for (const { key } of live.slice(0, Math.max(0, live.length - MAX_STORED_PICKS))) await store.remove(key)
-      if (!live.length && writes === writesWhenQueued) storageDirty = false
+      for (const { key } of live.slice(0, Math.max(0, live.length - MAX_STORED_PICKS))) {
+        if (op.cancelled) return
+        await store.remove(key)
+      }
+      if (!op.cancelled && !live.length && writes === writesWhenQueued) storageDirty = false
     }
     // Every path that observes Smart Router off calls this: notices and picks clear together, and a selection
     // that started before it may not store its pick.
@@ -597,7 +611,7 @@ export default {
       } catch {} finally { reader.cancel().catch(() => {}) }
     }, { providerID: "openai" })
     // The startup prune is queued behind any storage call; setup never waits for it.
-    enqueue(() => pruneStoredPicks(writes))
+    enqueue((op) => pruneStoredPicks(op, writes))
     return () => {
       closed = true
       subscription.abort()
