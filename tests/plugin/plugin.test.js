@@ -1129,3 +1129,80 @@ test("the select schema bounds the hours and lists the four constraint fields; f
   assert.deepEqual(feedback.properties.rating, { type: "integer", minimum: 0, maximum: 5 })
   assert.deepEqual(feedback.properties.comment, { type: "string", maxLength: 280 })
 })
+
+const selectWithoutSession = (f) =>
+  f.h.tools.get("smart_router_select").execute({ v: 2, work_kind: "review", task }, { signal: new AbortController().signal })
+    .then((r) => JSON.parse(r.content))
+const cardFor = (f, input, sessionID) =>
+  f.h.tools.get("smart_router_feedback").execute(input, { signal: new AbortController().signal, sessionID })
+    .then((r) => JSON.parse(r.content))
+
+test("a selection without a session still gets a pick_id and the hint, and its card is ignored", async () => {
+  const f = await pickFixture()
+  try {
+    const answer = await selectWithoutSession(f)
+    assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
+    assert.equal(answer.feedback_hint, FEEDBACK_HINT)
+    assert.deepEqual(await cardFor(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }, undefined),
+      { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a selection without size_group is stored as short, and a ref without catalog_id cannot be rated", async () => {
+  const f = await pickFixture()
+  try {
+    const { size_group: _size, ...unsized } = picked
+    const alternatives = [{ provider: "claude-agent", model: "other", feedback: { sessions: 0, adjustment: 0 } }]
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...unsized, alternatives }))
+    const answer = JSON.parse((await f.execute()).content)
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "claude-agent/other#high", rating: 4 }),
+      { state: "refused", reason: "not_offered" })
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "recorded" })
+    assert.equal((await sentFeedback(f)).size_group, "short")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a card seen while Smart Router is off forgets the picks, so the old pick_id stays ignored after re-enabling", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await preference(f.root, false)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("the context hook seeing Smart Router off also forgets the picks", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await preference(f.root, false)
+    await f.h.hooks.get("context")({ system: [] })
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a selection that resolves after Smart Router is turned off stores no pick", async () => {
+  const turnsOff = `import json, sys
+from pathlib import Path
+if "--feedback" in sys.argv:
+    print('{"state":"recorded"}')
+else:
+    sys.stdin.read()
+    Path(".vibe-workflow", "settings.json").write_text('{"version":1,"features":[{"smart_router":{"enabled":false}}]}')
+    print(Path("answer.json").read_text())
+`
+  const f = await fixture(turnsOff, listed(info(), otherModel))
+  try {
+    await writeFile(join(f.root, "answer.json"), JSON.stringify(picked))
+    const answer = JSON.parse((await f.execute()).content)
+    assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
