@@ -171,8 +171,8 @@ class SelectionTest(unittest.TestCase):
     def test_constraints_leaving_only_low_candidates_fall_back(self):
         self.fetch = Fetch(BODY3)
         result = self.run_select(self.request(work_kind="implementation", constraints=dict(
-            allowed_models=["glm-5.3-flash"]), models=[model("opencode-go", "glm-5.3-flash"),
-                                                       model("opencode-go", "claude-haiku-5-5")]))
+            excluded_models=["claude-haiku-5-5"]), models=[model("opencode-go", "glm-5.3-flash"),
+                                                           model("opencode-go", "claude-haiku-5-5")]))
         self.assertEqual((result["state"], result["route"]["model"], result["below_level"]),
                          ("selected", "glm-5.3-flash", True))
 
@@ -294,9 +294,65 @@ class SelectionTest(unittest.TestCase):
         result = self.run_select(self.request(constraints=dict(excluded_models=["claude-sonnet-5-5"])))
         self.assertIn(dict(route="opencode-claude-subscription:claude-sonnet-5-5", reason="constraint"),
                       result["excluded"])
-        result = self.run_select(self.request(constraints=dict(allowed_efforts=["low"])))
+        everything = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6-2-sol"]
+        result = self.run_select(self.request(constraints=dict(excluded_models=everything)))
         self.assertEqual((result["state"], result["reason"], {e["reason"] for e in result["excluded"]}),
                          ("no_selection", "no_recommendation", {"constraint"}))
+
+    def test_excluded_models_matches_every_format(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        glm = model("opencode-go", "glm-5.3-flash")
+        request = self.request(work_kind="implementation", models=[glm, model("opencode-go", "kimi-x-1")])
+        self.assertEqual(self.run_select(request)["route"]["route"], "opencode-go-subscription:glm-5.3-flash")
+        for entry in ("glm-5.3-flash", "opencode-go/glm-5.3-flash#high", "opencode-go-subscription:glm-5.3-flash",
+                      "glm-5-3-flash"):
+            with self.subTest(entry=entry):
+                result = self.run_select(self.request(work_kind="implementation", models=[glm, model(
+                    "opencode-go", "kimi-x-1")], constraints=dict(excluded_models=[entry])))
+                self.assertEqual((result["state"], result["route"]["model"], "unmatched" in result),
+                                 ("selected", "kimi-x-1", False))
+                self.assertIn(dict(route="opencode-go-subscription:glm-5.3-flash", reason="constraint"),
+                              result["excluded"])
+
+    def test_unmatched_entries_are_reported_once_in_request_order(self):
+        result = self.run_select(self.request(constraints=dict(
+            excluded_models=["nope", "claude-sonnet-5-5", "nope", "also-nope"])))
+        self.assertEqual(result["state"], "selected")
+        self.assertEqual(result["unmatched"], ["nope", "also-nope"])
+
+    def test_unmatched_is_absent_when_every_entry_matches(self):
+        result = self.run_select(self.request(constraints=dict(excluded_models=["claude-sonnet-5-5"])))
+        self.assertNotIn("unmatched", result)
+
+    def test_unmatched_is_reported_on_early_answers(self):
+        result = self.run_select(self.request(models=[], constraints=dict(excluded_models=["nope"])))
+        self.assertEqual((result["state"], result["reason"], result["unmatched"]),
+                         ("no_selection", "no_models", ["nope"]))
+        self.assertEqual(self.source.calls, [])
+        self.source.exhausted.add("opencode-claude-subscription")
+        result = self.run_select(self.request(models=[model("claude-agent", "claude-opus-5-5")],
+                                              constraints=dict(excluded_models=["nope"])))
+        self.assertEqual((result["state"], result["reason"], result["unmatched"]),
+                         ("no_selection", "no_eligible_route", ["nope"]))
+
+    def test_quota_excluded_route_named_by_catalog_key_is_matched(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        self.source.exhausted.add("opencode-go-subscription")
+        result = self.run_select(self.request(work_kind="implementation", models=[
+            model("opencode-go", "glm-5.3-flash"), model("openai", "gpt-6-2-astra")],
+            constraints=dict(excluded_models=["glm-5-3-flash"])))
+        self.assertEqual((result["state"], result["route"]["model"]), ("selected", "gpt-6-2-astra"))
+        self.assertIn(dict(route="opencode-go-subscription:glm-5.3-flash", reason="quota_exhausted"),
+                      result["excluded"])
+        self.assertNotIn("unmatched", result)
+
+    def test_allowed_fields_are_invalid_requests(self):
+        for constraints in (dict(allowed_models=["claude-sonnet-5-5"]), dict(allowed_efforts=["low"]),
+                            dict(allowed_harnesses=[PATHS[0]])):
+            with self.subTest(constraints=constraints):
+                result = self.run_select(self.request(constraints=constraints))
+                self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
+        self.assertEqual((self.source.calls, self.fetch.calls), ([], []))
 
     def test_exhausted_route_is_not_selected(self):
         self.source.exhausted.add("opencode-chatgpt-subscription")

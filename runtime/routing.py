@@ -5,7 +5,7 @@ WORK_KINDS = ('implementation', 'review', 'investigation', 'planning', 'testing'
 MAX_INTEGER = 2**53 - 1
 MAX_ID = 256
 MAX_CLOCK_DRIFT = 60
-CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'allowed_harnesses')
+CONSTRAINT_FIELDS = ('excluded_models',)
 FACTS = {'files': ('1-2', '3+', 'cross-system'), 'spec': ('exact', 'prose', 'open'),
          'risk': ('reversible', 'shared', 'critical')}
 BASE = dict(planning=3, review=2, investigation=2, implementation=1, testing=1, writing=1)

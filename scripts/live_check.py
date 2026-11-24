@@ -253,7 +253,7 @@ def read_host_models(env):
 
 def pick_for_path(provider, models):
     """One level-1 Smart Router pick on one path: (provider/id, None, paid_overflow) or (None, reason, None)."""
-    request = {**LEVEL_ONE, "models": models, "constraints": {"allowed_harnesses": [PATHS[provider]]}}
+    request = {**LEVEL_ONE, "models": [model for model in models if model["provider"] == provider]}
     try:
         answer = json.loads(_run([sys.executable, "-I", "-B", str(ROOT / "scripts" / "select.py"), "--state-dir",
                                   str(STATE_DIR)], timeout=120, data=json.dumps(request)))

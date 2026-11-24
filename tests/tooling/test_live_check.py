@@ -482,12 +482,14 @@ class HostModelsTest(unittest.TestCase):
             return json.dumps({"state": "selected", "route": {"provider": "openai", "model": "gpt-6.3-terra",
                                                               "paid_overflow": "unknown"}})
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
-            self.assertEqual(live_check.pick_for_path("openai", host("openai/gpt-6.3-terra")),
+            self.assertEqual(live_check.pick_for_path("openai", host("openai/gpt-6.3-terra",
+                                                                     "opencode-go/glm-5.3-flash")),
                              ("openai/gpt-6.3-terra", None, "unknown"))
         request = seen["request"]
         self.assertEqual((request["work_kind"], request["task"]), ("testing", {"files": "1-2", "spec": "exact",
                                                                               "risk": "reversible"}))
-        self.assertEqual(request["constraints"], {"allowed_harnesses": [live_check.PATHS["openai"]]})
+        self.assertNotIn("constraints", request)
+        self.assertEqual([(m["provider"], m["id"]) for m in request["models"]], [("openai", "gpt-6.3-terra")])
         self.assertIn(str(ROOT / "scripts" / "select.py"), seen["argv"])
         self.assertIn("-I", seen["argv"])
         self.assertNotIn("name", json.dumps(request["models"]))
