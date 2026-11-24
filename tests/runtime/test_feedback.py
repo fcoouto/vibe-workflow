@@ -4,6 +4,8 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -380,6 +382,74 @@ class FeedbackTest(unittest.TestCase):
 
     def test_missing_store_adjusts_nothing(self):
         self.assertEqual(self.adjust(state=self.root / "absent"), dict(sessions=0, adjustment=0))
+
+
+class FeedbackSubmitTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
+
+    def entry(self, provider="claude-agent", id="opus", model="claude-x-5-2", family="claude-x"):
+        return dict(provider=provider, id=id, model=model, name="Opus", family=family,
+                    variants=["low", "high"], context=None, released=5)
+
+    def request(self, rater=None, **changes):
+        value = dict(v=1, rated=dict(key="claude-x-5-2", creator="anthropic", family="claude-x"),
+                     rater_entry=rater, work_kind="implementation", size_group="short", rating=3,
+                     session=session(1), comment=None)
+        value.update(changes)
+        return value
+
+    def test_rater_id_names_the_creator_and_key(self):
+        from runtime import selector
+        self.assertEqual(selector.rater_id(self.entry(provider="openai", id="gpt-6-2", model="gpt-6-2",
+                                                      family="gpt-6"), state_dir=self.state),
+                         dict(creator="openai", key="gpt-6-2"))
+        self.assertEqual(selector.rater_id(self.entry(), state_dir=self.state),
+                         dict(creator="anthropic", key="claude-x-5-2"))
+        self.assertIsNone(selector.rater_id(self.entry(provider="unknown-lab"), state_dir=self.state))
+
+    def test_submit_resolves_rater_and_refuses_self(self):
+        from runtime import selector
+        result = selector.feedback_submit(self.request(rater=self.entry()), state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="self_rating"))
+
+    def test_unknown_rater_counts_half(self):
+        from runtime import feedback, selector
+        result = selector.feedback_submit(self.request(rater=self.entry(provider="unknown-lab")),
+                                          state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="recorded"))
+        entry = feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
+        self.assertAlmostEqual(entry["w"], 0.5)
+        self.assertAlmostEqual(entry["wr"], 0.5 * 3)
+
+    def test_submit_invalid_shape(self):
+        from runtime import selector
+        base = self.request()
+        missing = dict(base)
+        del missing["rated"]
+        for name, value in (("missing_rated", missing), ("version_2", dict(base, v=2)),
+                            ("bad_rater_entry", dict(base, rater_entry="opus")),
+                            ("extra_field", dict(base, extra=1))):
+            with self.subTest(request=name):
+                self.assertEqual(selector.feedback_submit(value, state_dir=self.state, now=NOW),
+                                 dict(state="refused", reason="invalid"))
+
+    def test_cli_records_a_valid_card(self):
+        script = Path(__file__).resolve().parents[2] / "scripts" / "select.py"
+        payload = json.dumps(self.request()).encode()
+        done = subprocess.run([sys.executable, "-B", str(script), "--state-dir", str(self.state), "--feedback"],
+                              input=payload, capture_output=True, timeout=60)
+        self.assertEqual(json.loads(done.stdout), {"state": "recorded"})
+
+    def test_cli_failure_is_failed(self):
+        script = Path(__file__).resolve().parents[2] / "scripts" / "select.py"
+        done = subprocess.run([sys.executable, "-B", str(script), "--state-dir", str(self.state), "--feedback"],
+                              input=b"not json", capture_output=True, timeout=60)
+        self.assertEqual(json.loads(done.stdout), {"state": "failed"})
 
 
 if __name__ == "__main__":

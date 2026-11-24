@@ -214,3 +214,43 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     if chosen:
         answer['size_group'] = size
     return _refresh_flag(answer, pool)
+
+
+def rater_id(entry, *, state_dir):
+    """The creator and key of the model that rates, or None when it cannot be named. Never raises."""
+    try:
+        found = routing_paths.routes([entry])
+        if len(found) != 1:
+            return None
+        item = found[0]
+        catalog = native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') \
+            if item['path'] == CLAUDE else None
+        key = _key(item, catalog)
+        creator = scores.CREATOR.get(item['path'])
+        if creator is None:
+            own = scores.lookup(scores.load(Path(state_dir)), key, None)
+            creator = own['creator'] if own else None
+        if not (feedback._text(feedback.LAB, creator) and feedback._text(feedback.MODEL, key)):
+            return None
+        return dict(creator=creator, key=key)
+    except Exception:  # an unknown or unnamed rater only halves its weight
+        return None
+
+
+FEEDBACK_REQUIRED = {'v', 'rated', 'work_kind', 'size_group', 'rating', 'session'}
+FEEDBACK_OPTIONAL = {'rater_entry', 'comment'}
+
+
+def feedback_submit(request, *, state_dir, now=None):
+    """Store one feedback card from a request; refused/invalid when its shape is wrong. Never raises."""
+    if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 1 \
+            or not FEEDBACK_REQUIRED <= set(request) <= FEEDBACK_REQUIRED | FEEDBACK_OPTIONAL \
+            or type(request.get('rated')) is not dict \
+            or request.get('rater_entry') is not None and type(request.get('rater_entry')) is not dict:
+        return dict(state='refused', reason='invalid')
+    entry = request.get('rater_entry')
+    rater = None if entry is None else rater_id(entry, state_dir=state_dir)
+    card = dict(rated=request['rated'], rater=rater, work_kind=request['work_kind'],
+                size_group=request['size_group'], rating=request['rating'], session=request['session'],
+                comment=request.get('comment'))
+    return feedback.record(card, state_dir=Path(state_dir), now=int(time.time()) if now is None else now)
