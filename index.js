@@ -52,6 +52,7 @@ function pickRefs(answer) {
   for (const entry of [answer.route, ...(Array.isArray(answer.alternatives) ? answer.alternatives : [])]) {
     const id = entry?.catalog_id
     if (typeof entry?.provider !== "string" || typeof entry?.model !== "string" || !id || typeof id !== "object") continue
+    if (![id.key, id.creator, id.family].every((part) => typeof part === "string" && part.length > 0)) continue
     refs.set(`${entry.provider}/${entry.model}`, { provider: entry.provider, model: entry.model,
       catalog_id: { key: id.key, creator: id.creator, family: id.family } })
   }
@@ -327,7 +328,8 @@ export default {
           const after = await inspectRouter()
           // A size group the selector does not name is never guessed: such a pick is issued but cannot be rated.
           if (identified && !closed && generation === started && after.state === "on" && SIZE_GROUPS.includes(answer.size_group)) {
-            remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs: pickRefs(answer) })
+            const refs = pickRefs(answer)
+            if (refs.size) remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs })
           }
         }
         return { content: JSON.stringify({ ...withModelRef(answer), ...pickFields, notice }) }
@@ -361,8 +363,11 @@ export default {
           const found = (await models()).find((m) => m.provider === rater.providerID && m.id === rater.id)
           if (found) { const { name: _name, ...entry } = found; rater_entry = entry }
         }
+        // Turning the router off while the lookups ran forgot the pick; a card for it must not be written.
+        if (closed || picks.get(sessionID)?.get(request.pick_id) !== pick) return ignored
         const { key, creator, family } = ref.catalog_id
-        const card = { v: 1, rated: { key, creator, family }, rater_entry, work_kind: pick.work_kind,
+        const card = { v: 1, rated: { key, creator, family }, rater_entry,
+          rater_model: rater ? { provider: rater.providerID, id: rater.id } : null, work_kind: pick.work_kind,
           size_group: pick.size_group, rating: request.rating,
           session: createHash("sha256").update(sessionID).digest("hex").slice(0, 32),
           ...(typeof request.comment === "string" && { comment: request.comment }) }

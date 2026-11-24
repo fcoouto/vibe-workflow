@@ -402,9 +402,9 @@ def _run(argv, cwd=None, timeout=120, data=None, env=None):
                           check=True, env=env).stdout
 
 
-def _api(*args, data=None, timeout=60):
+def _api(*args, data=None, timeout=60, env=None):
     argv = ["opencode", "api", *args] + (["-d", json.dumps(data)] if data is not None else [])
-    out = _run(argv, timeout=timeout)
+    out = _run(argv, timeout=timeout, env=env)
     if not out.strip():
         return None
     value = json.loads(out)
@@ -434,26 +434,32 @@ def prepare(work, settings=None, origin=None):
     return project
 
 
-def check(prompts, settings=None, origin=None, keep=False, wait=900):
+def check(prompts, settings=None, origin=None, keep=False, wait=900, isolated=False):
     work = Path(tempfile.mkdtemp(prefix="vibe-live-check-")).resolve()
-    session = None
+    session, extra = None, {}
     try:
         project = prepare(work, settings, origin)
-        created = _api("post", "/api/session", data={"location": {"directory": str(project)}})
+        # Isolated: only the clone's plugin loads, as in the injection check (private empty config, PWD, no OPENCODE*).
+        extra = {}
+        if isolated:
+            config_home = work / "config"
+            config_home.mkdir()
+            extra = {"env": {**isolated_env(config_home), "PWD": str(project)}}
+        created = _api("post", "/api/session", data={"location": {"directory": str(project)}}, **extra)
         session = created.get("id") if isinstance(created, dict) else None
         if not session:
             raise ValueError(f"no session id in the create response: {created!r}")
         for prompt in prompts:
-            _api("post", f"/api/session/{session}/prompt", data={"text": prompt})
-            _api("post", f"/api/experimental/session/{session}/wait", timeout=wait)
-        messages = _api("get", f"/api/session/{session}/message?limit=200&order=asc") or []
-        title = (_api("get", f"/api/session/{session}") or {}).get("title")
+            _api("post", f"/api/session/{session}/prompt", data={"text": prompt}, **extra)
+            _api("post", f"/api/experimental/session/{session}/wait", timeout=wait, **extra)
+        messages = _api("get", f"/api/session/{session}/message?limit=200&order=asc", **extra) or []
+        title = (_api("get", f"/api/session/{session}", **extra) or {}).get("title")
         return {"session": session, "project": str(project) if keep else None, "title": title,
                 "events": summarize(messages)}
     finally:
         if session and not keep:
             try:
-                _api("delete", f"/api/session/{session}")
+                _api("delete", f"/api/session/{session}", **extra)
             except (subprocess.SubprocessError, OSError, ValueError) as error:
                 print(f"live-check: could not delete session {session}: {error}", file=sys.stderr)
         if not keep:
@@ -470,12 +476,16 @@ def main():
     parser.add_argument("--origin", help="origin URL for gh lookups; use a throwaway or local URL, since the "
                         "session's agent could fetch from or push to it")
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--isolated", action="store_true", help="with --prompt: run with a private empty config "
+                        "directory and no OPENCODE* variables, so only the clone's plugin is loaded")
     args = parser.parse_args()
+    if args.isolated and not args.prompt:
+        parser.error("--isolated needs --prompt")
     if args.injection:
         summary = check_injection()
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0 if summary["recorded"] else 1
-    print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep), indent=2, ensure_ascii=False))
+    print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep, isolated=args.isolated), indent=2, ensure_ascii=False))
     return 0
 
 

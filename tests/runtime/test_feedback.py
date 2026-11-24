@@ -132,6 +132,21 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(result, dict(state="refused", reason="self_rating"))
         self.assertEqual(self.feedback.load(self.state), before)
 
+    def test_a_prefixed_lab_is_the_same_lab(self):
+        refused = self.feedback.record(self.card(1, 5, rater=dict(key="claude-x-5-2", creator="~anthropic")),
+                                       state_dir=self.state, now=NOW)
+        self.assertEqual(refused, dict(state="refused", reason="self_rating"))
+        self.record(self.card(2, 2, rater=dict(key="claude-y-1", creator="~anthropic")))
+        entry = self.feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
+        self.assertAlmostEqual(entry["w"], 0.5)
+        older = self.rated(key="claude-x-5-1", creator="~anthropic")
+        state = self.make_state("prefixed")
+        for number in (1, 2, 3):
+            self.record(self.card(number, 0, rated=older), state=state)
+        result = self.adjust(state=state, creator="anthropic", key="claude-x-5-2")
+        self.assertEqual(result["sessions"], 3)
+        self.assertLess(result["adjustment"], 0)
+
     def test_one_vote_per_session_model_kind(self):
         self.record(self.card(1, 3))
         again = self.card(1, 4, size_group="long")
@@ -425,6 +440,39 @@ class FeedbackSubmitTest(unittest.TestCase):
         entry = feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
         self.assertAlmostEqual(entry["w"], 0.5)
         self.assertAlmostEqual(entry["wr"], 0.5 * 3)
+
+    def test_same_model_on_another_provider_is_refused_as_self_rating(self):
+        from runtime import selector
+        for model in (dict(provider="other-host", id="claude-x-5-2"), dict(provider="other-host", id="vendor/Claude-X-5-2")):
+            with self.subTest(model=model):
+                result = selector.feedback_submit(self.request(rater=None, rater_model=model),
+                                                  state_dir=self.state, now=NOW)
+                self.assertEqual(result, dict(state="refused", reason="self_rating"))
+
+    def test_claude_agent_alias_resolves_through_the_stored_catalog(self):
+        from runtime import selector
+        with mock.patch.object(selector.native_catalog, "stored",
+                               return_value=dict(models=[dict(alias="opus", resolved="claude-x-5-2")])):
+            result = selector.feedback_submit(
+                self.request(rater=None, rater_model=dict(provider="claude-agent", id="opus")),
+                state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="self_rating"))
+
+    def test_a_different_model_not_on_the_plan_still_counts_half(self):
+        from runtime import feedback, selector
+        result = selector.feedback_submit(
+            self.request(rater=None, rater_model=dict(provider="other-host", id="mystery-9")),
+            state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="recorded"))
+        entry = feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
+        self.assertAlmostEqual(entry["w"], 0.5)
+
+    def test_rater_model_must_be_a_provider_id_pair(self):
+        from runtime import selector
+        for bad in ("opus", dict(provider="p"), dict(provider=1, id="x")):
+            with self.subTest(bad=bad):
+                self.assertEqual(selector.feedback_submit(self.request(rater_model=bad), state_dir=self.state, now=NOW),
+                                 dict(state="refused", reason="invalid"))
 
     def test_submit_invalid_shape(self):
         from runtime import selector

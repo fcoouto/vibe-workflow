@@ -216,20 +216,44 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     return _refresh_flag(answer, pool)
 
 
-def rater_id(entry, *, state_dir):
+def _entry_identity(entry, state_dir):
+    """(creator, key) of a routable model entry, or None."""
+    found = routing_paths.routes([entry])
+    if len(found) != 1:
+        return None
+    item = found[0]
+    catalog = native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if item['path'] == CLAUDE else None
+    key = _key(item, catalog)
+    creator = scores.CREATOR.get(item['path'])
+    if creator is None:
+        cache = scores.load(Path(state_dir))
+        own = scores.lookup(cache, key, None) if cache is not None else None
+        creator = own['creator'] if own else None
+    return creator, key
+
+
+def _model_identity(model, state_dir):
+    """(creator or None, key) the catalog would give a raw session model, whatever its provider. Off-plan models
+    only name a rater; they never become eligible for selection."""
+    path = CLAUDE if model['provider'] == 'claude-agent' else None
+    key = _key(dict(path=path, model=model['id'], model_id=model['id']),
+               native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if path else None)
+    cache = scores.load(Path(state_dir))
+    own = scores.lookup(cache, key, None) if cache is not None else None
+    return (own['creator'] if own else None), key
+
+
+def rater_id(entry, *, state_dir, model=None):
     """The creator and key of the model that rates, or None when it cannot be named. Never raises."""
     try:
-        found = routing_paths.routes([entry])
-        if len(found) != 1:
-            return None
-        item = found[0]
-        catalog = native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') \
-            if item['path'] == CLAUDE else None
-        key = _key(item, catalog)
-        creator = scores.CREATOR.get(item['path'])
-        if creator is None:
-            own = scores.lookup(scores.load(Path(state_dir)), key, None)
-            creator = own['creator'] if own else None
+        named = None
+        try:
+            named = _entry_identity(entry, state_dir) if entry is not None else None
+        except Exception:
+            named = None
+        if named is None and model is not None:
+            named = _model_identity(model, state_dir)
+        creator, key = named or (None, None)
         if not (feedback._text(feedback.LAB, creator) and feedback._text(feedback.MODEL, key)):
             return None
         return dict(creator=creator, key=key)
@@ -237,8 +261,22 @@ def rater_id(entry, *, state_dir):
         return None
 
 
+def _is_self(model, rated, state_dir):
+    """True when the raw session model resolves to the rated model, whatever its provider."""
+    try:
+        creator, key = _model_identity(model, state_dir)
+        return key == rated.get('key') and (creator is None or feedback._lab(creator) == feedback._lab(rated.get('creator')))
+    except Exception:
+        return False
+
+
 FEEDBACK_REQUIRED = {'v', 'rated', 'work_kind', 'size_group', 'rating', 'session'}
-FEEDBACK_OPTIONAL = {'rater_entry', 'comment'}
+FEEDBACK_OPTIONAL = {'rater_entry', 'rater_model', 'comment'}
+
+
+def _model_ok(model):
+    return type(model) is dict and set(model) == {'provider', 'id'} \
+        and all(type(value) is str and 0 < len(value) <= 256 for value in model.values())
 
 
 def feedback_submit(request, *, state_dir, now=None):
@@ -246,10 +284,13 @@ def feedback_submit(request, *, state_dir, now=None):
     if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 1 \
             or not FEEDBACK_REQUIRED <= set(request) <= FEEDBACK_REQUIRED | FEEDBACK_OPTIONAL \
             or type(request.get('rated')) is not dict \
-            or request.get('rater_entry') is not None and type(request.get('rater_entry')) is not dict:
+            or request.get('rater_entry') is not None and type(request.get('rater_entry')) is not dict \
+            or request.get('rater_model') is not None and not _model_ok(request.get('rater_model')):
         return dict(state='refused', reason='invalid')
-    entry = request.get('rater_entry')
-    rater = None if entry is None else rater_id(entry, state_dir=state_dir)
+    entry, model = request.get('rater_entry'), request.get('rater_model')
+    if model is not None and _is_self(model, request['rated'], state_dir):
+        return dict(state='refused', reason='self_rating')
+    rater = None if entry is None and model is None else rater_id(entry, state_dir=state_dir, model=model)
     card = dict(rated=request['rated'], rater=rater, work_kind=request['work_kind'],
                 size_group=request['size_group'], rating=request['rating'], session=request['session'],
                 comment=request.get('comment'))

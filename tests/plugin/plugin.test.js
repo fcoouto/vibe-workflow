@@ -1034,7 +1034,7 @@ test("a valid rating reaches the selector with the card, session hash and rater,
     assert.ok(!JSON.stringify(answer).includes("PRIVATE-COMMENT"))
     const request = await sentFeedback(f)
     assert.deepEqual(Object.keys(request).sort(),
-      ["comment", "rated", "rater_entry", "rating", "session", "size_group", "v", "work_kind"])
+      ["comment", "rated", "rater_entry", "rater_model", "rating", "session", "size_group", "v", "work_kind"])
     assert.equal(request.v, 1)
     assert.deepEqual(request.rated, { key: "gpt-x", creator: "openai", family: "gpt" })
     assert.equal(request.work_kind, "review")
@@ -1045,6 +1045,7 @@ test("a valid rating reaches the selector with the card, session hash and rater,
     assert.equal(request.rater_entry.provider, "claude-agent")
     assert.equal(request.rater_entry.id, "other")
     assert.equal("name" in request.rater_entry, false)
+    assert.deepEqual(request.rater_model, { provider: "claude-agent", id: "other" })
     assert.match(await readFile(join(f.root, "feedback-argv"), "utf8"), /--feedback/)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1065,6 +1066,51 @@ test("a rater the host cannot name sends rater_entry null", async () => {
       assert.deepEqual(await rate(f, input), { state: "recorded" })
       assert.equal((await sentFeedback(f)).rater_entry, null)
     }
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("an unlisted rater still sends its raw session model, so Python can refuse a cross-provider self-rating", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    f.h.ctx.session.get = async () => ({ model: { providerID: "other-host", id: "gpt-x" } })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 3 }), { state: "recorded" })
+    const request = await sentFeedback(f)
+    assert.equal(request.rater_entry, null)
+    assert.deepEqual(request.rater_model, { provider: "other-host", id: "gpt-x" })
+    f.h.ctx.session.get = async () => ({})
+    await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 3 })
+    assert.equal((await sentFeedback(f)).rater_model, null)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("turning Smart Router off while a rating looks up the session leaves it ignored and unsent", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    let release
+    f.h.ctx.session.get = () => new Promise((resolve) => { release = () => resolve({ model: { providerID: "claude-agent", id: "other" } }) })
+    const pending = rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 })
+    while (!release) await new Promise((resolve) => setImmediate(resolve))
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    release()
+    assert.deepEqual(await pending, { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a pick whose refs have no usable catalog_id is not remembered, so its card is ignored", async () => {
+  const f = await pickFixture()
+  try {
+    const bad = (id) => ({ provider: "openai", model: "gpt-x", catalog_id: id })
+    for (const id of [undefined, { key: "", creator: "openai", family: "gpt" }, { key: "gpt-x", creator: 1, family: "gpt" },
+      { key: "gpt-x", creator: "openai" }]) {
+      await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, route: bad(id), alternatives: [] }))
+      const pick_id = await pickOf(f)
+      assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    }
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 

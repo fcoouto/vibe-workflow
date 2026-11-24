@@ -30,6 +30,11 @@ FAMILY = re.compile(r'[a-z0-9-]{0,128}')
 SESSION = re.compile(r'[0-9a-fA-F]{16,64}')
 
 
+def _lab(value):
+    """A lab for comparison: scores treats `lab` and `~lab` as the same lab."""
+    return value[1:] if type(value) is str and value.startswith('~') else value
+
+
 def _text(pattern, value):
     return type(value) is str and pattern.fullmatch(value) is not None
 
@@ -172,7 +177,7 @@ def _record(card, state_dir, now):
     if clean is None:
         return _refused('invalid')
     creator, key = clean['creator'], clean['key']
-    if clean['rater'] == (creator, key):
+    if clean['rater'] is not None and _lab(clean['rater'][0]) == _lab(creator) and clean['rater'][1] == key:
         return _refused('self_rating')
     now = int(now)
     with storage._locked(Path(state_dir) / FILE, lock=LOCK) as path:
@@ -191,7 +196,7 @@ def _record(card, state_dir, now):
         entry['wr'] = entry['wr'] * factor
         entry['at'] = now
         rater = clean['rater']
-        weight = SAME_LAB_WEIGHT if rater is None or rater[0] == creator else 1.0
+        weight = SAME_LAB_WEIGHT if rater is None or _lab(rater[0]) == _lab(creator) else 1.0
         entry['w'] += weight
         entry['wr'] += weight * clean['rating']
         if entry['w'] > WEIGHT_MAX:  # scale both totals together: the mean stays
@@ -236,7 +241,7 @@ def adjustment(store, *, key, creator, family, work_kind, size_group, anchor, no
         factor = _factor(entry['at'], now)
         if name == own_key:
             own_w, own_wr = entry['w'] * factor, entry['wr'] * factor
-        elif lab == creator and kind == work_kind and size == size_group \
+        elif _lab(lab) == _lab(creator) and kind == work_kind and size == size_group \
                 and entry['family'] == family and scores.version(model) < scores.version(key):
             family_w += entry['w'] * factor
             family_wr += entry['wr'] * factor

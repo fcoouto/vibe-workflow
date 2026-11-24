@@ -92,6 +92,42 @@ class CleanupTest(unittest.TestCase):
                 live_check.check(["hi"])
 
 
+class IsolatedPromptTest(unittest.TestCase):
+    def test_isolated_prompt_mode_builds_the_injection_environment(self):
+        seen = []
+
+        def api(method, path, data=None, timeout=60, env=None):
+            seen.append(env)
+            return {"id": "ses_x"} if path == "/api/session" else []
+        overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_SESSION_ID": "ses_parent"}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, overrides), \
+                mock.patch.object(live_check, "prepare", return_value=Path("/clone")), \
+                mock.patch.object(live_check, "_api", side_effect=api):
+            live_check.check(["hi"], isolated=True)
+        self.assertTrue(seen)
+        for env in seen:
+            self.assertEqual(env["PWD"], "/clone")
+            self.assertFalse([name for name in env if name.startswith(("OPENCODE", "GIT_"))])
+            self.assertNotEqual(env["XDG_CONFIG_HOME"], os.environ.get("XDG_CONFIG_HOME"))
+        self.assertEqual(len({env["XDG_CONFIG_HOME"] for env in seen}), 1)
+
+    def test_the_default_prompt_mode_is_unchanged(self):
+        calls = []
+
+        def api(method, path, data=None, timeout=60):
+            calls.append(path)
+            return {"id": "ses_x"} if path == "/api/session" else []
+        with mock.patch.object(live_check, "prepare", return_value=Path("/clone")), \
+                mock.patch.object(live_check, "_api", side_effect=api):
+            live_check.check(["hi"])
+        self.assertTrue(calls)
+
+    def test_the_flag_is_only_for_prompt_mode(self):
+        with mock.patch("sys.argv", ["live_check.py", "--injection", "--isolated"]), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            live_check.main()
+
+
 class VersionTest(unittest.TestCase):
     def test_parses_the_cli_version(self):
         self.assertEqual(live_check.parse_version("opencode v2.3.2\n"), "2.3.2")
