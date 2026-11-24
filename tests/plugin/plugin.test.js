@@ -1225,6 +1225,18 @@ test("a card seen while Smart Router is off forgets the picks, so the old pick_i
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
+test("the 429 fallback seeing Smart Router off forgets the picks, so the old pick_id stays ignored after re-enabling", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await preference(f.root, false)
+    const body = '{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}'
+    await f.h.hooks.get("http.response")({ providerID: "openai", response: new Response(body, { status: 429 }) })
+    await preference(f.root, true)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
 test("the context hook seeing Smart Router off also forgets the picks", async () => {
   const f = await pickFixture()
   try {

@@ -156,6 +156,12 @@ export default {
     }
     let closed = false
     const project = createProjectSettings(directory)
+    // The only read of Smart Router's setting: observing off forgets picks here, so no path can skip it.
+    const inspectRouter = async () => {
+      const result = await project.inspect()
+      if (result.state === "off") forgetOff()
+      return result
+    }
     // Only models on a path the router knows can be routed; this also keeps the request under MAX_BYTES.
     let providers = new Set()
     try {
@@ -264,7 +270,7 @@ export default {
       if (closed || marking || Date.now() - lastMark < 60000) return
       marking = true
       try {
-        if ((await project.inspect()).state !== "on" || closed) return
+        if ((await inspectRouter()).state !== "on" || closed) return
         lastMark = Date.now()
         await runRouter(null, { directory, stateDir: state, operation: "mark" })
       } catch {} finally { marking = false }
@@ -283,9 +289,8 @@ export default {
       input,
       execute: async (request, { signal, sessionID }) => {
         const started = generation
-        const preference = await project.inspect()
+        const preference = await inspectRouter()
         if (preference.state !== "on") {
-          if (preference.state === "off") forgetOff()
           const reason = preference.state === "off" ? "project_disabled" :
             preference.state === "not_onboarded" ? "project_not_onboarded" : "project_settings_invalid"
           return { content: JSON.stringify({ ...blocked(), state: "no_selection", reason, notice: null }) }
@@ -319,8 +324,7 @@ export default {
         if (answer.state === "selected") {
           const pickID = randomBytes(8).toString("hex")
           pickFields = { pick_id: pickID, feedback_hint: FEEDBACK_HINT }
-          const after = await project.inspect()
-          if (after.state === "off") forgetOff()
+          const after = await inspectRouter()
           // A size group the selector does not name is never guessed: such a pick is issued but cannot be rated.
           if (identified && !closed && generation === started && after.state === "on" && SIZE_GROUPS.includes(answer.size_group)) {
             remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs: pickRefs(answer) })
@@ -344,8 +348,7 @@ export default {
       execute: async (request, { signal, sessionID }) => {
         const ignored = { content: JSON.stringify({ state: "ignored" }) }
         const refused = (reason) => ({ content: JSON.stringify({ state: "refused", reason }) })
-        const preference = (await project.inspect()).state
-        if (preference === "off") forgetOff()
+        const preference = (await inspectRouter()).state
         const book = typeof sessionID === "string" && preference === "on" ? picks.get(sessionID) : undefined
         const pick = typeof request?.pick_id === "string" ? book?.get(request.pick_id) : undefined
         if (closed || !pick) return ignored
@@ -368,12 +371,12 @@ export default {
     }))
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
     const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
-    const onboarded = async () => (await Promise.all([project, gitWorkflow, sessionTitles].map((item) => item.inspect())))
+    const onboarded = async () => (await Promise.all([inspectRouter(), gitWorkflow.inspect(), sessionTitles.inspect()]))
       .some(({ state }) => state === "on" || state === "off")
     const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
-    await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
+    await registerOnboarding(ctx, { smart_router: { ...project, inspect: inspectRouter, async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) forgetOff()
       return result
@@ -405,8 +408,7 @@ export default {
     }
     await ctx.session.hook("context", async (event) => {
       if (closed) return
-      const { state } = await project.inspect()
-      if (state === "off") forgetOff()
+      const { state } = await inspectRouter()
       await noteModel(event, state === "on")
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
@@ -418,7 +420,7 @@ export default {
       try { body = event.response.clone().body } catch {}
       if (!body) return
       try {
-        if ((await project.inspect()).state === "on" && !closed) reader = body.getReader()
+        if ((await inspectRouter()).state === "on" && !closed) reader = body.getReader()
       } catch {}
       if (!reader) {
         try { body.cancel().catch(() => {}) } catch {}
