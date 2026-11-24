@@ -188,3 +188,11 @@ specified tasks but needed two fix rounds each on two tasks needing judgment abo
 tests and test data; the advisor evaluation behind the exact-plan rule never set
 low effort. Effort is still clamped to the model's variants; the level never
 changes.
+
+## Amendment, 24 November 2026 (release 0.13.0)
+
+The user decided: implementation, testing, review, planning and investigation start
+at high effort at every level; writing keeps medium, medium, high by level. The
+step for tasks of 2 or more agent-hours stays (high becomes xhigh). Effort is still
+clamped to the model's variants; callers without a work kind (council seats) follow
+the level table.
