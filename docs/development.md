@@ -275,6 +275,17 @@ in 0.10.0, so a caller still sending them gets `invalid_request`. Pinning stays 
 `docs/superpowers/specs/2026-11-24-router-steering-design.md`; council:
 `docs/vibe-council/sessions/08d7b6126f45_router-constraints/result.md`.
 
+## Onboarding in a worktree: what is known
+
+The design is `docs/superpowers/specs/2026-11-23-onboarding-in-worktree-design.md`. Verified by
+tests only (fixture repositories with a linked worktree): the `worktree` option of
+`createProjectSettings` saves at the session's checkout root, previews from main's file overlaid
+with that root's own, and snapshots both files; git workflow reads stay at main; session titles read
+the checkout's own file. Not observed: the procedure's worktree check, `worktree_create` and
+`session.move` in a real session, and a real session started in the primary checkout. Nothing in code
+stops a primary-checkout session from saving in main; only the procedure does. The wiring of
+`sessionTitles` in `index.js` has no test.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;
