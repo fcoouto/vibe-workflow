@@ -243,7 +243,7 @@ test("below-level answers get one notice per session and level", async () => {
     route: { provider: "invented", model: "invented", effort: "high" }, admission: false, reservation: false, spend_permit: false })
   const normal = JSON.stringify({ state: "selected", reason: null, route: { provider: "invented", model: "invented", effort: "high" },
     admission: false, reservation: false, spend_permit: false })
-  const message = (level) => `vibe-workflow: Smart Router could not confirm a level ${level} match for this request and recommended the strongest available. Tell your human partner.`
+  const message = (level) => `vibe-workflow: Smart Router could not confirm a level ${level} match for this request and recommended the strongest available; excluded models may be the cause. Tell your human partner.`
   const execute = async (id) => JSON.parse((await f.execute(undefined, id)).content)
   try {
     await writeFile(answerFile, below(3))
@@ -258,6 +258,77 @@ test("below-level answers get one notice per session and level", async () => {
     assert.equal((await execute("two")).notice, message(2))
     await writeFile(answerFile, below(3))
     assert.equal((await execute("two")).notice, message(3))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+const SAME_LAB = "vibe-workflow: No reviewer from a different lab than the reviewed work reaches this task's level; Smart Router recommended the usual pick."
+// A rateable below-level pick: the picked fixture plus the below-level fields.
+const belowPick = (level) => ({ ...picked, below_level: true, level })
+
+test("a same-lab review gets one notice per session, kept through an ordinary pick", async () => {
+  const f = await fixture(echo)
+  const answerFile = join(f.root, "answer.json")
+  const execute = async (id) => JSON.parse((await f.execute(undefined, id, { reviewing: "openai/gpt-x#high" })).content)
+  try {
+    await writeFile(answerFile, JSON.stringify({ ...picked, reviewer_independent: false }))
+    assert.equal((await execute("one")).notice, SAME_LAB)
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, JSON.stringify(picked))
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, JSON.stringify({ ...picked, reviewer_independent: false }))
+    assert.equal((await execute("one")).notice, null)
+    assert.equal((await execute("two")).notice, SAME_LAB)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("no same-lab notice when the reviewer is independent or the field is absent", async () => {
+  const f = await fixture(echo)
+  const answerFile = join(f.root, "answer.json")
+  const execute = async (id) => JSON.parse((await f.execute(undefined, id, { reviewing: "openai/gpt-x#high" })).content)
+  try {
+    await writeFile(answerFile, JSON.stringify({ ...picked, reviewer_independent: true }))
+    assert.equal((await execute("one")).notice, null)
+    await writeFile(answerFile, JSON.stringify(picked))
+    assert.equal((await execute("one")).notice, null)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a below-level answer shows only the below-level notice even when the reviewer is not independent", async () => {
+  const f = await fixture(echo)
+  const answerFile = join(f.root, "answer.json")
+  try {
+    await writeFile(answerFile, JSON.stringify({ ...belowPick(2), reviewer_independent: false }))
+    const answer = JSON.parse((await f.execute(undefined, "one", { reviewing: "openai/gpt-x#high" })).content)
+    assert.match(answer.notice, /^vibe-workflow: Smart Router could not confirm a level 2 match/)
+    assert.doesNotMatch(answer.notice, /No reviewer from a different lab/)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a below-level pick keeps its pick_id and hint but its card is ignored", async () => {
+  const f = await pickFixture()
+  try {
+    await writeFile(join(f.root, "answer.json"), JSON.stringify(belowPick(2)))
+    const answer = JSON.parse((await f.execute()).content)
+    assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
+    assert.equal(answer.feedback_hint, FEEDBACK_HINT)
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("reviewing reaches the selector unchanged and reviewer_independent reaches the answer", async () => {
+  const f = await fixture(`import json, sys
+from pathlib import Path
+Path("request.json").write_text(json.dumps(json.load(sys.stdin)))
+print(Path("answer.json").read_text())
+`)
+  try {
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, reviewer_independent: true }))
+    const answer = JSON.parse((await f.execute(undefined, "ses_a", { reviewing: "openai/gpt-x#high" })).content)
+    assert.equal(answer.reviewer_independent, true)
+    const request = JSON.parse(await readFile(join(f.root, "request.json"), "utf8"))
+    assert.equal(request.reviewing, "openai/gpt-x#high")
+    assert.equal("models" in request, true)
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1169,17 +1240,21 @@ test("the select and feedback descriptions teach the plan rule, the hours and th
   assert.doesNotMatch(feedback.description, /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
 })
 
-test("the select schema bounds the hours and lists the four constraint fields; feedback bounds its input", async () => {
+test("the select schema bounds the hours, lists only excluded_models and takes reviewing; feedback bounds its input", async () => {
   const h = host(await realpath(await mkdtemp(join(tmpdir(), "router-schema2-"))))
   await (await load()).setup(h.ctx)
-  const { properties } = h.tools.get("smart_router_select").input
+  const select = h.tools.get("smart_router_select").input
+  const { properties } = select
   assert.deepEqual(properties.task.properties.estimate_agentic_effort_hours, { type: "number", minimum: 0, maximum: 100 })
   assert.equal(properties.constraints.type, "object")
   assert.equal(properties.constraints.additionalProperties, false)
-  assert.deepEqual(Object.keys(properties.constraints.properties),
-    ["allowed_models", "excluded_models", "allowed_efforts", "allowed_harnesses"])
-  for (const key of Object.keys(properties.constraints.properties))
-    assert.deepEqual(properties.constraints.properties[key], { type: "array", items: { type: "string" } })
+  assert.deepEqual(Object.keys(properties.constraints.properties), ["excluded_models"])
+  assert.deepEqual(properties.constraints.properties.excluded_models, { type: "array", items: { type: "string" },
+    description: "Models to leave out for this request only: a pick's model_ref, a catalog key or a model name." })
+  assert.deepEqual(properties.reviewing, { type: "string",
+    description: "For a review: the model_ref of the model whose work is reviewed; the router prefers a reviewer from another lab." })
+  assert.deepEqual(Object.keys(properties).sort(), ["constraints", "reviewing", "task", "v", "work_kind"])
+  assert.doesNotMatch(JSON.stringify(properties), /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
   const feedback = h.tools.get("smart_router_feedback").input
   assert.equal(feedback.additionalProperties, false)
   assert.deepEqual(feedback.required, ["pick_id", "model_ref", "rating"])
