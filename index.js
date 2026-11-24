@@ -376,7 +376,14 @@ export default {
     const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
-    await registerOnboarding(ctx, { smart_router: { ...project, inspect: inspectRouter, async apply(...args) {
+    await registerOnboarding(ctx, { smart_router: { ...project, inspect: inspectRouter,
+      // A preview reports the saved state as previous_enabled; false means the router was off when it was read.
+      async preview(...args) {
+        const result = await project.preview(...args)
+        if (result.previous_enabled === false) forgetOff()
+        return result
+      },
+      async apply(...args) {
       const result = await project.apply(...args)
       if (result.enabled === false) forgetOff()
       return result

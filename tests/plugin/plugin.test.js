@@ -1237,6 +1237,22 @@ test("the 429 fallback seeing Smart Router off forgets the picks, so the old pic
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
+test("an onboarding preview that sees the router off forgets picks, so re-enabling keeps the old pick_id ignored", async () => {
+  const f = await pickFixture(undefined, { permission: { assert: async () => {} } })
+  try {
+    const pick_id = await pickOf(f)
+    await preference(f.root, false)
+    const invocation = { sessionID: "ses_test", messageID: "m", id: "c", agent: "build", signal: new AbortController().signal }
+    const onboard = (input) => f.h.tools.get("vibe_workflow_onboard").execute({ v: 1, ...input }, invocation)
+      .then((r) => JSON.parse(r.content))
+    const preview = await onboard({ op: "preview", enabled: true })
+    assert.equal(preview.previous_enabled, false)
+    const applied = await onboard({ op: "apply", enabled: true, expected_snapshot: preview.snapshot })
+    assert.notEqual(applied.state, "blocked")
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
 test("the context hook seeing Smart Router off also forgets the picks", async () => {
   const f = await pickFixture()
   try {
