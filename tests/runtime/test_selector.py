@@ -141,6 +141,12 @@ class SelectionTest(unittest.TestCase):
         long = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=6)))
         self.assertEqual(long["route"]["effort"], "high")
 
+    def test_huge_hour_estimate_is_invalid_request_not_an_exception(self):
+        self.warm()
+        for bad in (10**400, -10**400, float('nan')):
+            result = self.run_select(self.request(task=dict(TASK, estimate_agentic_effort_hours=bad)))
+            self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
+
     def test_cheap_model_below_the_bar_is_not_picked(self):
         self.fetch = Fetch(BODY3)
         result = self.run_select(self.request(work_kind="implementation", models=[

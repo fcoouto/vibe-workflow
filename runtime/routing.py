@@ -39,7 +39,8 @@ def _optional(value, check):
 
 
 def _hours(value):
-    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100
+    # Range first: math.isfinite raises OverflowError on huge ints, and a value in 0..100 is always finite.
+    return type(value) in (int, float) and 0 <= value <= 100 and math.isfinite(value)
 
 
 def task_level(work_kind, task):

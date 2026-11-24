@@ -109,7 +109,7 @@ class RoutingTest(unittest.TestCase):
     def test_estimated_hours_is_validated_and_does_not_change_the_level(self):
         for hours in (0, 4.0, 100):
             self.assertEqual(routing.task_level('implementation', dict(FACTS, estimate_agentic_effort_hours=hours)), 1)
-        for bad in (-1, 100.5, '4', True, float('nan')):
+        for bad in (-1, 100.5, '4', True, float('nan'), 10**400):
             with self.assertRaises(ValueError):
                 routing.task_level('implementation', dict(FACTS, estimate_agentic_effort_hours=bad))
 
