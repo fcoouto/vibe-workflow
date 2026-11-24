@@ -27,8 +27,8 @@ not a new subsystem.
   model can drop out of a level, or climb into one.
 - New models start from their catalog score; new versions of a known family
   start with half of the family's record.
-- The router can tell short tasks from long ones, and gives long tasks more
-  effort.
+- The router can tell short tasks from long ones (4 agent-hours or more), and
+  gives long tasks more effort.
 
 ## Non-goals
 
@@ -70,22 +70,27 @@ not a new subsystem.
   line: rate the subagent's work with `smart_router_feedback` after it reports.
 - The plugin keeps, per session in memory (bounded like the notice map), what
   each `pick_id` stood for: the pick and its alternatives, level, work kind,
-  facts and size. An unknown or forgotten `pick_id` (for example after a plugin
+  facts and size group. An unknown or forgotten `pick_id` (for example after a plugin
   restart) makes a card return `ignored`, never an error.
 - Each pick shows `feedback: {sessions, adjustment}` for its model, so the
   coordinator sees why it moved.
 
-### Task size and effort (coordinator's calls)
+### Task size and effort
 
-- New optional fact `task.size`: `short` (default) or `long` (about a working day
-  or more, or several separately checkable steps).
-- Size does not change the level. The text fix below sends whole plans to
-  `prose`, which already raises them.
-- Effort is no longer fixed by the level alone: a `long` task gets one effort
-  step above its level's default (level 1 low → medium, level 2 medium → high,
-  level 3 high → xhigh), clamped to the model's variants as today.
-- Cards are kept apart by size, so a failed long build does not lower a model's
-  record on short tasks.
+- New optional fact `task.estimate_agentic_effort_hours`: a number from 0 to 100,
+  the coordinator's estimate of how long the delegated agent will work on the
+  task, in hours of agent time, not a person's time (the user's choice of field,
+  so the cutoff is Smart Router's rule, not each agent's judgement).
+- Threshold: 4 hours (the user's choice). A missing estimate counts as below it.
+- The estimate does not change the level. The text fix below sends whole plans
+  to `prose`, which already raises them.
+- Effort: at or above 4 hours, one effort step above the level's default (level 1
+  low to medium, level 2 medium to high, level 3 high to xhigh), clamped to the
+  model's variants as today.
+- Cards are kept in two size groups, below and at or above 4 hours, so a failed
+  long build does not lower a model's record on short tasks. Two groups only,
+  because cards will be sparse.
+- Deferred: moving the threshold from card evidence (where ratings drop).
 
 ### Text changes in the tool description
 
@@ -94,7 +99,7 @@ not a new subsystem.
   the builder nothing to decide. Several plan tasks in one request, or any open
   choice, is `prose`. Unsure whether it is exact: say `prose`.
 - One request per delegated task. Rate risk by what a mistake would cost, not by
-  the task's size; give size in `size`.
+  the task's size; give the size in `estimate_agentic_effort_hours`.
 - The card scale: 0 = failed; 3 = met the stated checks; 5 = met them with no
   rework needed. Skip the card when the brief was at fault or the provider
   failed.
@@ -122,7 +127,7 @@ not a new subsystem.
 ### Storage
 
 - One file, `router-feedback.json`, under the existing lock helpers.
-- Per key (model, kind of work, size): two decayed running totals (weight, and
+- Per key (model, kind of work, size group): two decayed running totals (weight, and
   weight × rating) and the set of sessions that contributed; plus a bounded set
   of recent vote keys. No card list, so nothing to prune.
 - The whole file is bounded (well under 1 MiB). A missing, damaged or oversized
@@ -131,7 +136,7 @@ not a new subsystem.
 
 ### How cards move a model
 
-- Effective score for a model, kind of work and size = catalog score +
+- Effective score for a model, kind of work and size group = catalog score +
   adjustment. The bars and cheapest-first order then use the effective score.
   The council's seat pick does not.
 - Adjustment = clamp(cap × d × n / (n + 5), −cap, +cap), where cap = 10% of the
