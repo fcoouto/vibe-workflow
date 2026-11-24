@@ -3,7 +3,7 @@ RUNTIME = (
     "__init__", "routing", "routing_paths", "routing_observations",
     "subscription_billing", "selector", "storage", "processes", "continuity",
     "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit",
-    "council",
+    "council", "feedback",
 )
 FILES = (
     "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js",
