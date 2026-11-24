@@ -63,10 +63,64 @@ def _key(route, catalog):
     return scores.normalize(route['model_id'] or route['model'])
 
 
-def _constrained(item, effort, constraints):
-    values = dict(allowed_models=item['model'], allowed_efforts=effort, allowed_harnesses=item['harness'])
-    return item['model'] in constraints.get('excluded_models', []) \
-        or any(value not in constraints[key] for key, value in values.items() if key in constraints)
+def excluded(item, key, entries):
+    """True when an excluded_models entry names this route: its bare model name, its catalog key or its route name
+    exactly, or its provider/model with any #variant dropped from the entry."""
+    pair = f"{item['provider']}/{item['model']}"
+    return any(entry in (item['model'], key, item['route']) or entry.split('#', 1)[0] == pair for entry in entries)
+
+
+def _constrained(item, key, constraints):
+    return excluded(item, key, constraints.get('excluded_models', []))
+
+
+def _usable_row(entry):
+    """A catalog row can name an identity only with a non-empty key and a real canonical creator (not openrouter)."""
+    creator = entry.get('creator')
+    return type(entry.get('key')) is str and bool(entry['key']) and type(creator) is str \
+        and feedback._lab(creator) not in ('', 'openrouter')
+
+
+def _creator(cache, key, fixed=None):
+    """The one identity rule: the creator of the model's own catalog row (exact key, else the unique date-suffix
+    row), scored or not; else the plan's fixed creator; never a family-borrowed score donor. None when unknown."""
+    rows = [] if cache is None else [entry for entry in cache.get('models', {}).values()
+                                     if type(entry) is dict and _usable_row(entry)]
+    exact = {entry['creator'] for entry in rows if entry['key'] == key}
+    if not exact:
+        exact = {entry['creator'] for entry in rows if scores._month_day(entry['key'], key)}
+    return next(iter(exact)) if len(exact) == 1 else fixed
+
+
+def _identify(path, name, model_id, state_dir):
+    """(creator or None, key) of a model: the catalog key (alias resolved) and its one creator. Never raises."""
+    anchor = Path(state_dir) / 'router.json'
+    try:
+        catalog = native_catalog.stored(anchor, 'claude-code') if path == CLAUDE else None
+    except Exception:
+        catalog = None
+    key = _key(dict(path=path, model=name, model_id=model_id), catalog)
+    try:
+        cache = scores.load(Path(state_dir))
+    except Exception:
+        cache = None
+    return _creator(cache, key, scores.CREATOR.get(path)), key
+
+
+def _known_lab(creator):
+    """The canonical lab of a creator, or None when it is not a real lab (unknown, malformed or openrouter)."""
+    if not feedback._text(feedback.LAB, creator):
+        return None
+    lab = feedback._lab(creator)
+    return None if lab == 'openrouter' else lab
+
+
+def _reviewing_ok(value):
+    """A model_ref: provider/model or provider/creator/model, either with an optional #variant. All parts non-empty."""
+    if not routing._text(value):
+        return False
+    parts = value.split('#', 1)[0].split('/')
+    return len(parts) in (2, 3) and all(parts)
 
 
 def select(request, *, state_dir, source=None, fetch=None, now=None):
@@ -74,43 +128,58 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
     try:
         if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 2 \
                 or not {'v', 'work_kind', 'task'} <= set(request) \
-                <= {'v', 'work_kind', 'task', 'models', 'constraints'}:
+                <= {'v', 'work_kind', 'task', 'models', 'constraints', 'reviewing'} \
+                or ('reviewing' in request and not _reviewing_ok(request['reviewing'])):
             raise ValueError('invalid_request')
         level = routing.task_level(request['work_kind'], request['task'])
         constraints = routing.check_constraints(request.get('constraints', {}))
     except (ValueError, TypeError, KeyError, RecursionError):
         return result('blocked', 'invalid_request')
+    entries = constraints.get('excluded_models', [])
+    unmatched = _unmatched_for(request.get('models', []), entries, state_dir)
+    seen = {}
     try:
-        return _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now)
+        answer = _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now,
+                         unmatched=unmatched, seen=seen)
     except Exception:
-        return result('blocked', 'selector_unavailable')
+        if seen:
+            unmatched = _unmatched(seen['routed'], seen['allkeys'], entries)
+        answer = result('blocked', 'selector_unavailable', **_reported(unmatched))
+    if 'reviewing' in request:
+        answer.setdefault('reviewer_independent', False)
+    return answer
 
 
-def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None):
+def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None, seen=None):
     """The selection steps up to the scored candidates, shared by Smart Router and council picks."""
     long = task is not None and routing.size_group(task) == 'long'
     state_dir = Path(state_dir)
     now = int(time.time()) if fixed is None else fixed
     if not state_dir.is_absolute() or state_dir.is_symlink():
         raise ValueError('selector_unavailable')
+    anchor = state_dir / 'router.json'
     unique = {}
     for item in routing_paths.routes(models):
         unique.setdefault(item['route'], item)
-    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={},
-                had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
+    pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={}, labs={}, named=set(),
+                allkeys=None, routed=[], had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
     if not unique:
         return dict(pool, reason='no_models')
-    anchor = state_dir / 'router.json'
     source = pool['source'] = source if source is not None else routing_observations.LocalSource(anchor)
     source.acquire_billing(list(unique.values()), now)
     # Readers stamp the facts they just acquired, so an earlier clock would see them as future.
     now = pool['now'] = int(time.time()) if fixed is None else fixed
+    # One route-to-key map per request, read after acquisition, serves both the exclusion filter and `unmatched`.
+    routed = pool['routed'] = list(unique.values())
+    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in routed) else None
+    allkeys = pool['allkeys'] = {item['route']: _key(item, catalog) for item in routed}
+    if seen is not None:
+        seen.update(routed=routed, allkeys=allkeys)
     kept, excluded = routing_observations.eligible(list(unique.values()), source, now)
     pool.update(excluded=excluded, kept=len(kept))
-    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
     if not kept:
         return dict(pool, reason='no_eligible_route')
-    keys = pool['keys'] = {item['route']: _key(item, catalog) for item in kept}
+    keys = pool['keys'] = {item['route']: allkeys[item['route']] for item in kept}
     cache = scores.load(state_dir)
     had = _has_scores(cache)
     if not had:
@@ -128,14 +197,54 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
             excluded.append(dict(route=item['route'], reason='unscored'))
         elif item['context_limit'] is not None and item['context_limit'] < tokens:
             excluded.append(dict(route=item['route'], reason='context_limit'))
-        elif _constrained(item, effort, constraints):
+        elif _constrained(item, key, constraints):
             excluded.append(dict(route=item['route'], reason='constraint'))
         else:
-            pool['creators'][item['route']] = scores.CREATOR.get(item['path']) or own['creator']
+            creator = _creator(cache, key, scores.CREATOR.get(item['path']))
+            # Without an identity of its own the score's creator still keys the card; it never names a lab.
+            pool['creators'][item['route']] = creator or own['creator']
+            if creator is not None:
+                pool['named'].add(item['route'])
+            pool['labs'][item['route']] = _known_lab(creator)
             pool['candidates'].append(dict(item, effort=effort,
                                            score=own['score'], score_source=own['score_source'], price=own['price'],
                                            released=item['released'] or own['released']))
     return pool
+
+
+def _unmatched(routed, keys, entries):
+    """Entries (request order, no duplicates) that name no route, whatever its eligibility, quota or score.
+    `keys` maps each route name to its catalog key."""
+    return [entry for entry in dict.fromkeys(entries)
+            if not any(excluded(item, keys[item['route']], [entry]) for item in routed)]
+
+
+def _catalog_or_none(state_dir):
+    """The stored Claude catalog for alias resolution; None when it cannot be read, which only drops alias names."""
+    try:
+        state_dir = Path(state_dir)
+        if not state_dir.is_absolute() or state_dir.is_symlink():
+            return None
+        return native_catalog.stored(state_dir / 'router.json', 'claude-code')
+    except Exception:
+        return None
+
+
+def _unmatched_for(models, entries, state_dir):
+    """Entries that name no route built from `models`, whatever its eligibility, quota or score. Models that do
+    not route leave nothing to match, so they report none."""
+    if not entries:
+        return []
+    try:
+        routed = routing_paths.routes(models)
+    except Exception:
+        return []
+    catalog = _catalog_or_none(state_dir) if any(r['path'] == CLAUDE for r in routed) else None
+    return _unmatched(routed, {item['route']: _key(item, catalog) for item in routed}, entries)
+
+
+def _reported(unmatched):
+    return dict(unmatched=unmatched) if unmatched else {}
 
 
 def _confirm(ordered, pool, limit, qualifies=None):
@@ -179,6 +288,9 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
     """A candidate with its feedback adjustment in `score`; the catalog score stays in `catalog_score`."""
     key, creator = pool['keys'][item['route']], pool['creators'][item['route']]
     family = scores.family_key(key)
+    if item['route'] not in pool['named']:
+        # An identity that only a score donor gave is not the model's own: recommend it, but it cannot be rated.
+        return dict(item, catalog_score=item['score'], feedback=dict(sessions=0, adjustment=0.0))
     try:
         facts = feedback.adjustment(store, key=key, creator=creator, family=family, work_kind=work_kind,
                                     size_group=size_group, anchor=anchor, now=pool['now'])
@@ -191,11 +303,13 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
                 catalog_id=dict(key=key, creator=creator, family=family))
 
 
-def _select(request, level, constraints, *, state_dir, source, fetch, now):
+def _select(request, level, constraints, *, state_dir, source, fetch, now, unmatched, seen):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
-                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
+                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'], seen=seen)
+    if pool['allkeys'] is not None:
+        unmatched = _unmatched(pool['routed'], pool['allkeys'], constraints.get('excluded_models', []))
     if pool['reason']:
-        return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
+        return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'], **_reported(unmatched))
     anchor = scores.anchor(pool['cache'])
     size = routing.size_group(request['task'])
     store = _store(state_dir)
@@ -205,25 +319,30 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     if not ordered and candidates:
         ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
-    chosen = _confirm(ordered, pool, 3, qualifies)
+    reviewing = request.get('reviewing')
+    independent, chosen = False, []
+    if reviewing is not None and not below:
+        lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
+        other = [item for item in ordered if lab is not None and qualifies(item)
+                 and pool['labs'].get(item['route']) not in (None, lab)]
+        chosen = _confirm(other, pool, 3, qualifies)
+        independent = bool(chosen)
+        if not chosen:
+            failed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
+            ordered = [item for item in ordered if item['route'] not in failed]
+    if not independent:
+        chosen = _confirm(ordered, pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
-                    route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))
+                    route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen),
+                    **_reported(unmatched))
     if chosen:
         answer['size_group'] = size
+    if reviewing is not None:
+        answer['reviewer_independent'] = independent and bool(chosen)
     return _refresh_flag(answer, pool)
-
-
-def _cached_creator(key, state_dir):
-    """The catalog creator of a key, or None when unknown or the score cache cannot be read."""
-    try:
-        cache = scores.load(Path(state_dir))
-        own = scores.lookup(cache, key, None) if cache is not None else None
-        return own['creator'] if own else None
-    except Exception:
-        return None
 
 
 def _entry_identity(entry, state_dir):
@@ -231,19 +350,18 @@ def _entry_identity(entry, state_dir):
     found = routing_paths.routes([entry])
     if len(found) != 1:
         return None
-    item = found[0]
-    catalog = native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if item['path'] == CLAUDE else None
-    key = _key(item, catalog)
-    return (scores.CREATOR.get(item['path']) or _cached_creator(key, state_dir)), key
+    return _identify(found[0]['path'], found[0]['model'], found[0]['model_id'], state_dir)
 
 
 def _model_identity(model, state_dir):
-    """(creator or None, key) the catalog would give a raw session model, whatever its provider. Off-plan models
-    only name a rater; they never become eligible for selection."""
-    path = CLAUDE if model['provider'] == 'claude-agent' else None
-    key = _key(dict(path=path, model=model['id'], model_id=model['id']),
-               native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if path else None)
-    return _cached_creator(key, state_dir), key
+    """(creator or None, key) of a raw session model, whatever its provider: the same rule a routed entry gets.
+    Off-plan models only name a rater; they never become eligible for selection."""
+    try:
+        found = routing_paths.routes([dict(provider=model['provider'], id=model['id'], model=None, family=None,
+                                           variants=[], context=None, released=0)])
+    except Exception:
+        found = []
+    return _identify(found[0]['path'] if found else None, model['id'], model['id'], state_dir)
 
 
 def _identity(entry, model, state_dir):
@@ -266,6 +384,21 @@ def rater_id(entry, *, state_dir, model=None):
     if not (feedback._text(feedback.LAB, creator) and feedback._text(feedback.MODEL, key)):
         return None
     return dict(creator=creator, key=key)
+
+
+def review_lab(reviewing, models, *, state_dir):
+    """The canonical lab (leading ~ dropped) of the model a review names, or None when it cannot be named.
+    provider/creator/model names its creator; provider/model resolves through the one identity rule. Never raises."""
+    try:
+        parts = reviewing.split('#', 1)[0].split('/')
+        if len(parts) == 3:
+            return _known_lab(parts[1])
+        provider, model_id = parts
+        entry = next((item for item in models if type(item) is dict and item.get('provider') == provider
+                      and item.get('id') == model_id), None)
+        return _known_lab((_identity(entry, dict(provider=provider, id=model_id), state_dir) or (None, None))[0])
+    except Exception:
+        return None
 
 
 def _is_self(identity, rated):

@@ -122,10 +122,16 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.effort_for(3, ['low', 'high'], long=True), 'high')
 
     def test_constraints_are_bounded_lists(self):
-        self.assertEqual(routing.check_constraints(dict(allowed_models=['m'])), dict(allowed_models=['m']))
-        for bad in (dict(other=['x']), dict(allowed_strategy_ids=['x']), dict(allowed_models='m'),
-                    dict(allowed_models=['m'] * 257), 'x'):
+        self.assertEqual(routing.check_constraints(dict(excluded_models=['m'])), dict(excluded_models=['m']))
+        for bad in (dict(other=['x']), dict(allowed_strategy_ids=['x']), dict(excluded_models='m'),
+                    dict(excluded_models=['m'] * 257), 'x'):
             with self.assertRaises(ValueError):
+                routing.check_constraints(bad)
+
+    def test_allowed_fields_are_gone(self):
+        self.assertEqual(routing.CONSTRAINT_FIELDS, ('excluded_models',))
+        for bad in (dict(allowed_models=['m']), dict(allowed_efforts=['low']), dict(allowed_harnesses=['x'])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
                 routing.check_constraints(bad)
 
 
