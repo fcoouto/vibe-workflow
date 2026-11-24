@@ -388,6 +388,27 @@ class SelectionTest(unittest.TestCase):
                 result = self.run_select(self.request(**extra))
                 self.assertEqual((result["state"], result["reason"]), ("selected", None))
 
+    def test_an_empty_creator_row_keeps_the_fixed_creator(self):
+        self.warm()
+        path = self.root / scores.CACHE
+        cache = json.loads(path.read_text())
+        cache["models"]["anthropic/claude-opus-5-5"]["creator"] = ""
+        path.write_text(json.dumps(cache))
+        result = self.run_select(self.request(models=[model("claude-agent", "claude-opus-5-5")]))
+        self.assertEqual((result["state"], result["route"]["catalog_id"]["creator"]), ("selected", "anthropic"))
+
+    def test_an_empty_creator_row_never_names_a_donor_only_route(self):
+        raw = body(("b/x-0", 80, 1, 5, 67), ("b/x-1", 90, 1, 5, None), ("a/a-small", 50, 0.1, 0.5, 67), *REVIEW_TOP)
+        self.fetch = Fetch(raw)
+        self.warm()
+        path = self.root / scores.CACHE
+        cache = json.loads(path.read_text())
+        cache["models"]["b/x-1"]["creator"] = ""
+        path.write_text(json.dumps(cache))
+        result = self.run_select(self.request(models=[model("opencode-go", "x-1")]))
+        self.assertEqual(result["state"], "selected")
+        self.assertNotIn("catalog_id", result["route"])
+
     def test_a_donor_only_identity_is_recommended_but_not_rateable(self):
         raw = body(("b/x-0", 80, 1, 5, 67), ("a/a-small", 50, 0.1, 0.5, 67), *REVIEW_TOP)
         models = [model("opencode-go", "x-1"), model("openai", "x-1")]

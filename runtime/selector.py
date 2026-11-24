@@ -74,12 +74,18 @@ def _constrained(item, key, constraints):
     return excluded(item, key, constraints.get('excluded_models', []))
 
 
+def _usable_row(entry):
+    """A catalog row can name an identity only with a non-empty key and a real canonical creator (not openrouter)."""
+    creator = entry.get('creator')
+    return type(entry.get('key')) is str and bool(entry['key']) and type(creator) is str \
+        and feedback._lab(creator) not in ('', 'openrouter')
+
+
 def _creator(cache, key, fixed=None):
     """The one identity rule: the creator of the model's own catalog row (exact key, else the unique date-suffix
     row), scored or not; else the plan's fixed creator; never a family-borrowed score donor. None when unknown."""
     rows = [] if cache is None else [entry for entry in cache.get('models', {}).values()
-                                     if type(entry) is dict and type(entry.get('key')) is str
-                                     and type(entry.get('creator')) is str]
+                                     if type(entry) is dict and _usable_row(entry)]
     exact = {entry['creator'] for entry in rows if entry['key'] == key}
     if not exact:
         exact = {entry['creator'] for entry in rows if scores._month_day(entry['key'], key)}
