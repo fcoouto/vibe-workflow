@@ -1114,6 +1114,17 @@ test("a pick whose refs have no usable catalog_id is not remembered, so its card
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
+test("a pick whose family key is empty (a numeric model) is still rated", async () => {
+  const f = await pickFixture()
+  try {
+    const route = { ...picked.route, catalog_id: { key: "123", creator: "openai", family: "" } }
+    await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, route, alternatives: [] }))
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "recorded" })
+    assert.deepEqual((await sentFeedback(f)).rated, { key: "123", creator: "openai", family: "" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
 test("rating a pick with the model that made it is refused before the selector runs", async () => {
   const f = await pickFixture()
   try {

@@ -52,7 +52,8 @@ function pickRefs(answer) {
   for (const entry of [answer.route, ...(Array.isArray(answer.alternatives) ? answer.alternatives : [])]) {
     const id = entry?.catalog_id
     if (typeof entry?.provider !== "string" || typeof entry?.model !== "string" || !id || typeof id !== "object") continue
-    if (![id.key, id.creator, id.family].every((part) => typeof part === "string" && part.length > 0)) continue
+    // The family key is empty for a purely numeric model id, which the runtime accepts.
+    if (![id.key, id.creator].every((part) => typeof part === "string" && part.length > 0) || typeof id.family !== "string") continue
     refs.set(`${entry.provider}/${entry.model}`, { provider: entry.provider, model: entry.model,
       catalog_id: { key: id.key, creator: id.creator, family: id.family } })
   }

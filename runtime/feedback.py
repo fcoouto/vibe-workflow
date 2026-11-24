@@ -53,7 +53,7 @@ def _factor(at, now):
 
 
 def _store_key(creator, key, work_kind, size_group):
-    return f'{creator}/{key}|{work_kind}|{size_group}'
+    return f'{_lab(creator)}/{key}|{work_kind}|{size_group}'
 
 
 def _pair_ok(text):
@@ -69,7 +69,7 @@ def _parse_key(name):
             or parts[2] not in SIZE_GROUPS:
         return None
     lab, _, model = parts[0].partition('/')
-    return lab, model, parts[1], parts[2]
+    return _lab(lab), model, parts[1], parts[2]
 
 
 def _clamp(entry):
@@ -155,8 +155,8 @@ def _card(card):
                                   and _text(MODEL, rater.get('key'))):
         return None
     return dict(
-        creator=rated['creator'], key=rated['key'], family=rated['family'],
-        rater=None if rater is None else (rater['creator'], rater['key']),
+        creator=_lab(rated['creator']), key=rated['key'], family=rated['family'],
+        rater=None if rater is None else (_lab(rater['creator']), rater['key']),
         work_kind=card['work_kind'], size_group=card['size_group'], rating=card['rating'],
         session=session.lower(), comment=comment or None,
     )
@@ -177,7 +177,7 @@ def _record(card, state_dir, now):
     if clean is None:
         return _refused('invalid')
     creator, key = clean['creator'], clean['key']
-    if clean['rater'] is not None and _lab(clean['rater'][0]) == _lab(creator) and clean['rater'][1] == key:
+    if clean['rater'] == (creator, key):
         return _refused('self_rating')
     now = int(now)
     with storage._locked(Path(state_dir) / FILE, lock=LOCK) as path:
@@ -196,7 +196,7 @@ def _record(card, state_dir, now):
         entry['wr'] = entry['wr'] * factor
         entry['at'] = now
         rater = clean['rater']
-        weight = SAME_LAB_WEIGHT if rater is None or _lab(rater[0]) == _lab(creator) else 1.0
+        weight = SAME_LAB_WEIGHT if rater is None or rater[0] == creator else 1.0
         entry['w'] += weight
         entry['wr'] += weight * clean['rating']
         if entry['w'] > WEIGHT_MAX:  # scale both totals together: the mean stays
@@ -230,7 +230,7 @@ def record(card, *, state_dir, now):
 
 def adjustment(store, *, key, creator, family, work_kind, size_group, anchor, now):
     """Decayed card record for one model, kind and size: dict(sessions=int, adjustment=float)."""
-    own_key = _store_key(creator, key, work_kind, size_group)
+    creator = _lab(creator)
     sessions = set()
     own_w = own_wr = family_w = family_wr = 0.0
     for name, entry in (store or {}).get('keys', {}).items():
@@ -239,9 +239,9 @@ def adjustment(store, *, key, creator, family, work_kind, size_group, anchor, no
             continue
         lab, model, kind, size = parsed
         factor = _factor(entry['at'], now)
-        if name == own_key:
+        if (lab, model, kind, size) == (creator, key, work_kind, size_group):
             own_w, own_wr = entry['w'] * factor, entry['wr'] * factor
-        elif _lab(lab) == _lab(creator) and kind == work_kind and size == size_group \
+        elif lab == creator and kind == work_kind and size == size_group \
                 and entry['family'] == family and scores.version(model) < scores.version(key):
             family_w += entry['w'] * factor
             family_wr += entry['wr'] * factor

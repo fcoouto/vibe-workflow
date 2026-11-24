@@ -147,6 +147,18 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(result["sessions"], 3)
         self.assertLess(result["adjustment"], 0)
 
+    def test_one_canonical_lab_in_store_keys_votes_and_history(self):
+        tilde = self.rated(creator="~anthropic")
+        for number in (1, 2, 3):
+            self.record(self.card(number, 0, rated=tilde))
+        store = self.feedback.load(self.state)
+        self.assertEqual(list(store["keys"]), [ANTHROPIC_KEY])
+        self.assertTrue(all("~" not in name for name in store["votes"]))
+        self.assertEqual(self.adjust(creator="anthropic")["sessions"], 3)
+        self.assertEqual(self.adjust(creator="~anthropic")["sessions"], 3)
+        again = self.feedback.record(self.card(1, 4), state_dir=self.state, now=NOW)
+        self.assertEqual(again, dict(state="refused", reason="already_rated"))
+
     def test_one_vote_per_session_model_kind(self):
         self.record(self.card(1, 3))
         again = self.card(1, 4, size_group="long")
@@ -466,6 +478,24 @@ class FeedbackSubmitTest(unittest.TestCase):
         self.assertEqual(result, dict(state="recorded"))
         entry = feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
         self.assertAlmostEqual(entry["w"], 0.5)
+
+    def test_a_failing_score_cache_keeps_the_normalized_key_for_the_self_check(self):
+        from runtime import selector
+        with mock.patch.object(selector.scores, "load", side_effect=OSError("unreadable")):
+            result = selector.feedback_submit(
+                self.request(rater=None, rater_model=dict(provider="other-host", id="claude-x-5-2")),
+                state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="self_rating"))
+
+    def test_a_routed_rater_is_not_judged_by_its_display_id(self):
+        from runtime import feedback, selector
+        routed = self.entry(provider="openai", id="claude-x-5-2", model="gpt-6-2", family="gpt-6")
+        result = selector.feedback_submit(
+            self.request(rater=routed, rater_model=dict(provider="openai", id="claude-x-5-2")),
+            state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="recorded"))
+        entry = feedback.load(self.state)["keys"]["anthropic/claude-x-5-2|implementation|short"]
+        self.assertAlmostEqual(entry["w"], 1.0)
 
     def test_rater_model_must_be_a_provider_id_pair(self):
         from runtime import selector
