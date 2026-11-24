@@ -14,6 +14,7 @@ DAY = 86400
 
 
 OTHER_LAB = object()  # default rater sentinel; None means an unknown rater
+ANTHROPIC_KEY = "anthropic/claude-x-5-2|implementation|short"
 
 
 def session(number):
@@ -202,6 +203,80 @@ class FeedbackTest(unittest.TestCase):
         self.assertIsNone(self.feedback.load(state))
         result = self.feedback.record(self.card(1, 3), state_dir=state, now=NOW)
         self.assertEqual(result, dict(state="refused", reason="store_unsafe"))
+
+    def valid_entry(self, **changes):
+        entry = dict(w=2.0, wr=4.0, at=NOW, family="claude-x", sessions=[session(1)],
+                     comments=[], last_rater=None)
+        entry.update(changes)
+        return entry
+
+    def store_bytes(self, keys=None, votes=None):
+        if keys is None:
+            keys = {ANTHROPIC_KEY: self.valid_entry()}
+        return json.dumps(dict(version=1, keys=keys, votes=votes or {})).encode()
+
+    def assert_damaged_then_replaced(self, raw, name):
+        state = self.make_state(name)
+        self.write_store_file(raw, state=state)
+        self.assertIsNone(self.feedback.load(state))
+        self.record(self.card(1, 3), state=state)
+        self.assertEqual(self.feedback.load(state)["keys"][ANTHROPIC_KEY]["sessions"], [session(1)])
+
+    def test_baseline_store_is_valid(self):
+        self.write_store_file(self.store_bytes())
+        self.assertIsNotNone(self.feedback.load(self.state))
+
+    def test_numbers_beyond_float_range_fall_back(self):
+        cases = {"w": dict(w=10 ** 400), "wr": dict(wr=10 ** 400), "at": dict(at=10 ** 400)}
+        for name, changes in cases.items():
+            with self.subTest(field=name):
+                self.assert_damaged_then_replaced(
+                    self.store_bytes({ANTHROPIC_KEY: self.valid_entry(**changes)}), "big-" + name)
+
+    def test_malformed_stores_fall_back(self):
+        vote = f"{session(1)}|anthropic/claude-x-5-2|implementation"
+        cases = {
+            "non_hex_sessions": dict(keys={ANTHROPIC_KEY: self.valid_entry(sessions=["xyz", "not-hex", "zz"])}),
+            "too_many_sessions": dict(keys={ANTHROPIC_KEY: self.valid_entry(
+                sessions=[session(n) for n in range(11)])}),
+            "long_comment": dict(keys={ANTHROPIC_KEY: self.valid_entry(comments=["x" * 281])}),
+            "too_many_comments": dict(keys={ANTHROPIC_KEY: self.valid_entry(comments=["a", "b", "c", "d"])}),
+            "impossible_totals": dict(keys={ANTHROPIC_KEY: self.valid_entry(w=1.0, wr=6.0)}),
+            "negative_weight": dict(keys={ANTHROPIC_KEY: self.valid_entry(w=-1.0, wr=-1.0)}),
+            "bad_last_rater": dict(keys={ANTHROPIC_KEY: self.valid_entry(last_rater="no-slash")}),
+            "family_mismatch": dict(keys={ANTHROPIC_KEY: self.valid_entry(family="other")}),
+            "unknown_kind": dict(keys={"anthropic/claude-x-5-2|invented|short": self.valid_entry()}),
+            "bad_vote_name": dict(votes={"not-a-vote": NOW}),
+            "vote_not_int": dict(votes={vote: "soon"}),
+        }
+        for name, changes in cases.items():
+            with self.subTest(store=name):
+                self.assert_damaged_then_replaced(self.store_bytes(**changes), "bad-" + name)
+
+    def test_store_counts_are_bounded(self):
+        keys = {f"anthropic/{m}-1|implementation|short": self.valid_entry(family=m)
+                for m in ("alpha", "beta", "gamma")}
+        with mock.patch.multiple(self.feedback, MAX_KEYS=2):
+            self.assert_damaged_then_replaced(self.store_bytes(keys=keys), "too-many-keys")
+        votes = {f"{session(n)}|anthropic/claude-x-5-2|implementation": NOW for n in (1, 2)}
+        with mock.patch.multiple(self.feedback, MAX_VOTES=1):
+            self.assert_damaged_then_replaced(self.store_bytes(votes=votes), "too-many-votes")
+
+    def test_oversized_write_is_refused_as_store_full(self):
+        with mock.patch("runtime.storage.MAX_FILE", 100):
+            result = self.feedback.record(self.card(1, 3), state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="store_full"))
+        self.assertIsNone(self.feedback.load(self.state))
+
+    def test_unexpected_failure_is_store_error(self):
+        with mock.patch("runtime.storage._write", side_effect=RuntimeError("synthetic")):
+            result = self.feedback.record(self.card(1, 3), state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="store_error"))
+
+    def test_unknown_work_kind_refused(self):
+        result = self.feedback.record(self.card(1, 3, work_kind="invented"), state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="invalid"))
+        self.assertIsNone(self.feedback.load(self.state))
 
     def test_bounds(self):
         with mock.patch.multiple(self.feedback, MAX_KEYS=3, MAX_VOTES=3):

@@ -6,6 +6,7 @@ from pathlib import Path
 import math
 import re
 
+from runtime import routing
 from runtime import scores
 from runtime import storage
 
@@ -21,10 +22,12 @@ COMMENT_MAX = 280
 SIZE_GROUPS = ('short', 'long')
 SAME_LAB_WEIGHT = 0.5
 FAMILY_WEIGHT = 0.5
+WEIGHT_MAX = 10 ** 6  # a sanity bound on stored totals, far above any real count
+AT_MAX = 10 ** 15  # a sanity bound on stored times (seconds)
+TOTAL_TOLERANCE = 1e-6
 LAB = re.compile(r'~?[a-z0-9][a-z0-9-]{0,63}')
 MODEL = re.compile(r'[a-z0-9][a-z0-9-]{0,127}')
 FAMILY = re.compile(r'[a-z0-9-]{0,128}')
-KIND = re.compile(r'[a-z][a-z-]{0,31}')
 SESSION = re.compile(r'[0-9a-fA-F]{16,64}')
 
 
@@ -32,8 +35,13 @@ def _text(pattern, value):
     return type(value) is str and pattern.fullmatch(value) is not None
 
 
-def _number(value):
-    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+def _bounded(value, limit):
+    """A finite number in [0, limit]. Range-checked first, so huge ints never reach float conversion."""
+    return type(value) in (int, float) and 0 <= value <= limit
+
+
+def _at(value):
+    return type(value) is int and 0 <= value <= AT_MAX
 
 
 def _factor(at, now):
@@ -44,36 +52,55 @@ def _store_key(creator, key, work_kind, size_group):
     return f'{creator}/{key}|{work_kind}|{size_group}'
 
 
+def _pair_ok(text):
+    """A `creator/key` string with valid parts."""
+    lab, slash, model = text.partition('/') if type(text) is str else ('', '', '')
+    return bool(slash and LAB.fullmatch(lab) and MODEL.fullmatch(model))
+
+
 def _parse_key(name):
     """(lab, model key, work kind, size group) of a stored key, or None when malformed."""
     parts = name.split('|') if type(name) is str else []
-    if len(parts) != 3:
+    if len(parts) != 3 or not _pair_ok(parts[0]) or parts[1] not in routing.WORK_KINDS \
+            or parts[2] not in SIZE_GROUPS:
         return None
-    lab, slash, model = parts[0].partition('/')
-    if not slash or not (LAB.fullmatch(lab) and MODEL.fullmatch(model)
-                         and KIND.fullmatch(parts[1]) and parts[2] in SIZE_GROUPS):
-        return None
+    lab, _, model = parts[0].partition('/')
     return lab, model, parts[1], parts[2]
 
 
-def _entry_ok(entry):
-    return type(entry) is dict and _number(entry.get('w')) and _number(entry.get('wr')) \
-        and type(entry.get('at')) is int and entry['at'] >= 0 and _text(FAMILY, entry.get('family')) \
-        and type(entry.get('sessions')) is list and len(entry['sessions']) <= MAX_SESSIONS \
-        and all(type(item) is str for item in entry['sessions']) \
-        and type(entry.get('comments')) is list and len(entry['comments']) <= MAX_COMMENTS \
-        and all(type(item) is str for item in entry['comments']) \
-        and (entry.get('last_rater') is None or type(entry['last_rater']) is str)
+def _entry_ok(name, entry):
+    parsed = _parse_key(name)
+    if parsed is None or type(entry) is not dict:
+        return False
+    w, wr, sessions, comments = entry.get('w'), entry.get('wr'), entry.get('sessions'), entry.get('comments')
+    return _bounded(w, WEIGHT_MAX) and _bounded(wr, 5 * WEIGHT_MAX) \
+        and wr <= 5 * w + TOTAL_TOLERANCE * (1 + w) \
+        and _at(entry.get('at')) \
+        and _text(FAMILY, entry.get('family')) and entry['family'] == scores.family_key(parsed[1]) \
+        and type(sessions) is list and len(sessions) <= MAX_SESSIONS \
+        and all(_text(SESSION, item) for item in sessions) \
+        and type(comments) is list and len(comments) <= MAX_COMMENTS \
+        and all(type(item) is str and len(item) <= COMMENT_MAX for item in comments) \
+        and (entry.get('last_rater') is None or _pair_ok(entry['last_rater']))
+
+
+def _vote_ok(name, at):
+    parts = name.split('|') if type(name) is str else []
+    return len(parts) == 3 and _text(SESSION, parts[0]) and _pair_ok(parts[1]) \
+        and parts[2] in routing.WORK_KINDS and _at(at)
 
 
 def _valid(value):
-    """The store when its shape is right, else None (the caller treats it as damaged)."""
+    """The store when every field has its specified shape and bound, else None (the caller treats it as damaged)."""
     if type(value) is not dict or type(value.get('version')) is not int or value['version'] != 1 \
             or type(value.get('keys')) is not dict or type(value.get('votes')) is not dict:
         return None
-    if not all(_parse_key(name) and _entry_ok(entry) for name, entry in value['keys'].items()):
+    keys, votes = value['keys'], value['votes']
+    if len(keys) > MAX_KEYS or len(votes) > MAX_VOTES:
         return None
-    if not all(type(name) is str and type(at) is int for name, at in value['votes'].items()):
+    if not all(_entry_ok(name, entry) for name, entry in keys.items()):
+        return None
+    if not all(_vote_ok(name, at) for name, at in votes.items()):
         return None
     return value
 
@@ -96,10 +123,10 @@ def _read(path):
 
 
 def load(state_dir):
-    """The store, or None when missing, damaged, unsafe or unreadable."""
+    """The store, or None when missing, damaged, unsafe or unreadable. Never raises."""
     try:
         return _read(Path(state_dir) / FILE)
-    except (OSError, ValueError, RecursionError, TypeError):
+    except Exception:  # any read problem means no adjustment, never an error in a pick
         return None
 
 
@@ -111,9 +138,9 @@ def _card(card):
     session, comment = card.get('session'), card.get('comment')
     if not (_text(LAB, rated.get('creator')) and _text(MODEL, rated.get('key'))
             and _text(FAMILY, rated.get('family')) and rated['family'] == scores.family_key(rated['key'])
-            and _text(KIND, card.get('work_kind'))
+            and card.get('work_kind') in routing.WORK_KINDS
             and card.get('size_group') in SIZE_GROUPS and type(card.get('rating')) is int
-            and 0 <= card['rating'] <= 5 and type(session) is str and SESSION.fullmatch(session)
+            and 0 <= card['rating'] <= 5 and _text(SESSION, session)
             and (comment is None or type(comment) is str and len(comment) <= COMMENT_MAX)):
         return None
     if rater is not None and not (type(rater) is dict and _text(LAB, rater.get('creator'))
@@ -180,8 +207,10 @@ def record(card, *, state_dir, now):
     """Store one card: dict(state='recorded') or dict(state='refused', reason=...). Never raises."""
     try:
         return _record(card, Path(state_dir), now)
-    except (OSError, ValueError, TypeError, RecursionError):
-        return _refused('store_unsafe')
+    except storage.StorageError as error:
+        return _refused('store_full' if str(error) == 'observation_store_full' else 'store_unsafe')
+    except Exception:  # never raise; the reason names the failure class without hiding it as "unsafe"
+        return _refused('store_error')
 
 
 def adjustment(store, *, key, creator, family, work_kind, size_group, anchor, now):
