@@ -289,6 +289,33 @@ class FeedbackTest(unittest.TestCase):
         self.assertLessEqual(stored["w"], bound)
         self.assertGreater(stored["wr"] / stored["w"], 3)
 
+    def test_rating_total_at_its_edge_stays_valid(self):
+        for name, wr in (("exact", 5 * 999999.9), ("over-tolerance", 5000000)):
+            with self.subTest(start=name):
+                state = self.make_state(name)
+                self.write_store_file(self.store_bytes({ANTHROPIC_KEY: self.valid_entry(
+                    w=999999.9, wr=float(wr))}), state=state)
+                self.record(self.card(2, 5), state=state)
+                store = self.feedback.load(state)
+                self.assertIsNotNone(store)
+                stored = store["keys"][ANTHROPIC_KEY]
+                self.assertLessEqual(stored["wr"], 5 * stored["w"])
+
+    def test_store_failing_validation_is_never_written(self):
+        self.write_store_file(self.store_bytes())
+        before = (self.state / self.feedback.FILE).read_bytes()
+        real = self.feedback._valid
+        calls = []
+
+        def reject_the_write_check(value):
+            calls.append(value)
+            return real(value) if len(calls) == 1 else None
+
+        with mock.patch.object(self.feedback, "_valid", side_effect=reject_the_write_check):
+            result = self.feedback.record(self.card(2, 3), state_dir=self.state, now=NOW)
+        self.assertEqual(result, dict(state="refused", reason="store_error"))
+        self.assertEqual((self.state / self.feedback.FILE).read_bytes(), before)
+
     def test_bounds(self):
         with mock.patch.multiple(self.feedback, MAX_KEYS=3, MAX_VOTES=3):
             for index, name in enumerate(("alpha-1", "beta-1", "gamma-1", "delta-1")):

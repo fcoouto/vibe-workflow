@@ -24,7 +24,6 @@ SAME_LAB_WEIGHT = 0.5
 FAMILY_WEIGHT = 0.5
 WEIGHT_MAX = 10 ** 6  # a sanity bound on stored totals, far above any real count
 AT_MAX = 10 ** 15  # a sanity bound on stored times (seconds)
-TOTAL_TOLERANCE = 1e-6
 LAB = re.compile(r'~?[a-z0-9][a-z0-9-]{0,63}')
 MODEL = re.compile(r'[a-z0-9][a-z0-9-]{0,127}')
 FAMILY = re.compile(r'[a-z0-9-]{0,128}')
@@ -68,13 +67,17 @@ def _parse_key(name):
     return lab, model, parts[1], parts[2]
 
 
+def _clamp(entry):
+    """Keep the rating total in its exact range, 0 <= wr <= 5 * w, after every write-side change."""
+    entry['wr'] = min(max(entry['wr'], 0.0), 5 * entry['w'])
+
+
 def _entry_ok(name, entry):
     parsed = _parse_key(name)
     if parsed is None or type(entry) is not dict:
         return False
     w, wr, sessions, comments = entry.get('w'), entry.get('wr'), entry.get('sessions'), entry.get('comments')
-    return _bounded(w, WEIGHT_MAX) and _bounded(wr, 5 * WEIGHT_MAX) \
-        and wr <= 5 * w + TOTAL_TOLERANCE * (1 + w) \
+    return _bounded(w, WEIGHT_MAX) and _bounded(wr, 5 * WEIGHT_MAX) and wr <= 5 * w \
         and _at(entry.get('at')) \
         and _text(FAMILY, entry.get('family')) and entry['family'] == scores.family_key(parsed[1]) \
         and type(sessions) is list and len(sessions) <= MAX_SESSIONS \
@@ -191,10 +194,11 @@ def _record(card, state_dir, now):
         weight = SAME_LAB_WEIGHT if rater is None or rater[0] == creator else 1.0
         entry['w'] += weight
         entry['wr'] += weight * clean['rating']
-        if entry['w'] > WEIGHT_MAX:  # scale both totals together: the mean stays, the store stays valid
+        if entry['w'] > WEIGHT_MAX:  # scale both totals together: the mean stays
             scale = WEIGHT_MAX / entry['w']
             entry['w'] = float(WEIGHT_MAX)
             entry['wr'] *= scale
+        _clamp(entry)
         entry['family'] = clean['family']
         if clean['session'] not in entry['sessions']:
             entry['sessions'] = (entry['sessions'] + [clean['session']])[-MAX_SESSIONS:]
@@ -203,6 +207,8 @@ def _record(card, state_dir, now):
         entry['last_rater'] = None if rater is None else f'{rater[0]}/{rater[1]}'
         _trim(store['votes'], MAX_VOTES - 1, store['votes'].get)
         store['votes'][vote] = now
+        if _valid(store) is None:  # never write a store the loader would reject
+            return _refused('store_error')
         storage._write(path, store)
     return dict(state='recorded')
 
