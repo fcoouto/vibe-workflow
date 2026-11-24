@@ -143,13 +143,15 @@ class SelectionTest(unittest.TestCase):
                                               ("claude-agent", "claude-sonnet-5-5"), ("openai", "gpt-6-2-sol"))]
         self.warm()
         short = self.run_select(self.request(work_kind="review"))
-        self.assertEqual(short["route"]["effort"], "medium")
+        self.assertEqual(short["route"]["effort"], "high")
         long = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=6)))
-        self.assertEqual(long["route"]["effort"], "high")
+        self.assertEqual(long["route"]["effort"], "xhigh")
         edge = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=2)))
-        self.assertEqual((edge["route"]["effort"], edge["size_group"]), ("high", "long"))
+        self.assertEqual((edge["route"]["effort"], edge["size_group"]), ("xhigh", "long"))
         under = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=1.9)))
-        self.assertEqual((under["route"]["effort"], under["size_group"]), ("medium", "short"))
+        self.assertEqual((under["route"]["effort"], under["size_group"]), ("high", "short"))
+        writing = self.run_select(self.request(work_kind="writing"))
+        self.assertEqual((writing["level"], writing["route"]["effort"]), (1, "medium"))
 
     def test_huge_hour_estimate_is_invalid_request_not_an_exception(self):
         self.warm()

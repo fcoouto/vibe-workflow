@@ -83,8 +83,10 @@ def size_group(task):
     return 'long' if task.get('estimate_agentic_effort_hours', 0) >= LONG_HOURS else 'short'
 
 
-def effort_for(level, variants, long=False):
-    target = EFFORTS.index(('medium', 'medium', 'high')[level - 1]) + (1 if long else 0)
+def effort_for(level, variants, long=False, work_kind=None):
+    # Writing (and a caller with no work kind, such as council seats) follows the level; every other kind starts at high.
+    base = ('medium', 'medium', 'high')[level - 1] if work_kind in (None, 'writing') else 'high'
+    target = EFFORTS.index(base) + (1 if long else 0)
     known = sorted(EFFORTS.index(v) for v in variants if v in EFFORTS)
     if not known:
         return None

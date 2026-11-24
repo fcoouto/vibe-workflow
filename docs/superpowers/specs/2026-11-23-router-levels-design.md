@@ -110,7 +110,8 @@ today's scores. They are policy values, not measured thresholds.
   97% of the bar and priced at most half the cheapest qualifying price is also
   eligible.
 - Effort still follows the task's level (low, medium, high), not the model's.
-  (Since 0.12.0: medium, medium, high; see the feedback design's amendment.)
+  (Since 0.12.0: medium, medium, high. Since 0.13.0: high at every level for every kind of work but writing,
+  which keeps medium, medium, high; see the feedback design's amendments.)
 
 ### Nothing reaches the level
 
