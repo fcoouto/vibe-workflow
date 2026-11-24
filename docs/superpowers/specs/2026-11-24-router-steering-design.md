@@ -51,19 +51,25 @@ nothing, silently.
 2. **`excluded_models`** matches a route when an entry equals any of: the route's
    model name; its `provider/model` with any `#variant` removed (so a pick's
    `model_ref` works); its catalog key (`pool['keys']`); its route name. Entries
-   that match no runnable route (before any other filter) are returned in the
-   answer as `unmatched: [...]` (only when non-empty), never blocking.
+   that match no route built from the request's `models` (before eligibility,
+   quota or scoring; catalog keys computed for every route) are returned in every
+   answer, including early `no_selection` ones, as `unmatched: [...]` (only when
+   non-empty), never blocking.
 3. **`reviewing`**: a new optional top-level request field, a string `model_ref`
-   (`provider/model` or `provider/model#variant`). The router resolves its lab
+   (`provider/model` or `provider/model#variant`; a value without one `/` and
+   non-empty parts is `invalid_request`). The router resolves its lab
    from the catalog: from the request's `models` list when the provider and model
    match a runnable route (as `rater_id` does), otherwise from the id
    (`_model_identity`). Labs are canonical (a leading `~` stripped).
-   - Among the qualifying ordered candidates, those from a different lab come
-     first; the pick and alternatives are taken from them when any exist.
-   - If none from another lab qualifies, or the lab is unknown, the normal pick is
-     returned. The answer carries `reviewer_independent: true | false` whenever
+   - When candidates from a different lab qualify for the task's level, the pick
+     and alternatives are taken only from them, in the usual order.
+   - If none from another lab qualifies, the lab is unknown, or the answer falls
+     back below the level, the normal pick is returned unchanged (the below-level
+     fallback is never reordered, so "the strongest available" stays true). The answer carries `reviewer_independent: true | false` whenever
      `reviewing` is given (false also for an unknown lab).
-   - The plugin adds a notice once per session when it is false: "vibe-workflow:
+   - The plugin adds a notice once per session when it is false (it persists for
+     the session like the below-level notice; when both apply, the below-level one
+     is shown): "vibe-workflow:
      No reviewer from a different lab than the reviewed work reaches this task's
      level; Smart Router recommended the usual pick." (no model names).
    - It applies to any work kind, but the descriptions present it for reviews
