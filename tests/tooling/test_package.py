@@ -141,7 +141,7 @@ await plugin.setup({
   skill: { transform: async f => f({ add: s => skills.push(s) }) },
   session: { hook: async () => {} },
 })
-assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_council_roster', 'vibe_workflow_onboard'])
+assert.deepEqual(tools.sort(), ['smart_router_feedback', 'smart_router_select', 'vibe_council_roster', 'vibe_workflow_onboard'])
 assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project'],
   ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace'], ['vibe-pull-requests', 'vibe-pull-requests'], ['vibe-council', 'vibe-council'],
   ['vibe-project-layout', 'vibe-project-layout']])

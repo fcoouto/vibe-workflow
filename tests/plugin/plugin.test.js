@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { mkdtempSync } from "node:fs"
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -33,7 +34,8 @@ function host(directory, options = {}, models, extra = {}) {
       add: (tool) => tools.set(tool.name, tool),
     }) },
     skill: { transform: async (callback) => callback({ add: () => {} }) },
-    session: { hook: async (name, callback, opts) => { hooks.set(name, callback); hookOptions.set(name, opts) } },
+    session: { hook: async (name, callback, opts) => { hooks.set(name, callback); hookOptions.set(name, opts) },
+      get: async () => undefined },
     ...(models && { model: { list: typeof models === "function" ? models : async () => models } }),
     ...extra,
   }
@@ -55,7 +57,8 @@ test("registers onboarding and keeps the native tool and existing context untouc
   const original = h.tools.get("subagent")
   await plugin.setup(h.ctx)
   assert.equal(plugin.id, "vibe-workflow")
-  assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "vibe_workflow_onboard", "vibe_council_roster"])
+  assert.deepEqual([...h.tools.keys()], ["subagent", "smart_router_select", "smart_router_feedback",
+    "vibe_workflow_onboard", "vibe_council_roster"])
   assert.equal(h.tools.get("subagent"), original)
   assert.deepEqual([...h.hooks.keys()], ["context", "http.response"])
   assert.deepEqual(h.hookOptions.get("http.response"), { providerID: "openai" })
@@ -954,4 +957,175 @@ test("a host without the tool hook gets no pull request push", async (t) => {
   t.after(n.done)
   const { system } = await n.step()
   assert.deepEqual(system, [])
+})
+
+const FEEDBACK_HINT = "After the subagent reports, you may rate its work with smart_router_feedback and this pick_id."
+const otherModel = info({ id: "other", modelID: "other", providerID: "claude-agent", family: "other", variants: [] })
+const picked = { state: "selected", reason: null, size_group: "short", level: 1,
+  route: { provider: "openai", model: "gpt-x", effort: "high", catalog_id: { key: "gpt-x", creator: "openai", family: "gpt" },
+    feedback: { sessions: 0, adjustment: 0 } },
+  alternatives: [{ provider: "claude-agent", model: "other", catalog_id: { key: "other", creator: "anthropic", family: "other" },
+    feedback: { sessions: 0, adjustment: 0 } }],
+  admission: false, reservation: false, spend_permit: false }
+// One stub: a selection answer from answer.json, and a feedback reply it chooses (default recorded).
+const picking = (reply = '{"state":"recorded"}') => `import json, sys
+from pathlib import Path
+if "--feedback" in sys.argv:
+    Path("feedback-stdin").write_text(sys.stdin.read())
+    Path("feedback-argv").write_text(" ".join(sys.argv))
+    print(${JSON.stringify(reply)})
+else:
+    sys.stdin.read()
+    print(Path("answer.json").read_text())
+`
+async function pickFixture(reply) {
+  const f = await fixture(picking(reply), listed(info(), otherModel))
+  await writeFile(join(f.root, "answer.json"), JSON.stringify(picked))
+  return f
+}
+const rate = (f, input, sessionID = "ses_test") =>
+  f.h.tools.get("smart_router_feedback").execute(input, { signal: new AbortController().signal, sessionID }).then((r) => JSON.parse(r.content))
+const pickOf = async (f) => JSON.parse((await f.execute()).content).pick_id
+const sentFeedback = async (f) => JSON.parse(await readFile(join(f.root, "feedback-stdin"), "utf8"))
+
+test("a selected pick carries a pick_id and the feedback hint; no selection carries neither", async () => {
+  const f = await pickFixture()
+  try {
+    const answer = JSON.parse((await f.execute()).content)
+    assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
+    assert.equal(answer.feedback_hint, FEEDBACK_HINT)
+    await writeFile(join(f.root, "answer.json"), answerWith({}))
+    const none = JSON.parse((await f.execute()).content)
+    assert.ok(!("pick_id" in none))
+    assert.ok(!("feedback_hint" in none))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("feedback is ignored for an unknown pick, another session, or Smart Router off", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    const input = { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }
+    assert.deepEqual(await rate(f, { ...input, pick_id: "0123456789abcdef" }), { state: "ignored" })
+    assert.deepEqual(await rate(f, input, "ses_other"), { state: "ignored" })
+    await preference(f.root, false)
+    assert.deepEqual(await rate(f, input), { state: "ignored" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a model ref that was not offered is refused before the selector runs", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/other#high", rating: 4 }),
+      { state: "refused", reason: "not_offered" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a valid rating reaches the selector with the card, session hash and rater, never the comment", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    f.h.ctx.session.get = async () => ({ model: { providerID: "claude-agent", id: "other" } })
+    const answer = await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4, comment: "PRIVATE-COMMENT" })
+    assert.deepEqual(answer, { state: "recorded" })
+    assert.ok(!JSON.stringify(answer).includes("PRIVATE-COMMENT"))
+    const request = await sentFeedback(f)
+    assert.deepEqual(Object.keys(request).sort(),
+      ["comment", "rated", "rater_entry", "rating", "session", "size_group", "v", "work_kind"])
+    assert.equal(request.v, 1)
+    assert.deepEqual(request.rated, { key: "gpt-x", creator: "openai", family: "gpt" })
+    assert.equal(request.work_kind, "review")
+    assert.equal(request.size_group, "short")
+    assert.equal(request.rating, 4)
+    assert.equal(request.comment, "PRIVATE-COMMENT")
+    assert.equal(request.session, createHash("sha256").update("ses_test").digest("hex").slice(0, 32))
+    assert.equal(request.rater_entry.provider, "claude-agent")
+    assert.equal(request.rater_entry.id, "other")
+    assert.equal("name" in request.rater_entry, false)
+    assert.match(await readFile(join(f.root, "feedback-argv"), "utf8"), /--feedback/)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a rater the host cannot name sends rater_entry null", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    const input = { pick_id, model_ref: "openai/gpt-x#high", rating: 3 }
+    const cases = [
+      () => { delete f.h.ctx.session.get },
+      () => { f.h.ctx.session.get = async () => { throw Error("gone") } },
+      () => { f.h.ctx.session.get = async () => ({}) },
+      () => { f.h.ctx.session.get = async () => ({ model: { providerID: "claude-agent", id: "unlisted" } }) },
+    ]
+    for (const arrange of cases) {
+      arrange()
+      assert.deepEqual(await rate(f, input), { state: "recorded" })
+      assert.equal((await sentFeedback(f)).rater_entry, null)
+    }
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("rating a pick with the model that made it is refused before the selector runs", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    f.h.ctx.session.get = async () => ({ model: { providerID: "openai", id: "gpt-x" } })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 5 }),
+      { state: "refused", reason: "self_rating" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a dispatch at another effort still counts as the offered model", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#low", rating: 2 }), { state: "recorded" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a selector that cannot answer feedback reports failed", async () => {
+  const f = await pickFixture("garbage")
+  try {
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "failed" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("the select and feedback descriptions teach the plan rule, the hours and the rating scale", async () => {
+  const h = host(await realpath(await mkdtemp(join(tmpdir(), "router-text-"))))
+  await (await load()).setup(h.ctx)
+  const select = h.tools.get("smart_router_select")
+  assert.ok(select.description.length < 2048)
+  assert.match(select.description, /one task of a written plan/)
+  assert.match(select.description, /estimate_agentic_effort_hours/)
+  assert.match(select.description, /One request per delegated task\. Rate risk by what a mistake would cost/)
+  assert.doesNotMatch(select.description, /Rate the task, not the project/)
+  assert.doesNotMatch(select.description, /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
+  const feedback = h.tools.get("smart_router_feedback")
+  assert.equal(feedback.description, "Optional. Rate a subagent's finished work for a Smart Router pick: 0 = failed, " +
+    "3 = met the stated checks, 5 = met them with no rework needed. Skip it when the brief was at fault or the provider " +
+    "failed. One card per session, model and kind of work. Ratings adjust later picks on this machine; Smart Router sends nothing.")
+  assert.doesNotMatch(feedback.description, /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
+})
+
+test("the select schema bounds the hours and lists the four constraint fields; feedback bounds its input", async () => {
+  const h = host(await realpath(await mkdtemp(join(tmpdir(), "router-schema2-"))))
+  await (await load()).setup(h.ctx)
+  const { properties } = h.tools.get("smart_router_select").input
+  assert.deepEqual(properties.task.properties.estimate_agentic_effort_hours, { type: "number", minimum: 0, maximum: 100 })
+  assert.equal(properties.constraints.type, "object")
+  assert.equal(properties.constraints.additionalProperties, false)
+  assert.deepEqual(Object.keys(properties.constraints.properties),
+    ["allowed_models", "excluded_models", "allowed_efforts", "allowed_harnesses"])
+  for (const key of Object.keys(properties.constraints.properties))
+    assert.deepEqual(properties.constraints.properties[key], { type: "array", items: { type: "string" } })
+  const feedback = h.tools.get("smart_router_feedback").input
+  assert.equal(feedback.additionalProperties, false)
+  assert.deepEqual(feedback.required, ["pick_id", "model_ref", "rating"])
+  assert.deepEqual(feedback.properties.rating, { type: "integer", minimum: 0, maximum: 5 })
+  assert.deepEqual(feedback.properties.comment, { type: "string", maxLength: 280 })
 })

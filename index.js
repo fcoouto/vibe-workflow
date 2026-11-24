@@ -1,5 +1,6 @@
 // OpenCode V2's structural server-plugin contract; no SDK dependency is needed.
 import { spawn } from "node:child_process"
+import { createHash, randomBytes } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
@@ -13,6 +14,8 @@ import { registerSessionTitles } from "./src/session-titles.js"
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
 const MAX_NOTICE_SESSIONS = 128
+const MAX_PICKS = 64
+const FEEDBACK_HINT = "After the subagent reports, you may rate its work with smart_router_feedback and this pick_id."
 const blocked = () => ({
   state: "blocked", reason: "selector_unavailable", route: null, excluded: [],
   admission: false, reservation: false, spend_permit: false,
@@ -42,6 +45,17 @@ const ROUTER_NOTE =
   "facts: files, spec, risk. If it has no recommendation, show its notice in chat when present. Do not retry " +
   "automatically or override a native denial; routing grants no launch or spending authority."
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
+// Every model a pick offers, keyed provider/model: feedback matches a dispatch against these, not against the route text.
+function pickRefs(answer) {
+  const refs = new Map()
+  for (const entry of [answer.route, ...(Array.isArray(answer.alternatives) ? answer.alternatives : [])]) {
+    const id = entry?.catalog_id
+    if (typeof entry?.provider !== "string" || typeof entry?.model !== "string" || !id || typeof id !== "object") continue
+    refs.set(`${entry.provider}/${entry.model}`, { provider: entry.provider, model: entry.model,
+      catalog_id: { key: id.key, creator: id.creator, family: id.family } })
+  }
+  return refs
+}
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
 
@@ -75,6 +89,7 @@ function withModelRef(answer) {
   return { ...answer, ...(answer.route !== undefined && { route: modelRef(answer.route) }),
     ...(Array.isArray(answer.alternatives) && { alternatives: answer.alternatives.map(modelRef) }) }
 }
+const stringList = () => ({ type: "array", items: { type: "string" } })
 const input = {
   type: "object", additionalProperties: false, required: ["v", "work_kind", "task"],
   properties: {
@@ -83,18 +98,30 @@ const input = {
     task: {
       type: "object", additionalProperties: false, required: Object.keys(rubric),
       properties: { ...Object.fromEntries(Object.entries(rubric).map(([key, values]) => [key, { enum: values }])),
-        context_tokens: { type: "integer", minimum: 0 } },
+        context_tokens: { type: "integer", minimum: 0 },
+        estimate_agentic_effort_hours: { type: "number", minimum: 0, maximum: 100 } },
     },
-    constraints: { type: "object" },
+    constraints: { type: "object", additionalProperties: false, properties: {
+      allowed_models: stringList(), excluded_models: stringList(), allowed_efforts: stringList(),
+      allowed_harnesses: stringList() } },
   },
 }
+const feedbackInput = { type: "object", additionalProperties: false, required: ["pick_id", "model_ref", "rating"],
+  properties: { pick_id: { type: "string" }, model_ref: { type: "string" },
+    rating: { type: "integer", minimum: 0, maximum: 5 }, comment: { type: "string", maxLength: 280 } } }
+const feedbackDescription = "Optional. Rate a subagent's finished work for a Smart Router pick: 0 = failed, 3 = met the " +
+  "stated checks, 5 = met them with no rework needed. Skip it when the brief was at fault or the provider failed. One " +
+  "card per session, model and kind of work. Ratings adjust later picks on this machine; Smart Router sends nothing."
 // Read by the agent where it asks for a model; the stakes design's "Texts" section owns the wording.
-const definitions = "Rate the task, not the project, by what a mistake in it would cost, not by its size. risk: critical = " +
+const definitions = "One request per delegated task. Rate risk by what a mistake would cost, not by the task's size; " +
+  "give the size in estimate_agentic_effort_hours, the hours the delegated agent will work, not a person's. risk: critical = " +
   "a mistake could lose real money, expose credentials, break production or users' data, or cannot be undone by a " +
   "revert, including config, flags, helpers or fixtures that feed such a path; shared = it changes code, data or " +
   "interfaces that other work depends on; reversible = local and undone by a revert. Unsure whether it is critical: " +
-  "say critical. spec: exact = a written plan names the files, the expected behavior and the checks that tell success " +
-  "from failure; prose = described in words; open = approach undecided. files: files changed; cross-system = changes " +
+  "say critical. spec: exact = this request is one task of a written plan that names its files, its expected behavior " +
+  "and the checks that tell success from failure, and leaves the builder nothing to decide; several plan tasks in one " +
+  "request, or any open choice, is prose. Unsure whether it is exact: say prose. prose = described in words; open = " +
+  "approach undecided. files: files changed; cross-system = changes " +
   "in more than one repository or deployed service that must stay compatible with each other. Implementing or testing " +
   "an exact plan stays at level 1 unless cross-system; its reviews carry the risk. To review a design or plan, use " +
   "work_kind planning. To review a diff, give the risk and files of the work reviewed, spec exact if it was built from " +
@@ -112,6 +139,16 @@ export default {
       process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "vibe-workflow", "smart-router")
     const active = new Set()
     const notices = new Map()
+    // session → Map(pick_id → { work_kind, size_group, refs }), bounded like notices.
+    const picks = new Map()
+    const remember = (sessionID, pickID, pick) => {
+      const book = picks.get(sessionID) ?? new Map()
+      picks.delete(sessionID)
+      picks.set(sessionID, book)
+      book.set(pickID, pick)
+      if (book.size > MAX_PICKS) book.delete(book.keys().next().value)
+      if (picks.size > MAX_NOTICE_SESSIONS) picks.delete(picks.keys().next().value)
+    }
     let closed = false
     const project = createProjectSettings(directory)
     // Only models on a path the router knows can be routed; this also keeps the request under MAX_BYTES.
@@ -147,8 +184,8 @@ export default {
     }
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
       const setup = operation === "check_setup", council = operation === "council", pick = operation === "council_pick"
-      const refresh = operation === "refresh", mark = operation === "mark"
-      const fallback = () => council || pick ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
+      const refresh = operation === "refresh", mark = operation === "mark", rate = operation === "feedback"
+      const fallback = () => council || pick || rate ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
       if (closed || signal?.aborted || typeof directory !== "string" || !isAbsolute(directory)
@@ -169,11 +206,12 @@ export default {
           if (mark) args.push("--chatgpt-limit")
           if (council) args.push("--council-roster")
           if (pick) args.push("--council-pick")
+          if (rate) args.push("--feedback")
           child = spawn("python3", args, { cwd: directory, stdio: ["pipe", "pipe", "ignore"] })
         } catch { resolve(fallback()); return }
         active.add(stop)
         signal?.addEventListener("abort", stop, { once: true })
-        timer = setTimeout(stop, refresh ? 15000 : mark ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
+        timer = setTimeout(stop, refresh ? 15000 : mark || rate ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
         child.stdin.on("error", stop)
         child.stdout.on("data", (chunk) => {
           size += chunk.length
@@ -199,6 +237,10 @@ export default {
               if (value.state !== (pick ? "picked" : "checked") || !Array.isArray(value.seats)
                 || ["admission", "reservation", "spend_permit"].some((key) => value[key] !== false)) throw Error()
               return resolve(value)
+            }
+            if (rate) {
+              if (!["recorded", "refused", "failed"].includes(value.state)) throw Error()
+              return resolve(value.state === "refused" ? { state: value.state, reason: value.reason } : { state: value.state })
             }
             if (!["selected", "no_selection", "blocked"].includes(value.state)
               || ["admission", "reservation", "spend_permit"].some((key) => value[key] !== false)
@@ -237,7 +279,7 @@ export default {
       execute: async (request, { signal, sessionID }) => {
         const preference = await project.inspect()
         if (preference.state !== "on") {
-          if (preference.state === "off") notices.clear()
+          if (preference.state === "off") { notices.clear(); picks.clear() }
           const reason = preference.state === "off" ? "project_disabled" :
             preference.state === "not_onboarded" ? "project_not_onboarded" : "project_settings_invalid"
           return { content: JSON.stringify({ ...blocked(), state: "no_selection", reason, notice: null }) }
@@ -252,11 +294,11 @@ export default {
           refreshLater(refresh)
         }
         let notice = null
+        const identified = typeof sessionID === "string" && sessionID.length > 0 && sessionID.length <= 256
         const belowLevel = answer.state === "selected" && answer.below_level === true && Number.isSafeInteger(answer.level)
         if (answer.state === "selected" && !belowLevel) forgetFailures(notices, sessionID)
         else if (!closed && !signal?.aborted) {
           const [cause, message] = belowLevel ? belowLevelAdvice(answer.level) : failureAdvice(answer)
-          const identified = typeof sessionID === "string" && sessionID.length > 0 && sessionID.length <= 256
           const seen = identified ? notices.get(sessionID) ?? new Set() : new Set()
           if (!seen.has(cause)) notice = message
           if (identified) {
@@ -266,7 +308,51 @@ export default {
             if (notices.size > MAX_NOTICE_SESSIONS) notices.delete(notices.keys().next().value)
           }
         }
-        return { content: JSON.stringify({ ...withModelRef(answer), notice }) }
+        // A pick is rateable only with its session and the size group the selector reports.
+        let pickFields = null
+        const refs = answer.state === "selected" && identified && !closed && typeof answer.size_group === "string"
+          ? pickRefs(answer) : new Map()
+        if (refs.size) {
+          const pickID = randomBytes(8).toString("hex")
+          remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs })
+          pickFields = { pick_id: pickID, feedback_hint: FEEDBACK_HINT }
+        }
+        return { content: JSON.stringify({ ...withModelRef(answer), ...pickFields, notice }) }
+      },
+    }))
+    // The session's model, or null when the host cannot name it; never throws.
+    async function ratedModel(sessionID) {
+      try {
+        const model = (await ctx.session.get({ sessionID }))?.model
+        return typeof model?.providerID === "string" && typeof model?.id === "string"
+          ? { providerID: model.providerID, id: model.id } : null
+      } catch { return null }
+    }
+    await ctx.tool.transform((editor) => editor.add({
+      name: "smart_router_feedback",
+      description: feedbackDescription,
+      input: feedbackInput,
+      execute: async (request, { signal, sessionID }) => {
+        const ignored = { content: JSON.stringify({ state: "ignored" }) }
+        const refused = (reason) => ({ content: JSON.stringify({ state: "refused", reason }) })
+        const book = typeof sessionID === "string" ? picks.get(sessionID) : undefined
+        const pick = typeof request?.pick_id === "string" ? book?.get(request.pick_id) : undefined
+        if (closed || !pick || (await project.inspect()).state !== "on") return ignored
+        const ref = typeof request.model_ref === "string" ? pick.refs.get(request.model_ref.split("#")[0]) : undefined
+        if (!ref) return refused("not_offered")
+        const rater = await ratedModel(sessionID)
+        if (rater?.providerID === ref.provider && rater.id === ref.model) return refused("self_rating")
+        let rater_entry = null
+        if (rater) {
+          const found = (await models()).find((m) => m.provider === rater.providerID && m.id === rater.id)
+          if (found) { const { name: _name, ...entry } = found; rater_entry = entry }
+        }
+        const { key, creator, family } = ref.catalog_id
+        const card = { v: 1, rated: { key, creator, family }, rater_entry, work_kind: pick.work_kind,
+          size_group: pick.size_group, rating: request.rating,
+          session: createHash("sha256").update(sessionID).digest("hex").slice(0, 32),
+          ...(typeof request.comment === "string" && { comment: request.comment }) }
+        return { content: JSON.stringify(await runRouter(card, { directory, stateDir: state, signal, operation: "feedback" })) }
       },
     }))
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
@@ -278,7 +364,7 @@ export default {
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...project, async apply(...args) {
       const result = await project.apply(...args)
-      if (result.enabled === false) notices.clear()
+      if (result.enabled === false) { notices.clear(); picks.clear() }
       return result
     } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
@@ -309,7 +395,7 @@ export default {
     await ctx.session.hook("context", async (event) => {
       if (closed) return
       const { state } = await project.inspect()
-      if (state === "off") notices.clear()
+      if (state === "off") { notices.clear(); picks.clear() }
       await noteModel(event, state === "on")
     })
     // HTTP transport fallback; the websocket transport only reports through the event above.
@@ -344,6 +430,7 @@ export default {
       advice.close()
       titles.close()
       notices.clear()
+      picks.clear()
       for (const stop of active) stop()
     }
   },
