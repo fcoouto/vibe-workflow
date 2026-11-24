@@ -64,10 +64,10 @@ def _key(route, catalog):
 
 
 def excluded(item, key, entries):
-    """True when an excluded_models entry names this route: its model, provider/model (any #variant dropped
-    from the entry), its catalog key or its route name."""
-    return any(entry == key or entry == item['route'] or entry.split('#', 1)[0] in (item['model'],
-               f"{item['provider']}/{item['model']}") for entry in entries)
+    """True when an excluded_models entry names this route: its bare model name, its catalog key or its route name
+    exactly, or its provider/model with any #variant dropped from the entry."""
+    pair = f"{item['provider']}/{item['model']}"
+    return any(entry in (item['model'], key, item['route']) or entry.split('#', 1)[0] == pair for entry in entries)
 
 
 def _constrained(item, key, constraints):
@@ -85,10 +85,12 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         constraints = routing.check_constraints(request.get('constraints', {}))
     except (ValueError, TypeError, KeyError, RecursionError):
         return result('blocked', 'invalid_request')
+    unmatched = _unmatched_for(request.get('models', []), constraints.get('excluded_models', []), state_dir)
     try:
-        return _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now)
+        return _select(request, level, constraints, state_dir=state_dir, source=source, fetch=fetch, now=now,
+                       unmatched=unmatched)
     except Exception:
-        return result('blocked', 'selector_unavailable')
+        return result('blocked', 'selector_unavailable', **_reported(unmatched))
 
 
 def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None):
@@ -99,16 +101,11 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
     if not state_dir.is_absolute() or state_dir.is_symlink():
         raise ValueError('selector_unavailable')
     anchor = state_dir / 'router.json'
-    routed = routing_paths.routes(models)
-    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in routed) else None
     unique = {}
-    for item in routed:
+    for item in routing_paths.routes(models):
         unique.setdefault(item['route'], item)
     pool = dict(reason=None, excluded=[], candidates=[], kept=0, unscored=0, keys={}, creators={},
                 had=False, cache=None, wanted=set(), now=now, fixed=fixed, source=source)
-    unmatched = _unmatched(routed, catalog, constraints.get('excluded_models', []))
-    if unmatched:
-        pool['unmatched'] = unmatched
     if not unique:
         return dict(pool, reason='no_models')
     source = pool['source'] = source if source is not None else routing_observations.LocalSource(anchor)
@@ -119,6 +116,7 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
     pool.update(excluded=excluded, kept=len(kept))
     if not kept:
         return dict(pool, reason='no_eligible_route')
+    catalog = native_catalog.stored(anchor, 'claude-code') if any(r['path'] == CLAUDE for r in kept) else None
     keys = pool['keys'] = {item['route']: _key(item, catalog) for item in kept}
     cache = scores.load(state_dir)
     had = _has_scores(cache)
@@ -154,8 +152,25 @@ def _unmatched(routed, catalog, entries):
             if not any(excluded(item, key, [entry]) for item, key in zip(routed, keys))]
 
 
-def _reported(pool):
-    return dict(unmatched=pool['unmatched']) if pool.get('unmatched') else {}
+def _unmatched_for(models, entries, state_dir):
+    """Entries that name no route built from `models`, whatever its eligibility, quota or score. Never raises:
+    any failure means none are reported."""
+    try:
+        if not entries:
+            return []
+        state_dir = Path(state_dir)
+        if not state_dir.is_absolute() or state_dir.is_symlink():
+            return []
+        routed = routing_paths.routes(models)
+        catalog = native_catalog.stored(state_dir / 'router.json', 'claude-code') \
+            if any(r['path'] == CLAUDE for r in routed) else None
+        return _unmatched(routed, catalog, entries)
+    except Exception:
+        return []
+
+
+def _reported(unmatched):
+    return dict(unmatched=unmatched) if unmatched else {}
 
 
 def _confirm(ordered, pool, limit, qualifies=None):
@@ -211,11 +226,11 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
                 catalog_id=dict(key=key, creator=creator, family=family))
 
 
-def _select(request, level, constraints, *, state_dir, source, fetch, now):
+def _select(request, level, constraints, *, state_dir, source, fetch, now, unmatched):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
     if pool['reason']:
-        return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'], **_reported(pool))
+        return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'], **_reported(unmatched))
     anchor = scores.anchor(pool['cache'])
     size = routing.size_group(request['task'])
     store = _store(state_dir)
@@ -231,7 +246,7 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen),
-                    **_reported(pool))
+                    **_reported(unmatched))
     if chosen:
         answer['size_group'] = size
     return _refresh_flag(answer, pool)

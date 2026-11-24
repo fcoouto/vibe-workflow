@@ -335,6 +335,27 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual((result["state"], result["reason"], result["unmatched"]),
                          ("no_selection", "no_eligible_route", ["nope"]))
 
+    def test_variant_suffix_counts_only_on_provider_model(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        request = self.request(work_kind="implementation", models=[
+            model("opencode-go", "glm-5.3-flash"), model("opencode-go", "kimi-x-1")])
+        result = self.run_select(self.request(work_kind="implementation", models=request["models"],
+                                              constraints=dict(excluded_models=["glm-5.3-flash#high"])))
+        self.assertEqual((result["state"], result["route"]["model"]), ("selected", "glm-5.3-flash"))
+        self.assertEqual(result["unmatched"], ["glm-5.3-flash#high"])
+        result = self.run_select(self.request(work_kind="implementation", models=request["models"],
+                                              constraints=dict(excluded_models=["opencode-go/glm-5.3-flash#high"])))
+        self.assertEqual((result["state"], result["route"]["model"]), ("selected", "kimi-x-1"))
+        self.assertNotIn("unmatched", result)
+
+    def test_unmatched_survives_selector_unavailable(self):
+        def unavailable(routes, now):
+            raise OSError("down")
+        self.source.acquire_billing = unavailable
+        result = self.run_select(self.request(constraints=dict(excluded_models=["nope", "claude-sonnet-5-5"])))
+        self.assertEqual((result["state"], result["reason"], result["unmatched"]),
+                         ("blocked", "selector_unavailable", ["nope"]))
+
     def test_quota_excluded_route_named_by_catalog_key_is_matched(self):
         self.fetch = Fetch(FEEDBACK_BODY)
         self.source.exhausted.add("opencode-go-subscription")
