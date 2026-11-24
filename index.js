@@ -15,6 +15,9 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
 const MAX_NOTICE_SESSIONS = 128
 const MAX_PICKS = 64
+const PICK_TTL_MS = 48 * 3600 * 1000
+const MAX_STORED_PICKS = 2000
+const STORAGE_OP_TIMEOUT_MS = 5000
 const SIZE_GROUPS = ["short", "long"]
 const FEEDBACK_HINT = "After the subagent reports, you may rate its work with smart_router_feedback and this pick_id."
 const blocked = () => ({
@@ -63,18 +66,38 @@ function boundedUnmatched(answer, unmatched) {
   return { ...(low ? { unmatched: unmatched.slice(0, low) } : {}), unmatched_more: unmatched.length - low }
 }
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
+const sessionHash = (sessionID) => createHash("sha256").update(sessionID).digest("hex").slice(0, 32)
+// A route or alternative as a ref, or null when its catalog_id is missing or unusable.
+function refOf(entry) {
+  const id = entry?.catalog_id
+  if (typeof entry?.provider !== "string" || typeof entry?.model !== "string" || !id || typeof id !== "object") return null
+  // The family key is empty for a purely numeric model id, which the runtime accepts.
+  if (![id.key, id.creator].every((part) => typeof part === "string" && part.length > 0) || typeof id.family !== "string") return null
+  return { provider: entry.provider, model: entry.model, catalog_id: { key: id.key, creator: id.creator, family: id.family } }
+}
 // Every model a pick offers, keyed provider/model: feedback matches a dispatch against these, not against the route text.
 function pickRefs(answer) {
   const refs = new Map()
   for (const entry of [answer.route, ...(Array.isArray(answer.alternatives) ? answer.alternatives : [])]) {
-    const id = entry?.catalog_id
-    if (typeof entry?.provider !== "string" || typeof entry?.model !== "string" || !id || typeof id !== "object") continue
-    // The family key is empty for a purely numeric model id, which the runtime accepts.
-    if (![id.key, id.creator].every((part) => typeof part === "string" && part.length > 0) || typeof id.family !== "string") continue
-    refs.set(`${entry.provider}/${entry.model}`, { provider: entry.provider, model: entry.model,
-      catalog_id: { key: id.key, creator: id.creator, family: id.family } })
+    const ref = refOf(entry)
+    if (ref) refs.set(`${ref.provider}/${ref.model}`, ref)
   }
   return refs
+}
+// A stored pick as memory holds it, or null when the record is not one this version wrote.
+function pickFromRecord(value) {
+  if (value?.v !== 1 || typeof value.s !== "string" || !Number.isSafeInteger(value.t)) return null
+  if (!WORK_KINDS.includes(value.work_kind) || typeof value.rateable !== "boolean" || !Array.isArray(value.refs)) return null
+  if (!(SIZE_GROUPS.includes(value.size_group) || (!value.rateable && value.size_group === null))) return null
+  const refs = new Map()
+  for (const entry of value.refs) {
+    const ref = Array.isArray(entry) ? refOf(entry[1]) : null
+    if (!ref || entry[0] !== `${ref.provider}/${ref.model}`) return null
+    refs.set(entry[0], ref)
+  }
+  if (value.rateable && !refs.size) return null
+  return { s: value.s, t: value.t, work_kind: value.work_kind, size_group: value.size_group,
+    rateable: value.rateable, refs }
 }
 const rubric = { files: ["1-2", "3+", "cross-system"], spec: ["exact", "prose", "open"],
   risk: ["reversible", "shared", "critical"] }
@@ -129,6 +152,7 @@ const input = {
       description: "For a review: the model_ref of the model whose work is reviewed (provider/model, or provider/creator/model for a routed model); the router prefers a reviewer from another lab, never at a lower level." },
   },
 }
+const WORK_KINDS = input.properties.work_kind.enum
 const feedbackInput = { type: "object", additionalProperties: false, required: ["pick_id", "model_ref", "rating"],
   properties: { pick_id: { type: "string" }, model_ref: { type: "string" },
     rating: { type: "integer", minimum: 0, maximum: 5 }, comment: { type: "string", maxLength: 280 } } }
@@ -164,10 +188,91 @@ export default {
     const notices = new Map()
     // session → Map(pick_id → { work_kind, size_group, refs }), bounded like notices.
     const picks = new Map()
+    // Picks also live in OpenCode's plugin storage, so they survive a restart. Without a usable set, memory only.
+    const store = typeof ctx.storage?.set === "function" ? ctx.storage : null
+    const storedKey = (pickID) => `pick/${pickID}`
+    // Every storage write, remove and clear runs here, one at a time, in the order issued. Nothing waits on the
+    // queue, so a slow or failing call never blocks or fails an answer.
+    let queue = Promise.resolve()
+    // A call that never settles counts as failed after STORAGE_OP_TIMEOUT_MS, so the queue moves on. Accepted
+    // residual: a timed-out write that completes much later could restore one pick that an off-state clear
+    // forgot. It can receive at most one card and expires within 48 hours.
+    const enqueue = (action) => {
+      if (!store) return Promise.resolve(false)
+      const run = queue.then(() => {
+        // The timeout cancels the operation: it runs no further pages or removals. A host call already in flight
+        // cannot be cancelled.
+        const op = { cancelled: false }
+        let timer
+        const timeout = new Promise((resolve) => {
+          timer = setTimeout(() => { op.cancelled = true; resolve(false) }, STORAGE_OP_TIMEOUT_MS)
+        })
+        return Promise.race([Promise.resolve().then(() => action(op)).then(() => true), timeout])
+          .finally(() => clearTimeout(timer))
+      }).then((done) => done, () => false)
+      queue = run
+      return run
+    }
+    // Picks may be persisted: true at startup, set by every write, and cleared once a clear or a prune finds none left.
+    let storageDirty = true
+    let writes = 0
+    // Clears queued and not yet finished: a lookup meanwhile must not bring back a pick that was just forgotten.
+    let clearsPending = 0
+    const storePick = (pickID, record) => {
+      storageDirty = true
+      writes += 1
+      enqueue(() => store.set(storedKey(pickID), record))
+    }
+    const storedPick = async (pickID) => {
+      if (!store || clearsPending) return null
+      try { return pickFromRecord(await store.get(storedKey(pickID))) } catch { return null }
+    }
+    // Every stored pick, one page at a time; a failing page ends the walk. A cancelled operation stops before each
+    // page and each entry, so no removal starts after its timeout.
+    async function scanPicks(op, visit) {
+      let after
+      for (;;) {
+        if (op.cancelled) return
+        const page = await store.scan({ prefix: "pick/", limit: 100, ...(after !== undefined && { after }) })
+        for (const { key, value } of page.entries) {
+          if (op.cancelled) return
+          await visit(key, value)
+        }
+        if (!page.next || !page.entries.length) return
+        after = page.next
+      }
+    }
+    async function clearStoredPicks(op) { await scanPicks(op, (key) => store.remove(key)) }
+    // Drops expired and malformed picks, then the oldest rateable ones beyond MAX_STORED_PICKS. Clears storageDirty
+    // only when nothing is left and no write was queued since the prune was.
+    async function pruneStoredPicks(op, writesWhenQueued) {
+      const live = []
+      await scanPicks(op, async (key, value) => {
+        const pick = pickFromRecord(value)
+        if (pick && Date.now() - pick.t <= PICK_TTL_MS) live.push({ key, t: pick.t })
+        else await store.remove(key)
+      })
+      live.sort((a, b) => a.t - b.t)
+      for (const { key } of live.slice(0, Math.max(0, live.length - MAX_STORED_PICKS))) {
+        if (op.cancelled) return
+        await store.remove(key)
+      }
+      if (!op.cancelled && !live.length && writes === writesWhenQueued) storageDirty = false
+    }
     // Every path that observes Smart Router off calls this: notices and picks clear together, and a selection
     // that started before it may not store its pick.
     let generation = 0
-    const forgetOff = () => { notices.clear(); generation += 1; picks.clear() }
+    const forgetOff = () => {
+      notices.clear(); generation += 1; picks.clear()
+      // A clear is queued only while stored picks may exist, so repeated observations of off do not rescan storage.
+      if (!store || !storageDirty) return
+      storageDirty = false
+      clearsPending += 1
+      enqueue(clearStoredPicks).then((done) => {
+        clearsPending -= 1
+        if (!done) storageDirty = true
+      })
+    }
     const remember = (sessionID, pickID, pick) => {
       const book = picks.get(sessionID) ?? new Map()
       picks.delete(sessionID)
@@ -352,18 +457,23 @@ export default {
             if (notices.size > MAX_NOTICE_SESSIONS) notices.delete(notices.keys().next().value)
           }
         }
-        // Every selected answer gets a pick_id; only one made in this session, while Smart Router stays on, is remembered.
+        // Every selected answer gets a pick_id; one made in this session, while Smart Router stays on, is remembered
+        // even when it is not rateable, so its card can say why it is ignored.
         let pickFields = null
         if (answer.state === "selected") {
           const pickID = randomBytes(8).toString("hex")
           pickFields = { pick_id: pickID, feedback_hint: FEEDBACK_HINT }
           const after = await inspectRouter()
-          // A size group the selector does not name is never guessed: such a pick is issued but cannot be rated.
-          // A below-level pick is a fallback, not the model's level, so its card would lower the model unfairly.
-          if (identified && !closed && generation === started && after.state === "on" && answer.below_level !== true
-            && SIZE_GROUPS.includes(answer.size_group)) {
+          if (identified && !closed && generation === started && after.state === "on") {
+            // A size group the selector does not name is never guessed. A below-level pick is a fallback, not the
+            // model's level, so its card would lower the model unfairly. Neither kind is rateable.
             const refs = pickRefs(answer)
-            if (refs.size) remember(sessionID, pickID, { work_kind: own.work_kind, size_group: answer.size_group, refs })
+            const sized = SIZE_GROUPS.includes(answer.size_group)
+            const pick = { s: sessionHash(sessionID), t: Date.now(), work_kind: own.work_kind,
+              size_group: sized ? answer.size_group : null,
+              rateable: sized && answer.below_level !== true && refs.size > 0, refs }
+            remember(sessionID, pickID, pick)
+            storePick(pickID, { v: 1, ...pick, refs: [...refs] })
           }
         }
         return { content: JSON.stringify({ ...withModelRef(answer), ...pickFields, notice }) }
@@ -382,12 +492,29 @@ export default {
       description: feedbackDescription,
       input: feedbackInput,
       execute: async (request, { signal, sessionID }) => {
-        const ignored = { content: JSON.stringify({ state: "ignored" }) }
+        const ignored = (reason) => ({ content: JSON.stringify({ state: "ignored", reason }) })
         const refused = (reason) => ({ content: JSON.stringify({ state: "refused", reason }) })
-        const preference = (await inspectRouter()).state
-        const book = typeof sessionID === "string" && preference === "on" ? picks.get(sessionID) : undefined
-        const pick = typeof request?.pick_id === "string" ? book?.get(request.pick_id) : undefined
-        if (closed || !pick) return ignored
+        if (closed) return ignored("router_off")
+        const started = generation
+        if ((await inspectRouter()).state !== "on") return ignored("router_off")
+        const pickID = typeof request?.pick_id === "string" ? request.pick_id : null
+        const hash = typeof sessionID === "string" ? sessionHash(sessionID) : null
+        let pick = pickID !== null && hash !== null ? picks.get(sessionID)?.get(pickID) : undefined
+        if (!pick && pickID !== null && hash !== null) {
+          const stored = await storedPick(pickID)
+          // Turning the router off during the lookup forgot every pick; this one must not come back.
+          if (closed || generation !== started) return ignored("router_off")
+          // A concurrent lookup of this pick may have finished first: share its memory pick, so neither card loses it.
+          pick = picks.get(sessionID)?.get(pickID)
+          if (!pick && stored?.s === hash) { pick = stored; remember(sessionID, pickID, pick) }
+        }
+        if (!pick || pick.s !== hash) return ignored("unknown_pick")
+        if (Date.now() - pick.t > PICK_TTL_MS) {
+          picks.get(sessionID)?.delete(pickID)
+          enqueue(() => store.remove(storedKey(pickID)))
+          return ignored("expired")
+        }
+        if (!pick.rateable) return ignored("not_rateable")
         const ref = typeof request.model_ref === "string" ? pick.refs.get(request.model_ref.split("#")[0]) : undefined
         if (!ref) return refused("not_offered")
         const rater = await ratedModel(sessionID)
@@ -398,12 +525,12 @@ export default {
           if (found) { const { name: _name, ...entry } = found; rater_entry = entry }
         }
         // Turning the router off while the lookups ran forgot the pick; a card for it must not be written.
-        if (closed || picks.get(sessionID)?.get(request.pick_id) !== pick) return ignored
+        if (closed || picks.get(sessionID)?.get(pickID) !== pick) return ignored("router_off")
         const { key, creator, family } = ref.catalog_id
         const card = { v: 1, rated: { key, creator, family }, rater_entry,
           rater_model: rater ? { provider: rater.providerID, id: rater.id } : null, work_kind: pick.work_kind,
           size_group: pick.size_group, rating: request.rating,
-          session: createHash("sha256").update(sessionID).digest("hex").slice(0, 32),
+          session: hash,
           ...(typeof request.comment === "string" && { comment: request.comment }) }
         return { content: JSON.stringify(await runRouter(card, { directory, stateDir: state, signal, operation: "feedback" })) }
       },
@@ -483,6 +610,8 @@ export default {
         if (Buffer.concat(parts).toString("utf8").includes("subscription_sharing_usage_limit_exceeded")) markLimit()
       } catch {} finally { reader.cancel().catch(() => {}) }
     }, { providerID: "openai" })
+    // The startup prune is queued behind any storage call; setup never waits for it.
+    enqueue((op) => pruneStoredPicks(op, writes))
     return () => {
       closed = true
       subscription.abort()
