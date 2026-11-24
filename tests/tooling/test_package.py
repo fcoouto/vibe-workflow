@@ -117,7 +117,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council"]}
+            "native_catalog", "claude_usage", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council", "feedback"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
@@ -141,7 +141,7 @@ await plugin.setup({
   skill: { transform: async f => f({ add: s => skills.push(s) }) },
   session: { hook: async () => {} },
 })
-assert.deepEqual(tools.sort(), ['smart_router_select', 'vibe_council_roster', 'vibe_workflow_onboard'])
+assert.deepEqual(tools.sort(), ['smart_router_feedback', 'smart_router_select', 'vibe_council_roster', 'vibe_workflow_onboard'])
 assert.deepEqual(skills.map(({id, name}) => [id, name]), [['vibe-onboard-project', 'vibe-onboard-project'],
   ['vibe-prepare-my-workspace', 'vibe-prepare-my-workspace'], ['vibe-pull-requests', 'vibe-pull-requests'], ['vibe-council', 'vibe-council'],
   ['vibe-project-layout', 'vibe-project-layout']])

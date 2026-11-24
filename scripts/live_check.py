@@ -168,7 +168,8 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
     # caller's input out of the prompt.
-    out = _run(["opencode", "run", "--standalone", "--archived", "-m", model, "--format", "json", prompt],
+    out = _run(["opencode", "run", "--standalone", "--archived", *(["-m", model] if model else []),
+                "--format", "json", prompt],
                cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
     # One event per line. Only top-level `text` events are the model's reply; a `tool_use` event is one tool call,
     # and the text nested in its result is the tool's output, not the reply.
@@ -193,7 +194,8 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT):
             texts_out = [item.get("text", "") for item in content if isinstance(item, dict)] if isinstance(content, list) else []
             if isinstance(state.get("output"), str):
                 texts_out.append(state["output"])
-            tools[key] = {"command": given.get("command") if isinstance(given.get("command"), str) else None,
+            tools[key] = {"tool": part.get("tool") if isinstance(part.get("tool"), str) else None, "input": given,
+                          "command": given.get("command") if isinstance(given.get("command"), str) else None,
                           "output": "\n".join(text for text in texts_out if isinstance(text, str))}
     session, deleted = (sessions[0] if sessions else None), False
     if session:
@@ -434,7 +436,27 @@ def prepare(work, settings=None, origin=None):
     return project
 
 
-def check(prompts, settings=None, origin=None, keep=False, wait=900):
+def check_isolated(prompts, settings=None, origin=None, keep=False):
+    """Each prompt in its own private standalone run in the clone, so only the clone's plugin is loaded.
+
+    The shared background service loads the user's installed plugins, so `opencode api` is never used here.
+    """
+    work = Path(tempfile.mkdtemp(prefix="vibe-live-check-")).resolve()
+    try:
+        project = prepare(work, settings, origin)
+        config_home = work / "config"
+        config_home.mkdir()
+        env = {**isolated_env(config_home), "PWD": str(project)}
+        runs = [run_model(project, None, env, prompt=prompt) for prompt in prompts]
+        return {"sessions": [run["session"] for run in runs], "project": str(project) if keep else None, "runs": runs}
+    finally:
+        if not keep:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def check(prompts, settings=None, origin=None, keep=False, wait=900, isolated=False):
+    if isolated:
+        return check_isolated(prompts, settings, origin, keep)
     work = Path(tempfile.mkdtemp(prefix="vibe-live-check-")).resolve()
     session = None
     try:
@@ -470,12 +492,17 @@ def main():
     parser.add_argument("--origin", help="origin URL for gh lookups; use a throwaway or local URL, since the "
                         "session's agent could fetch from or push to it")
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--isolated", action="store_true", help="with --prompt: run each prompt as its own "
+                        "private standalone session (empty config directory, no OPENCODE* variables), so only the "
+                        "clone's plugin is loaded; prompts do not share a session")
     args = parser.parse_args()
+    if args.isolated and not args.prompt:
+        parser.error("--isolated needs --prompt")
     if args.injection:
         summary = check_injection()
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0 if summary["recorded"] else 1
-    print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep), indent=2, ensure_ascii=False))
+    print(json.dumps(check(args.prompt, args.settings, args.origin, args.keep, isolated=args.isolated), indent=2, ensure_ascii=False))
     return 0
 
 

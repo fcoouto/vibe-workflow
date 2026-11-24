@@ -92,6 +92,59 @@ class CleanupTest(unittest.TestCase):
                 live_check.check(["hi"])
 
 
+class IsolatedPromptTest(unittest.TestCase):
+    def events(self):
+        return "\n".join(json.dumps(event) for event in [
+            {"type": "text", "sessionID": "ses_a", "part": {"id": "p1", "type": "text", "text": "done"}},
+            {"type": "tool_use", "sessionID": "ses_a", "part": {"id": "t1", "type": "tool", "tool": "smart_router_feedback",
+             "state": {"input": {"pick_id": "abc"}, "output": "{\"state\":\"recorded\"}"}}}])
+
+    def test_isolated_prompts_run_standalone_in_the_clone_with_the_injection_environment(self):
+        calls = []
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            calls.append((argv, cwd, data, env))
+            return self.events() if argv[:3] == ["opencode", "run", "--standalone"] else ""
+        overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_SESSION_ID": "ses_parent", "GIT_DIR": "/g"}
+        with mock.patch.dict(os.environ, overrides), mock.patch.object(live_check, "prepare", return_value=Path("/clone")), \
+                mock.patch.object(live_check, "_run", side_effect=fake_run), \
+                mock.patch.object(live_check, "_api", side_effect=AssertionError("shared service")):
+            result = live_check.check(["one", "two"], isolated=True)
+        runs = [call for call in calls if call[0][:2] == ["opencode", "run"]]
+        self.assertEqual([call[0] for call in runs], [
+            ["opencode", "run", "--standalone", "--archived", "--format", "json", prompt] for prompt in ("one", "two")])
+        deletes = [call[0] for call in calls if call[0][:3] == ["opencode", "session", "delete"]]
+        self.assertEqual(deletes, [["opencode", "session", "delete", "ses_a", "--standalone"]] * 2)
+        for _, cwd, data, env in calls:
+            if env is None:
+                continue
+            self.assertEqual((cwd, data, env["PWD"]), (Path("/clone"), "", "/clone"))
+            self.assertFalse([name for name in env if name.startswith(("OPENCODE", "GIT_"))])
+            self.assertNotEqual(env["XDG_CONFIG_HOME"], os.environ.get("XDG_CONFIG_HOME"))
+        self.assertEqual(len({call[3]["XDG_CONFIG_HOME"] for call in runs}), 1)
+        self.assertEqual(result["sessions"], ["ses_a", "ses_a"])
+        tool = result["runs"][0]["tools"][0]
+        self.assertEqual((tool["tool"], tool["input"], tool["output"]),
+                         ("smart_router_feedback", {"pick_id": "abc"}, "{\"state\":\"recorded\"}"))
+        self.assertEqual(result["runs"][0]["reply"], "done")
+
+    def test_the_default_prompt_mode_still_uses_the_api(self):
+        calls = []
+
+        def api(method, path, data=None, timeout=60):
+            calls.append(path)
+            return {"id": "ses_x"} if path == "/api/session" else []
+        with mock.patch.object(live_check, "prepare", return_value=Path("/clone")), \
+                mock.patch.object(live_check, "_api", side_effect=api):
+            live_check.check(["hi"])
+        self.assertTrue(calls)
+
+    def test_the_flag_is_only_for_prompt_mode(self):
+        with mock.patch("sys.argv", ["live_check.py", "--injection", "--isolated"]), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            live_check.main()
+
+
 class VersionTest(unittest.TestCase):
     def test_parses_the_cli_version(self):
         self.assertEqual(live_check.parse_version("opencode v2.3.2\n"), "2.3.2")

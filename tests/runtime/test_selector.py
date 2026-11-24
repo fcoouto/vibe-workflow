@@ -9,7 +9,7 @@ import unittest
 
 from runtime import routing
 from runtime import routing_paths
-from runtime import native_catalog, scores, selector
+from runtime import feedback, native_catalog, scores, selector
 from unittest import mock
 try:
     from runtime.selector import select
@@ -60,6 +60,12 @@ BODY = body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("anthropic/claude-son
 BODY3 = body(("anthropic/claude-fable-5-2", 10, 8, 40, 64.6), ("openai/gpt-6-2-astra", 20, 8, 40, 62.1),
              ("google/gemini-4-neon", 30, 4, 20, 61.4), ("anthropic/claude-haiku-5-5", 40, 0.1, 0.5, 36.5),
              ("z-ai/glm-5-3-flash", 50, 0.03, 0.11, 27.8))
+
+
+# Anchor 61.4 (third lab). glm-5.3-flash is the cheap 34.8 candidate, kimi-x-1 the pricier 40.
+FEEDBACK_BODY = body(("anthropic/claude-fable-5-2", 10, 8, 40, 64.6), ("openai/gpt-6-2-astra", 20, 8, 40, 62.1),
+                     ("google/gemini-4-neon", 30, 4, 20, 61.4), ("z-ai/glm-5-3-flash", 40, 0.1, 0.5, 34.8),
+                     ("moonshot/kimi-x-1", 50, 3, 15, 40))
 
 
 def model(provider, name, **extra):
@@ -130,6 +136,22 @@ class SelectionTest(unittest.TestCase):
         self.assertIs(result["below_level"], False)
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
+
+    def test_estimated_hours_of_four_or_more_raise_effort_one_step(self):
+        self.models = [model(provider, name, variants=["low", "medium", "high", "xhigh"])
+                       for provider, name in (("claude-agent", "claude-opus-5-5"),
+                                              ("claude-agent", "claude-sonnet-5-5"), ("openai", "gpt-6-2-sol"))]
+        self.warm()
+        short = self.run_select(self.request(work_kind="review"))
+        self.assertEqual(short["route"]["effort"], "medium")
+        long = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=6)))
+        self.assertEqual(long["route"]["effort"], "high")
+
+    def test_huge_hour_estimate_is_invalid_request_not_an_exception(self):
+        self.warm()
+        for bad in (10**400, -10**400, float('nan')):
+            result = self.run_select(self.request(task=dict(TASK, estimate_agentic_effort_hours=bad)))
+            self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))
 
     def test_cheap_model_below_the_bar_is_not_picked(self):
         self.fetch = Fetch(BODY3)
@@ -373,6 +395,66 @@ class SelectionTest(unittest.TestCase):
         result = self.run_select(self.request(models=[model("opencode-go", "mystery-model")]))
         self.assertEqual((result["state"], result["reason"]), ("no_selection", "unscored"))
         self.assertEqual(result["excluded"], [dict(route="opencode-go-subscription:mystery-model", reason="unscored")])
+
+    def seed(self, creator, key, rating, count, kind="implementation"):
+        """Cards from `count` distinct sessions, each rated by a different lab (full weight)."""
+        for number in range(count):
+            card = dict(rated=dict(creator=creator, key=key, family=scores.family_key(key)),
+                        rater=dict(creator="anthropic", key="claude-fable-5-2"), work_kind=kind,
+                        size_group="short", rating=rating, session=f"{number + 1:016x}", comment=None)
+            self.assertEqual(feedback.record(card, state_dir=self.root, now=NOW), dict(state="recorded"))
+
+    def test_feedback_moves_a_model_below_its_bar(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        request = self.request(work_kind="implementation",
+                               models=[model("opencode-go", "glm-5.3-flash"), model("opencode-go", "kimi-x-1")])
+        self.assertEqual(self.run_select(request)["route"]["model"], "glm-5.3-flash")
+        self.seed("z-ai", "glm-5-3-flash", 0, 20)
+        result = self.run_select(request)
+        self.assertEqual((result["state"], result["route"]["model"], result["below_level"]),
+                         ("selected", "kimi-x-1", False))
+        self.assertNotIn("glm-5.3-flash", [item["model"] for item in result["alternatives"]])
+
+    def test_feedback_is_per_kind(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        request = self.request(work_kind="review",
+                               models=[model("opencode-go", "glm-5.3-flash"), model("opencode-go", "kimi-x-1")])
+        before = self.run_select(request)
+        self.seed("z-ai", "glm-5-3-flash", 0, 20, kind="implementation")
+        after = self.run_select(request)
+        self.assertEqual((after["state"], after["route"]["model"]), (before["state"], before["route"]["model"]))
+        self.assertEqual([item["model"] for item in after["alternatives"]],
+                         [item["model"] for item in before["alternatives"]])
+        self.assertEqual({item["feedback"]["sessions"] for item in [after["route"]] + after["alternatives"]}, {0})
+
+    def test_damaged_feedback_file_changes_nothing(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        request = self.request(work_kind="implementation",
+                               models=[model("opencode-go", "glm-5.3-flash"), model("opencode-go", "kimi-x-1")])
+        before = self.run_select(request)
+        path = self.root / feedback.FILE
+        path.write_bytes(b'{"version": 1, garbage')
+        path.chmod(0o600)
+        result = self.run_select(request)
+        self.assertEqual((result["state"], result["route"]["model"]), ("selected", before["route"]["model"]))
+        self.assertEqual(result["route"]["model"], "glm-5.3-flash")
+
+    def test_pick_reports_catalog_id_and_feedback(self):
+        self.fetch = Fetch(FEEDBACK_BODY)
+        result = self.run_select(self.request(work_kind="implementation",
+                                              models=[model("opencode-go", "glm-5.3-flash"),
+                                                      model("opencode-go", "kimi-x-1")]))
+        picks = [result["route"]] + result["alternatives"]
+        self.assertEqual(result["size_group"], "short")
+        self.assertEqual(picks[0]["catalog_id"], dict(key="glm-5-3-flash", creator="z-ai", family="glm-flash"))
+        for item in picks:
+            self.assertIsNotNone(item["catalog_id"]["key"])
+            self.assertIsNotNone(item["catalog_id"]["creator"])
+            self.assertEqual(item["feedback"], dict(sessions=0, adjustment=0.0))
+            self.assertEqual(item["catalog_score"], item["score"])
+        long = self.run_select(self.request(work_kind="implementation", task=dict(TASK, estimate_agentic_effort_hours=6),
+                                            models=[model("opencode-go", "glm-5.3-flash")]))
+        self.assertEqual(long["size_group"], "long")
 
     def test_check_setup(self):
         with mock.patch("runtime.opencode_account.refresh", side_effect=AssertionError("reader started")):

@@ -106,6 +106,21 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.effort_for(1, ['high', 'max']), 'high')
         self.assertIsNone(routing.effort_for(2, []))
 
+    def test_estimated_hours_is_validated_and_does_not_change_the_level(self):
+        for hours in (0, 4.0, 100):
+            self.assertEqual(routing.task_level('implementation', dict(FACTS, estimate_agentic_effort_hours=hours)), 1)
+        for bad in (-1, 100.5, '4', True, float('nan'), 10**400):
+            with self.assertRaises(ValueError):
+                routing.task_level('implementation', dict(FACTS, estimate_agentic_effort_hours=bad))
+
+    def test_size_group_and_long_effort(self):
+        self.assertEqual(routing.size_group(FACTS), 'short')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=3.9)), 'short')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=4)), 'long')
+        v = ['low', 'medium', 'high', 'xhigh', 'max']
+        self.assertEqual([routing.effort_for(l, v, long=True) for l in (1, 2, 3)], ['medium', 'high', 'xhigh'])
+        self.assertEqual(routing.effort_for(3, ['low', 'high'], long=True), 'high')
+
     def test_constraints_are_bounded_lists(self):
         self.assertEqual(routing.check_constraints(dict(allowed_models=['m'])), dict(allowed_models=['m']))
         for bad in (dict(other=['x']), dict(allowed_strategy_ids=['x']), dict(allowed_models='m'),

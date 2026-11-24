@@ -250,6 +250,18 @@ delegation and no plan review. Case 3 (a config default read by order sizing): r
 mode also loads the user's installed plugin, whose copy answered the tool with the old rule, so these runs verify
 the agents' ratings, not the new levels, which unit tests cover. Dispatch of the reviews was not observed.
 
+## Feedback cards
+
+Cards live in `router-feedback.json` in Smart Router's state folder (`$XDG_STATE_HOME/vibe-workflow/smart-router`,
+by default `~/.local/state/vibe-workflow/smart-router`). A card rates a finished subagent's work from 0 to 5 and
+moves that model's effective score only for the same kind of work and size group (below, or at or above, 4 agent
+hours). The formula, caps and decay are in `docs/superpowers/specs/2026-11-24-router-feedback-design.md`; this file
+does not copy them. A key gets no adjustment until its cards come from at least 3 different sessions. A missing,
+damaged or oversized store means no adjustment, and picks fall back to catalog scores. A model cannot rate itself,
+on any provider. A session gets one vote per model and kind of work, and can vote again only after 5,000 newer votes
+evict its old one. Smart Router sends nothing anywhere; cards stay in that file. A hosted coordinator's own transcript
+may still keep what it typed, such as a comment.
+
 ## Smart Router automatic selection: what is known
 
 The design is `docs/superpowers/specs/2026-11-20-smart-router-auto-selection-design.md`;

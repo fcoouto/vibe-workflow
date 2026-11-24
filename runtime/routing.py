@@ -10,6 +10,7 @@ FACTS = {'files': ('1-2', '3+', 'cross-system'), 'spec': ('exact', 'prose', 'ope
          'risk': ('reversible', 'shared', 'critical')}
 BASE = dict(planning=3, review=2, investigation=2, implementation=1, testing=1, writing=1)
 BAR = (0.55, 0.80, 1.0)
+LONG_HOURS = 4
 FRONTIER = 0.90
 NEAR_SCORE = 0.97
 NEAR_PRICE = 0.5
@@ -37,11 +38,19 @@ def _optional(value, check):
     return value is None or check(value)
 
 
+def _hours(value):
+    # Range first: math.isfinite raises OverflowError on huge ints, and a value in 0..100 is always finite.
+    return type(value) in (int, float) and 0 <= value <= 100 and math.isfinite(value)
+
+
 def task_level(work_kind, task):
-    if work_kind not in BASE or type(task) is not dict or set(task) - {*FACTS, 'context_tokens'}:
+    if work_kind not in BASE or type(task) is not dict \
+            or set(task) - {*FACTS, 'context_tokens', 'estimate_agentic_effort_hours'}:
         raise ValueError('invalid_request')
     tokens = task.get('context_tokens', 0)
     if type(tokens) is not int or not 0 <= tokens <= 10**9:
+        raise ValueError('invalid_request')
+    if 'estimate_agentic_effort_hours' in task and not _hours(task['estimate_agentic_effort_hours']):
         raise ValueError('invalid_request')
     levels = [BASE[work_kind]]
     exact = task.get('spec') == 'exact'
@@ -70,8 +79,12 @@ def price(input_per_m, output_per_m):
     return (3 * input_per_m + output_per_m) / 4
 
 
-def effort_for(level, variants):
-    target = EFFORTS.index(('low', 'medium', 'high')[level - 1])
+def size_group(task):
+    return 'long' if task.get('estimate_agentic_effort_hours', 0) >= LONG_HOURS else 'short'
+
+
+def effort_for(level, variants, long=False):
+    target = EFFORTS.index(('low', 'medium', 'high')[level - 1]) + (1 if long else 0)
     known = sorted(EFFORTS.index(v) for v in variants if v in EFFORTS)
     if not known:
         return None

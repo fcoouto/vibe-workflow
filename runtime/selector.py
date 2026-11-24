@@ -1,8 +1,9 @@
 """Compose the tested advisory flow; never dispatch, admit, reserve or retry."""
 from pathlib import Path
+import math
 import time
 
-from runtime import native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
+from runtime import feedback, native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
 
 CLAUDE = 'opencode-claude-subscription'
 
@@ -85,8 +86,9 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         return result('blocked', 'selector_unavailable')
 
 
-def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed):
+def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None):
     """The selection steps up to the scored candidates, shared by Smart Router and council picks."""
+    long = task is not None and routing.size_group(task) == 'long'
     state_dir = Path(state_dir)
     now = int(time.time()) if fixed is None else fixed
     if not state_dir.is_absolute() or state_dir.is_symlink():
@@ -117,7 +119,7 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
         return dict(pool, reason='scores_unavailable')
     pool.update(had=had, cache=cache)
     for item in kept:
-        key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
+        key, effort = keys[item['route']], routing.effort_for(level, item['variants'], long=long)
         own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
         if own is None or own['score_source'] != 'openrouter':
             pool['wanted'].add(key)
@@ -166,16 +168,42 @@ def _refresh_flag(answer, pool):
     return answer
 
 
+def _store(state_dir):
+    try:
+        return feedback.load(Path(state_dir))
+    except Exception:  # feedback never breaks a pick
+        return None
+
+
+def _adjusted(pool, store, item, work_kind, size_group, anchor):
+    """A candidate with its feedback adjustment in `score`; the catalog score stays in `catalog_score`."""
+    key, creator = pool['keys'][item['route']], pool['creators'][item['route']]
+    family = scores.family_key(key)
+    try:
+        facts = feedback.adjustment(store, key=key, creator=creator, family=family, work_kind=work_kind,
+                                    size_group=size_group, anchor=anchor, now=pool['now'])
+        delta = float(facts['adjustment'])
+        if not math.isfinite(delta):
+            raise ValueError('non_finite_adjustment')
+    except Exception:  # any feedback problem means no adjustment for this candidate
+        facts, delta = dict(sessions=0, adjustment=0.0), 0.0
+    return dict(item, catalog_score=item['score'], score=item['score'] + delta, feedback=facts,
+                catalog_id=dict(key=key, creator=creator, family=family))
+
+
 def _select(request, level, constraints, *, state_dir, source, fetch, now):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
-                       state_dir=state_dir, source=source, fetch=fetch, fixed=now)
+                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
     anchor = scores.anchor(pool['cache'])
-    ordered = routing.order(pool['candidates'], level, anchor) if anchor is not None else []
+    size = routing.size_group(request['task'])
+    store = _store(state_dir)
+    candidates = [_adjusted(pool, store, item, request['work_kind'], size, anchor) for item in pool['candidates']]
+    ordered = routing.order(candidates, level, anchor) if anchor is not None else []
     below = False
-    if not ordered and pool['candidates']:
-        ordered, below = routing.strongest(pool['candidates']), True
+    if not ordered and candidates:
+        ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
     chosen = _confirm(ordered, pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
@@ -183,4 +211,92 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))
+    if chosen:
+        answer['size_group'] = size
     return _refresh_flag(answer, pool)
+
+
+def _cached_creator(key, state_dir):
+    """The catalog creator of a key, or None when unknown or the score cache cannot be read."""
+    try:
+        cache = scores.load(Path(state_dir))
+        own = scores.lookup(cache, key, None) if cache is not None else None
+        return own['creator'] if own else None
+    except Exception:
+        return None
+
+
+def _entry_identity(entry, state_dir):
+    """(creator, key) of a routable model entry, or None."""
+    found = routing_paths.routes([entry])
+    if len(found) != 1:
+        return None
+    item = found[0]
+    catalog = native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if item['path'] == CLAUDE else None
+    key = _key(item, catalog)
+    return (scores.CREATOR.get(item['path']) or _cached_creator(key, state_dir)), key
+
+
+def _model_identity(model, state_dir):
+    """(creator or None, key) the catalog would give a raw session model, whatever its provider. Off-plan models
+    only name a rater; they never become eligible for selection."""
+    path = CLAUDE if model['provider'] == 'claude-agent' else None
+    key = _key(dict(path=path, model=model['id'], model_id=model['id']),
+               native_catalog.stored(Path(state_dir) / 'router.json', 'claude-code') if path else None)
+    return _cached_creator(key, state_dir), key
+
+
+def _identity(entry, model, state_dir):
+    """The rater's one identity: the routed entry's when it routes, else the one derived from the session model."""
+    try:
+        named = _entry_identity(entry, state_dir) if entry is not None else None
+    except Exception:
+        named = None
+    if named is None and model is not None:
+        try:
+            named = _model_identity(model, state_dir)
+        except Exception:
+            named = None
+    return named
+
+
+def rater_id(entry, *, state_dir, model=None):
+    """The creator and key of the model that rates, or None when it cannot be named. Never raises."""
+    creator, key = _identity(entry, model, state_dir) or (None, None)
+    if not (feedback._text(feedback.LAB, creator) and feedback._text(feedback.MODEL, key)):
+        return None
+    return dict(creator=creator, key=key)
+
+
+def _is_self(identity, rated):
+    """True when the rater's identity is the rated model: same key, and same lab when both are known."""
+    creator, key = identity
+    return key == rated.get('key') and (creator is None or feedback._lab(creator) == feedback._lab(rated.get('creator')))
+
+
+FEEDBACK_REQUIRED = {'v', 'rated', 'work_kind', 'size_group', 'rating', 'session'}
+FEEDBACK_OPTIONAL = {'rater_entry', 'rater_model', 'comment'}
+
+
+def _model_ok(model):
+    return type(model) is dict and set(model) == {'provider', 'id'} \
+        and all(type(value) is str and 0 < len(value) <= 256 for value in model.values())
+
+
+def feedback_submit(request, *, state_dir, now=None):
+    """Store one feedback card from a request; refused/invalid when its shape is wrong. Never raises."""
+    if type(request) is not dict or type(request.get('v')) is not int or request['v'] != 1 \
+            or not FEEDBACK_REQUIRED <= set(request) <= FEEDBACK_REQUIRED | FEEDBACK_OPTIONAL \
+            or type(request.get('rated')) is not dict \
+            or request.get('rater_entry') is not None and type(request.get('rater_entry')) is not dict \
+            or request.get('rater_model') is not None and not _model_ok(request.get('rater_model')):
+        return dict(state='refused', reason='invalid')
+    entry, model = request.get('rater_entry'), request.get('rater_model')
+    named = _identity(entry, model, state_dir)
+    if named is not None and _is_self(named, request['rated']):
+        return dict(state='refused', reason='self_rating')
+    rater = None if named is None else rater_id(entry, state_dir=state_dir, model=model)
+    card = dict(rated=request['rated'], rater=rater, work_kind=request['work_kind'],
+                size_group=request['size_group'], rating=request['rating'], session=request['session'],
+                comment=request.get('comment'))
+    return feedback.record(card, state_dir=Path(state_dir), now=int(time.time()) if now is None else now)
