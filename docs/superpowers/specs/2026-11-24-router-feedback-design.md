@@ -1,7 +1,9 @@
 # Smart Router learns from feedback cards between models
 
-Date: 24 November 2026. Status: draft, under independent review; not yet
-approved by the user.
+Date: 24 November 2026. Status: approved by the user on 24 November 2026 after
+two independent reviews (Fable and Astra, both "ready with changes") and a
+filtering pass for a lightweight plugin. Items marked "coordinator's call" were
+settled without the user and are listed for their check.
 
 ## Intent
 
@@ -10,122 +12,162 @@ appear every week, without any human input. Today every pick comes from public
 catalog scores and list prices, so the router repeats a bad pick as often as it
 is asked. Coordinators already learn by hand ("Terra has stalled three times
 today, so I'm taking its listed alternative") and lose the lesson when the
-session ends.
+session ends. A coordinator on a trading project also reported that the router
+cannot see task size: a long multi-file build and a one-hour plan task look the
+same.
 
-Evidence that prompted this: a coordinator using 0.9.x on a trading project
-reported a level-1 pick for a 10-14 hour multi-file build, a reviewer picked
-from the same model that did the build, and a mid-level model stopping to ask
-on long builds. A second coordinator overrode a pick because that model had
-stalled three times that day on long multi-file documentation work.
+vibe-workflow stays a lightweight plugin: feedback is one part of Smart Router,
+not a new subsystem.
 
 ## Goals
 
 - Coordinators rate a finished subagent's work on an optional card, model to
   model, with no human in the loop.
-- Ratings adjust each model's effective strength per kind of work, so a model
-  can drop out of a level, or climb into one, for work it keeps failing or
-  handling well.
+- Cards adjust a model's effective strength per kind of work and task size, so a
+  model can drop out of a level, or climb into one.
 - New models start from their catalog score; new versions of a known family
-  start with part of the family's record.
+  start with half of the family's record.
+- The router can tell short tasks from long ones, and gives long tasks more
+  effort.
 
 ## Non-goals
 
-- User ratings or any human input (the user's decision).
-- Sharing ratings across machines or users; nothing leaves the machine.
-- Using the free-text comment for ranking.
+- Human ratings; sharing cards across machines or users.
+- Using the comment for ranking.
 - Usage balancing across plans; the main session's model.
 
 ## Anti-goals
 
-- A few bad cards sinking a good model.
-- A model rating itself, or a lab grading its own models up.
-- Any model call, polling or background process (the user's lightweight rule).
-  The card costs the rater one tool call; nothing else.
+- A few cards, or one bad day, sinking a good model.
+- A model rating itself.
+- Feedback ever breaking a pick.
+- Any model call, polling or background process. A card costs the rater one tool
+  call and one short Python process, the same path a pick uses.
 
 ## Constraints
 
-- Smart Router stays advisory: no launch, admission, reservation or spend.
+- Advisory only: no launch, admission, reservation or spend.
 - Rules, notes and decisions speak in levels and facts, never model names.
 - The `smart_router_select` description stays under 2048 characters.
-- Python standard library; `runtime/` stays flat; modules within 1000 lines.
-- The `v: 2` selection contract stays compatible; new answer fields are
-  additions.
+- Python standard library; `runtime/` flat; modules within 1000 lines.
+- `v: 2` stays compatible: every new field is optional.
 
 ## Approaches
 
-- **Plugin tool plus the existing Python runtime (chosen, one sensible way).**
-  A new `smart_router_feedback` tool in `index.js`, handled by the same
-  short-lived Python process the plugin already runs for selection
-  (`runRouter`, a new `feedback` operation), writing a small file next to the
-  existing scores cache.
-- A script raters run by hand: rejected, agents call tools, and a script needs
+- **Plugin tool plus the existing Python runtime (chosen).** A new
+  `smart_router_feedback` tool in `index.js`, run through `runRouter` as a new
+  `feedback` operation, writing one small file in Smart Router's state directory.
+- A script raters run by hand: rejected; agents call tools, and a script needs
   shell permission and a path into the installed package.
-- Inferring quality from overrides, stalls or re-dispatches without a card:
-  deferred; harder to attribute to the model, and the user chose an explicit
-  card.
+- Inferring quality from overrides, stalls or re-dispatches: deferred; harder to
+  attribute, and the user chose an explicit card.
 
 ## The decided design
 
+### The pick
+
+- Every `smart_router_select` answer carries a `pick_id` (random, opaque) and one
+  line: rate the subagent's work with `smart_router_feedback` after it reports.
+- The plugin keeps, per session in memory (bounded like the notice map), what
+  each `pick_id` stood for: the pick and its alternatives, level, work kind,
+  facts and size. An unknown or forgotten `pick_id` (for example after a plugin
+  restart) makes a card return `ignored`, never an error.
+- Each pick shows `feedback: {sessions, adjustment}` for its model, so the
+  coordinator sees why it moved.
+
+### Task size and effort (coordinator's calls)
+
+- New optional fact `task.size`: `short` (default) or `long` (about a working day
+  or more, or several separately checkable steps).
+- Size does not change the level. The text fix below sends whole plans to
+  `prose`, which already raises them.
+- Effort is no longer fixed by the level alone: a `long` task gets one effort
+  step above its level's default (level 1 low → medium, level 2 medium → high,
+  level 3 high → xhigh), clamped to the model's variants as today.
+- Cards are kept apart by size, so a failed long build does not lower a model's
+  record on short tasks.
+
+### Text changes in the tool description
+
+- `exact` = this request is one task of a written plan that names its files, its
+  expected behavior and the checks that tell success from failure, and leaves
+  the builder nothing to decide. Several plan tasks in one request, or any open
+  choice, is `prose`. Unsure whether it is exact: say `prose`.
+- One request per delegated task. Rate risk by what a mistake would cost, not by
+  the task's size; give size in `size`.
+- The card scale: 0 = failed; 3 = met the stated checks; 5 = met them with no
+  rework needed. Skip the card when the brief was at fault or the provider
+  failed.
+- `constraints` lists its four fields in the input schema (`allowed_models`,
+  `excluded_models`, `allowed_efforts`, `allowed_harnesses`, each a list of
+  strings), with no rule about when to use them.
+
 ### The card
 
-- Each `smart_router_select` answer gets a `pick_id` (random, opaque). The
-  plugin remembers, per session, which model, level, work kind and facts each
-  `pick_id` stood for, for the session's lifetime (bounded like the notice map).
-- The rater calls `smart_router_feedback` with `pick_id`, the `model_ref` it
-  actually dispatched (it may be an alternative), `rating` 0-5 (integer), and
-  an optional `comment` (at most 280 characters). The plugin fills in level,
-  work kind and facts from the `pick_id`, so the rater cannot misreport them.
-- Scale anchors, in the tool description: 0 failed or unusable; 3 did the job
-  as asked; 5 exceptional, did more than asked.
-- One card per session, model and kind of work (the user's rule). A repeat is
-  refused with a short message.
-- A model never rates itself: a card is refused when the rater's model (when
-  the host exposes it) equals the rated model.
-- `smart_router_select`'s description gains one sentence: after a subagent
-  reports, rating it with `smart_router_feedback` is optional and improves
-  later picks.
+- `smart_router_feedback` takes `pick_id`, `model_ref` (what was dispatched),
+  `rating` 0-5 (integer) and an optional `comment` of at most 280 characters.
+- The plugin fills in level, work kind, size and facts from the `pick_id`. The
+  card counts only when `model_ref` is the pick or one of its alternatives.
+- The rater's model is read from the rater's own session (`ctx.session.get`
+  returns `model: {providerID, id}`), resolved to a catalog key and lab the same
+  way picks are.
+- A model never rates itself: same key, refused. A rater from the same lab as
+  the rated model counts at half weight. An unknown rater counts at half weight.
+- One vote per session, model and kind of work, enforced in the stored file; a
+  repeat is refused.
+- Comments are stored capped and are never echoed in any answer. Wording in docs:
+  "Smart Router sends nothing"; a hosted coordinator's transcript still holds
+  what it typed.
 
 ### Storage
 
-- One local file, `router-feedback.json`, in Smart Router's state directory,
-  written under the existing lock helpers. Per card: rated model key, family,
-  creator, work kind, level, rating, rater model key and creator when known,
-  time, session hash. Comments are stored separately and capped.
-- Size is bounded: cards older than 180 days, or beyond a fixed count per
-  model and kind of work, are dropped on write.
+- One file, `router-feedback.json`, under the existing lock helpers.
+- Per key (model, kind of work, size): two decayed running totals (weight, and
+  weight × rating) and the set of sessions that contributed; plus a bounded set
+  of recent vote keys. No card list, so nothing to prune.
+- The whole file is bounded (well under 1 MiB). A missing, damaged or oversized
+  file means no adjustment; picks fall back to catalog scores. Writes refuse when
+  over the bound.
 
 ### How cards move a model
 
-- Effective score for a model and kind of work = catalog score + adjustment.
-  Eligibility at the bars and the cheapest-first order then use the effective
-  score.
-- Adjustment = cap * (weighted mean - 3) / 2 * n / (n + 5), where cap = 10% of
-  the anchor A (about 6 points today), n = the weighted card count, so a few
-  cards move it little and many consistent cards approach the cap.
-- Weights: a card's weight halves every 30 days; a card from a rater of the same
-  lab as the rated model counts half; when a kind of work has no cards, the
-  model's cards for other kinds count at half weight; a new version of a known
-  family starts with the family's cards at half weight.
-- Example: a level-2 model at 51.3 with six recent cards averaging 1.5 on
-  implementation moves to about 48.8, below the 49.1 level-2 bar, so
-  implementation stops going to it; its reviews are unaffected.
-- Every pick reports `feedback: {cards, adjustment}` so the coordinator sees why
-  it moved.
+- Effective score for a model, kind of work and size = catalog score +
+  adjustment. The bars and cheapest-first order then use the effective score.
+  The council's seat pick does not.
+- Adjustment = clamp(cap × d × n / (n + 5), −cap, +cap), where cap = 10% of the
+  anchor A (about 6 points today), n = the decayed weight, and d = (mean − 3) / 3
+  when the mean is below 3, (mean − 3) / 2 when above, so both ends reach the
+  cap.
+- Weights halve every 30 days.
+- No adjustment until the key has cards from at least 3 different sessions.
+- A model's record also includes, at half weight, the cards of older versions in
+  its family (same lab and family key). A new version starts with that half
+  record on top of its catalog score.
+- No borrowing across kinds of work.
 
 ### Unchanged
 
-The anchor, the bars, the level rules, cheapest-first order, the near clause,
-`model_ref`, the council's seat rule, advisory-only.
+The anchor, the bars, level rules other than the text fix, cheapest-first order,
+the near clause, `model_ref`, the council's seat rule, `ROUTER_NOTE` and
+`MODEL_NOTE`.
 
-## Open for review
+## Deferred
 
-- Whether ratings from coordinators judging their own delegations are reliable
-  enough to move eligibility, and what bias the scheme still lets through.
-- Whether model plus kind of work is the right key, given the coordinator's
-  feedback that task size is what the router cannot see.
-- Whether the constants (cap 10% of A, n/(n+5), 30-day half-life) are sound.
-- Whether coordinators will actually fill in an optional card.
+- Keying cards by level or file count.
+- Saving `pick_id`s across plugin restarts.
+- Centring ratings on the machine-wide average; tracking how many picks get
+  rated.
+- Inferring quality without a card (overrides, stalls, re-dispatches).
+
+## Verification
+
+- Unit tests for the formula (both caps, decay, the 3-session rule, family half
+  weight, self-rating refusal, same-lab and unknown-rater half weight, one vote,
+  damaged file falls back), the size and effort rule, the text and schema.
+- A live check: one fresh session dispatches a subagent and files a card; the
+  card is stored with the rater's model, and a repeat is refused.
 
 ## Left to the builder
 
-File layout of the store, the exact refusal messages, test fixtures.
+The file layout, refusal messages, test fixtures, and the exact wording of the
+text changes within the character limit.
