@@ -121,9 +121,23 @@ async function readSettings(folder, path, feature) {
   } finally { await file.close() }
 }
 
-function snapshot(root, raw) {
-  return createHash("sha256").update(root).update(raw ? "\0present\0" : "\0absent\0")
-    .update(raw ?? "").digest("hex")
+function snapshot(root, raw, mainRaw) {
+  const hash = createHash("sha256").update(root).update(raw ? "\0present\0" : "\0absent\0").update(raw ?? "")
+  // Worktree mode also covers main's file, so a change there between preview and apply is caught.
+  if (mainRaw !== undefined) hash.update(mainRaw ? "\0main-present\0" : "\0main-absent\0").update(mainRaw ?? "")
+  return hash.digest("hex")
+}
+
+// Main's entries in main's order, each replaced by the worktree's entry of the same name,
+// then the worktree's own entries. Top-level keys merge the same way, the worktree winning.
+function overlay(main, own, feature) {
+  if (!main.value && !own.value) return { value: undefined, featureIndex: -1 }
+  const byName = (entry) => Object.keys(entry)[0]
+  const ownEntries = new Map((own.value?.features ?? []).map((entry) => [byName(entry), entry]))
+  const features = (main.value?.features ?? []).map((entry) => ownEntries.get(byName(entry)) ?? entry)
+  const seen = new Set(features.map(byName))
+  for (const entry of own.value?.features ?? []) if (!seen.has(byName(entry))) features.push(entry)
+  return { value: { ...main.value, ...own.value, version: 1, features }, featureIndex: features.findIndex((entry) => feature in entry) }
 }
 
 function decimal(token) {
@@ -147,8 +161,10 @@ function numbersRoundTrip(raw) {
   return true
 }
 
-export function createProjectSettings(directory, feature = "smart_router", { atProject = false } = {}) {
+// `worktree` saves at the session's checkout root and previews from main's file overlaid with that root's own.
+export function createProjectSettings(directory, feature = "smart_router", { atProject = false, worktree = false } = {}) {
   if (!Object.hasOwn(FEATURES, feature)) throw new Error("unsupported feature")
+  if (atProject && worktree) throw new Error("unsupported options")
   const prefs = feature === "git_workflow"
   // The default feature accepts a boolean or { enabled }; git_workflow accepts { enabled?, agent_merge?, worktree_cleanup? }.
   // Unknown keys and non-boolean values are invalid.
@@ -170,13 +186,22 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
     const { project } = found, root = atProject ? project : found.root
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
-      const data = await readSettings(folder, path, feature)
+      let data = await readSettings(folder, path, feature)
+      let mainRaw
+      if (worktree) {
+        mainRaw = null
+        if (!found.unresolved && found.project !== root) {
+          const main = await readSettings(join(found.project, ".vibe-workflow"), join(found.project, ".vibe-workflow", "settings.json"), feature)
+          mainRaw = main.raw ?? null
+          data = { ...data, ...overlay(main, data, feature), mainRaw }
+        }
+      }
       const entry = data.value?.features[data.featureIndex]?.[feature]
       const enabled = entry?.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
         reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null,
           worktree_cleanup: entry ? entry.worktree_cleanup ?? null : null }),
-        snapshot: snapshot(root, data.raw), folder, data }
+        snapshot: snapshot(root, data.raw, mainRaw), folder, data }
     } catch {
       return { state: "blocked", reason: "project_settings_invalid", root, project, path }
     }
@@ -196,7 +221,7 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
         ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge,
           previous_worktree_cleanup: state.worktree_cleanup, worktree_cleanup: cleanup }),
-        change: !data.raw ? "create" : same ? "none" : "update" }
+        change: same ? "none" : !data.raw ? "create" : "update" }
     },
     async apply(values, expectedSnapshot, { signal } = {}) {
       const asked = normalize(values)
@@ -215,7 +240,9 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
       if (initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
         initial.worktree_cleanup === cleanup))) return result("unchanged")
-      if (initial.data.raw && !numbersRoundTrip(initial.data.raw)) return blocked("project_settings_lossy")
+      if ((initial.data.raw && !numbersRoundTrip(initial.data.raw)) || (initial.data.mainRaw && !numbersRoundTrip(initial.data.mainRaw))) {
+        return blocked("project_settings_lossy")
+      }
       const lockPath = join(folder, ".settings.lock")
       let lock, temporary, createdFolder = false, saved = false
       try {
