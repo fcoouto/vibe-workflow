@@ -288,8 +288,7 @@ test("every onboarding question has the same control-shaped form", async (t) => 
     assert.ok(questions[index].includes(phrase), phrase)
   }
   const flat = text.replace(/\s+/g, " ")
-  for (const phrase of ["add that Smart Router is saved in this worktree",
-    "`previous_agent_merge` `true` is Agents merge their own and `false` is I merge them",
+  for (const phrase of ["`previous_agent_merge` `true` is Agents merge their own and `false` is I merge them",
     "In OpenCode, the control's question text is the Context followed by the Question",
     "For `false`, that gives Keep them (Current) first and Clean up (Recommended) second.",
     "For `false`, that gives Leave titles alone (Current) first and Show progress (Recommended) second.",
@@ -329,7 +328,7 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
   for (const phrase of ["Up to five short questions.", "Session titles: not saved.", "Unless question 5 was skipped, apply session titles last",
     "Session titles: Off — titles are left alone.",
     "Session titles: On — updated at the end of each turn.",
-    "Session titles: On · Setup needed — this OpenCode does not deliver session events.", "saved in the main checkout", "project_root_unavailable",
+    "Session titles: On · Setup needed — this OpenCode does not deliver session events.",
     "Smart Router: Off —", "Smart Router: On · Scores loaded —", "Git workflow: Off —", "Git workflow: On · I merge —",
     "Git workflow: On · Agents merge —", "Git workflow: not saved.", "reminders registered", "Run onboarding again to change them",
     "Nothing to change", "Saving:", "native file-edit permission",
@@ -337,9 +336,16 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
     assert.ok(text.includes(phrase), phrase)
   }
   const flat = text.replace(/\s+/g, " ")
-  for (const phrase of ["When `root` differs and Smart Router was saved, add before the last line",
-    "**Smart Router is saved only in this worktree. Merge this branch into main so it applies to the project.**"]) {
+  for (const phrase of ["Before step 1, check where the session runs", "`git rev-parse --absolute-git-dir --git-common-dir`",
+    "`worktree_create` with the name `onboard-vibe-workflow`", "`session.move`", "never save in the main checkout instead",
+    "When `root` differs from `project`, add before the last line",
+    "**Git workflow and cleanup take effect only after this branch is merged into main.**",
+    "committing and merging that file is the user's step"]) {
     assert.ok(flat.includes(phrase), phrase)
+  }
+  for (const phrase of ["saved in the main checkout", "Smart Router is saved only in this worktree", "main checkout's settings file will change",
+    "must run from the main checkout", "run onboarding from the main checkout"]) {
+    assert.ok(!flat.includes(phrase), phrase)
   }
 })
 
