@@ -45,7 +45,7 @@ test("skillNote states the onboarding decision for the finishing and worktree sk
 
 const PLAN_STEP = "After your self-review and before you ask for theirs, unless the plan's risk is reversible, dispatch one " +
   "fresh reviewer, once, with the spec and plan paths only. Ask it for, ranked: spec requirements with no task, misordered " +
-  "tasks, failure modes no test covers, and steps a cheap implementer could misread; \"nothing important\" is a valid " +
+  "tasks, failure modes no test covers (for statistics, numerics or calibration, a missing known-answer or reference-value test), and steps a cheap implementer could misread; \"nothing important\" is a valid " +
   "answer. Set its model as planning work (level 3); without Smart Router, the top tier. Fix what it finds yourself, " +
   "without a second review; bring your human partner only what they must decide."
 const PLAN = "vibe-workflow: your human partner pre-approved the execution method you recommend; treat it as already " +
