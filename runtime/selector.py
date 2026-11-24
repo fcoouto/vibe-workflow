@@ -1,8 +1,9 @@
 """Compose the tested advisory flow; never dispatch, admit, reserve or retry."""
 from pathlib import Path
+import math
 import time
 
-from runtime import native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
+from runtime import feedback, native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
 
 CLAUDE = 'opencode-claude-subscription'
 
@@ -167,16 +168,42 @@ def _refresh_flag(answer, pool):
     return answer
 
 
+def _store(state_dir):
+    try:
+        return feedback.load(Path(state_dir))
+    except Exception:  # feedback never breaks a pick
+        return None
+
+
+def _adjusted(pool, store, item, work_kind, size_group, anchor):
+    """A candidate with its feedback adjustment in `score`; the catalog score stays in `catalog_score`."""
+    key, creator = pool['keys'][item['route']], pool['creators'][item['route']]
+    family = scores.family_key(key)
+    try:
+        facts = feedback.adjustment(store, key=key, creator=creator, family=family, work_kind=work_kind,
+                                    size_group=size_group, anchor=anchor, now=pool['now'])
+        delta = float(facts['adjustment'])
+        if not math.isfinite(delta):
+            raise ValueError('non_finite_adjustment')
+    except Exception:  # any feedback problem means no adjustment for this candidate
+        facts, delta = dict(sessions=0, adjustment=0.0), 0.0
+    return dict(item, catalog_score=item['score'], score=item['score'] + delta, feedback=facts,
+                catalog_id=dict(key=key, creator=creator, family=family))
+
+
 def _select(request, level, constraints, *, state_dir, source, fetch, now):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
                        state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
     anchor = scores.anchor(pool['cache'])
-    ordered = routing.order(pool['candidates'], level, anchor) if anchor is not None else []
+    size = routing.size_group(request['task'])
+    store = _store(state_dir)
+    candidates = [_adjusted(pool, store, item, request['work_kind'], size, anchor) for item in pool['candidates']]
+    ordered = routing.order(candidates, level, anchor) if anchor is not None else []
     below = False
-    if not ordered and pool['candidates']:
-        ordered, below = routing.strongest(pool['candidates']), True
+    if not ordered and candidates:
+        ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
     chosen = _confirm(ordered, pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
@@ -184,4 +211,6 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now):
     reason = None if chosen else _empty_reason(pool)
     answer = result('selected' if chosen else 'no_selection', reason, level=level, excluded=pool['excluded'],
                     route=chosen[0] if chosen else None, alternatives=chosen[1:], below_level=below and bool(chosen))
+    if chosen:
+        answer['size_group'] = size
     return _refresh_flag(answer, pool)
