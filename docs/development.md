@@ -42,7 +42,7 @@ the check without a pick. An unreadable or empty list stops it as `models_unavai
 refuses to run unless `config/routes.json` holds exactly the three authorized paths, each billed as
 `included_subscription`, so a new route never extends the authorization. One that is gone is replaced
 by one level-1 Smart Router pick on its path, reported with its paid-overflow status
-(`allowed_harnesses`, the user's state folder for scores and account facts); a pick that fails, lands on
+(the pick sees only that plan's models; scores and account facts come from the user's state folder); a pick that fails, lands on
 another path or is not listed is reported as `could_not_select`, nothing runs and nothing is recorded.
 The user pre-authorized that pick (council `51429ec7c824_router-engine-required`). Picks are sticky: the
 record keeps the models used, so a weekly price change never swaps a working model. Each run's session is deleted afterwards
@@ -261,6 +261,18 @@ damaged or oversized store means no adjustment, and picks fall back to catalog s
 on any provider. A session gets one vote per model and kind of work, and can vote again only after 5,000 newer votes
 evict its old one. Smart Router sends nothing anywhere; cards stay in that file. A hosted coordinator's own transcript
 may still keep what it typed, such as a comment.
+
+## Steering
+
+A coordinator may narrow a pick but not pin one. `excluded_models` takes a pick's `model_ref`, a catalog
+key, a route name or a model name; an entry that matches no route is returned as `unmatched`.
+`reviewing` takes the `model_ref` of the work under review; the router then prefers a reviewer from another
+lab, among models that clear the task's level. The answer carries `reviewer_independent`, and the plugin
+shows a notice once per session when it is false. Below-level picks get no feedback card. `allowed_models`,
+`allowed_efforts` and `allowed_harnesses` are removed on this branch (release 0.11.0); they were advertised
+in 0.10.0, so a caller still sending them gets `invalid_request`. Pinning stays outside the router. Design:
+`docs/superpowers/specs/2026-11-24-router-steering-design.md`; council:
+`docs/vibe-council/sessions/08d7b6126f45_router-constraints/result.md`.
 
 ## Smart Router automatic selection: what is known
 
