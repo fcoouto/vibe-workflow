@@ -88,6 +88,9 @@ preserved, the worktree's winning on a name clash.
 - The snapshot covers both files' contents and the root, so a change to either between
   preview and apply returns `project_settings_changed`.
 - When main has no file, the effective settings are the worktree file alone.
+- A checkout with no file of its own gets main's choices written even for an unchanged answer
+  (`change` is `create`, never `none`), because the runtime reads for Smart Router and session titles
+  use the checkout's own file. Found by review on 2026-11-24.
 
 ### Runtime reads
 
@@ -106,7 +109,7 @@ changed here.
 ### The procedure (`skills/vibe-onboard-project/references/procedure.md`)
 
 - Step 1: before the first preview, the agent checks whether the session's directory is
-  a linked worktree (its git directory differs from the git common directory). If it is
+  a linked worktree (its git directory differs from the git common directory, both resolved with `git rev-parse --path-format=absolute`; a raw comparison fails in a primary checkout, where the common directory prints as `.git`). If it is
   the primary checkout of a git repository, the agent says in one line that it will create
   a worktree and move the chat there, creates it with `worktree_create` (name
   `onboard-vibe-workflow`), moves the session with `session.move`, confirms the working

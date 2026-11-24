@@ -521,12 +521,15 @@ test("worktree mode seeds from main and shows main's values as current", async (
   assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [git3, { session_titles: { enabled: true } }, { smart_router: { enabled: true } }])
 })
 
-test("worktree mode treats an answer equal to main's value as no change and creates no file", async (t) => {
-  const { saving, own } = await linkedFixture(t, { version: 1, features: [{ session_titles: { enabled: true } }] })
+test("worktree mode materializes main's choices when the checkout has no file, even for an unchanged answer", async (t) => {
+  const { saving, own, create, linked } = await linkedFixture(t, { version: 1, features: [{ session_titles: { enabled: true } }] })
+  assert.equal((await create(linked, "session_titles").inspect()).state, "not_onboarded")
   const project = saving("session_titles"), preview = await project.preview(true)
-  assert.deepEqual([preview.previous_enabled, preview.change], [true, "none"])
-  assert.equal((await project.apply(true, preview.snapshot)).state, "unchanged")
-  await assert.rejects(stat(own), { code: "ENOENT" })
+  assert.deepEqual([preview.previous_enabled, preview.change], [true, "create"])
+  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [{ session_titles: { enabled: true } }])
+  assert.equal((await saving("session_titles").preview(true)).change, "none")
+  assert.equal((await create(linked, "session_titles").inspect()).state, "on")
 })
 
 test("worktree mode completes a partial worktree file with main's entries", async (t) => {

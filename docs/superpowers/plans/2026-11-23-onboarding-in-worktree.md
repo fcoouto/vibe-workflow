@@ -44,7 +44,7 @@
   - `worktree mode in a primary checkout saves at the root with no overlay`.
   - `worktree mode saves in place outside git` and `in a linked worktree whose main cannot be resolved` (reuse the bare-repository fixture).
   - `worktree mode seeds from main`: no worktree file, main `[git_workflow, session_titles]` on; preview `smart_router` → `previous_enabled: null`, `change: "create"`; apply writes `[git_workflow, session_titles, smart_router]` with main's values.
-  - `worktree mode reads main's value as current`: main has `session_titles` on; preview `session_titles` with `true` → `previous_enabled: true`, `change: "none"`; apply → `unchanged`; no worktree file created.
+  - `worktree mode reads main's value as current`: main has `session_titles` on; preview `session_titles` with `true` → `previous_enabled: true`, `change: "create"` (the checkout has no file, so main's choices are materialized; changed after review 2026-11-24); apply → `saved`; a second preview is `none`.
   - `worktree mode completes a partial worktree file`: worktree `[smart_router]`, main `[git_workflow, session_titles]`; apply `git_workflow` changed → worktree file `[git_workflow(new), session_titles, smart_router]`.
   - `worktree mode keeps unknown entries and top-level keys from both files, the worktree winning a clash`.
   - `worktree mode snapshot covers main's file`: change main's file between preview and apply → `project_settings_changed`; unchanged main → `saved`.

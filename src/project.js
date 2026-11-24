@@ -221,7 +221,7 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
         ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge,
           previous_worktree_cleanup: state.worktree_cleanup, worktree_cleanup: cleanup }),
-        change: same ? "none" : !data.raw ? "create" : "update" }
+        change: same && !(data.mainRaw && !data.raw) ? "none" : !data.raw ? "create" : "update" }
     },
     async apply(values, expectedSnapshot, { signal } = {}) {
       const asked = normalize(values)
@@ -238,7 +238,9 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      if (initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
+      // A checkout with no file of its own still gets main's choices written, so its own runtime read sees them.
+      const inherited = initial.data.mainRaw && !initial.data.raw
+      if (!inherited && initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
         initial.worktree_cleanup === cleanup))) return result("unchanged")
       if ((initial.data.raw && !numbersRoundTrip(initial.data.raw)) || (initial.data.mainRaw && !numbersRoundTrip(initial.data.mainRaw))) {
         return blocked("project_settings_lossy")

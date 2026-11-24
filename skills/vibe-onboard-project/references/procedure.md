@@ -83,7 +83,7 @@ exactly as written, apart from the markers and the saved choice's place.
 
 ## Steps
 
-Before step 1, check where the session runs: `git rev-parse --absolute-git-dir --git-common-dir`.
+Before step 1, check where the session runs: `git rev-parse --path-format=absolute --absolute-git-dir --git-common-dir`.
 When both paths are the same in a git repository, the session is in the primary checkout.
 Say in one line that you are creating a worktree and moving this chat there. Call
 `worktree_create` with the name `onboard-vibe-workflow` (another name when it exists), move the

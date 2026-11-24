@@ -336,7 +336,7 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
     assert.ok(text.includes(phrase), phrase)
   }
   const flat = text.replace(/\s+/g, " ")
-  for (const phrase of ["Before step 1, check where the session runs", "`git rev-parse --absolute-git-dir --git-common-dir`",
+  for (const phrase of ["Before step 1, check where the session runs", "`git rev-parse --path-format=absolute --absolute-git-dir --git-common-dir`",
     "`worktree_create` with the name `onboard-vibe-workflow`", "`session.move`", "never save in the main checkout instead",
     "When `root` differs from `project`, add before the last line",
     "**Git workflow and cleanup take effect only after this branch is merged into main.**",

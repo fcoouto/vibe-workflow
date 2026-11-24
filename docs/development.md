@@ -284,7 +284,7 @@ with that root's own, and snapshots both files; git workflow reads stay at main;
 the checkout's own file. Not observed: the procedure's worktree check, `worktree_create` and
 `session.move` in a real session, and a real session started in the primary checkout. Nothing in code
 stops a primary-checkout session from saving in main; only the procedure does. The wiring of
-`sessionTitles` in `index.js` has no test.
+`sessionTitles` in `index.js` is pinned by a test that reads storage after a succeeded step (checked by mutation).
 
 ## Smart Router automatic selection: what is known
 
