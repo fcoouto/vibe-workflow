@@ -27,7 +27,7 @@ not a new subsystem.
   model can drop out of a level, or climb into one.
 - New models start from their catalog score; new versions of a known family
   start with half of the family's record.
-- The router can tell short tasks from long ones (4 agent-hours or more), and
+- The router can tell short tasks from long ones (2 agent-hours or more; 4 before 0.12.0), and
   gives long tasks more effort.
 
 ## Non-goals
@@ -81,13 +81,13 @@ not a new subsystem.
   the coordinator's estimate of how long the delegated agent will work on the
   task, in hours of agent time, not a person's time (the user's choice of field,
   so the cutoff is Smart Router's rule, not each agent's judgement).
-- Threshold: 4 hours (the user's choice). A missing estimate counts as below it.
+- Threshold: 2 hours (the user's choice on 24 November 2026; it was 4 until 0.12.0). A missing estimate counts as below it.
 - The estimate does not change the level. The text fix below sends whole plans
   to `prose`, which already raises them.
-- Effort: at or above 4 hours, one effort step above the level's default (level 1
-  low to medium, level 2 medium to high, level 3 high to xhigh), clamped to the
+- Effort: at or above 2 hours, one effort step above the level's default (level 1
+  medium to high, level 2 medium to high, level 3 high to xhigh), clamped to the
   model's variants as today.
-- Cards are kept in two size groups, below and at or above 4 hours, so a failed
+- Cards are kept in two size groups, below and at or above 2 hours, so a failed
   long build does not lower a model's record on short tasks. Two groups only,
   because cards will be sparse.
 - Deferred: moving the threshold from card evidence (where ratings drop).
@@ -176,3 +176,15 @@ the near clause, `model_ref`, the council's seat rule, `ROUTER_NOTE` and
 
 The file layout, refusal messages, test fixtures, and the exact wording of the
 text changes within the character limit.
+
+## Amendment, 24 November 2026 (release 0.12.0)
+
+The user decided: the default effort by level is medium, medium, high (it was low,
+medium, high), so Smart Router never recommends `low` when the model offers more;
+the long-task threshold is 2 agent-hours (it was 4). The estimate stays in hours of
+the delegated agent's wall-clock time, not a person's. Evidence: on a 14-task
+statistics-heavy plan, level-1 builds at low effort passed cleanly on fully
+specified tasks but needed two fix rounds each on two tasks needing judgment about
+tests and test data; the advisor evaluation behind the exact-plan rule never set
+low effort. Effort is still clamped to the model's variants; the level never
+changes.
