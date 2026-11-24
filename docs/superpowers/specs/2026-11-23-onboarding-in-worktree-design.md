@@ -25,6 +25,8 @@ feature in one file, and the file reaches main by pull request.
 
 ## Non-goals
 
+- Enforcing the worktree in code. A primary-checkout session that ignores the procedure can still
+  save in main.
 - A plugin tool that creates worktrees or moves sessions (the plugin runs no write
   command; see `2026-11-22-cleanup-moves-session-design.md`). The procedure does it with
   OpenCode's own tools.
@@ -55,16 +57,20 @@ feature in one file, and the file reaches main by pull request.
 ### Where it saves
 
 All three onboarding features write `<root>/.vibe-workflow/settings.json`, where `root`
-is the session's checkout top level (`found.root` in `src/project.js`).
+is the session's checkout top level (`found.root` in `src/project.js`). The tool does not
+tell a linked worktree from a primary checkout: in a primary checkout the root is main, so
+the save lands in main's file. Keeping the session out of main is the procedure's job
+(below). Decided with the user on 2026-11-24: instructions handle that case, code handles
+only what instructions cannot (the write path and the overlay).
 
 | Session location | Preview and apply |
 |---|---|
-| Linked worktree | Work normally; save in this worktree. |
-| Main checkout of a git repository | Blocked, `worktree_required`. Nothing is read for saving and nothing is written. |
-| Not a git repository | Work normally; save in the directory (no worktree is possible). |
-| Linked worktree whose main checkout cannot be resolved | Work normally; save in this worktree. Writes no longer need the main path. |
+| Linked worktree | Save in this worktree. |
+| Primary git checkout | Save in main's file. The procedure moves the session to a worktree first, so this is the unguarded case. |
+| Not a git repository | Save in the directory. |
+| Linked worktree whose main checkout cannot be resolved | Save in this worktree; no overlay. |
 
-The edit permission resource is the worktree's own `.vibe-workflow/settings.json`.
+The edit permission resource is the root's own `.vibe-workflow/settings.json`, relative to the session directory.
 
 ### What a preview and a save see
 
@@ -78,6 +84,7 @@ preserved, the worktree's winning on a name clash.
 - Apply writes the effective settings with the chosen feature changed, to the worktree
   file. A worktree with no file therefore gets main's entries plus the new one, and
   merges into main without conflict.
+- The overlay applies only when main's file is a different file from the worktree's.
 - The snapshot covers both files' contents and the root, so a change to either between
   preview and apply returns `project_settings_changed`.
 - When main has no file, the effective settings are the worktree file alone.
@@ -98,12 +105,14 @@ changed here.
 
 ### The procedure (`skills/vibe-onboard-project/references/procedure.md`)
 
-- Step 1: when a preview is blocked with `worktree_required`, the agent says in one line
-  that it will create a worktree and move the chat there, creates it with
-  `worktree_create` (name `onboard-vibe-workflow`), calls `session_move` to it, confirms
-  the working directory in a later step (the move applies at the next step boundary,
-  see the cleanup spec's evidence) and only then runs the preview again. If it cannot,
-  it stops and reports why; it never saves in main another way.
+- Step 1: before the first preview, the agent checks whether the session's directory is
+  a linked worktree (its git directory differs from the git common directory). If it is
+  the primary checkout of a git repository, the agent says in one line that it will create
+  a worktree and move the chat there, creates it with `worktree_create` (name
+  `onboard-vibe-workflow`), moves the session with `session.move`, confirms the working
+  directory in a later step (the move applies at the next step boundary, see the cleanup
+  spec's evidence) and only then previews. If it cannot, it stops and reports why; it never
+  saves in main instead. Not a git repository: no worktree, save in place.
 - The opening line stops branching on `root` differing: every run names the worktree.
 - Question 5's and the Saving line's "saved in the main checkout" wording goes; the
   Saving line names the worktree file and says committing and merging it is the user's
@@ -116,9 +125,9 @@ changed here.
 
 ## Changes
 
-- `src/project.js`: a way to build a settings instance that saves at the session root
-  and previews from the effective settings (main overlaid by the worktree file), blocks
-  `worktree_required` for a primary git checkout, and snapshots both files. Existing
+- `src/project.js`: a `worktree` option: an instance that saves at the session root and
+  previews from the effective settings (main overlaid by the worktree file), and
+  snapshots both files. Existing
   read instances keep their behavior; `session_titles` reads switch to the own-checkout
   instance.
 - `src/onboarding.js`: use that instance for all three features; permission resource
@@ -140,8 +149,7 @@ In `tests/plugin/project.test.js` and `tests/plugin/onboarding.test.js`:
 - From a linked worktree, saving any of the three features writes only the worktree file;
   main's file is untouched. This replaces `git_workflow apply from a linked worktree
   writes the main checkout only`.
-- From a primary git checkout, preview and apply return `worktree_required`, write
-  nothing and ask no permission.
+- In a primary git checkout the instance saves at the root, with no overlay.
 - A non-git directory still saves in place.
 - A worktree with no file, main holding `git_workflow` and `session_titles`: the preview
   shows them as current; applying Smart Router writes all three entries.
@@ -152,14 +160,14 @@ In `tests/plugin/project.test.js` and `tests/plugin/onboarding.test.js`:
 - Runtime: `git_workflow` still reads main when the worktree file says `agent_merge:
   true` (existing test `a worktree copy never grants merge` stays green); `session_titles`
   reads the checkout's own file.
-- Procedure text contains the `worktree_required` handling, the new final-report line,
+- Procedure text contains the worktree check and move step, the new final-report line,
   and no "saved in the main checkout" claim. The existing wording tests at
   `onboarding.test.js:264` and `:314` change with it.
 
 ## Known gaps
 
 - The agent steps in step 1 (create, move, confirm) rest on `worktree_create` and
-  `session_move`, observed on 2.2.6 in the cleanup spec; not tried here.
+  `session.move`, observed on 2.2.6 in the cleanup spec; not tried here.
 - A stale worktree file (main changed after branching) can conflict at merge. Git shows
   it; onboarding does not detect it.
 - Session titles and Smart Router do not apply in a worktree branched before the file
