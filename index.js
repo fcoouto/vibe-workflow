@@ -17,6 +17,7 @@ const MAX_NOTICE_SESSIONS = 128
 const MAX_PICKS = 64
 const PICK_TTL_MS = 48 * 3600 * 1000
 const MAX_STORED_PICKS = 2000
+const STORAGE_OP_TIMEOUT_MS = 5000
 const SIZE_GROUPS = ["short", "long"]
 const FEEDBACK_HINT = "After the subagent reports, you may rate its work with smart_router_feedback and this pick_id."
 const blocked = () => ({
@@ -193,9 +194,18 @@ export default {
     // Every storage write, remove and clear runs here, one at a time, in the order issued. Nothing waits on the
     // queue, so a slow or failing call never blocks or fails an answer.
     let queue = Promise.resolve()
+    // A call that never settles counts as failed after STORAGE_OP_TIMEOUT_MS, so the queue moves on. Accepted
+    // residual: a timed-out write that completes much later could restore one pick that an off-state clear
+    // forgot. It can receive at most one card and expires within 48 hours.
     const enqueue = (action) => {
-      if (!store) return
-      queue = queue.then(action).catch(() => {})
+      if (!store) return Promise.resolve(false)
+      const run = queue.then(() => {
+        let timer
+        const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(false), STORAGE_OP_TIMEOUT_MS) })
+        return Promise.race([Promise.resolve().then(action).then(() => true), timeout]).finally(() => clearTimeout(timer))
+      }).then((done) => done, () => false)
+      queue = run
+      return run
     }
     // Picks may be persisted: true at startup, set by every write, and cleared once a clear or a prune finds none left.
     let storageDirty = true
@@ -244,8 +254,9 @@ export default {
       if (!store || !storageDirty) return
       storageDirty = false
       clearsPending += 1
-      enqueue(async () => {
-        try { await clearStoredPicks() } catch { storageDirty = true } finally { clearsPending -= 1 }
+      enqueue(clearStoredPicks).then((done) => {
+        clearsPending -= 1
+        if (!done) storageDirty = true
       })
     }
     const remember = (sessionID, pickID, pick) => {

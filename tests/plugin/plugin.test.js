@@ -1709,3 +1709,30 @@ test("two cards for one stored pick looked up together are both answered, neithe
     assert.ok(results.some((result) => result.state === "recorded"), JSON.stringify(results))
   } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
+
+test("a storage write that never settles times out, so the queued clear and the next write still run", { timeout: 5000 }, async (t) => {
+  const base = memoryStorage()
+  let stalled = false
+  const storage = { ...base, set: (key, json) => {
+    if (!stalled) return base.set(key, json)
+    stalled = false
+    return new Promise(() => {})
+  } }
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const kept = await pickOf(f)
+    await flush()
+    stalled = true
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    await pickOf(f) // this write never settles
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection") // queues a clear behind the stall
+    await preference(f.root, true)
+    const fresh = await pickOf(f) // queued behind the clear
+    await flush()
+    assert.deepEqual(storedKeys(storage), [`pick/${kept}`], "the clear waits behind the stalled write")
+    t.mock.timers.tick(5000)
+    await flush()
+    assert.deepEqual(storedKeys(storage), [`pick/${fresh}`])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
