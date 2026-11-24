@@ -190,13 +190,25 @@ export default {
     // Picks also live in OpenCode's plugin storage, so they survive a restart. Without a usable set, memory only.
     const store = typeof ctx.storage?.set === "function" ? ctx.storage : null
     const storedKey = (pickID) => `pick/${pickID}`
-    // Storage writes and removals never block or fail an answer.
-    const background = (action) => {
+    // Every storage write, remove and clear runs here, one at a time, in the order issued. Nothing waits on the
+    // queue, so a slow or failing call never blocks or fails an answer.
+    let queue = Promise.resolve()
+    const enqueue = (action) => {
       if (!store) return
-      try { Promise.resolve(action()).catch(() => {}) } catch {}
+      queue = queue.then(action).catch(() => {})
+    }
+    // Picks may be persisted: true at startup, set by every write, and cleared once a clear or a prune finds none left.
+    let storageDirty = true
+    let writes = 0
+    // Clears queued and not yet finished: a lookup meanwhile must not bring back a pick that was just forgotten.
+    let clearsPending = 0
+    const storePick = (pickID, record) => {
+      storageDirty = true
+      writes += 1
+      enqueue(() => store.set(storedKey(pickID), record))
     }
     const storedPick = async (pickID) => {
-      if (!store) return null
+      if (!store || clearsPending) return null
       try { return pickFromRecord(await store.get(storedKey(pickID))) } catch { return null }
     }
     // Every stored pick, one page at a time; a failing page ends the walk.
@@ -210,8 +222,9 @@ export default {
       }
     }
     async function clearStoredPicks() { await scanPicks((key) => store.remove(key)) }
-    // Drops expired and malformed picks, then the oldest rateable ones beyond MAX_STORED_PICKS.
-    async function pruneStoredPicks() {
+    // Drops expired and malformed picks, then the oldest rateable ones beyond MAX_STORED_PICKS. Clears storageDirty
+    // only when nothing is left and no write was queued since the prune was.
+    async function pruneStoredPicks(writesWhenQueued) {
       const live = []
       await scanPicks(async (key, value) => {
         const pick = pickFromRecord(value)
@@ -220,11 +233,21 @@ export default {
       })
       live.sort((a, b) => a.t - b.t)
       for (const { key } of live.slice(0, Math.max(0, live.length - MAX_STORED_PICKS))) await store.remove(key)
+      if (!live.length && writes === writesWhenQueued) storageDirty = false
     }
     // Every path that observes Smart Router off calls this: notices and picks clear together, and a selection
     // that started before it may not store its pick.
     let generation = 0
-    const forgetOff = () => { notices.clear(); generation += 1; picks.clear(); background(clearStoredPicks) }
+    const forgetOff = () => {
+      notices.clear(); generation += 1; picks.clear()
+      // A clear is queued only while stored picks may exist, so repeated observations of off do not rescan storage.
+      if (!store || !storageDirty) return
+      storageDirty = false
+      clearsPending += 1
+      enqueue(async () => {
+        try { await clearStoredPicks() } catch { storageDirty = true } finally { clearsPending -= 1 }
+      })
+    }
     const remember = (sessionID, pickID, pick) => {
       const book = picks.get(sessionID) ?? new Map()
       picks.delete(sessionID)
@@ -425,7 +448,7 @@ export default {
               size_group: sized ? answer.size_group : null,
               rateable: sized && answer.below_level !== true && refs.size > 0, refs }
             remember(sessionID, pickID, pick)
-            background(() => store.set(storedKey(pickID), { v: 1, ...pick, refs: [...refs] }))
+            storePick(pickID, { v: 1, ...pick, refs: [...refs] })
           }
         }
         return { content: JSON.stringify({ ...withModelRef(answer), ...pickFields, notice }) }
@@ -446,7 +469,7 @@ export default {
       execute: async (request, { signal, sessionID }) => {
         const ignored = (reason) => ({ content: JSON.stringify({ state: "ignored", reason }) })
         const refused = (reason) => ({ content: JSON.stringify({ state: "refused", reason }) })
-        if (closed) return { content: JSON.stringify({ state: "ignored" }) }
+        if (closed) return ignored("router_off")
         const started = generation
         if ((await inspectRouter()).state !== "on") return ignored("router_off")
         const pickID = typeof request?.pick_id === "string" ? request.pick_id : null
@@ -456,12 +479,14 @@ export default {
           const stored = await storedPick(pickID)
           // Turning the router off during the lookup forgot every pick; this one must not come back.
           if (closed || generation !== started) return ignored("router_off")
-          if (stored?.s === hash) { pick = stored; remember(sessionID, pickID, pick) }
+          // A concurrent lookup of this pick may have finished first: share its memory pick, so neither card loses it.
+          pick = picks.get(sessionID)?.get(pickID)
+          if (!pick && stored?.s === hash) { pick = stored; remember(sessionID, pickID, pick) }
         }
         if (!pick || pick.s !== hash) return ignored("unknown_pick")
         if (Date.now() - pick.t > PICK_TTL_MS) {
           picks.get(sessionID)?.delete(pickID)
-          background(() => store.remove(storedKey(pickID)))
+          enqueue(() => store.remove(storedKey(pickID)))
           return ignored("expired")
         }
         if (!pick.rateable) return ignored("not_rateable")
@@ -560,8 +585,8 @@ export default {
         if (Buffer.concat(parts).toString("utf8").includes("subscription_sharing_usage_limit_exceeded")) markLimit()
       } catch {} finally { reader.cancel().catch(() => {}) }
     }, { providerID: "openai" })
-    // The startup prune runs in the background; setup never waits for it.
-    background(pruneStoredPicks)
+    // The startup prune is queued behind any storage call; setup never waits for it.
+    enqueue(() => pruneStoredPicks(writes))
     return () => {
       closed = true
       subscription.abort()

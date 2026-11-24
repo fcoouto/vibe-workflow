@@ -1607,3 +1607,105 @@ test("the select answer does not wait for a storage write that never settles", {
     assert.deepEqual(await rate(f, { pick_id: answer.pick_id, ...cardInput }), { state: "recorded" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
+
+// Storage whose named method waits until the release function returned by hold(name) is called.
+function holdable(storage) {
+  const gates = new Map()
+  const arrivals = new Map()
+  for (const name of ["get", "set", "remove", "scan"]) {
+    const call = storage[name]
+    storage[name] = async (...args) => {
+      arrivals.set(name, (arrivals.get(name) ?? 0) + 1)
+      await gates.get(name)
+      return call(...args)
+    }
+  }
+  storage.arrived = (name) => arrivals.get(name) ?? 0
+  storage.hold = (name) => {
+    let release
+    gates.set(name, new Promise((resolve) => { release = resolve }))
+    return release
+  }
+  return storage
+}
+// Counts calls to storage.scan.
+function countScans(storage) {
+  const counter = { count: 0 }
+  const scan = storage.scan
+  storage.scan = (...args) => { counter.count += 1; return scan(...args) }
+  return counter
+}
+
+test("a write still pending when Smart Router turns off leaves no pick entry behind", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const release = storage.hold("set")
+    await pickOf(f)
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    release()
+    await flush()
+    assert.deepEqual(storedKeys(storage), [])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a clear still pending when Smart Router turns back on does not delete a pick written after it", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const old = await pickOf(f)
+    await flush()
+    const release = storage.hold("scan")
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    await preference(f.root, true)
+    const fresh = await pickOf(f)
+    release()
+    await flush()
+    assert.notEqual(fresh, old)
+    assert.deepEqual(storedKeys(storage), [`pick/${fresh}`])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("with Smart Router off, repeated context-hook steps scan storage at most once", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  try {
+    await pickOf(f)
+    await flush()
+    await preference(f.root, false)
+    const scans = countScans(storage)
+    for (let step = 0; step < 5; step += 1) await f.h.hooks.get("context")({ system: [] })
+    await flush()
+    assert.ok(scans.count <= 1, `storage scans: ${scans.count}`)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a card after the plugin closed is ignored with router_off", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await f.cleanup()
+    assert.deepEqual(await rate(f, { pick_id, ...cardInput }), { state: "ignored", reason: "router_off" })
+  } finally { await rm(f.root, { recursive: true }) }
+})
+
+test("two cards for one stored pick looked up together are both answered, neither as router_off", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    const pick_id = await pickOf(f)
+    await flush()
+    b = await restarted(f, storage)
+    await flush()
+    const release = storage.hold("get")
+    const cards = Promise.all([rate(b, { pick_id, ...cardInput }), rate(b, { pick_id, ...cardInput })])
+    while (storage.arrived("get") < 2) await flush()
+    release()
+    const results = await cards
+    assert.ok(results.every((result) => result.reason !== "router_off"), JSON.stringify(results))
+    assert.ok(results.some((result) => result.state === "recorded"), JSON.stringify(results))
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
