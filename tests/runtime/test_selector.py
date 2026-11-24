@@ -146,6 +146,10 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(short["route"]["effort"], "medium")
         long = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=6)))
         self.assertEqual(long["route"]["effort"], "high")
+        edge = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=2)))
+        self.assertEqual((edge["route"]["effort"], edge["size_group"]), ("high", "long"))
+        under = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=1.9)))
+        self.assertEqual((under["route"]["effort"], under["size_group"]), ("medium", "short"))
 
     def test_huge_hour_estimate_is_invalid_request_not_an_exception(self):
         self.warm()
