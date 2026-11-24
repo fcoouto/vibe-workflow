@@ -137,7 +137,7 @@ class SelectionTest(unittest.TestCase):
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
 
-    def test_estimated_hours_of_four_or_more_raise_effort_one_step(self):
+    def test_estimated_hours_of_two_or_more_raise_effort_one_step(self):
         self.models = [model(provider, name, variants=["low", "medium", "high", "xhigh"])
                        for provider, name in (("claude-agent", "claude-opus-5-5"),
                                               ("claude-agent", "claude-sonnet-5-5"), ("openai", "gpt-6-2-sol"))]
