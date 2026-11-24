@@ -93,6 +93,32 @@ test("a host without models still reports reviewer_independent and every exclude
   } finally { await rm(root, { recursive: true }) }
 })
 
+test("a host without models validates excluded_models like the runtime and bounds the echoed answer", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
+  try {
+    await preference(root, true)
+    const h = host(root, { state_dir: join(root, "absent") })
+    await (await load()).setup(h.ctx)
+    const run = async (entries) => JSON.parse((await h.tools.get("smart_router_select").execute(
+      { v: 2, work_kind: "review", task, constraints: { excluded_models: entries } },
+      { signal: new AbortController().signal })).content)
+    for (const bad of [Array.from({ length: 257 }, (_, n) => `m${n}`), [""], ["x".repeat(257)], ["a\nb"], [7], "no"]) {
+      const answer = await run(bad)
+      assert.deepEqual([answer.state, answer.reason], ["blocked", "invalid_request"])
+      assert.equal("unmatched" in answer, false)
+    }
+    const entries = Array.from({ length: 256 }, (_, n) => "字".repeat(250) + String(n).padStart(3, "0"))
+    const raw = (await h.tools.get("smart_router_select").execute({ v: 2, work_kind: "review", task,
+      constraints: { excluded_models: entries } }, { signal: new AbortController().signal })).content
+    const answer = JSON.parse(raw)
+    assert.equal(answer.reason, "no_models")
+    assert.ok(Buffer.byteLength(raw) <= 65536)
+    assert.deepEqual(answer.unmatched, entries.slice(0, answer.unmatched.length))
+    assert.equal(answer.unmatched.length + answer.unmatched_more, 256)
+    assert.ok(answer.unmatched_more > 0)
+  } finally { await rm(root, { recursive: true }) }
+})
+
 test("a host without models returns no authority without creating state", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-plugin-")))
   try {
@@ -1271,7 +1297,7 @@ test("the select schema bounds the hours, lists only excluded_models and takes r
   assert.deepEqual(properties.constraints.properties.excluded_models, { type: "array", items: { type: "string" },
     description: "Models to leave out for this request only: a pick's model_ref, a catalog key or a model name." })
   assert.deepEqual(properties.reviewing, { type: "string",
-    description: "For a review: the model_ref of the model whose work is reviewed; the router prefers a reviewer from another lab." })
+    description: "For a review: the model_ref of the model whose work is reviewed (provider/model, or provider/creator/model for a routed model); the router prefers a reviewer from another lab, never at a lower level." })
   assert.deepEqual(Object.keys(properties).sort(), ["constraints", "reviewing", "task", "v", "work_kind"])
   assert.doesNotMatch(JSON.stringify(properties), /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i)
   const feedback = h.tools.get("smart_router_feedback").input

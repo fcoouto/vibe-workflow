@@ -391,6 +391,23 @@ class SelectionTest(unittest.TestCase):
         self.assertIn(dict(route="opencode-claude-subscription:sonnet", reason="constraint"), result["excluded"])
         self.assertNotIn("unmatched", result)
 
+    def test_error_answers_reuse_the_post_acquisition_match(self):
+        root = self.root
+
+        class Fills(Facts):
+            def acquire_billing(self, routes, now):
+                super().acquire_billing(routes, now)
+                native_catalog.store_snapshot(root / "router.json", "claude-code", dict(
+                    binding=dict(client_version="1", connection="c", controls="x"),
+                    models=[dict(alias="sonnet", resolved="claude-sonnet-5-5", efforts=[])]))
+        self.source = Fills()
+        request = self.request(models=[model("claude-agent", "sonnet")],
+                               constraints=dict(excluded_models=["claude-sonnet-5-5", "nope"]))
+        with mock.patch.object(selector.scores, "load", side_effect=OSError("unreadable")):
+            result = self.run_select(request)
+        self.assertEqual((result["state"], result["reason"], result["unmatched"]),
+                         ("blocked", "selector_unavailable", ["nope"]))
+
     def test_allowed_fields_are_invalid_requests(self):
         for constraints in (dict(allowed_models=["claude-sonnet-5-5"]), dict(allowed_efforts=["low"]),
                             dict(allowed_harnesses=[PATHS[0]])):
@@ -676,8 +693,42 @@ class ReviewingTest(unittest.TestCase):
                          ("selected", "a-small", False))
         self.assertIn(dict(route=PATHS[1] + ":gpt-x", reason="account_changed"), result["excluded"])
 
+    def test_reviewing_unique_dated_row_names_an_unscored_author_lab(self):
+        raw = self.catalog(extra=[("a/a-d-1-0101", 70, 1, 5, None), ("b/a-d-0", 80, 1, 5, 67)])
+        result = self.run_select(self.request("opencode-go/a-d-1"), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_reviewing_openrouter_author_is_unknown(self):
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("b/b-small", 60, 1, 5, 67),
+                   ("openrouter/o-small", 70, 1, 5, 67), *REVIEW_TOP)
+        result = self.run_select(self.request("opencode-go/o-small"), raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+
+    def test_reviewing_names_the_creator_in_a_three_part_reference(self):
+        raw = self.catalog()
+        for reference in ("openrouter/a/whatever", "openrouter/~a/whatever#high"):
+            with self.subTest(reference=reference):
+                result = self.run_select(self.request(reference), raw)
+                self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+        for reference in ("openrouter/openrouter/x", "openrouter/Bad Lab/x"):
+            with self.subTest(reference=reference):
+                result = self.run_select(self.request(reference), raw)
+                self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+
+    def test_a_pick_and_its_card_agree_on_the_model_identity(self):
+        # An unscored model catalogued under lab a, with a score borrowed from lab b's family.
+        raw = self.catalog(extra=[("a/a-x-1", 70, 1, 5, None), ("b/a-x-0", 80, 1, 5, 67)])
+        picked = self.run_select(self.request(models=[model("opencode-go", "a-x-1")]), raw)
+        rated = picked["route"]["catalog_id"]
+        self.assertEqual(rated["creator"], "a")
+        answer = selector.feedback_submit(
+            dict(v=1, rated=rated, work_kind="review", size_group=picked["size_group"], rating=3,
+                 session="%032x" % 1, rater_entry=None, rater_model=dict(provider="other-host", id="a-x-1")),
+            state_dir=self.root, now=NOW)
+        self.assertEqual(answer, dict(state="refused", reason="self_rating"))
+
     def test_reviewing_refused_shapes(self):
-        for bad in (7, "no-slash", "a/b/c", "/model", "provider/"):
+        for bad in (7, "no-slash", "a/b/c/d", "/model", "provider/", "a//c", "a/b/"):
             with self.subTest(reviewing=bad):
                 result = self.run_select(self.request(bad), self.catalog())
                 self.assertEqual((result["state"], result["reason"]), ("blocked", "invalid_request"))

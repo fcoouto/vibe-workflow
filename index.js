@@ -45,6 +45,23 @@ const ROUTER_NOTE =
   "Smart Router is on: when no exact model is named, consult smart_router_select first, describing the task by its " +
   "facts: files, spec, risk. If it has no recommendation, show its notice in chat when present. Do not retry " +
   "automatically or override a native denial; routing grants no launch or spending authority."
+const MAX_ANSWER_BYTES = 65536 - 2048 // room left for the notice added after the answer
+// Like the runtime: at most 256 entries, each 1-256 printable characters.
+const printable = (text) => [...text].every((char) => char === " " || !/[\p{C}\p{Z}]/u.test(char))
+const validExclusions = (entries) => Array.isArray(entries) && entries.length <= 256 && entries.every((entry) =>
+  typeof entry === "string" && [...entry].length > 0 && [...entry].length <= 256 && printable(entry))
+// The largest prefix of `unmatched` that keeps the answer under the limit; the rest is counted in unmatched_more.
+function boundedUnmatched(answer, unmatched) {
+  const fits = (count) => Buffer.byteLength(JSON.stringify({ ...answer, unmatched: unmatched.slice(0, count),
+    unmatched_more: unmatched.length - count })) <= MAX_ANSWER_BYTES
+  if (fits(unmatched.length)) return { unmatched }
+  let low = 0, high = unmatched.length - 1
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (fits(middle)) low = middle; else high = middle - 1
+  }
+  return { ...(low ? { unmatched: unmatched.slice(0, low) } : {}), unmatched_more: unmatched.length - low }
+}
 const noModels = () => ({ ...blocked(), state: "no_selection", reason: "no_models" })
 // Every model a pick offers, keyed provider/model: feedback matches a dispatch against these, not against the route text.
 function pickRefs(answer) {
@@ -109,7 +126,7 @@ const input = {
       excluded_models: { type: "array", items: { type: "string" },
         description: "Models to leave out for this request only: a pick's model_ref, a catalog key or a model name." } } },
     reviewing: { type: "string",
-      description: "For a review: the model_ref of the model whose work is reviewed; the router prefers a reviewer from another lab." },
+      description: "For a review: the model_ref of the model whose work is reviewed (provider/model, or provider/creator/model for a routed model); the router prefers a reviewer from another lab, never at a lower level." },
   },
 }
 const feedbackInput = { type: "object", additionalProperties: false, required: ["pick_id", "model_ref", "rating"],
@@ -304,10 +321,13 @@ export default {
         const list = ctx.model ? await models() : []
         let answer = noModels()
         if (!list.length) {
-          // No Python runs here: still say the review is not independent and which exclusions named nothing.
-          const entries = Array.isArray(own.constraints?.excluded_models) ? own.constraints.excluded_models : []
-          if (typeof own.reviewing === "string") answer.reviewer_independent = false
-          if (entries.length) answer.unmatched = [...new Set(entries.filter((entry) => typeof entry === "string"))]
+          // No Python runs here: apply the runtime's checks and bounds to what the answer echoes.
+          const raw = own.constraints?.excluded_models
+          if (raw !== undefined && !validExclusions(raw)) answer = { ...blocked(), reason: "invalid_request" }
+          else {
+            if (typeof own.reviewing === "string") answer.reviewer_independent = false
+            if (raw?.length) Object.assign(answer, boundedUnmatched(answer, [...new Set(raw)]))
+          }
         }
         if (list.length) {
           const { refresh, ...rest } = await runRouter({ ...own, models: list.map(({ name, ...entry }) => entry) },
