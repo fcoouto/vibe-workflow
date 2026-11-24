@@ -85,8 +85,9 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
         return result('blocked', 'selector_unavailable')
 
 
-def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed):
+def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None):
     """The selection steps up to the scored candidates, shared by Smart Router and council picks."""
+    long = task is not None and routing.size_group(task) == 'long'
     state_dir = Path(state_dir)
     now = int(time.time()) if fixed is None else fixed
     if not state_dir.is_absolute() or state_dir.is_symlink():
@@ -117,7 +118,7 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
         return dict(pool, reason='scores_unavailable')
     pool.update(had=had, cache=cache)
     for item in kept:
-        key, effort = keys[item['route']], routing.effort_for(level, item['variants'])
+        key, effort = keys[item['route']], routing.effort_for(level, item['variants'], long=long)
         own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
         if own is None or own['score_source'] != 'openrouter':
             pool['wanted'].add(key)
@@ -168,7 +169,7 @@ def _refresh_flag(answer, pool):
 
 def _select(request, level, constraints, *, state_dir, source, fetch, now):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
-                       state_dir=state_dir, source=source, fetch=fetch, fixed=now)
+                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'])
     if pool['reason']:
         return result('no_selection', pool['reason'], level=level, excluded=pool['excluded'])
     anchor = scores.anchor(pool['cache'])
