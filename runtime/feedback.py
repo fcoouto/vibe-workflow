@@ -191,6 +191,10 @@ def _record(card, state_dir, now):
         weight = SAME_LAB_WEIGHT if rater is None or rater[0] == creator else 1.0
         entry['w'] += weight
         entry['wr'] += weight * clean['rating']
+        if entry['w'] > WEIGHT_MAX:  # scale both totals together: the mean stays, the store stays valid
+            scale = WEIGHT_MAX / entry['w']
+            entry['w'] = float(WEIGHT_MAX)
+            entry['wr'] *= scale
         entry['family'] = clean['family']
         if clean['session'] not in entry['sessions']:
             entry['sessions'] = (entry['sessions'] + [clean['session']])[-MAX_SESSIONS:]

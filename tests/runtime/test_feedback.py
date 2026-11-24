@@ -278,6 +278,17 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(result, dict(state="refused", reason="invalid"))
         self.assertIsNone(self.feedback.load(self.state))
 
+    def test_totals_at_the_bound_stay_valid(self):
+        bound = self.feedback.WEIGHT_MAX
+        entry = self.valid_entry(w=float(bound), wr=3.0 * bound)
+        self.write_store_file(self.store_bytes({ANTHROPIC_KEY: entry}))
+        self.record(self.card(2, 5))
+        store = self.feedback.load(self.state)
+        self.assertIsNotNone(store)
+        stored = store["keys"][ANTHROPIC_KEY]
+        self.assertLessEqual(stored["w"], bound)
+        self.assertGreater(stored["wr"] / stored["w"], 3)
+
     def test_bounds(self):
         with mock.patch.multiple(self.feedback, MAX_KEYS=3, MAX_VOTES=3):
             for index, name in enumerate(("alpha-1", "beta-1", "gamma-1", "delta-1")):
