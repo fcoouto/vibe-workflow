@@ -10,6 +10,9 @@ export const DEFAULT_TITLE = /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}
 
 export const strip = (title) => title.replace(PREFIX, "")
 
+// When this server process started; every run it starts is busy from a later time.
+export const serverStart = () => Date.now() - process.uptime() * 1000
+
 export const compose = (topic, cells, waiting) =>
   `${MARK}${"▰".repeat(cells)}${"▱".repeat(5 - cells)} ${waiting ? "WAITING · " : ""}${topic}`
 
@@ -28,7 +31,6 @@ const MAX_SESSIONS = 128
 const MAX_HOPS = 5
 const MAX_CHILDREN = 50
 const MAX_PAGES = 4
-const STALE_MS = 10 * 60 * 1000
 const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const SHELLS = new Set(["bash", "shell"])
@@ -36,7 +38,7 @@ const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
 
-export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000 }) {
+export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
@@ -63,6 +65,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   const text = (value) => value === null || typeof value === "string"
+  const finite = (value) => typeof value === "number" && Number.isFinite(value)
+  const running = (time) => finite(time?.busy) && time.busy >= started && !(finite(time.idle) && time.idle >= time.busy)
   const instance = randomUUID().slice(0, 8)
   const STEPS = ["status", "diff", "plan", "pr"]
   const PR_STATES = ["OPEN", "MERGED", "CLOSED"]
@@ -160,30 +164,25 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     return null
   }
 
-  // Whether a child of the root, or with `withSelf` the root itself, is running now. A session runs when it became busy
-  // and has not gone idle since. For a child the age rule (newest of `updated` and `busy`) keeps a busy mark left by a
-  // crash from hiding the label for good; the root has none, because `updated` does not move during a tool call and a
-  // root inside a long one is still running (a root stuck busy only skips a write that did not exist before). `ended` ({ id, at }) is a session whose end event arrived at `at`: that run counts as
-  // idle whatever the host still says, but a run that began after `at` does not. The two reads are independent and
-  // share one deadline of `deadline` ms; what has not answered by then, or failed, counts as "nothing runs", so a stuck
-  // host call cannot hold the session's queue.
+  // Whether a child of the root, or with `withSelf` the root itself, is running now: busy since this server process
+  // started and not idle since. A run killed by a restart keeps an old busy time and reads as not running; a long tool
+  // call, which moves no timestamp, still reads as running. `ended` ({ id, at }) is a session whose end event arrived
+  // at `at`: that run counts as idle whatever the host still says, but a run that began after `at` does not. The two
+  // reads are independent and share one deadline of `deadline` ms; what has not answered by then, or failed, counts as
+  // "nothing runs", so a stuck host call cannot hold the session's queue.
   async function activity(rootID, { ended = null, withSelf = false } = {}) {
-    const finite = (value) => typeof value === "number" && Number.isFinite(value)
-    const busy = (time) => finite(time?.busy) && !(finite(time.idle) && time.idle >= time.busy)
-    const running = (info, now) => busy(info?.time) && now - Math.max(info.time.busy, finite(info.time.updated) ? info.time.updated : 0) < STALE_MS
     const childRuns = async () => {
-      const now = Date.now()
       let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
       for (let pages = 1; ; pages++) {
         const items = Array.isArray(page) ? page : page?.data
-        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && running(info, now) &&
+        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && running(info?.time) &&
           !(ended && info.id === ended.id && info.time.busy <= ended.at))) return true
         const next = page?.cursor?.next
         if (typeof next !== "string" || pages >= MAX_PAGES) return false
         page = await ctx.session.list({ cursor: next, limit: MAX_CHILDREN })
       }
     }
-    const rootRuns = async () => withSelf && busy((await ctx.session.get({ sessionID: rootID })).time)
+    const rootRuns = async () => withSelf && running((await ctx.session.get({ sessionID: rootID })).time)
     const result = { children: false, self: false }
     let timer
     await Promise.race([

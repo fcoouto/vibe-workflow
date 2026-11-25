@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, strip } from "../../src/session-titles.js"
+import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, serverStart, strip } from "../../src/session-titles.js"
 
 test("compose and strip", () => {
   assert.equal(compose("Fix auth", 2, true), "￻▰▰▱▱▱ WAITING · Fix auth")
@@ -68,7 +68,7 @@ function memoryStorage({ failing = false } = {}) {
 }
 
 async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
-  storage = memoryStorage(), root, located = true, deadline } = {}) {
+  storage = memoryStorage(), root, located = true, deadline, started = Date.now() - 60 * 60 * 1000 } = {}) {
   if (!root) {
     root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
     const made = root
@@ -77,12 +77,16 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   directory ??= root
   const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], list: 0 }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
-    active: [], finished: [], stale: [], silent: [], busyOnly: [], busyAgo: {}, many: 0, parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
+    active: [], finished: [], stale: [], silent: [], busyOnly: [], busyAgo: {}, longBusy: [], busyAt: {}, many: 0, parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
   const preference = { state }
   let stream, subscribed
   const parentOf = (id) => facts.parents[id] ?? (id.startsWith("child") ? "ses_1" : undefined)
   const timeOf = (id) => {
-    const old = facts.stale.includes(id) ? 11 * 60 * 1000 : 0, now = Date.now()
+    const now = Date.now()
+    // stale: busy before this server started (a run killed by a restart); longBusy: busy for 11 minutes in this run.
+    if (facts.busyAt[id] !== undefined) return { created: facts.busyAt[id] - 5000, updated: facts.busyAt[id], busy: facts.busyAt[id] }
+    if (facts.active.includes(id) && facts.longBusy.includes(id)) return { created: now - 12 * 60 * 1000, updated: now - 11 * 60 * 1000, busy: now - 11 * 60 * 1000 }
+    const old = facts.stale.includes(id) ? now - started + 60 * 1000 : 0
     if (id.startsWith("child_m")) return { created: now - 9000, updated: now - 1000, busy: now - 2000, idle: now - 1000 }
     return { created: now - old - 5000,
       ...(!facts.busyOnly.includes(id) && { updated: facts.silent.includes(id) ? now - 11 * 60 * 1000 : now - old }),
@@ -136,7 +140,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     if (args[0] === "rev-parse") return "origin/main\n"
     return facts.changed.join("\n")
   }
-  const titlesFor = await registerSessionTitles(ctx, { run, ...(deadline && { deadline }), settings: { inspect: async () => preference },
+  const titlesFor = await registerSessionTitles(ctx, { run, started, ...(deadline && { deadline }), settings: { inspect: async () => preference },
     gitWorkflow: { inspect: async () => ({ state: gitState, project: project ?? root, worktree_cleanup: cleanup }) } })
   t.after(() => titlesFor.close())
   const write = async (path, sessionID = "ses_1", more = {}) => {
@@ -150,7 +154,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     return event
   }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
-  return { root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
+  return { started, root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
@@ -482,7 +486,7 @@ test("an evaluation still reading facts when the plugin closes renames nothing",
   assert.deepEqual(h.calls.update, [])
 })
 
-test("a running child counts; an idle, finished or stale one, another root's child and the root itself do not", async (t) => {
+test("a running child counts; an idle or finished one, one busy before the server started, another root's child and the root itself do not", async (t) => {
   const waiting = compose("Fix login flow", 1, true), quiet = compose("Fix login flow", 1, false)
   for (const [set, label] of [
     [{ active: ["child_1"] }, quiet],
@@ -592,7 +596,7 @@ test("a root still inside a long silent tool call is not labeled when its child 
   await h.start()
   const writes = h.calls.update.length
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
-  Object.assign(h.facts, { active: ["ses_1"], stale: ["ses_1"] })
+  Object.assign(h.facts, { active: ["ses_1"], longBusy: ["ses_1"] })
   await h.end("child_1")
   assert.equal(h.calls.update.length, writes)
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
@@ -607,6 +611,41 @@ test("a failing child list does not hide that the root is running again", async 
   Object.assign(h.facts, { active: ["ses_1"], listFail: true })
   await h.end("child_1")
   assert.equal(h.calls.update.length, writes)
+})
+
+test("a child inside one tool call for 11 minutes still counts as running", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { active: ["child_1"], longBusy: ["child_1"] })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
+test("a busy time 1 ms before the server start reads idle and 1 ms after reads running", async (t) => {
+  for (const [offset, label] of [[-1, true], [1, false]]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, { active: ["child_1"], busyAt: { child_1: h.started + offset } })
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, label), `child ${offset}`)
+  }
+  for (const [offset, writes] of [[-1, true], [1, false]]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    await h.end()
+    await h.start()
+    const before = h.calls.update.length
+    Object.assign(h.facts, { active: ["ses_1"], busyAt: { ses_1: h.started + offset } })
+    await h.end("child_1")
+    assert.equal(h.calls.update.length > before, writes, `root ${offset}`)
+  }
+})
+
+test("the server start is the same for copies registered at different times", async () => {
+  const first = serverStart()
+  await new Promise((done) => setTimeout(done, 30))
+  assert.ok(Math.abs(serverStart() - first) < 5)
+  assert.ok(serverStart() <= Date.now() - process.uptime() * 1000 + 5)
 })
 
 test("a hanging list read is cut off and reads as nothing running", async (t) => {
