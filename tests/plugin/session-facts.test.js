@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { artifact, branchOf, declaredPaths, defaultRun, readFacts } from "../../src/session-facts.js"
+import { artifact, branchOf, commonDir, declaredPaths, defaultRun, readFacts } from "../../src/session-facts.js"
 
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" })
 const tmp = (t) => {
@@ -86,7 +86,7 @@ test("readFacts follows the checkout through detached, branch, pushed and defaul
   git(top, "push", "-q", "-u", "origin", "feat/x")
   got = await facts()
   assert.deepEqual([got.branch, got.upstream, got.head, got.pr], ["feat/x", true, "feat/x", pr])
-  assert.deepEqual(calls.at(-1).args, ["pr", "list", "--head", "feat/x", "--state", "all", "--json", "state,title", "--limit", "1"])
+  assert.deepEqual(calls.at(-1).args, ["pr", "list", "--head", "feat/x", "--state", "all", "--json", "state,title,createdAt", "--limit", "1"])
   assert.equal(calls.at(-1).cwd, top)
 
   git(top, "switch", "-q", "--detach")
@@ -104,6 +104,77 @@ test("readFacts follows the checkout through detached, branch, pushed and defaul
   got = await facts({ remembered: "feat/x" })
   assert.deepEqual([got.branch, got.head, got.pr], ["main", "feat/x", pr])
   assert.deepEqual(calls.at(-1).args.slice(0, 4), ["pr", "list", "--head", "feat/x"])
+})
+
+const dated = { state: "MERGED", title: "Add x", createdAt: "2026-11-25T10:00:00Z" }
+const at = Date.parse(dated.createdAt)
+
+test("seen is used only when the checkout is gone or detached", async (t) => {
+  const { top, main } = setup(t)
+  const { calls, run } = recorder({ "feat/x": [dated] })
+  const facts = () => readFacts({ top, fallback: main, run, seen: "feat/x", bound: at })
+  git(top, "switch", "-q", "-c", "feat/x")
+  let got = await facts()
+  assert.deepEqual([got.branch, got.via, got.head, got.detached, got.gone], ["feat/x", null, null, false, false])
+  assert.equal(calls.length, 0, "an existing checkout on its unpushed branch makes no gh call")
+  git(top, "switch", "-q", "--detach")
+  got = await facts()
+  assert.deepEqual([got.detached, got.via, got.head, got.pr], [true, "seen", "feat/x", { state: "MERGED", title: "Add x" }])
+  rmSync(top, { recursive: true, force: true })
+  got = await facts()
+  assert.deepEqual([got.exists, got.gone, got.via, got.pr?.state], [false, true, "seen", "MERGED"])
+  assert.equal(calls.at(-1).cwd, main)
+})
+
+test("a failed read holds the cells", async (t) => {
+  const { top, main, root } = setup(t)
+  const { calls, run } = recorder({ "feat/x": [dated] })
+  const failing = async (command, args, options) => {
+    if (command === "git" && args[0] === "status") throw Object.assign(Error("x"), { code: 128 })
+    return run(command, args, options)
+  }
+  let got = await readFacts({ top, fallback: main, run: failing, seen: "feat/x", bound: at })
+  assert.deepEqual([got.exists, got.detached, got.via, got.pr], [true, false, null, null])
+  const file = join(root, "not-a-folder")
+  writeFileSync(file, "x\n")
+  got = await readFacts({ top: file, fallback: main, run, seen: "feat/x", bound: at })
+  assert.deepEqual([got.exists, got.gone, got.via, got.pr], [false, false, null, null])
+  const locked = join(root, "locked")
+  mkdirSync(join(locked, "child"), { recursive: true })
+  chmodSync(locked, 0o000)
+  try {
+    got = await readFacts({ top: join(locked, "child"), fallback: main, run, seen: "feat/x", bound: at })
+  } finally { chmodSync(locked, 0o755) }
+  assert.deepEqual([got.exists, got.gone, got.via, got.pr], [false, false, null, null], "a stat error other than ENOENT is not removal")
+  assert.equal(calls.length, 0)
+})
+
+test("a PR created before the bind does not count through seen", async (t) => {
+  const { top, main } = setup(t)
+  const { run } = recorder({ "feat/x": [dated] })
+  git(top, "switch", "-q", "--detach")
+  const pr = async (bound) => (await readFacts({ top, fallback: main, run, seen: "feat/x", bound })).pr
+  assert.equal(await pr(at + 30000), null)
+  assert.equal((await pr(at))?.state, "MERGED")
+  const unbound = await readFacts({ top, fallback: main, run, seen: "feat/x" })
+  assert.deepEqual([unbound.via, unbound.pr], [null, null])
+})
+
+test("remembered still wins over seen and needs no date", async (t) => {
+  const { top, main } = setup(t)
+  const { calls, run } = recorder({ "feat/r": [{ state: "OPEN", title: "r" }], "feat/x": [dated] })
+  git(top, "switch", "-q", "--detach")
+  const got = await readFacts({ top, fallback: main, run, remembered: "feat/r", seen: "feat/x", bound: at + 99999 })
+  assert.deepEqual([got.via, got.head, got.pr], ["remembered", "feat/r", { state: "OPEN", title: "r" }])
+  assert.equal(calls.length, 1)
+})
+
+test("commonDir is equal for a checkout and its linked worktree and null on failure", async (t) => {
+  const { top, main, root } = setup(t)
+  const shared = await commonDir({ top: main })
+  assert.ok(shared && shared.endsWith(".git"))
+  assert.equal(await commonDir({ top }), shared)
+  assert.equal(await commonDir({ top: join(root, "missing") }), null)
 })
 
 test("artifact finds the docs folder last when the checkout path contains one", () => {
