@@ -30,7 +30,7 @@ test("procedure states the lifecycle, readiness, merge and checkout rules", asyn
   const text = await read("references/procedure.md")
   for (const phrase of ["[BLOCKED]", "[READY]", "[SUPERSEDED]", "--undo", "git fetch origin main", "--ff-only",
     "agent_merge", ".github/pull_request_template.md", ".vibe-workflow/settings.json", "worktree",
-    '"feature":"git_workflow"', "previous_agent_merge", "observed on this head", "Never touch the primary checkout", "## Finishing a branch",
+    '{"v":1,"op":"inspect","feature":"git_workflow"}', "agent_merge", "observed on this head", "Never touch the primary checkout", "## Finishing a branch",
     "do not offer other ways to integrate it", "declared choice from onboarding"]) {
     assert.ok(text.includes(phrase), phrase)
   }
@@ -62,7 +62,7 @@ test("the cleanup reference moves the session before it removes the worktree", a
 
 test("the cleanup reference states the checks, the order, the mapping and the no-force rules", async () => {
   const text = await read("references/worktree-cleanup.md")
-  for (const phrase of ["worktree_cleanup", "previous_enabled", "previous_worktree_cleanup", "gh pr view", "defaultBranchRef",
+  for (const phrase of ['{"v":1,"op":"inspect","feature":"git_workflow"}', "worktree_cleanup", "gh pr view", "defaultBranchRef",
     "merge-base --is-ancestor", "git switch --detach", "--git-dir", "branch -d", "last action that changes anything",
     "git -C", "status --porcelain --ignored", "--path-format=absolute", "worktree list --porcelain", ".gitmodules", "origin/<default branch>", "worktree_remove", "ExitWorktree", "git worktree remove", "--delete-branch", "backstop"]) {
     assert.ok(text.includes(phrase), phrase)

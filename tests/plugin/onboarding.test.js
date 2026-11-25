@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { pathToFileURL } from "node:url"
+import { createProjectSettings } from "../../src/project.js"
 
 // Spawned selectors inherit this, so a real CLI can never reach the network.
 process.env.VCW_TEST_HOME = mkdtempSync(join(tmpdir(), "vcw-test-home-"))
@@ -230,8 +231,8 @@ test("from a linked worktree all three features save only in the worktree", asyn
   assert.deepEqual(assertCalls.map(({ resources }) => resources), Array(3).fill(["../.vibe-workflow/settings.json"]))
 })
 
-test("the split case saves one complete file in the worktree", async (t) => {
-  const { execute, write, path, root } = await fixture(t, async () => {}, inLinked)
+test("keeping every choice in the split case saves once and enables checkout-local titles", async (t) => {
+  const { execute, write, path, root, assertCalls } = await fixture(t, async () => {}, inLinked)
   const git = { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: true } }
   await write({ version: 1, features: [git, { session_titles: { enabled: true } }] })
   const own = join(root, "linked", ".vibe-workflow", "settings.json"), before = await readFile(path, "utf8")
@@ -239,11 +240,58 @@ test("the split case saves one complete file in the worktree", async (t) => {
   await writeFile(own, JSON.stringify({ version: 1, features: [{ smart_router: { enabled: true } }] }))
   const current = await prefs(execute, { op: "preview" })
   assert.deepEqual([current.previous_enabled, current.previous_agent_merge, current.previous_worktree_cleanup], [true, true, true])
-  const preview = await execute({ op: "preview", enabled: false })
-  assert.equal((await execute({ op: "apply", enabled: false, expected_snapshot: preview.snapshot })).state, "saved")
+  const inputs = [{ feature: "smart_router", enabled: true }, { feature: "git_workflow", ...git.git_workflow },
+    { feature: "session_titles", enabled: true }]
+  const changes = []
+  for (const input of inputs) {
+    const preview = await execute({ op: "preview", ...input })
+    changes.push(preview.change)
+    assert.equal((await execute({ op: "apply", ...input, expected_snapshot: preview.snapshot })).state,
+      input.feature === "smart_router" ? "saved" : "unchanged")
+  }
+  assert.deepEqual(changes, ["update", "none", "none"])
+  assert.equal(assertCalls.length, 1)
   assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features,
-    [git, { session_titles: { enabled: true } }, { smart_router: { enabled: false } }])
+    [git, { session_titles: { enabled: true } }, { smart_router: { enabled: true } }])
+  assert.equal((await createProjectSettings(join(root, "linked"), "session_titles").inspect()).state, "on")
+  for (const input of inputs) assert.equal((await execute({ op: "preview", ...input })).change, "none")
   assert.equal(await readFile(path, "utf8"), before)
+})
+
+test("operational git workflow inspection reads main, never onboarding's worktree preferences", async (t) => {
+  const { execute, write, root, assertCalls } = await fixture(t, async () => {}, inLinked)
+  const folder = join(root, "linked", ".vibe-workflow")
+  await mkdir(folder)
+  for (const main of [false, true]) {
+    await write({ version: 1, features: [{ git_workflow: { enabled: true, agent_merge: main, worktree_cleanup: main } }] })
+    await writeFile(join(folder, "settings.json"), JSON.stringify({
+      version: 1, features: [{ git_workflow: { enabled: true, agent_merge: !main, worktree_cleanup: !main } }],
+    }))
+    const preview = await prefs(execute, { op: "preview" })
+    assert.deepEqual([preview.previous_agent_merge, preview.previous_worktree_cleanup], [!main, !main])
+    const actual = await prefs(execute, { op: "inspect" })
+    assert.deepEqual([actual.state, actual.agent_merge, actual.worktree_cleanup], ["on", main, main])
+  }
+  assert.equal((await execute({ op: "inspect" })).reason, "invalid_request")
+  assert.equal((await prefs(execute, { op: "inspect", agent_merge: true })).reason, "invalid_request")
+  assert.equal(assertCalls.length, 0)
+})
+
+test("operational git workflow inspection fails closed when the main checkout cannot be resolved", async (t) => {
+  const { execute } = await fixture(t, async () => {}, async (root) => {
+    const bare = join(root, "bare.git"), linked = join(root, "linked")
+    gitIn(root, "init", "-q", "--bare", bare)
+    gitIn(bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked)
+    const folder = join(linked, ".vibe-workflow")
+    await mkdir(folder)
+    await writeFile(join(folder, "settings.json"), JSON.stringify({
+      version: 1, features: [{ git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: true } }],
+    }))
+    return linked
+  })
+  const actual = await prefs(execute, { op: "inspect" })
+  assert.deepEqual([actual.state, actual.reason, actual.agent_merge, actual.worktree_cleanup],
+    ["blocked", "project_root_unavailable", undefined, undefined])
 })
 
 test("a denied native edit from a linked worktree writes nothing", async (t) => {

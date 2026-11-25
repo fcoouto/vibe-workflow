@@ -85,12 +85,12 @@ preserved, the worktree's winning on a name clash.
   file. A worktree with no file therefore gets main's entries plus the new one, and
   merges into main without conflict.
 - The overlay applies only when main's file is a different file from the worktree's.
-- The snapshot covers both files' contents and the root, so a change to either between
+- The snapshot covers both files' contents and modes and the root, so a change to either between
   preview and apply returns `project_settings_changed`.
 - When main has no file, the effective settings are the worktree file alone.
-- A checkout with no file of its own gets main's choices written even for an unchanged answer
-  (`change` is `create`, never `none`), because the runtime reads for Smart Router and session titles
-  use the checkout's own file. Found by review on 2026-11-24.
+- Missing entries and top-level keys inherited from main are written even if all answers stay the
+  same. The runtime reads for Smart Router and session titles use the checkout's own file.
+  When copying inherited settings, the destination mode allows no access that either file's mode disallows.
 
 ### Runtime reads
 
@@ -101,6 +101,10 @@ preserved, the worktree's winning on a name clash.
 | `session_titles` | the checkout's own file (was main) | Advisory only; follows the file onboarding wrote. |
 
 `onboarded()` still counts any saved choice in any of the three reads.
+
+The PR and cleanup procedures use `vibe_workflow_onboard` with `op: "inspect"` and
+`feature: "git_workflow"` for operational decisions. This also reads only main, even
+when onboarding's worktree preview disagrees or main cannot be resolved.
 
 A worktree branched before the settings file was committed has no Smart Router or
 titles entry until it rebases on main. That is how Smart Router behaves today. Not

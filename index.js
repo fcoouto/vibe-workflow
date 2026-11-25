@@ -432,7 +432,8 @@ export default {
     } }, git_workflow: saving("git_workflow"), session_titles: saving("session_titles") }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
     () => advice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
-    () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })
+    () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" },
+    () => gitWorkflow.inspect())
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await registerCouncil(ctx, { roster: createRoster({ models: ctx.model ? models : async () => [], providers,

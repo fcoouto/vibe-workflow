@@ -563,6 +563,33 @@ test("worktree mode snapshot covers main's file", async (t) => {
   assert.equal((await saving("smart_router").apply(true, fresh.snapshot)).state, "saved")
 })
 
+test("worktree mode inherits main-only metadata without widening its file access", async (t) => {
+  for (const existing of [false, true]) {
+    const router = { smart_router: { enabled: true } }
+    const { saving, own, path, writeOwn } = await linkedFixture(t, { version: 1, features: [router], extra: "keep" })
+    await chmod(path, 0o600)
+    if (existing) {
+      await writeOwn({ version: 1, features: [router] })
+      await chmod(own, 0o644)
+    }
+    const project = saving("smart_router")
+    const preview = await project.preview(true)
+    assert.equal(preview.change, existing ? "update" : "create")
+    assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+    assert.equal((await stat(own)).mode & 0o777, 0o600)
+    assert.equal(JSON.parse(await readFile(own, "utf8")).extra, "keep")
+  }
+})
+
+test("worktree mode detects a source permission change after preview", async (t) => {
+  const { saving, own, path } = await linkedFixture(t, { version: 1, features: [git3] })
+  const project = saving("smart_router"), preview = await project.preview()
+  const mode = (await stat(path)).mode & 0o777
+  await chmod(path, mode === 0o600 ? 0o644 : 0o600)
+  assert.equal((await project.apply(true, preview.snapshot)).reason, "project_settings_changed")
+  await assert.rejects(stat(own), { code: "ENOENT" })
+})
+
 test("worktree mode blocks an invalid main file and writes nothing", async (t) => {
   const { saving, own } = await linkedFixture(t, "{ not json")
   const preview = await saving("smart_router").preview()

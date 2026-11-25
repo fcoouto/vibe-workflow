@@ -24,7 +24,7 @@
 ## Review Focus
 
 - Main's file is invalid or unsafe while the worktree's is fine: blocked `project_settings_invalid`, nothing written. (Task 1)
-- Worktree has no file and the answer equals main's value: `change: "none"`, no file created. (Task 1)
+- Worktree lacks settings inherited from main: keeping all answers still saves them once. (Task 1)
 - Session in a subfolder of a worktree: writes at the worktree's top level, permission resource relative to the session directory. (Task 2)
 - Main's file changes between preview and apply: `project_settings_changed`. (Task 1)
 
@@ -56,8 +56,8 @@
 - [ ] **Step 3: Implement.**
   - `current()` in worktree mode: `root = found.root`; the main file is read with `readSettings` from `found.project` unless `found.unresolved` or `found.project === root`. A read failure on either file gives `project_settings_invalid`.
   - Effective data: `features` = main's entries in main's order, each replaced by the worktree's entry of the same name, then worktree-only entries in the worktree's order; top-level value is `{ ...main.value, ...own.value, version: 1, features }`; recompute `featureIndex` by name; keep `raw` as the worktree's raw and add `mainRaw`.
-  - `snapshot(root, raw, mainRaw)`: when `mainRaw` is passed (worktree mode, even when absent, pass `null`) add a `\0main\0present|absent\0` section; the existing calls stay unchanged.
-  - `preview`: `change` is `"none"` when the values equal the effective ones, else `"create"` when there is no worktree raw, else `"update"` (reorder the current expression; behavior for existing instances is identical).
+  - Worktree snapshots include both files' contents and modes; non-worktree snapshots stay unchanged.
+  - `preview`: `change` is `"none"` when the answers match and no settings need to be inherited, else `"create"` for a missing file or `"update"` for an existing file. `apply` uses the same rule and caps the mode by both files when inheriting settings.
   - `apply`: write the effective value to the worktree file as today; `numbersRoundTrip` checks both raws.
 
 - [ ] **Step 4: Run** `node --test tests/plugin/project.test.js`. Expected: all PASS.

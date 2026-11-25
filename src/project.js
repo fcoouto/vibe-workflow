@@ -121,10 +121,9 @@ async function readSettings(folder, path, feature) {
   } finally { await file.close() }
 }
 
-function snapshot(root, raw, mainRaw) {
+function snapshot(root, { raw, mode }, main) {
   const hash = createHash("sha256").update(root).update(raw ? "\0present\0" : "\0absent\0").update(raw ?? "")
-  // Worktree mode also covers main's file, so a change there between preview and apply is caught.
-  if (mainRaw !== undefined) hash.update(mainRaw ? "\0main-present\0" : "\0main-absent\0").update(mainRaw ?? "")
+  if (main) hash.update(`\0mode:${mode ?? ""}\0main-mode:${main.mode ?? ""}\0`).update(main.raw ?? "")
   return hash.digest("hex")
 }
 
@@ -137,7 +136,10 @@ function overlay(main, own, feature) {
   const features = (main.value?.features ?? []).map((entry) => ownEntries.get(byName(entry)) ?? entry)
   const seen = new Set(features.map(byName))
   for (const entry of own.value?.features ?? []) if (!seen.has(byName(entry))) features.push(entry)
-  return { value: { ...main.value, ...own.value, version: 1, features }, featureIndex: features.findIndex((entry) => feature in entry) }
+  const materialize = Boolean(main.raw) && (features.length > ownEntries.size ||
+    Object.keys(main.value).some((key) => !Object.hasOwn(own.value ?? {}, key)))
+  return { value: { ...main.value, ...own.value, version: 1, features },
+    featureIndex: features.findIndex((entry) => feature in entry), materialize }
 }
 
 function decimal(token) {
@@ -187,21 +189,18 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
     const folder = join(root, ".vibe-workflow"), path = join(folder, "settings.json")
     try {
       let data = await readSettings(folder, path, feature)
-      let mainRaw
-      if (worktree) {
-        mainRaw = null
-        if (!found.unresolved && found.project !== root) {
-          const main = await readSettings(join(found.project, ".vibe-workflow"), join(found.project, ".vibe-workflow", "settings.json"), feature)
-          mainRaw = main.raw ?? null
-          data = { ...data, ...overlay(main, data, feature), mainRaw }
-        }
+      let main = worktree ? {} : undefined
+      if (worktree && !found.unresolved && found.project !== root) {
+        const mainFolder = join(found.project, ".vibe-workflow")
+        main = await readSettings(mainFolder, join(mainFolder, "settings.json"), feature)
+        data = { ...data, ...overlay(main, data, feature), main }
       }
       const entry = data.value?.features[data.featureIndex]?.[feature]
       const enabled = entry?.enabled ?? null
       return { state: enabled === null ? "not_onboarded" : enabled ? "on" : "off",
         reason: null, root, project, path, enabled, ...(prefs && { agent_merge: entry ? entry.agent_merge ?? false : null,
           worktree_cleanup: entry ? entry.worktree_cleanup ?? null : null }),
-        snapshot: snapshot(root, data.raw, mainRaw), folder, data }
+        snapshot: snapshot(root, data, main), folder, data }
     } catch {
       return { state: "blocked", reason: "project_settings_invalid", root, project, path }
     }
@@ -221,7 +220,7 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       return { ...state, state: "preview", previous_enabled: state.enabled, enabled,
         ...(prefs && { previous_agent_merge: state.agent_merge, agent_merge: agentMerge,
           previous_worktree_cleanup: state.worktree_cleanup, worktree_cleanup: cleanup }),
-        change: same && !(data.mainRaw && !data.raw) ? "none" : !data.raw ? "create" : "update" }
+        change: same && !data.materialize ? "none" : !data.raw ? "create" : "update" }
     },
     async apply(values, expectedSnapshot, { signal } = {}) {
       const asked = normalize(values)
@@ -238,11 +237,9 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
       if (initial.state === "blocked") return blocked(initial.reason)
       if (signal?.aborted) return blocked("project_settings_cancelled")
       if (initial.snapshot !== expectedSnapshot) return blocked("project_settings_changed")
-      // A checkout with no file of its own still gets main's choices written, so its own runtime read sees them.
-      const inherited = initial.data.mainRaw && !initial.data.raw
-      if (!inherited && initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
+      if (!initial.data.materialize && initial.enabled === enabled && (!prefs || (initial.agent_merge === agentMerge &&
         initial.worktree_cleanup === cleanup))) return result("unchanged")
-      if ((initial.data.raw && !numbersRoundTrip(initial.data.raw)) || (initial.data.mainRaw && !numbersRoundTrip(initial.data.mainRaw))) {
+      if ([initial.data.raw, initial.data.main?.raw].some((raw) => raw && !numbersRoundTrip(raw))) {
         return blocked("project_settings_lossy")
       }
       const lockPath = join(folder, ".settings.lock")
@@ -271,10 +268,11 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
         const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")
         const target = join(folder, `.settings-${randomUUID()}.tmp`)
-        const file = await open(target, "wx", latest.data.mode ?? 0o644)
+        const mode = (latest.data.mode ?? 0o644) & (latest.data.materialize ? latest.data.main.mode : 0o777)
+        const file = await open(target, "wx", mode)
         temporary = target
         try {
-          await file.chmod(latest.data.mode ?? 0o644)
+          await file.chmod(mode)
           await file.writeFile(body)
           await file.sync()
         } finally { await file.close() }

@@ -140,19 +140,26 @@ not a git repository, needs no move.
    .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
    Name the preview's full `path`, and add that committing and merging that file is the user's step.
    Say it in order: the Saving line comes before anything is applied, and a cancel at any question or a denied native file-edit permission means no GitHub change.
-8. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
+8. Keep the `previous_*` values from the previews used to ask the questions. Apply
+   Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
    `snapshot`. The features share one file, so then
-   preview `git_workflow` again with the answered values. If its `change` and
-   values match what the user answered, apply it with all three booleans and that
-   fresh `snapshot`, for example
+   preview `git_workflow` again with the answered values. Compare its
+   `previous_enabled`, `previous_agent_merge`, and `previous_worktree_cleanup`
+   with the values used for the questions, including `null`. Do not compare
+   `change`: the first save can turn `create` into `update` without changing
+   any git workflow choice. If the previous values still match, apply with all
+   three answered booleans and the fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":true,"expected_snapshot":"<snapshot>"}`;
-   otherwise ask the affected question again and say why. The user's answers are the
+   if a previous value changed, ask the affected question again and say why.
+   The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
    client's. If edit is denied, permission is unavailable or apply fails for any
    reason, do not write another way: never import or run the plugin's files outside the tool, and never write the settings file yourself.
-   Unless question 5 was skipped, apply session titles last, the same way: preview `session_titles` again with the
-   answered `enabled` and apply it with that fresh `snapshot`, for example
+   Unless question 5 was skipped, apply session titles last, the same way: preview
+   `session_titles` again with the answered `enabled`. Ask again if `previous_enabled`
+   changed from the value used for question 5. Apply with the confirmed answer
+   and fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.
    Report each feature that was not saved as **<Feature>: not saved.** followed by how
    to recover, for example **Git workflow: not saved. Run onboarding again.** If settings changed or the result is lost, inspect with a fresh preview

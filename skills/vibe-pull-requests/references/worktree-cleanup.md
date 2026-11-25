@@ -7,10 +7,10 @@ that, and you never pass `--delete-branch` to `gh pr merge` unless the user asks
 
 ## When
 
-Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
-Clean up only when `previous_enabled` is `true` **and** `previous_worktree_cleanup` is
-`true`. The preview's proposed values are defaults, not the saved choice. A missing,
-`false`, `null`, off or blocked result means do nothing.
+Call `vibe_workflow_onboard` with `{"v":1,"op":"inspect","feature":"git_workflow"}`.
+This reads only the main checkout. Never use onboarding's worktree preview to decide.
+Clean up only when `state` is `"on"` **and** `worktree_cleanup` is `true`.
+A missing, `false`, `null`, off or blocked result means do nothing.
 
 ## Confirm the merge
 
