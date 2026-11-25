@@ -27,7 +27,7 @@ not a new subsystem.
   model can drop out of a level, or climb into one.
 - New models start from their catalog score; new versions of a known family
   start with half of the family's record.
-- The router can tell short tasks from long ones (2 agent-hours or more; 4 before 0.12.0), and
+- The router can tell short tasks from long ones (4 agent-hours or more; 2 in 0.12.0 to 0.13.0), and
   gives long tasks more effort.
 
 ## Non-goals
@@ -81,13 +81,13 @@ not a new subsystem.
   the coordinator's estimate of how long the delegated agent will work on the
   task, in hours of agent time, not a person's time (the user's choice of field,
   so the cutoff is Smart Router's rule, not each agent's judgement).
-- Threshold: 2 hours (the user's choice on 24 November 2026; it was 4 until 0.12.0). A missing estimate counts as below it.
+- Threshold: 4 hours (the user's choice; 2 hours in 0.12.0 to 0.13.0). A missing estimate counts as below it.
 - The estimate does not change the level. The text fix below sends whole plans
   to `prose`, which already raises them.
-- Effort: at or above 2 hours, one effort step above the level's default (level 1
+- Effort: at or above 4 hours, one effort step above the level's default (level 1
   medium to high, level 2 medium to high, level 3 high to xhigh), clamped to the
   model's variants as today.
-- Cards are kept in two size groups, below and at or above 2 hours, so a failed
+- Cards are kept in two size groups, below and at or above 4 hours, so a failed
   long build does not lower a model's record on short tasks. Two groups only,
   because cards will be sparse.
 - Deferred: moving the threshold from card evidence (where ratings drop).
