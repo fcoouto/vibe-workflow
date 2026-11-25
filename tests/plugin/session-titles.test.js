@@ -106,6 +106,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       },
       list: async ({ parentID, limit = 50, cursor }) => {
         calls.list++
+        await facts.listGate
         if (facts.listFail) throw Error("list")
         if (facts.listHang) await new Promise(() => {})
         if (facts.listRaw !== undefined) return facts.listRaw
@@ -172,7 +173,7 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
   t.after(() => rmSync(base, { recursive: true, force: true }))
   const dirs = Object.fromEntries(folders.map((name) => [name, join(base, name)]))
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
-  const storage = memoryStorage(), table = new Map(), preference = { state: "on" }
+  const storage = memoryStorage(), table = new Map(), preference = { state: "on" }, reads = new Map()
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, gate: null, storageGate: null, getGate: null,
     updateGate: null, failGet: new Set() }
   const sessionOf = (id) => table.get(id) ?? { location: dirs[folders[0]] }
@@ -184,7 +185,7 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
       location: { directory: dirs[name], project: { id: projects[name] ?? project } },
       storage: { data: storage.data,
         get: async (key) => { await facts.storageGate; return storage.get(key) },
-        set: async (key, value) => { calls.set++; return storage.set(key, value) },
+        set: async (key, value) => { calls.set++; await facts.setGate; return storage.set(key, value) },
         remove: (key) => storage.remove(key), scan: (options) => storage.scan(options) },
       tool: { hook: async (hookName, handler) => hooks.push([hookName, handler]) },
       session: {
@@ -193,6 +194,8 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
           await facts.getGate
           if (facts.failGet.has(sessionID)) throw Error("get")
           const s = sessionOf(sessionID)
+          reads.set(sessionID, (reads.get(sessionID) ?? 0) + 1)
+          if (facts.gateNth?.id === sessionID && reads.get(sessionID) === facts.gateNth.n) await facts.gateNth.gate
           return { id: sessionID, title: s.title ?? "Fix login flow", location: { directory: s.location }, time: s.time ?? {},
             ...(s.parentID && { parentID: s.parentID }) }
         },
@@ -907,6 +910,49 @@ test("a hook delivered to a copy that does not own the session does nothing", as
   assert.equal(w.record(), undefined)
 })
 
+test("a child bind whose root moves while it is being read does not write the old folder's record", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  let release
+  w.facts.gateNth = { id: "ses_1", n: 2, gate: new Promise((done) => { release = done }) }
+  const writing = w.write(`${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`, "child_1")
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await writing
+  await settle()
+  assert.equal(w.record(), undefined)
+})
+
+test("a close during a storage write starts no pruning scan", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  let release
+  w.facts.setGate = new Promise((done) => { release = done })
+  const writing = w.write(`${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`)
+  await settle()
+  w.copies.main.registered.close()
+  release()
+  await writing
+  await settle()
+  assert.equal(w.storage.calls.scan, 0)
+})
+
+test("a folder that cannot be resolved yet is retried, not cached as someone else's", async (t) => {
+  const w = await world(t)
+  const link = join(w.dirs.main, "..", "link-later")
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.table.set("ses_1", { ...w.table.get("ses_1"), location: link })
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  symlinkSync(w.dirs.main, link)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 2, true))
+})
+
 test("the move's turn end is evaluated once, by the destination", async (t) => {
   const w = await world(t)
   w.session("ses_1", "main")
@@ -1152,6 +1198,23 @@ test("a finished shell result is never tracked, and an unbound session's shell e
   const reads = { get: h.calls.get.length, list: h.calls.list }
   await exited(h, "sh_other")
   assert.deepEqual([h.calls.get.length, h.calls.list], [reads.get, reads.list])
+})
+
+test("a shell started while an earlier shell's exit check runs keeps WAITING off", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  let release
+  h.facts.listGate = new Promise((done) => { release = done })
+  h.push({ type: "shell.exited", data: { id: "sh_1", status: "exited" } })
+  await settle()
+  await background(h, "sh_2")
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
 })
 
 test("a background git push still records its branch", async (t) => {

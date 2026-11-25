@@ -77,6 +77,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     sessions.delete(sessionID)
     checked.delete(sessionID)
     saved.delete(sessionID)
+    pending.delete(sessionID)
     const next = generation(sessionID) + 1
     generations.delete(sessionID)
     generations.set(sessionID, next)
@@ -90,14 +91,17 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (parents.size > MAX_PARENTS) parents.delete(parents.keys().next().value)
     return info
   }
-  // true or false, or undefined when the folder cannot be read (the caller then does nothing and retries later).
+  // true or false, or undefined when the folder cannot be resolved (the caller then does nothing and retries later).
+  // Only successful resolutions are cached; this copy's own folder still matches by name once it is gone.
   async function owns(info) {
     if (!where) return true
     const dir = info?.location?.directory
     if (typeof dir !== "string") return undefined
     if (!reals.has(dir)) {
+      const real = await realpath(dir).catch(() => null)
+      if (real === null) return dir === where ? true : undefined
       if (reals.size > 256) reals.delete(reals.keys().next().value)
-      reals.set(dir, await realpath(dir).catch(() => dir))
+      reals.set(dir, real)
     }
     return reals.get(dir) === here
   }
@@ -113,6 +117,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       sessions.delete(oldest)
       checked.delete(oldest)
       saved.delete(oldest)
+      pending.delete(oldest)
     }
   }
 
@@ -180,6 +185,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       }
       await storage.set(KEY + sessionID, { location: where, project, at: Date.now(), task: entry.task, last: entry.last,
         silenced: entry.silenced, diag: entry.diag ?? null })
+      if (controller.signal.aborted || sessions.get(sessionID) !== entry) return
       saved.set(sessionID, snapshot)
       if (known) return
       const entries = []
@@ -206,9 +212,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
     const root = await rootOf(sessionID)
     if (!root || root === sessionID) return
+    // The root's generation before its read: a move during the read or while the bind waits on the root's queue
+    // makes the bind do nothing, so stale root information can never write the old folder's record.
+    const before = generation(root)
     const rootInfo = await read(root)
-    if (await owns(rootInfo) !== true) return
-    await enqueue(root, (rootAdmitted) => bind(root, path, directory, rootAdmitted, rootInfo))
+    if (await owns(rootInfo) !== true || generation(root) !== before) return
+    await enqueue(root, () => bind(root, path, directory, before, rootInfo))
   }
 
   async function bind(sessionID, path, directory, admitted, known) {
@@ -333,7 +342,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || task.fresh) return
     const info = await read(sessionID)
-    if (!current(sessionID, admitted) || await owns(info) !== true || (whileRunning && !running(info.time)) || !still()) return
+    if (await owns(info) !== true || !current(sessionID, admitted) || (whileRunning && !running(info.time)) || !still()) return
     const title = info.title ?? ""
     if (!PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const next = compose(strip(title) || task.slug, task.cells, waiting)
@@ -361,7 +370,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     // turn that may never come, accepting a possible sub-second flash.
     enqueue(sessionID, async (admitted) => {
       const now = await activity(sessionID, { withSelf: true })
-      if (!now.children && !now.self) await relabel(sessionID, true, admitted)
+      if (!now.children && !now.self) await relabel(sessionID, true, admitted, { still: () => !hasShell(sessionID) })
     })
   }
 
@@ -394,7 +403,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
     const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
     const info = await read(sessionID)
-    if (!current(sessionID, admitted) || (fromChild && busy.self) || await owns(info) !== true) return
+    if ((fromChild && busy.self) || await owns(info) !== true || !current(sessionID, admitted)) return
     const title = info.title ?? ""
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
