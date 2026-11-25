@@ -37,14 +37,23 @@ const SHELLS = new Set(["bash", "shell"])
 const RECORDING = new Set(["push", "pr_create", "pr_merge"])
 const TURNS = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
-const TYPES = [...TURNS, "session.moved"]
+// A request the agent waits on mid-turn: [session id, request id, asked (true) or answered (false)].
+const REQUESTS = {
+  "permission.asked": (data) => [data?.sessionID, data?.id, true],
+  "form.created": (data) => [data?.form?.sessionID, data?.form?.id, true],
+  "permission.replied": (data) => [data?.sessionID, data?.requestID, false],
+  "form.replied": (data) => [data?.sessionID, data?.id, false],
+  "form.cancelled": (data) => [data?.sessionID, data?.id, false],
+}
+const MAX_PENDING = 16
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS)]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
-  const generations = new Map(), parents = new Map(), reals = new Map()
-  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
+  const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map()
+  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear(); pending.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
@@ -286,6 +295,41 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (root && root !== sessionID) await enqueue(root, (admitted) => evaluate(root, true, { id: sessionID, at }, admitted))
   }
 
+  // Requests are tracked only for roots bound in this copy's memory, so other sessions cost nothing. A reply removes only
+  // an id it knows; the label clears when none is left and the session is still running, so a stray reply never
+  // removes an idle session's WAITING.
+  function request(sessionID, id, asked) {
+    if (typeof sessionID !== "string" || typeof id !== "string" || !sessions.get(sessionID)?.task) return
+    const open = pending.get(sessionID) ?? new Set()
+    if (asked) {
+      if (open.has(id) || open.size >= MAX_PENDING) return
+      pending.set(sessionID, open.add(id))
+      enqueue(sessionID, (admitted) => relabel(sessionID, true, admitted, { still: () => pending.get(sessionID)?.size > 0 }))
+    } else if (open.delete(id) && !open.size) {
+      pending.delete(sessionID)
+      enqueue(sessionID, (admitted) => relabel(sessionID, false, admitted, { running: true, still: () => !pending.get(sessionID)?.size }))
+    }
+  }
+
+  // Sets or clears WAITING on the meter as it stands, with no git or gh read. Never while the task is fresh: before its
+  // first meter (OpenCode titles a new session during its first turn) or when it was bound in the current turn.
+  // `running`: only while the session runs. `still()`: re-checked right before the write, so a request answered (or a
+  // new one asked) while this job waited on its reads leaves no flash.
+  async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, still = () => true } = {}) {
+    if (!await on()) return
+    const entry = sessions.get(sessionID), task = entry?.task
+    if (!task || entry.silenced || task.fresh) return
+    const info = await read(sessionID)
+    if (!current(sessionID, admitted) || await owns(info) !== true || (whileRunning && !running(info.time)) || !still()) return
+    const title = info.title ?? ""
+    if (!PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
+    const next = compose(strip(title) || task.slug, task.cells, waiting)
+    if (next !== title) await ctx.session.update({ sessionID, title: next })
+    if (sessions.get(sessionID) !== entry || entry.task !== task) return
+    entry.last = next
+    await save(sessionID, entry)
+  }
+
   async function evaluate(sessionID, ended, fromChild, admitted) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
@@ -343,10 +387,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     ;(async () => {
       try {
         for await (const event of stream) {
+          if (REQUESTS[event?.type]) { request(...REQUESTS[event.type](event.data)); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
           if (event.type === "session.moved") forget(sessionID)
           else if (TURNS.includes(event.type)) {
+            // A blocking request cannot outlive its session's own turn boundary; this also drops a missed reply.
+            pending.delete(sessionID)
             enqueue(sessionID, (admitted) => evaluate(sessionID, event.type !== TURNS[0], null, admitted))
             if (event.type !== TURNS[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }

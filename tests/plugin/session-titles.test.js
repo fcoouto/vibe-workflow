@@ -248,7 +248,8 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   const h = await host(t)
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
-    "session.execution.failed", "session.execution.interrupted", "session.moved"])
+    "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
+    "permission.replied", "form.replied", "form.cancelled"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -938,6 +939,133 @@ test("a child's spec write binds the root, and a child in another folder does no
   w.session("child_2", "wt", { parentID: "ses_2" })
   await w.write(spec(w.dirs.wt), "child_2")
   assert.equal(w.record("ses_2"), undefined)
+})
+
+const ask = (h, type, id, sessionID = "ses_1") => {
+  const data = type === "form.created" ? { form: { id, sessionID } }
+    : type === "permission.replied" ? { sessionID, requestID: id, reply: "once" }
+    : type === "permission.asked" ? { id, sessionID, action: "shell", resources: [] } : { id, sessionID }
+  h.push({ type, data })
+  return settle()
+}
+// A bound root that already shows its meter and is running a turn.
+async function running(t) {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  h.facts.active = ["ses_1"]
+  return h
+}
+const quiet = compose("Fix login flow", 1, false), waiting = compose("Fix login flow", 1, true)
+
+test("a permission request sets WAITING mid-turn without git reads and its reply removes it", async (t) => {
+  const h = await running(t)
+  assert.equal(h.titles.get("ses_1"), quiet)
+  const reads = h.calls.run.length
+  await ask(h, "permission.asked", "per_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "permission.replied", "per_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+  assert.equal(h.calls.run.length, reads, "no git or gh read")
+})
+
+test("a question form does the same, and cancel removes it", async (t) => {
+  const h = await running(t)
+  await ask(h, "form.created", "frm_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await ask(h, "form.created", "frm_2")
+  await ask(h, "form.cancelled", "frm_2")
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("overlapping requests keep WAITING until the last answer", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_1")
+  await ask(h, "form.created", "frm_1")
+  await ask(h, "permission.replied", "per_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("a reply never removes an idle session's WAITING", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const writes = h.calls.update.length
+  await ask(h, "permission.replied", "per_x")
+  await ask(h, "form.cancelled", "frm_x")
+  await ask(h, "form.created", "frm_1")
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  assert.equal(h.calls.update.length, writes)
+})
+
+test("a request answered before its label is written leaves none; a new one before the clear keeps it", async (t) => {
+  const h = await running(t)
+  let writes = h.calls.update.length
+  h.push({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_1" } })
+  h.push({ type: "permission.replied", data: { sessionID: "ses_1", requestID: "per_1" } })
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  assert.equal(h.calls.update.length, writes, "no WAITING flashed")
+  await ask(h, "permission.asked", "per_2")
+  writes = h.calls.update.length
+  h.push({ type: "permission.replied", data: { sessionID: "ses_1", requestID: "per_2" } })
+  h.push({ type: "permission.asked", data: { id: "per_3", sessionID: "ses_1" } })
+  await settle()
+  assert.equal(h.titles.get("ses_1"), waiting)
+  assert.equal(h.calls.update.length, writes, "the label never cleared in between")
+})
+
+test("a dropped reply is cleared at the root's next turn boundary", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_dropped")
+  await h.end()
+  await h.start()
+  await ask(h, "permission.asked", "per_2")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "permission.replied", "per_2")
+  assert.equal(h.titles.get("ses_1"), quiet, "the dropped id no longer holds the label")
+})
+
+test("no request label before the first meter or for a task bound this turn", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["ses_1"]
+  await ask(h, "permission.asked", "per_1")
+  assert.deepEqual(h.calls.update, [])
+  const g = await running(t)
+  await g.write(OTHER)
+  await ask(g, "permission.asked", "per_1")
+  assert.equal(g.titles.get("ses_1"), quiet)
+})
+
+test("a child-triggered evaluation does not clear pending requests", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_1")
+  await h.end("child_1")
+  await ask(h, "form.created", "frm_2")
+  await ask(h, "form.replied", "frm_2")
+  assert.equal(h.titles.get("ses_1"), waiting, "per_1 still pending")
+})
+
+test("a 17th request is ignored", async (t) => {
+  const h = await running(t)
+  for (let i = 1; i <= 17; i++) await ask(h, "permission.asked", `per_${i}`)
+  for (let i = 1; i <= 16; i++) await ask(h, "permission.replied", `per_${i}`)
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("requests of unbound or child sessions do nothing", async (t) => {
+  const h = await running(t)
+  const before = { get: h.calls.get.length, update: h.calls.update.length }
+  await ask(h, "permission.asked", "per_1", "ses_2")
+  await ask(h, "form.created", "frm_1", "child_1")
+  assert.deepEqual([h.calls.get.length, h.calls.update.length], [before.get, before.update])
 })
 
 test("a rename during slow fact reads is kept", async (t) => {
