@@ -99,7 +99,8 @@ carries the new `location.directory`.
 - A per-session generation number in each copy: forgetting a session bumps it. A job notes the generation when it
   is QUEUED (not when it starts), and checks it before publishing a loaded record into memory, before a title
   update and before a save; on a change it does nothing. A child bind also re-checks root ownership after the parent
-  walk. (A title update already sent cannot be recalled; that window is the time of one session read.) Generations
+  walk. A title update or storage write already sent is not recalled; the guarantee is that no NEW write starts after
+  a move or a close (the window is the time of one session read or one storage call). Generations
   are kept only for the last 256 forgotten sessions; dropping an older one could only matter to a job that waited
   through 256 moves.
 - `session.moved` (new subscription): every copy forgets the session (memory, checked, saved snapshot, pending
@@ -110,9 +111,11 @@ carries the new `location.directory`.
   for a session moved while idle) the session's next turn start repairs the label and its next turn end the cells.
   A move the agent makes mid-turn applies within that turn, whose end is evaluated by the new owner.
 - Cost in copies that do not own a session: one cold ownership read per session per copy lifetime (turn-end events
-  carry no folder, so a copy must read the session once to learn it is not the owner); after that, nothing.
-  Request events and shell exits act only on sessions bound in this copy's memory (no I/O otherwise). The child-end
-  wake-up (`wakeRoot`) stays as today, so a root restored from storage after a reload is still woken by its child.
+  carry no folder, so a copy must read the session once to learn it is not the owner), and none after that for the
+  session's own turn events. Request events and shell exits act only on sessions bound in this copy's memory (no I/O
+  otherwise). The child-end wake-up (`wakeRoot`) stays exactly as today, including its parent-walk session reads on
+  the end of any session not in memory, so a root restored from storage after a reload is still woken by its child;
+  those reads are today's cost, not new.
 
 ### 2. Waiting requests (F2)
 
@@ -140,10 +143,11 @@ carries the new `location.directory`.
   process, including after a plugin reload (the process, and so its uptime, continue).
 - `running(time)`: `time.busy` finite and at or after `started`, and no finite `time.idle` at or after `time.busy`.
   Used for children (replacing the 10-minute age rule and the `time.updated` read) and for the root.
-- Claim: a run killed by a server restart reads as not running. A run OpenCode resumes after a restart is a run
-  started by the new process, so its busy time is later than `started` and it reads as running; this follows from the
-  busy time being the run's start (observed) and was not observed with a real resume (none happened within 70 s in
-  the lab). The ended-run exclusion (`{ id, at }`) is unchanged.
+- Claim: a run killed by a server restart reads as not running (observed busy times support it). A run OpenCode
+  resumes after a restart is expected to get a new busy time and read as running, but no real resume was observed
+  (none happened within 70 s in the lab); if a resumed run kept its old busy time it would read as not running, and
+  its root could show `WAITING` while it runs, until that run ends. The ended-run exclusion (`{ id, at }`) is
+  unchanged.
 
 ### 4. Background shells (F4)
 
@@ -220,11 +224,13 @@ No new background work: every new read happens on an event the plugin already re
   shared storage, both receiving every event, hooks run only in the copy for the session's folder):
   - F1: the lab's sequence (spec bound in the main checkout, moved, plan bound in the worktree, moved back) keeps
     the plan and cells; a record from another project is ignored and a legacy record loads only in its folder; a
-    failed ownership read retries on the next event; a non-owner makes one cold session read per session and then
-    none, and no `gh` call or storage write, for turn ends, request events and shell exits; a move (destination
+    failed ownership read retries on the next event; a non-owner makes one cold ownership read per session and no
+    further reads for that session's own turn events, and no `gh` call or storage write, for turn ends, request
+    events and shell exits (the existing child-end wake-up reads are counted separately); a move (destination
     taken from `data.location.directory`, source and destination copies both loaded) during a slow evaluation or a
     slow storage read writes neither title nor storage in the old copy and publishes no stale record, and the move's
-    turn end is evaluated once, by the destination; a close during a delayed storage write writes nothing after; a
+    turn end is evaluated once, by the destination; a close during a delayed storage read or evaluation starts no new
+    title or storage write; a
     child end that is the first event after a reload restores and wakes its stored root.
   - F2: ask → `WAITING` with no git reads; reply → removed while running; overlapping requests; cancel; an unmatched
     reply leaves an idle session's `WAITING`; a dropped reply keeps `WAITING` until the root's next boundary; no write
