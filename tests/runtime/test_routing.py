@@ -112,6 +112,15 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.effort_for(1, ['low', 'high']), 'high')
         self.assertEqual(routing.effort_for(1, ['low']), 'low')
 
+    def test_effort_is_high_for_every_kind_but_writing(self):
+        v = ['low', 'medium', 'high', 'xhigh', 'max']
+        for kind in ('implementation', 'testing', 'review', 'planning', 'investigation'):
+            self.assertEqual([routing.effort_for(l, v, work_kind=kind) for l in (1, 2, 3)], ['high'] * 3, kind)
+            self.assertEqual([routing.effort_for(l, v, long=True, work_kind=kind) for l in (1, 2, 3)], ['xhigh'] * 3, kind)
+        self.assertEqual([routing.effort_for(l, v, work_kind='writing') for l in (1, 2, 3)], ['medium', 'medium', 'high'])
+        self.assertEqual([routing.effort_for(l, v, long=True, work_kind='writing') for l in (1, 2, 3)], ['high', 'high', 'xhigh'])
+        self.assertEqual(routing.effort_for(1, ['low', 'medium'], work_kind='implementation'), 'medium')
+
     def test_estimated_hours_is_validated_and_does_not_change_the_level(self):
         for hours in (0, 4.0, 100):
             self.assertEqual(routing.task_level('implementation', dict(FACTS, estimate_agentic_effort_hours=hours)), 1)
@@ -121,8 +130,8 @@ class RoutingTest(unittest.TestCase):
 
     def test_size_group_and_long_effort(self):
         self.assertEqual(routing.size_group(FACTS), 'short')
-        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=1.9)), 'short')
-        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=2)), 'long')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=3.9)), 'short')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=4)), 'long')
         v = ['low', 'medium', 'high', 'xhigh', 'max']
         self.assertEqual([routing.effort_for(l, v, long=True) for l in (1, 2, 3)], ['high', 'high', 'xhigh'])
         self.assertEqual(routing.effort_for(3, ['low', 'high'], long=True), 'high')

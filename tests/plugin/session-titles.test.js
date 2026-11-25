@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, strip } from "../../src/session-titles.js"
+import { DEFAULT_TITLE, cellsFor, compose, registerSessionTitles, serverStart, strip } from "../../src/session-titles.js"
 
 test("compose and strip", () => {
   assert.equal(compose("Fix auth", 2, true), "￻▰▰▱▱▱ WAITING · Fix auth")
@@ -68,7 +68,7 @@ function memoryStorage({ failing = false } = {}) {
 }
 
 async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
-  storage = memoryStorage(), root, located = true, deadline } = {}) {
+  storage = memoryStorage(), root, located = true, deadline, started = Date.now() - 60 * 60 * 1000 } = {}) {
   if (!root) {
     root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
     const made = root
@@ -77,12 +77,16 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   directory ??= root
   const titles = new Map(), calls = { get: [], update: [], run: [], hook: [], status: [], gh: [], list: 0 }
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
-    active: [], finished: [], stale: [], silent: [], busyOnly: [], busyAgo: {}, many: 0, parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
+    active: [], finished: [], stale: [], silent: [], busyOnly: [], busyAgo: {}, longBusy: [], busyAt: {}, many: 0, parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
   const preference = { state }
   let stream, subscribed
   const parentOf = (id) => facts.parents[id] ?? (id.startsWith("child") ? "ses_1" : undefined)
   const timeOf = (id) => {
-    const old = facts.stale.includes(id) ? 11 * 60 * 1000 : 0, now = Date.now()
+    const now = Date.now()
+    // stale: busy before this server started (a run killed by a restart); longBusy: busy for 11 minutes in this run.
+    if (facts.busyAt[id] !== undefined) return { created: facts.busyAt[id] - 5000, updated: facts.busyAt[id], busy: facts.busyAt[id] }
+    if (facts.active.includes(id) && facts.longBusy.includes(id)) return { created: now - 12 * 60 * 1000, updated: now - 11 * 60 * 1000, busy: now - 11 * 60 * 1000 }
+    const old = facts.stale.includes(id) ? now - started + 60 * 1000 : 0
     if (id.startsWith("child_m")) return { created: now - 9000, updated: now - 1000, busy: now - 2000, idle: now - 1000 }
     return { created: now - old - 5000,
       ...(!facts.busyOnly.includes(id) && { updated: facts.silent.includes(id) ? now - 11 * 60 * 1000 : now - old }),
@@ -90,7 +94,8 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       ...(facts.finished.includes(id) && { busy: now - 2000, idle: now - 1000 }) }
   }
   const ctx = {
-    ...(located && { location: { directory: root } }), storage,
+    // The copy that runs a session's hooks is the one for the session's folder, as on the real host.
+    ...(located && { location: { directory } }), storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
     session: {
       get: async ({ sessionID }) => {
@@ -101,6 +106,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       },
       list: async ({ parentID, limit = 50, cursor }) => {
         calls.list++
+        await facts.listGate
         if (facts.listFail) throw Error("list")
         if (facts.listHang) await new Promise(() => {})
         if (facts.listRaw !== undefined) return facts.listRaw
@@ -133,10 +139,15 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     if (args[0] === "status") await facts.statusGate
     if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` +
       (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+    if (args.includes("--git-common-dir")) {
+      const common = facts.common?.[options?.cwd]
+      if (!common) throw Error("not a repository")
+      return `${common}\n`
+    }
     if (args[0] === "rev-parse") return "origin/main\n"
     return facts.changed.join("\n")
   }
-  const titlesFor = await registerSessionTitles(ctx, { run, ...(deadline && { deadline }), settings: { inspect: async () => preference },
+  const titlesFor = await registerSessionTitles(ctx, { run, started, ...(deadline && { deadline }), settings: { inspect: async () => preference },
     gitWorkflow: { inspect: async () => ({ state: gitState, project: project ?? root, worktree_cleanup: cleanup }) } })
   t.after(() => titlesFor.close())
   const write = async (path, sessionID = "ses_1", more = {}) => {
@@ -150,16 +161,103 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     return event
   }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
-  return { root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
+  return { started, root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
+}
+
+// Two or more plugin copies, one per folder, as OpenCode runs them: one shared storage and session table, every copy
+// receives every event, and a tool hook runs only in the copy for the session's current folder.
+async function world(t, { folders = ["main", "wt"], project = "p1", projects = {}, started = Date.now() - 60 * 60 * 1000 } = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "session-world-")))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const dirs = Object.fromEntries(folders.map((name) => [name, join(base, name)]))
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
+  const storage = memoryStorage(), table = new Map(), preference = { state: "on" }, reads = new Map()
+  const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, gate: null, storageGate: null, getGate: null,
+    updateGate: null, failGet: new Set() }
+  const sessionOf = (id) => table.get(id) ?? { location: dirs[folders[0]] }
+  const copies = {}
+  for (const name of folders) {
+    const calls = { get: 0, gh: 0, set: 0, update: [] }, hooks = []
+    let stream
+    const ctx = {
+      location: { directory: dirs[name], project: { id: projects[name] ?? project } },
+      storage: { data: storage.data,
+        get: async (key) => { await facts.storageGate; return storage.get(key) },
+        set: async (key, value) => { calls.set++; await facts.setGate; return storage.set(key, value) },
+        remove: (key) => storage.remove(key), scan: (options) => storage.scan(options) },
+      tool: { hook: async (hookName, handler) => hooks.push([hookName, handler]) },
+      session: {
+        get: async ({ sessionID }) => {
+          calls.get++
+          await facts.getGate
+          if (facts.failGet.has(sessionID)) throw Error("get")
+          const s = sessionOf(sessionID)
+          reads.set(sessionID, (reads.get(sessionID) ?? 0) + 1)
+          if (facts.gateNth?.id === sessionID && reads.get(sessionID) === facts.gateNth.n) await facts.gateNth.gate
+          return { id: sessionID, title: s.title ?? "Fix login flow", location: { directory: s.location }, time: s.time ?? {},
+            ...(s.parentID && { parentID: s.parentID }) }
+        },
+        list: async () => ({ data: [], cursor: { previous: null, next: null } }),
+        update: async ({ sessionID, title }) => {
+          calls.update.push([sessionID, title])
+          await facts.updateGate
+          table.set(sessionID, { ...sessionOf(sessionID), title })
+        },
+      },
+      event: { subscribe: ({ signal }) => (stream = pushable(signal)) },
+    }
+    const run = async (command, args) => {
+      if (command === "gh") {
+        calls.gh++
+        await facts.gate
+        return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
+      }
+      if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` + (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+      if (args[0] === "rev-parse") return "origin/main\n"
+      return facts.changed.join("\n")
+    }
+    const registered = await registerSessionTitles(ctx, { run, started, settings: { inspect: async () => preference },
+      gitWorkflow: { inspect: async () => ({ state: "on", project: dirs[folders[0]], worktree_cleanup: false }) } })
+    t.after(() => registered.close())
+    copies[name] = { ctx, calls, hooks, registered, push: (event) => stream.push(event) }
+  }
+  const push = async (event) => { for (const copy of Object.values(copies)) copy.push(event); await settle() }
+  const hookIn = async (copy, event) => { for (const [hookName, handler] of copy.hooks) if (hookName === "execute.after") await handler(event) }
+  const hook = (event) => hookIn(Object.values(copies).find((c) => c.ctx.location.directory === sessionOf(event.sessionID).location), event)
+  return { dirs, copies, table, facts, storage, preference,
+    session: (id, folder, more = {}) => table.set(id, { location: dirs[folder], ...more }),
+    write: (path, id = "ses_1") => hook({ tool: "write", status: "completed", sessionID: id, input: { path } }),
+    start: (id = "ses_1") => push({ type: "session.execution.started", data: { sessionID: id } }),
+    end: (id = "ses_1") => push({ type: "session.execution.succeeded", data: { sessionID: id } }),
+    move: async (id, folder) => {
+      const from = sessionOf(id).location
+      table.set(id, { ...sessionOf(id), location: dirs[folder] })
+      await push({ type: "session.moved", location: { directory: from }, data: { sessionID: id, location: { directory: dirs[folder] } } })
+    },
+    // A move whose event this world never delivers, as if a copy had missed it.
+    moveSilently: (id, folder) => table.set(id, { ...sessionOf(id), location: dirs[folder] }),
+    writeIn: (copy, path, id = "ses_1") => hookIn(copies[copy], { tool: "write", status: "completed", sessionID: id, input: { path } }),
+    title: (id = "ses_1") => table.get(id)?.title,
+    record: (id = "ses_1") => storage.data.get(`session-titles/${id}`) }
+}
+
+// A stored binding as an earlier turn left it: the session's title is the meter it last wrote.
+function seed(w, id, folder, more = {}) {
+  const record = { location: w.dirs[folder], project: "p1", at: 1, last: compose("Fix login flow", 1, true), silenced: false,
+    diag: null, task: { top: w.dirs[folder], spec: `${w.dirs[folder]}/docs/superpowers/specs/2026-11-25-x-design.md`, plan: null,
+      remembered: null, cells: 1, slug: "x", fresh: false }, ...more }
+  w.storage.data.set(`session-titles/${id}`, record)
+  w.table.set(id, { ...(w.table.get(id) ?? { location: w.dirs[folder] }), title: record.last })
 }
 
 test("a spec write binds without renaming; turn boundaries write the meter and label", async (t) => {
   const h = await host(t)
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
-    "session.execution.failed", "session.execution.interrupted"])
+    "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
+    "permission.replied", "form.replied", "form.cancelled", "shell.exited"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -273,14 +371,15 @@ test("cleanup counts only while the git workflow feature is on", async (t) => {
   assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▰ Fix login flow")
 })
 
-test("children, events without a session and unbound sessions write nothing; failed and interrupted evaluate", async (t) => {
+test("a child's spec write binds its root, never the child; events without a session and unbound sessions write nothing; failed and interrupted evaluate", async (t) => {
   const h = await host(t)
   await h.write(SPEC, "child_1")
   await h.end("child_1")
+  assert.deepEqual(h.calls.update.map(([id]) => id), ["ses_1"], "the child's end wakes the root it bound")
   h.push({ type: "session.execution.succeeded", data: {} })
   h.push({ type: "session.execution.succeeded" })
   await h.end("ses_2")
-  assert.deepEqual(h.calls.update, [])
+  assert.equal(h.calls.update.length, 1)
   await h.write(SPEC)
   await h.emit("session.execution.failed")
   assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
@@ -482,7 +581,7 @@ test("an evaluation still reading facts when the plugin closes renames nothing",
   assert.deepEqual(h.calls.update, [])
 })
 
-test("a running child counts; an idle, finished or stale one, another root's child and the root itself do not", async (t) => {
+test("a running child counts; an idle or finished one, one busy before the server started, another root's child and the root itself do not", async (t) => {
   const waiting = compose("Fix login flow", 1, true), quiet = compose("Fix login flow", 1, false)
   for (const [set, label] of [
     [{ active: ["child_1"] }, quiet],
@@ -592,7 +691,7 @@ test("a root still inside a long silent tool call is not labeled when its child 
   await h.start()
   const writes = h.calls.update.length
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
-  Object.assign(h.facts, { active: ["ses_1"], stale: ["ses_1"] })
+  Object.assign(h.facts, { active: ["ses_1"], longBusy: ["ses_1"] })
   await h.end("child_1")
   assert.equal(h.calls.update.length, writes)
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
@@ -609,6 +708,41 @@ test("a failing child list does not hide that the root is running again", async 
   assert.equal(h.calls.update.length, writes)
 })
 
+test("a child inside one tool call for 11 minutes still counts as running", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { active: ["child_1"], longBusy: ["child_1"] })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
+test("a busy time 1 ms before the server start reads idle and 1 ms after reads running", async (t) => {
+  for (const [offset, label] of [[-1, true], [1, false]]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    Object.assign(h.facts, { active: ["child_1"], busyAt: { child_1: h.started + offset } })
+    await h.end()
+    assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, label), `child ${offset}`)
+  }
+  for (const [offset, writes] of [[-1, true], [1, false]]) {
+    const h = await host(t)
+    await h.write(SPEC)
+    await h.end()
+    await h.start()
+    const before = h.calls.update.length
+    Object.assign(h.facts, { active: ["ses_1"], busyAt: { ses_1: h.started + offset } })
+    await h.end("child_1")
+    assert.equal(h.calls.update.length > before, writes, `root ${offset}`)
+  }
+})
+
+test("the server start is the same for copies registered at different times", async () => {
+  const first = serverStart()
+  await new Promise((done) => setTimeout(done, 30))
+  assert.ok(Math.abs(serverStart() - first) < 5)
+  assert.ok(serverStart() <= Date.now() - process.uptime() * 1000 + 5)
+})
+
 test("a hanging list read is cut off and reads as nothing running", async (t) => {
   const h = await host(t, { deadline: 30 })
   await h.write(SPEC)
@@ -616,6 +750,558 @@ test("a hanging list read is cut off and reads as nothing running", async (t) =>
   h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
   await new Promise((done) => setTimeout(done, 200))
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("the lab move sequence keeps the plan", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  const spec = `${w.dirs.wt}/docs/superpowers/specs/2026-11-25-x-design.md`, plan = `${w.dirs.wt}/docs/superpowers/plans/2026-11-25-x.md`
+  mkdirSync(join(w.dirs.wt, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(plan, "**Files:** `src/app.js`\n")
+  await w.write(spec)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  await w.move("ses_1", "wt")
+  await w.write(plan)
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 4, true))
+  await w.move("ses_1", "main")
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 4, true), "the meter never goes back")
+  assert.deepEqual([w.record().task.plan, w.record().task.cells, w.record().project], [plan, 4, "p1"])
+})
+
+test("a record from another project is ignored and a legacy record loads only in its folder", async (t) => {
+  const w = await world(t)
+  for (const [id, more, loaded] of [["ses_a", { project: "other" }, false], ["ses_b", { project: undefined }, true]]) {
+    w.session(id, "main")
+    seed(w, id, "main", more)
+    w.facts.changed = ["src/app.js"]
+    await w.end(id)
+    assert.equal(w.title(id) === compose("Fix login flow", 2, true), loaded, id)
+  }
+  w.session("ses_c", "main")
+  seed(w, "ses_c", "wt", { project: undefined })
+  await w.end("ses_c")
+  assert.equal(w.title("ses_c"), compose("Fix login flow", 1, true), "a legacy record saved in another folder is not loaded")
+  assert.equal(w.record("ses_c").at, 1)
+})
+
+test("a failed ownership read retries on the next event", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.facts.failGet.add("ses_1")
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  w.facts.failGet.delete("ses_1")
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 2, true))
+})
+
+test("a non-owner makes one cold ownership read and no gh call or storage write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  const reads = w.copies.wt.calls.get
+  for (let i = 0; i < 3; i++) await w.end()
+  assert.ok(reads >= 1 && reads <= 2, `cold reads ${reads}`)
+  assert.equal(w.copies.wt.calls.get, reads, "no further reads for the session's own turn events")
+  assert.deepEqual([w.copies.wt.calls.gh, w.copies.wt.calls.set, w.copies.wt.calls.update.length], [0, 0, 0])
+  assert.ok(w.copies.main.calls.gh > 0, "the owner evaluated")
+})
+
+test("a move during a slow evaluation or a slow storage read writes nothing in the old copy", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  const before = { ...w.copies.main.calls, update: w.copies.main.calls.update.length }
+  w.facts.changed = ["src/app.js"]
+  w.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [before.update, before.set])
+
+  const v = await world(t)
+  v.session("ses_2", "main")
+  seed(v, "ses_2", "main")
+  v.facts.storageGate = new Promise((done) => { release = done })
+  v.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_2" } })
+  await settle()
+  await v.move("ses_2", "wt")
+  release()
+  await settle()
+  assert.deepEqual([v.copies.main.calls.update.length, v.copies.main.calls.set], [0, 0], "no stale record published or written")
+})
+
+test("a close during a slow evaluation starts no new write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  await w.end()
+  w.copies.main.registered.close()
+  release()
+  await settle()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [0, 0])
+})
+
+test("a copy that missed a move does not write the session", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  w.moveSilently("ses_1", "wt")
+  const before = { update: w.copies.main.calls.update.length, set: w.copies.main.calls.set }
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [before.update, before.set])
+})
+
+test("a move during a slow title update starts no storage write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.updateGate = new Promise((done) => { release = done })
+  w.facts.changed = ["src/app.js"]
+  w.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await settle()
+  assert.equal(w.copies.main.calls.update.length, 1, "the update is in flight")
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  assert.equal(w.copies.main.calls.set, 0)
+})
+
+test("a load interrupted by a move does not publish a stale binding", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.storageGate = new Promise((done) => { release = done })
+  w.copies.main.push({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  w.facts.storageGate = null
+  const newer = `${w.dirs.wt}/docs/superpowers/specs/2026-11-26-y-design.md`
+  await w.write(newer)
+  await w.end()
+  w.moveSilently("ses_1", "main")
+  await w.end()
+  assert.equal(w.record().task.spec, newer, "the main copy never held the older binding")
+})
+
+test("a hook delivered to a copy that does not own the session does nothing", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  await w.writeIn("wt", `${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`)
+  assert.equal(w.record(), undefined)
+})
+
+test("a child bind whose root moves while it is being read does not write the old folder's record", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  let release
+  w.facts.gateNth = { id: "ses_1", n: 2, gate: new Promise((done) => { release = done }) }
+  const writing = w.write(`${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`, "child_1")
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await writing
+  await settle()
+  assert.equal(w.record(), undefined)
+})
+
+test("a close during a storage write starts no pruning scan", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  let release
+  w.facts.setGate = new Promise((done) => { release = done })
+  const writing = w.write(`${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`)
+  await settle()
+  w.copies.main.registered.close()
+  release()
+  await writing
+  await settle()
+  assert.equal(w.storage.calls.scan, 0)
+})
+
+test("a folder that cannot be resolved yet is retried, not cached as someone else's", async (t) => {
+  const w = await world(t)
+  const link = join(w.dirs.main, "..", "link-later")
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.table.set("ses_1", { ...w.table.get("ses_1"), location: link })
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  symlinkSync(w.dirs.main, link)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 2, true))
+})
+
+test("the move's turn end is evaluated once, by the destination", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  const gh = { main: w.copies.main.calls.gh, wt: w.copies.wt.calls.gh }
+  await w.start()
+  await w.move("ses_1", "wt")
+  await w.end()
+  assert.deepEqual([w.copies.main.calls.gh - gh.main, w.copies.wt.calls.gh - gh.wt], [0, 1])
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+})
+
+test("a child end that comes first after a reload restores and wakes its stored root", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  seed(w, "ses_1", "main", { last: compose("Fix login flow", 1, false) })
+  w.table.set("ses_1", { ...w.table.get("ses_1"), title: compose("Fix login flow", 1, false) })
+  await w.end("child_1")
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+})
+
+test("a child's spec write binds the root, and a child in another folder does not", async (t) => {
+  const w = await world(t)
+  const spec = (dir) => `${dir}/docs/superpowers/specs/2026-11-25-x-design.md`
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  await w.write(spec(w.dirs.main), "child_1")
+  assert.equal(w.record().task.spec, spec(w.dirs.main))
+  assert.equal(w.record("child_1"), undefined)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  w.session("ses_2", "main")
+  w.session("child_2", "wt", { parentID: "ses_2" })
+  await w.write(spec(w.dirs.wt), "child_2")
+  assert.equal(w.record("ses_2"), undefined)
+})
+
+const ask = (h, type, id, sessionID = "ses_1") => {
+  const data = type === "form.created" ? { form: { id, sessionID } }
+    : type === "permission.replied" ? { sessionID, requestID: id, reply: "once" }
+    : type === "permission.asked" ? { id, sessionID, action: "shell", resources: [] } : { id, sessionID }
+  h.push({ type, data })
+  return settle()
+}
+// A bound root that already shows its meter and is running a turn.
+async function running(t) {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  h.facts.active = ["ses_1"]
+  return h
+}
+const quiet = compose("Fix login flow", 1, false), waiting = compose("Fix login flow", 1, true)
+
+test("a permission request sets WAITING mid-turn without git reads and its reply removes it", async (t) => {
+  const h = await running(t)
+  assert.equal(h.titles.get("ses_1"), quiet)
+  const reads = h.calls.run.length
+  await ask(h, "permission.asked", "per_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "permission.replied", "per_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+  assert.equal(h.calls.run.length, reads, "no git or gh read")
+})
+
+test("a question form does the same, and cancel removes it", async (t) => {
+  const h = await running(t)
+  await ask(h, "form.created", "frm_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await ask(h, "form.created", "frm_2")
+  await ask(h, "form.cancelled", "frm_2")
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("overlapping requests keep WAITING until the last answer", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_1")
+  await ask(h, "form.created", "frm_1")
+  await ask(h, "permission.replied", "per_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("a reply never removes an idle session's WAITING", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const writes = h.calls.update.length
+  await ask(h, "permission.replied", "per_x")
+  await ask(h, "form.cancelled", "frm_x")
+  await ask(h, "form.created", "frm_1")
+  await ask(h, "form.replied", "frm_1")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  assert.equal(h.calls.update.length, writes)
+})
+
+test("a request answered before its label is written leaves none; a new one before the clear keeps it", async (t) => {
+  const h = await running(t)
+  let writes = h.calls.update.length
+  h.push({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_1" } })
+  h.push({ type: "permission.replied", data: { sessionID: "ses_1", requestID: "per_1" } })
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  assert.equal(h.calls.update.length, writes, "no WAITING flashed")
+  await ask(h, "permission.asked", "per_2")
+  writes = h.calls.update.length
+  h.push({ type: "permission.replied", data: { sessionID: "ses_1", requestID: "per_2" } })
+  h.push({ type: "permission.asked", data: { id: "per_3", sessionID: "ses_1" } })
+  await settle()
+  assert.equal(h.titles.get("ses_1"), waiting)
+  assert.equal(h.calls.update.length, writes, "the label never cleared in between")
+})
+
+test("a dropped reply is cleared at the root's next turn boundary", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_dropped")
+  await h.end()
+  await h.start()
+  await ask(h, "permission.asked", "per_2")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await ask(h, "permission.replied", "per_2")
+  assert.equal(h.titles.get("ses_1"), quiet, "the dropped id no longer holds the label")
+})
+
+test("no request label before the first meter or for a task bound this turn", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  h.facts.active = ["ses_1"]
+  await ask(h, "permission.asked", "per_1")
+  assert.deepEqual(h.calls.update, [])
+  const g = await running(t)
+  await g.write(OTHER)
+  await ask(g, "permission.asked", "per_1")
+  assert.equal(g.titles.get("ses_1"), quiet)
+})
+
+test("a child-triggered evaluation does not clear pending requests", async (t) => {
+  const h = await running(t)
+  await ask(h, "permission.asked", "per_1")
+  await h.end("child_1")
+  await ask(h, "form.created", "frm_2")
+  await ask(h, "form.replied", "frm_2")
+  assert.equal(h.titles.get("ses_1"), waiting, "per_1 still pending")
+})
+
+test("a 17th request is ignored", async (t) => {
+  const h = await running(t)
+  for (let i = 1; i <= 17; i++) await ask(h, "permission.asked", `per_${i}`)
+  for (let i = 1; i <= 16; i++) await ask(h, "permission.replied", `per_${i}`)
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("requests of unbound or child sessions do nothing", async (t) => {
+  const h = await running(t)
+  const before = { get: h.calls.get.length, update: h.calls.update.length }
+  await ask(h, "permission.asked", "per_1", "ses_2")
+  await ask(h, "form.created", "frm_1", "child_1")
+  assert.deepEqual([h.calls.get.length, h.calls.update.length], [before.get, before.update])
+})
+
+const background = (h, id, command = "sleep 45") => h.shell(command, "ses_1", { result: { content: [], metadata: { shellID: id, status: "running" } } })
+const exited = (h, id) => { h.push({ type: "shell.exited", data: { id, exit: 0, status: "exited" } }); return settle() }
+
+test("a running background shell keeps WAITING off at a turn end, and its exit with nothing running sets it", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  await exited(h, "sh_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a background shell's exit while the session runs again writes nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  await h.start()
+  h.facts.active = ["ses_1"]
+  const writes = h.calls.update.length
+  await exited(h, "sh_1")
+  assert.equal(h.calls.update.length, writes)
+})
+
+test("with two background shells only the last exit labels", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await background(h, "sh_2")
+  await h.end()
+  await exited(h, "sh_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  await exited(h, "sh_2")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a shell that exits before its hook runs is never tracked", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await exited(h, "sh_fast")
+  await background(h, "sh_fast")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a 65th background shell drops the oldest", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  for (let i = 0; i <= 64; i++) await background(h, `sh_${i}`)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  for (let i = 1; i <= 64; i++) await exited(h, `sh_${i}`)
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+
+test("a finished shell result is never tracked, and an unbound session's shell exit costs no read", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await h.shell("ls", "ses_1", { result: { content: [], metadata: { shellID: "sh_done", status: "exited", exit: 0 } } })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+  await h.shell("sleep 9", "ses_2", { result: { content: [], metadata: { shellID: "sh_other", status: "running" } } })
+  const reads = { get: h.calls.get.length, list: h.calls.list }
+  await exited(h, "sh_other")
+  assert.deepEqual([h.calls.get.length, h.calls.list], [reads.get, reads.list])
+})
+
+test("a shell started while an earlier shell's exit check runs keeps WAITING off", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  let release
+  h.facts.listGate = new Promise((done) => { release = done })
+  h.push({ type: "shell.exited", data: { id: "sh_1", status: "exited" } })
+  await settle()
+  await background(h, "sh_2")
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+})
+
+test("a background git push still records its branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false })
+  await background(h, "sh_push", "git push -u origin feat/x")
+  assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x")
+})
+
+const ago = (ms) => new Date(Date.now() - ms).toISOString()
+const later = () => new Date(Date.now() + 60000).toISOString()
+
+test("a removed worktree with a seen branch reaches 5 cells, and an unpushed checkout makes no gh call", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false, prs: { "feat/x": [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  await h.end()
+  assert.equal(h.calls.gh.length, 0)
+  assert.equal(h.storage.data.get(KEY).task.seen, "feat/x")
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 5, false))
+})
+
+test("a PR opened before the bind is not credited through the seen branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false, prs: { "feat/x": [{ state: "MERGED", title: "old", createdAt: ago(60000) }] } })
+  await h.end()
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+
+test("the default branch is never remembered as the seen branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "main", upstream: true, prs: { main: [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  assert.equal(h.storage.data.get(KEY).task.seen, null)
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("with cleanup on, a detached present checkout shows 4 and reaches 5 once removed", async (t) => {
+  const h = await host(t, { cleanup: true, project: join(tmpdir(), "session-primary-elsewhere") })
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false })
+  await h.end()
+  Object.assign(h.facts, { branch: null, prs: { "feat/x": [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 4, true))
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 5, false))
+})
+
+test("only the first same-topic plan in a checkout of the same repository adopts the task", async (t) => {
+  const dirs = {}
+  for (const name of ["wt", "third", "elsewhere"]) {
+    dirs[name] = realpathSync(mkdtempSync(join(tmpdir(), `session-${name}-`)))
+    t.after(() => rmSync(dirs[name], { recursive: true, force: true }))
+  }
+  const plan = (dir, name = "2026-11-20-fix-auth") => `${dir}/docs/superpowers/plans/${name}.md`
+  const scenario = async (prepare) => {
+    const h = await host(t)
+    h.facts.common = { [h.root]: "/repo/.git", [dirs.wt]: "/repo/.git", [dirs.third]: "/repo/.git", [dirs.elsewhere]: "/other/.git" }
+    await h.write(SPEC)
+    Object.assign(h.facts, { branch: "feat/old", upstream: false })
+    await h.end()
+    await prepare(h)
+    return h.storage.data.get(KEY).task
+  }
+  let task = await scenario(async (h) => { h.facts.branch = "feat/switched"; await h.write(plan(dirs.wt)) })
+  assert.deepEqual([task.top, task.plan, task.remembered, task.seen], [dirs.wt, plan(dirs.wt), null, null])
+  task = await scenario(async (h) => { await h.write(plan(dirs.wt)); await h.write(plan(dirs.third)) })
+  assert.equal(task.top, dirs.wt, "a second plan does not move the task again")
+  task = await scenario((h) => h.write(plan(dirs.wt, "2026-11-20-other-thing")))
+  assert.deepEqual([task.plan, task.seen], [null, "feat/old"], "another topic")
+  task = await scenario((h) => h.write(plan(dirs.elsewhere)))
+  assert.equal(task.plan, null, "another repository")
+  task = await scenario(async (h) => { delete h.facts.common[dirs.wt]; await h.write(plan(dirs.wt)) })
+  assert.equal(task.plan, null, "a failed read")
 })
 
 test("a rename during slow fact reads is kept", async (t) => {

@@ -137,19 +137,21 @@ class SelectionTest(unittest.TestCase):
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
 
-    def test_estimated_hours_of_two_or_more_raise_effort_one_step(self):
+    def test_estimated_hours_of_four_or_more_raise_effort_one_step(self):
         self.models = [model(provider, name, variants=["low", "medium", "high", "xhigh"])
                        for provider, name in (("claude-agent", "claude-opus-5-5"),
                                               ("claude-agent", "claude-sonnet-5-5"), ("openai", "gpt-6-2-sol"))]
         self.warm()
         short = self.run_select(self.request(work_kind="review"))
-        self.assertEqual(short["route"]["effort"], "medium")
+        self.assertEqual(short["route"]["effort"], "high")
         long = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=6)))
-        self.assertEqual(long["route"]["effort"], "high")
-        edge = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=2)))
-        self.assertEqual((edge["route"]["effort"], edge["size_group"]), ("high", "long"))
-        under = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=1.9)))
-        self.assertEqual((under["route"]["effort"], under["size_group"]), ("medium", "short"))
+        self.assertEqual(long["route"]["effort"], "xhigh")
+        edge = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=4)))
+        self.assertEqual((edge["route"]["effort"], edge["size_group"]), ("xhigh", "long"))
+        under = self.run_select(self.request(work_kind="review", task=dict(TASK, estimate_agentic_effort_hours=3.9)))
+        self.assertEqual((under["route"]["effort"], under["size_group"]), ("high", "short"))
+        writing = self.run_select(self.request(work_kind="writing"))
+        self.assertEqual((writing["level"], writing["route"]["effort"]), (1, "medium"))
 
     def test_huge_hour_estimate_is_invalid_request_not_an_exception(self):
         self.warm()

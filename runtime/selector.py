@@ -150,7 +150,8 @@ def select(request, *, state_dir, source=None, fetch=None, now=None):
     return answer
 
 
-def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None, seen=None):
+def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch, fixed, task=None, seen=None,
+                work_kind=None):
     """The selection steps up to the scored candidates, shared by Smart Router and council picks."""
     long = task is not None and routing.size_group(task) == 'long'
     state_dir = Path(state_dir)
@@ -188,7 +189,7 @@ def _candidates(models, level, constraints, tokens, *, state_dir, source, fetch,
         return dict(pool, reason='scores_unavailable')
     pool.update(had=had, cache=cache)
     for item in kept:
-        key, effort = keys[item['route']], routing.effort_for(level, item['variants'], long=long)
+        key, effort = keys[item['route']], routing.effort_for(level, item['variants'], long=long, work_kind=work_kind)
         own = scores.lookup(cache, key, scores.CREATOR.get(item['path']))
         if own is None or own['score_source'] != 'openrouter':
             pool['wanted'].add(key)
@@ -305,7 +306,8 @@ def _adjusted(pool, store, item, work_kind, size_group, anchor):
 
 def _select(request, level, constraints, *, state_dir, source, fetch, now, unmatched, seen):
     pool = _candidates(request['models'], level, constraints, request['task'].get('context_tokens', 0),
-                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'], seen=seen)
+                       state_dir=state_dir, source=source, fetch=fetch, fixed=now, task=request['task'], seen=seen,
+                       work_kind=request['work_kind'])
     if pool['allkeys'] is not None:
         unmatched = _unmatched(pool['routed'], pool['allkeys'], constraints.get('excluded_models', []))
     if pool['reason']:

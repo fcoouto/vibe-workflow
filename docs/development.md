@@ -254,9 +254,10 @@ the agents' ratings, not the new levels, which unit tests cover. Dispatch of the
 
 Cards live in `router-feedback.json` in Smart Router's state folder (`$XDG_STATE_HOME/vibe-workflow/smart-router`,
 by default `~/.local/state/vibe-workflow/smart-router`). A card rates a finished subagent's work from 0 to 5 and
-moves that model's effective score only for the same kind of work and size group (below, or at or above, 2 agent
-hours). From 0.12.0 the default effort by level is medium, medium, high (never low when the model offers
-more), and a task estimated at 2 or more agent-hours gets one effort step more; the level never changes. The formula, caps and decay are in `docs/superpowers/specs/2026-11-24-router-feedback-design.md`; this file
+moves that model's effective score only for the same kind of work and size group (below, or at or above, 4 agent
+hours). From 0.13.0 every kind of work but writing starts at high effort at any level; writing follows the
+level (medium, medium, high). Low is never recommended when the model offers more, and a task estimated at 4 or
+more agent-hours gets one effort step more; the level never changes. The formula, caps and decay are in `docs/superpowers/specs/2026-11-24-router-feedback-design.md`; this file
 does not copy them. A key gets no adjustment until its cards come from at least 3 different sessions. A missing,
 damaged or oversized store means no adjustment, and picks fall back to catalog scores. A model cannot rate itself,
 on any provider. A session gets one vote per model and kind of work, and can vote again only after 5,000 newer votes
@@ -284,7 +285,7 @@ with that root's own, and snapshots both files; git workflow reads stay at main;
 the checkout's own file. Not observed: the procedure's worktree check, `worktree_create` and
 `session.move` in a real session, and a real session started in the primary checkout. Nothing in code
 stops a primary-checkout session from saving in main; only the procedure does. The wiring of
-`sessionTitles` in `index.js` is pinned by a test that reads storage after a succeeded step (checked by mutation).
+`sessionTitles` in `index.js` is pinned by a test that reads storage after a completed spec write.
 
 ## Smart Router automatic selection: what is known
 

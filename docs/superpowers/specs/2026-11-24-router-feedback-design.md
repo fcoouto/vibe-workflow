@@ -27,7 +27,7 @@ not a new subsystem.
   model can drop out of a level, or climb into one.
 - New models start from their catalog score; new versions of a known family
   start with half of the family's record.
-- The router can tell short tasks from long ones (2 agent-hours or more; 4 before 0.12.0), and
+- The router can tell short tasks from long ones (4 agent-hours or more; 2 in 0.12.0 to 0.13.0), and
   gives long tasks more effort.
 
 ## Non-goals
@@ -81,13 +81,13 @@ not a new subsystem.
   the coordinator's estimate of how long the delegated agent will work on the
   task, in hours of agent time, not a person's time (the user's choice of field,
   so the cutoff is Smart Router's rule, not each agent's judgement).
-- Threshold: 2 hours (the user's choice on 24 November 2026; it was 4 until 0.12.0). A missing estimate counts as below it.
+- Threshold: 4 hours (the user's choice; 2 hours in 0.12.0 to 0.13.0). A missing estimate counts as below it.
 - The estimate does not change the level. The text fix below sends whole plans
   to `prose`, which already raises them.
-- Effort: at or above 2 hours, one effort step above the level's default (level 1
+- Effort: at or above 4 hours, one effort step above the level's default (level 1
   medium to high, level 2 medium to high, level 3 high to xhigh), clamped to the
   model's variants as today.
-- Cards are kept in two size groups, below and at or above 2 hours, so a failed
+- Cards are kept in two size groups, below and at or above 4 hours, so a failed
   long build does not lower a model's record on short tasks. Two groups only,
   because cards will be sparse.
 - Deferred: moving the threshold from card evidence (where ratings drop).
@@ -188,3 +188,17 @@ specified tasks but needed two fix rounds each on two tasks needing judgment abo
 tests and test data; the advisor evaluation behind the exact-plan rule never set
 low effort. Effort is still clamped to the model's variants; the level never
 changes.
+
+## Amendment, 24 November 2026 (release 0.13.0)
+
+The user decided: implementation, testing, review, planning and investigation start
+at high effort at every level; writing keeps medium, medium, high by level. The
+step for tasks of 2 or more agent-hours stays (high becomes xhigh). Effort is still
+clamped to the model's variants; callers without a work kind (council seats) follow
+the level table.
+
+## Amendment, 25 November 2026 (release 0.13.1)
+
+The user moved the long-task threshold back to 4 agent-hours (it was 2 from 0.12.0).
+Below 4 hours a task gets its kind's base effort; at 4 or more, one step more. The
+store held no card from a 2-4-hour task when this changed.

@@ -356,7 +356,7 @@ test("a below-level pick keeps its pick_id and hint but its card is ignored", as
     const answer = JSON.parse((await f.execute()).content)
     assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
     assert.equal(answer.feedback_hint, FEEDBACK_HINT)
-    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "not_rateable" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1122,10 +1122,10 @@ test("feedback is ignored for an unknown pick, another session, or Smart Router 
   try {
     const pick_id = await pickOf(f)
     const input = { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }
-    assert.deepEqual(await rate(f, { ...input, pick_id: "0123456789abcdef" }), { state: "ignored" })
-    assert.deepEqual(await rate(f, input, "ses_other"), { state: "ignored" })
+    assert.deepEqual(await rate(f, { ...input, pick_id: "0123456789abcdef" }), { state: "ignored", reason: "unknown_pick" })
+    assert.deepEqual(await rate(f, input, "ses_other"), { state: "ignored", reason: "unknown_pick" })
     await preference(f.root, false)
-    assert.deepEqual(await rate(f, input), { state: "ignored" })
+    assert.deepEqual(await rate(f, input), { state: "ignored", reason: "router_off" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1211,7 +1211,7 @@ test("turning Smart Router off while a rating looks up the session leaves it ign
     await preference(f.root, false)
     assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
     release()
-    assert.deepEqual(await pending, { state: "ignored" })
+    assert.deepEqual(await pending, { state: "ignored", reason: "router_off" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1224,7 +1224,7 @@ test("a pick whose refs have no usable catalog_id is not remembered, so its card
       { key: "gpt-x", creator: "openai" }]) {
       await writeFile(join(f.root, "answer.json"), JSON.stringify({ ...picked, route: bad(id), alternatives: [] }))
       const pick_id = await pickOf(f)
-      assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+      assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "not_rateable" })
     }
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
@@ -1321,7 +1321,7 @@ test("a selection without a session still gets a pick_id and the hint, and its c
     assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
     assert.equal(answer.feedback_hint, FEEDBACK_HINT)
     assert.deepEqual(await cardFor(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }, undefined),
-      { state: "ignored" })
+      { state: "ignored", reason: "unknown_pick" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1347,7 +1347,7 @@ test("a size group the selector does not name is never guessed: the pick is issu
       const issued = JSON.parse((await f.execute()).content)
       assert.match(issued.pick_id, /^[0-9a-f]{16}$/)
       assert.equal(issued.feedback_hint, FEEDBACK_HINT)
-      assert.deepEqual(await rate(f, { pick_id: issued.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+      assert.deepEqual(await rate(f, { pick_id: issued.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "not_rateable" })
     }
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
@@ -1370,7 +1370,7 @@ test("a selection that observes Smart Router off forgets the picks, so the old p
     await preference(f.root, false)
     assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1386,7 +1386,7 @@ test("onboarding turning Smart Router off forgets the picks, so the old pick_id 
     assert.notEqual(applied.state, "blocked")
     assert.match(await readFile(join(f.root, ".vibe-workflow", "settings.json"), "utf8"), /"enabled": false/)
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1395,9 +1395,9 @@ test("a card seen while Smart Router is off forgets the picks, so the old pick_i
   try {
     const pick_id = await pickOf(f)
     await preference(f.root, false)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "router_off" })
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
@@ -1410,7 +1410,7 @@ test("the 429 fallback seeing Smart Router off forgets the picks, so the old pic
     const body = '{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}'
     await f.h.hooks.get("http.response")({ providerID: "openai", response: new Response(body, { status: 429 }) })
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1426,7 +1426,7 @@ test("an onboarding preview that sees the router off forgets picks, so re-enabli
     assert.equal(preview.previous_enabled, false)
     const applied = await onboard({ op: "apply", enabled: true, expected_snapshot: preview.snapshot })
     assert.notEqual(applied.state, "blocked")
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1437,7 +1437,7 @@ test("the context hook seeing Smart Router off also forgets the picks", async ()
     await preference(f.root, false)
     await f.h.hooks.get("context")({ system: [] })
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
@@ -1457,12 +1457,12 @@ else:
     const answer = JSON.parse((await f.execute()).content)
     assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
     await preference(f.root, true)
-    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored" })
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, model_ref: "openai/gpt-x#high", rating: 4 }), { state: "ignored", reason: "unknown_pick" })
     await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
-// A succeeded step makes session titles read their settings, then storage: storage reads show whether the checkout was "on".
+// A completed spec write makes titles read their settings before binding the session.
 async function titlesReadStorage(t, { own, main }) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "titles-wiring-")))
   t.after(() => rm(root, { recursive: true }))
@@ -1476,21 +1476,319 @@ async function titlesReadStorage(t, { own, main }) {
     await mkdir(join(dir, ".vibe-workflow"), { recursive: true })
     await writeFile(join(dir, ".vibe-workflow", "settings.json"), JSON.stringify({ version: 1, features: [{ session_titles: { enabled } }] }))
   }
-  const events = feed(), reads = []
+  const events = feed(), reads = [], after = []
   const h = host(linked, { state_dir: join(root, "state") }, undefined, {
     event: { subscribe: events.subscribe },
     storage: { get: async (key) => { reads.push(key) }, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: { hook: async () => {}, get: async () => { throw Error("get") } },
+    session: { hook: async () => {}, get: async () => ({ location: { directory: linked } }) },
   })
-  h.ctx.tool.hook = async () => {}
+  h.ctx.tool.hook = async (name, handler) => { if (name === "execute.after") after.push(handler) }
   const cleanup = await (await load()).setup(h.ctx)
   t.after(() => cleanup?.())
-  events.push({ id: "evt_1", created: Date.now(), type: "session.execution.succeeded", data: { sessionID: "ses_1" }, sessionID: "ses_1" })
-  await pause(300)
+  for (const hook of after) await hook({ status: "completed", tool: "write", sessionID: "ses_1",
+    input: { path: "docs/superpowers/specs/2026-11-23-fixture-design.md" } })
   return reads
 }
 
 test("session titles follow the checkout's own file, not main's", async (t) => {
   assert.ok((await titlesReadStorage(t, { own: true, main: false })).length > 0)
   assert.equal((await titlesReadStorage(t, { own: false, main: true })).length, 0)
+})
+
+// A Map-backed ctx.storage like the host's: JSON values, scan by prefix with an `after` cursor and a `limit`.
+function memoryStorage(entries = new Map()) {
+  return {
+    entries,
+    get: async (key) => entries.has(key) ? JSON.parse(entries.get(key)) : undefined,
+    set: async (key, json) => { entries.set(key, JSON.stringify(json)) },
+    remove: async (key) => { entries.delete(key) },
+    scan: async ({ prefix = "", after, limit = 100 } = {}) => {
+      const keys = [...entries.keys()].filter((key) => key.startsWith(prefix) && (after === undefined || key > after)).sort()
+      const page = keys.slice(0, limit)
+      return { entries: page.map((key) => ({ key, value: JSON.parse(entries.get(key)) })),
+        ...(keys.length > limit && { next: page.at(-1) }) }
+    },
+  }
+}
+const flush = () => new Promise((resolve) => setImmediate(resolve))
+const WINDOW_MS = 48 * 3600 * 1000
+const storedKeys = (storage) => [...storage.entries.keys()].filter((key) => key.startsWith("pick/"))
+const sessionHash = (sessionID) => createHash("sha256").update(sessionID).digest("hex").slice(0, 32)
+// A stored pick as this version writes it, for the session ses_test.
+const record = (over = {}) => ({ v: 1, s: sessionHash("ses_test"), t: Date.now(), work_kind: "review", size_group: "short",
+  rateable: true, refs: [["openai/gpt-x", { provider: "openai", model: "gpt-x",
+    catalog_id: { key: "gpt-x", creator: "openai", family: "gpt" } }]], ...over })
+// A second plugin instance on the same project and storage, as after a restart: it shares no memory with the first.
+async function restarted(f, storage) {
+  const plugin = (await import(pathToFileURL(join(f.root, "index.js")))).default
+  const h = host(f.root, { state_dir: join(f.root, "state") }, listed(info(), otherModel), { storage })
+  const cleanup = await plugin.setup(h.ctx)
+  return { root: f.root, h, cleanup }
+}
+const cardInput = { model_ref: "openai/gpt-x#high", rating: 4 }
+
+test("a rateable pick survives a restart: the second instance accepts its card for the same session", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    const pick_id = await pickOf(f)
+    const stored = JSON.parse(storage.entries.get(`pick/${pick_id}`))
+    assert.deepEqual(Object.keys(stored).sort(), ["rateable", "refs", "s", "size_group", "t", "v", "work_kind"])
+    assert.equal(stored.s, sessionHash("ses_test"))
+    assert.equal(stored.rateable, true)
+    b = await restarted(f, storage)
+    assert.deepEqual(await rate(b, { pick_id, ...cardInput, rating: 4 }), { state: "recorded" })
+    assert.equal((await sentFeedback(b)).size_group, "short")
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a stored pick is not accepted from another session", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    const pick_id = await pickOf(f)
+    b = await restarted(f, storage)
+    assert.deepEqual(await rate(b, { pick_id, ...cardInput }, "ses_other"), { state: "ignored", reason: "unknown_pick" })
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a stored record of another shape is unknown_pick, not a card", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    storage.entries.set("pick/0123456789abcdef", JSON.stringify({ v: 1, s: sessionHash("ses_test"), t: Date.now() }))
+    b = await restarted(f, storage)
+    assert.deepEqual(await rate(b, { pick_id: "0123456789abcdef", ...cardInput }), { state: "ignored", reason: "unknown_pick" })
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a stored pick older than 48 hours is ignored as expired and its entry is removed", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    const pick_id = await pickOf(f)
+    b = await restarted(f, storage)
+    await flush() // the startup prune keeps this fresh entry; the expiry is then seen at lookup time
+    storage.entries.set(`pick/${pick_id}`, JSON.stringify(record({ t: Date.now() - WINDOW_MS - 1000 })))
+    assert.deepEqual(await rate(b, { pick_id, ...cardInput }), { state: "ignored", reason: "expired" })
+    await flush()
+    assert.deepEqual(storedKeys(storage), [])
+    await assert.rejects(readFile(join(f.root, "feedback-stdin")), { code: "ENOENT" })
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a pick remembered in this instance expires after 48 hours too", async (t) => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    const now = Date.now()
+    t.mock.method(Date, "now", () => now + WINDOW_MS + 1000)
+    assert.deepEqual(await rate(f, { pick_id, ...cardInput }), { state: "ignored", reason: "expired" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("turning Smart Router off removes the stored picks too", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const pick_id = await pickOf(f)
+    assert.equal(storedKeys(storage).length, 1)
+    await preference(f.root, false)
+    assert.deepEqual(await rate(f, { pick_id, ...cardInput }), { state: "ignored", reason: "router_off" })
+    await flush()
+    assert.deepEqual(storedKeys(storage), [])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("startup prunes expired and malformed stored picks, then keeps only the newest MAX_STORED_PICKS (2000)", async () => {
+  const storage = memoryStorage()
+  const now = Date.now()
+  storage.entries.set("pick/expired", JSON.stringify(record({ t: now - WINDOW_MS - 1000 })))
+  storage.entries.set("pick/malformed", JSON.stringify({ v: 1, s: "x" }))
+  for (let n = 0; n <= 2000; n += 1) storage.entries.set(`pick/fresh-${String(n).padStart(4, "0")}`, JSON.stringify(record({ t: now - n })))
+  const f = await pickFixture(undefined, { storage })
+  try {
+    await flush()
+    const keys = storedKeys(storage)
+    assert.equal(keys.length, 2000)
+    assert.ok(!keys.includes("pick/expired"))
+    assert.ok(!keys.includes("pick/malformed"))
+    assert.ok(!keys.includes("pick/fresh-2000"), "the oldest rateable pick goes first")
+    assert.ok(keys.includes("pick/fresh-1999"))
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a storage without set leaves picks in memory only", async () => {
+  const f = await pickFixture(undefined, { storage: { get: async () => { throw Error("unused") } } })
+  try {
+    const pick_id = await pickOf(f)
+    assert.deepEqual(await rate(f, { pick_id, ...cardInput }), { state: "recorded" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("the select answer does not wait for a storage write that never settles", { timeout: 5000 }, async () => {
+  const storage = { ...memoryStorage(), set: () => new Promise(() => {}) }
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const answer = JSON.parse((await f.execute()).content)
+    assert.match(answer.pick_id, /^[0-9a-f]{16}$/)
+    assert.deepEqual(await rate(f, { pick_id: answer.pick_id, ...cardInput }), { state: "recorded" })
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+// Storage whose named method waits until the release function returned by hold(name) is called.
+function holdable(storage) {
+  const gates = new Map()
+  const arrivals = new Map()
+  for (const name of ["get", "set", "remove", "scan"]) {
+    const call = storage[name]
+    storage[name] = async (...args) => {
+      arrivals.set(name, (arrivals.get(name) ?? 0) + 1)
+      await gates.get(name)
+      return call(...args)
+    }
+  }
+  storage.arrived = (name) => arrivals.get(name) ?? 0
+  storage.hold = (name) => {
+    let release
+    gates.set(name, new Promise((resolve) => { release = resolve }))
+    return release
+  }
+  return storage
+}
+// Counts calls to storage.scan.
+function countScans(storage) {
+  const counter = { count: 0 }
+  const scan = storage.scan
+  storage.scan = (...args) => { counter.count += 1; return scan(...args) }
+  return counter
+}
+
+test("a write still pending when Smart Router turns off leaves no pick entry behind", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const release = storage.hold("set")
+    await pickOf(f)
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    release()
+    await flush()
+    assert.deepEqual(storedKeys(storage), [])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a clear still pending when Smart Router turns back on does not delete a pick written after it", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const old = await pickOf(f)
+    await flush()
+    const release = storage.hold("scan")
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection")
+    await preference(f.root, true)
+    const fresh = await pickOf(f)
+    release()
+    await flush()
+    assert.notEqual(fresh, old)
+    assert.deepEqual(storedKeys(storage), [`pick/${fresh}`])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("with Smart Router off, repeated context-hook steps scan storage at most once", async () => {
+  const storage = memoryStorage()
+  const f = await pickFixture(undefined, { storage })
+  try {
+    await pickOf(f)
+    await flush()
+    await preference(f.root, false)
+    const scans = countScans(storage)
+    for (let step = 0; step < 5; step += 1) await f.h.hooks.get("context")({ system: [] })
+    await flush()
+    assert.ok(scans.count <= 1, `storage scans: ${scans.count}`)
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a card after the plugin closed is ignored with router_off", async () => {
+  const f = await pickFixture()
+  try {
+    const pick_id = await pickOf(f)
+    await f.cleanup()
+    assert.deepEqual(await rate(f, { pick_id, ...cardInput }), { state: "ignored", reason: "router_off" })
+  } finally { await rm(f.root, { recursive: true }) }
+})
+
+test("two cards for one stored pick looked up together are both answered, neither as router_off", async () => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  let b
+  try {
+    const pick_id = await pickOf(f)
+    await flush()
+    b = await restarted(f, storage)
+    await flush()
+    const release = storage.hold("get")
+    const cards = Promise.all([rate(b, { pick_id, ...cardInput }), rate(b, { pick_id, ...cardInput })])
+    while (storage.arrived("get") < 2) await flush()
+    release()
+    const results = await cards
+    assert.ok(results.every((result) => result.reason !== "router_off"), JSON.stringify(results))
+    assert.ok(results.some((result) => result.state === "recorded"), JSON.stringify(results))
+  } finally { await b?.cleanup?.(); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a storage write that never settles times out, so the queued clear and the next write still run", { timeout: 5000 }, async (t) => {
+  const base = memoryStorage()
+  let stalled = false
+  const storage = { ...base, set: (key, json) => {
+    if (!stalled) return base.set(key, json)
+    stalled = false
+    return new Promise(() => {})
+  } }
+  const f = await pickFixture(undefined, { storage })
+  try {
+    const kept = await pickOf(f)
+    await flush()
+    stalled = true
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    await pickOf(f) // this write never settles
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection") // queues a clear behind the stall
+    await preference(f.root, true)
+    const fresh = await pickOf(f) // queued behind the clear
+    await flush()
+    assert.deepEqual(storedKeys(storage), [`pick/${kept}`], "the clear waits behind the stalled write")
+    t.mock.timers.tick(5000)
+    await flush()
+    assert.deepEqual(storedKeys(storage), [`pick/${fresh}`])
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a clear that timed out does not remove a pick written after it, even when its scan resolves late", { timeout: 5000 }, async (t) => {
+  const storage = holdable(memoryStorage())
+  const f = await pickFixture(undefined, { storage })
+  try {
+    await pickOf(f)
+    await flush()
+    const release = storage.hold("scan")
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    await preference(f.root, false)
+    assert.equal(JSON.parse((await f.execute()).content).state, "no_selection") // queues a clear, whose scan now waits
+    while (storage.arrived("scan") < 2) await flush()
+    t.mock.timers.tick(5000) // the clear times out; the queue moves on
+    await flush()
+    await preference(f.root, true)
+    const fresh = await pickOf(f)
+    await flush()
+    assert.ok(storedKeys(storage).includes(`pick/${fresh}`))
+    release()
+    await flush()
+    assert.ok(storedKeys(storage).includes(`pick/${fresh}`), "the timed-out clear must not remove the new pick")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
