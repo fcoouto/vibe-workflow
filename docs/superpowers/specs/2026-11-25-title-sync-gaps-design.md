@@ -52,7 +52,8 @@ polling, no extra model calls. Every fix here adds no background work.
 ## Approaches
 
 - **F1.** (a) *Chosen:* one owner per session, the copy whose folder is the session's current folder; every copy
-  drops its memory of a session on `session.moved`; the owner loads the stored record whatever folder saved it.
+  drops its memory of a session on `session.moved`; the owner loads a stored record saved by any folder of the same
+  project.
   (b) Re-read the stored record at every turn end: also correct, but costs a storage read per turn end and still
   needs an owner rule to stop two writers; (a) makes it unnecessary. The table shown to the user named (b); this
   design refines it to (a) for that reason. (c) Key records by folder: keeps both copies' state, does not stop the
@@ -69,106 +70,154 @@ polling, no extra model calls. Every fix here adds no background work.
   because `remembered` is looked up whenever there is no upstream.
 - **F7.** (a) *Chosen:* bind a child's spec or plan write to its root when the same plugin copy owns the root.
   (b) Bind the child itself: children never show meters, so nothing would change for the user.
-- **F9.** (a) *Chosen:* a plan written in another checkout of the same repository moves the task there, when the
-  current task folder is not on a task branch. (b) Follow `session.moved`: misses agents that work in a worktree
-  through absolute paths without moving the session.
+- **F9.** (a) *Chosen:* the first plan of a task, with the spec's topic, written in another checkout of the same
+  repository moves the task there. (b) Also require the old checkout to be off a task branch: that read fails
+  ambiguously and the spec's checkout can change branch before the plan arrives; the topic match identifies the task
+  better. (c) Follow `session.moved`: misses agents that work in a worktree through absolute paths.
 
 ## Design
 
-All changes are in `src/session-titles.js` and `src/session-facts.js`, tested in `tests/plugin/`.
+All changes are in `src/session-titles.js` and `src/session-facts.js`, tested in `tests/plugin/`. Host facts used
+below were checked on OpenCode 2.3.2: a session located in a subfolder gets its own plugin copy for exactly that
+folder; the main checkout, its subfolders and its linked worktrees share one `ctx.location.project.id`; `session.moved`
+carries the new `location.directory`.
 
 ### 1. One owner (F1)
 
-- `here`: the realpath of `ctx.location.directory`, computed once. With no location, the copy keeps today's
-  behavior: memory only, and it treats every session as its own.
-- `owns(info)`: `realpath(info.location.directory) === here` (realpaths cached, bounded).
-- `load(sessionID)` (once per session per copy, as today) first reads the session; when this copy does not own it,
-  it marks the session checked and returns. When it does, it accepts the stored record whatever its `location`
-  (the field is still written, for diagnosis). The old "only the saving folder may load" rule goes.
-- `bind`, `record` and every title write already read the session; each checks `owns` and does nothing otherwise.
-  In `evaluate` the check uses the read that fetches the title, so a session that moved during a slow fact read is
-  not written.
-- On `session.moved` (new subscription), every copy forgets the session: `sessions`, `checked`, `saved`, pending
-  requests. The next event in the new folder loads the record there. The move's own turn-end events may reach the
-  new copy before it exists; that is harmless, because a move changes no task fact, and the next turn end updates
-  the title.
+- `here`: the realpath of `ctx.location.directory`, computed once; `project`: `ctx.location.project.id`. A copy with
+  no location keeps today's behavior (memory only, every session its own); real hosts always give one.
+- `owns(info)`: `realpath(info.location.directory) === here` (realpaths cached, bounded). A failed session read or
+  realpath means "unknown": the copy does nothing this time and does not remember the session as checked, so the
+  next event retries.
+- `load(sessionID)` reads the session first and returns early for a session it does not own. An owner accepts a
+  stored record when `record.project` equals its project id; a record without `project` (saved before this change)
+  only when `record.location === where` (today's rule). Records from another project are ignored. `save` writes
+  `project` as well as `location`.
+- `bind`, `record`, `relabel` and `evaluate` check `owns` on the session read each already makes; in `evaluate` it is
+  the read that fetches the title, so a session that moved during a slow fact read is not written.
+- A per-session generation number in each copy: forgetting a session bumps it; every job notes it when it starts
+  and skips its title update and its save when it changed. (A title update already sent cannot be recalled; that
+  window is the time of one session read.)
+- `session.moved` (new subscription): every copy forgets the session (memory, checked, saved snapshot, pending
+  requests, generation bump) with no I/O. The destination copy (the event's `location.directory` equals `here`)
+  queues one evaluation on the session's chain, as a turn end when the session is not running (rule of §3), so a
+  move that changed task facts or removed `WAITING` is corrected. If the destination copy loads only after the
+  move's own events (seen once in the lab, for a session moved while idle), the title is corrected at the session's
+  next turn start or end. A move the agent makes mid-turn applies within that turn, and the turn's end is evaluated
+  by the new owner.
+- Broadcast events cost nothing in copies that do not hold the session: request events and shell exits act only on
+  sessions bound in this copy's memory; the child-end wake-up (`wakeRoot`) is skipped when the copy holds no bound
+  session.
 
 ### 2. Waiting requests (F2)
 
 - New subscriptions: `permission.asked` (`data.id`, `data.sessionID`), `permission.replied` (`data.requestID`,
   `data.sessionID`), `form.created` (`data.form.id`, `data.form.sessionID`), `form.replied` and `form.cancelled`
   (`data.id`, `data.sessionID`).
-- `pending`: session id → set of request ids (bounded per session and overall). An ask adds, a reply or cancel
-  removes; each queues `relabel(sessionID)` on the session's chain.
-- `relabel(sessionID, waiting)`: no git or `gh` reads. It runs only when the feature is on, the session is a bound
-  owned root, not silenced, a meter was already written (`entry.last` set) and the task is not fresh. It reads the
-  title, applies the existing silence rule, keeps the user's topic, writes `compose(topic, task.cells, waiting)` if
-  it changed, and saves `last`. Here `waiting` is "any request pending".
-- A turn start or end clears the session's pending set (a turn cannot start or end with a request pending; this also
-  drops ids whose reply was missed).
+- `pending`: session id → set of request ids (at most 16 per session; bound sessions only). An ask adds its id and
+  queues `relabel(sessionID, true)`. A reply or cancel removes its id only if present (an unmatched reply is
+  ignored); when the set becomes empty it queues `relabel(sessionID, false)`, which writes only while the session is
+  running (rule of §3), so an idle session's `WAITING` is never removed by a stray reply.
+- `relabel(sessionID, waiting)`: no git or `gh` reads. It acts only when the feature is on, the session is a bound
+  root this copy owns, not silenced, a meter was already written for this task (`entry.last` set and the task not
+  fresh, which also covers a replacement task bound in the current turn). It reads the title, applies the existing
+  silence rule, keeps the topic, writes `compose(topic, task.cells, waiting)` only if it differs, and saves `last`.
+- The pending set is cleared at the root's own turn start and turn end (a blocking request cannot outlive them),
+  never by a child-triggered evaluation. Requests raised in child sessions are not tracked.
 
 ### 3. Running since this server started (F3)
 
-- `started = Date.now() - process.uptime() * 1000`, computed once per copy, with 2 s of slack.
-- A child runs when `time.busy` is finite, at or after `started`, and no finite `time.idle` is at or after it. The
-  10-minute age rule and the `time.updated` read go. The root's own check uses the same rule.
-- The ended-run exclusion (`{ id, at }`) is unchanged.
+- `started = Date.now() - process.uptime() * 1000 - 250` (250 ms of slack), computed once per copy; it is the same in
+  every copy of one server process, including after a plugin reload.
+- `running(time)`: `time.busy` finite and at or after `started`, and no finite `time.idle` at or after `time.busy`.
+  Used for children (replacing the 10-minute age rule and the `time.updated` read) and for the root.
+- Claim: a run killed by a server restart reads as not running; a run OpenCode resumes after a restart is expected to
+  get a new busy time and read as running (not verified). The ended-run exclusion (`{ id, at }`) is unchanged.
 
 ### 4. Background shells (F4)
 
 - In `execute.after`, a completed shell call whose `result.metadata.shellID` is a string and
-  `result.metadata.status === "running"` is tracked: shell id → session id (bounded).
-- `shell.exited` (new subscription) removes the id. When that session has no other tracked shell, the copy queues a
-  check on its chain: unless the session or a child is running (the activity rule from §3), `relabel(sessionID,
-  true)`. The host normally resumes the agent right after the exit; then the resumed turn's start removes the label
-  again. A brief `WAITING` in between is accepted, because without the check a session that is not resumed would
-  stay idle without `WAITING`.
+  `result.metadata.status === "running"` is tracked: shell id → session id (at most 64). An id that already exited
+  (a bounded list of the last 64 exited ids) is not tracked, so a very fast command that exits before the hook runs
+  cannot stay "running". The existing push/PR recording is unaffected, background or not.
+- `shell.exited` (new subscription) removes the id. When the session has no other tracked shell, a check is queued
+  on its chain: if neither the session nor a child is running (§3), `relabel(sessionID, true)` right away. The
+  user chose this over waiting for the next turn: OpenCode normally resumes the agent within milliseconds, so a
+  sub-second `WAITING` may flash, but a session that is not resumed never stays without `WAITING`. Unchanged writes
+  are skipped.
 - At a turn end, `WAITING` also requires that the session has no tracked running shell.
 
 ### 5. The branch seen at a turn end (F5)
 
-- The stored task gains `seen` (string or null; a missing field loads as null).
-- At each turn end, when the checkout exists and is on a branch other than the default, `task.seen` is set to it.
-- `readFacts` takes `seen`. The PR is looked up by: the current branch when it has an upstream (today); otherwise
-  `remembered` (today); otherwise `seen`, but only when the checkout is gone or not on a branch (detached by
-  cleanup). An existing checkout on its unpushed branch therefore still makes no `gh` call.
+- `readFacts` reports two new facts with positive evidence only: `gone` (the task folder's `stat` failed with
+  `ENOENT`) and `detached` (a successful `git status` read showing a detached head). A failed read sets neither.
+- The stored task gains `seen` (a branch name or null) and `bound` (the bind time in ms or null); missing fields load
+  as null. At each turn end, when a successful status read shows a branch other than the default, `task.seen` is set.
+- The PR lookup order is: the current branch when it has an upstream (today); otherwise `remembered` (today);
+  otherwise `seen`, but only when the checkout is `gone` or `detached`. An existing checkout on its unpushed branch
+  still makes no `gh` call, and a failed read holds the cells.
+- A PR found through `seen` counts only if its `createdAt` (requested in the same `gh` call) is at or after the
+  task's `bound` time minus one minute; a task without `bound` does not use `seen`. This keeps a reused branch name
+  from crediting an older merged PR. (The same risk through `remembered` is unchanged and stays documented.)
 
 ### 6. Subagent writes bind the root (F7)
 
-- In `bind`, a session with a parent resolves its root (the existing parent walk, at most 5 steps). The path
-  resolves against the child's folder. The binding goes to the root when this copy owns the root; otherwise
-  nothing happens (a documented limit; children normally share the root's folder).
+- In the hook, a spec or plan write by a session with a parent is resolved first (the existing parent walk, at most
+  5 steps, returning the root's session info); the bind is then queued on the ROOT's chain, so it cannot race the
+  root's evaluation. The path resolves against the child's folder. The bind happens only when this copy owns the
+  root; children normally share the root's folder (146 of 158 descendants in the user's largest real session did).
 
 ### 7. A plan adopts the task (F9)
 
-- In `bind`, a plan whose checkout differs from the task's moves the task to the plan's checkout when both share
-  one git repository (`git rev-parse --path-format=absolute --git-common-dir` equal in both) and the task's current
-  checkout is not on a task branch (`branchOf` returns null). The spec, cells and recorded branches are kept; `top`
-  and `plan` change. Otherwise the plan stays ignored, as today. Cost: up to three git calls per plan written in
-  another checkout.
+- In `bind`, a plan in a checkout other than the task's adopts the task when all hold: the task has no plan yet;
+  the plan's topic (date and `-design` stripped, as for specs) equals the task's; and both checkouts report the same
+  `git rev-parse --path-format=absolute --git-common-dir` (two successful reads; a failed read means no adoption).
+- Adoption changes `top` and `plan`, keeps the spec and cells, and resets `remembered` and `seen` (branch evidence
+  from the old checkout does not belong to the new one). It happens at most once per task because the task then has
+  a plan. Cost: two git calls per plan written in another checkout.
 
 ## Known gaps (accepted)
 
 - A child in a different folder from its root cannot bind the root (another copy owns the root).
+- A session moved while idle, when the destination copy loads after the move's events: corrected at its next turn.
 - A shell tracked by one copy is unknown to the next owner after a move; that session's next turn end may show
-  `WAITING` while the shell still runs.
-- A child's background shell or permission request does not keep the root from `WAITING`.
+  `WAITING` while the shell still runs. A missed `shell.exited` keeps `WAITING` off for that session until the
+  server restarts.
+- A child's background shell or request does not keep the root from `WAITING`; a non-blocking form created while a
+  turn runs is cleared at the turn's end.
 - A session stuck busy within one server run (a host fault) keeps `WAITING` off until the server restarts.
-- A brief `WAITING` between a background shell's exit and the resumed turn.
+- A sub-second `WAITING` may flash between a background shell's exit and the resumed turn (the user's choice).
+- A reused branch name can still credit an older PR through `remembered` (unchanged).
 
 ## Constraints
 
-Node ES modules, standard library only; advisory only (reads git, never writes it); tests first; the existing
-guarantees stay: an unchanged turn writes nothing to storage, nothing is written after close, the title is never
-written at tool time for binding, child sessions never get their own meter.
+Node ES modules, standard library only; advisory only (reads git, never writes it); tests first. Existing guarantees
+stay: one queue per session within a copy, nothing written after close, an unchanged turn writes nothing to storage,
+the title is not written at tool time for binding, child sessions never get their own meter, cells never go down.
+No new background work: every new read happens on an event the plugin already receives.
 
 ## Proof expected
 
-- Unit: a two-copy fake host (two `registerSessionTitles` with different locations, one shared storage, both
-  receiving every event, hooks run by the owner) reproduces F1 and shows the fix; request events add and remove
-  `WAITING` without git reads; a child busy for 11 minutes still counts as running and a root busy before the server
-  started does not; a running background shell holds the label and its exit sets it; a removed worktree with a
-  seen branch reaches 5 cells and an existing unpushed checkout makes no `gh` call; a child's spec write binds the
-  root; a plan in a linked worktree of the same repo adopts a main-checkout task, one in another repo does not.
+- Unit, with a two-copy fake host (two `registerSessionTitles` with different locations and one project id, one
+  shared storage, both receiving every event, hooks run only in the copy for the session's folder):
+  - F1: the lab's sequence (spec bound in the main checkout, moved, plan bound in the worktree, moved back) keeps
+    the plan and cells; a record from another project is ignored and a legacy record loads only in its folder; a
+    failed ownership read retries on the next event; a non-owner makes no session read, `gh` call or storage write
+    for request events, shell exits and turn ends of a session it never held; a move during a slow evaluation writes
+    neither title nor storage in the old copy; the destination copy corrects the title on the move.
+  - F2: ask → `WAITING` with no git reads; reply → removed while running; overlapping requests; cancel; an unmatched
+    reply leaves an idle session's `WAITING`; no write before the first meter or for a task bound this turn; the set
+    is cleared at the root's turn boundaries and not by a child-triggered evaluation.
+  - F3: a child busy for 11 minutes counts as running; a busy time before the server start reads idle for the child
+    and the root; a busy time just after it reads running.
+  - F4: a running background shell holds the label at a turn end; its exit with nothing running sets `WAITING`; two
+    shells; an exit before the hook; a background `git push` still records its branch.
+  - F5: a removed worktree with a seen branch reaches 5 cells; a detached checkout does too; a failed `stat` or
+    `status` read holds the cells; an unpushed existing checkout makes no `gh` call; a PR created before the bind
+    does not count.
+  - F7: a child's spec write binds the root through the root's queue; a child in another folder does not.
+  - F9: a same-topic first plan in a linked worktree adopts the task and resets the branch evidence; a different
+    topic, a second plan, another repository, or a failed read does not.
+  - The existing suite stays green, including "an unchanged turn writes nothing to storage".
 - Live, in the same lab: rerun the scenarios that confirmed F1, F2 (permission and question), F4, F5, F7 and F9
   against the changed plugin, and F3 with the 13-minute child; each must now show the expected title.
