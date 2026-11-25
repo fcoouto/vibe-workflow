@@ -196,3 +196,9 @@ at high effort at every level; writing keeps medium, medium, high by level. The
 step for tasks of 2 or more agent-hours stays (high becomes xhigh). Effort is still
 clamped to the model's variants; callers without a work kind (council seats) follow
 the level table.
+
+## Amendment, 25 November 2026 (release 0.13.1)
+
+The user moved the long-task threshold back to 4 agent-hours (it was 2 from 0.12.0).
+Below 4 hours a task gets its kind's base effort; at 4 or more, one step more. The
+store held no card from a 2-4-hour task when this changed.

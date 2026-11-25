@@ -130,8 +130,8 @@ class RoutingTest(unittest.TestCase):
 
     def test_size_group_and_long_effort(self):
         self.assertEqual(routing.size_group(FACTS), 'short')
-        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=1.9)), 'short')
-        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=2)), 'long')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=3.9)), 'short')
+        self.assertEqual(routing.size_group(dict(FACTS, estimate_agentic_effort_hours=4)), 'long')
         v = ['low', 'medium', 'high', 'xhigh', 'max']
         self.assertEqual([routing.effort_for(l, v, long=True) for l in (1, 2, 3)], ['high', 'high', 'xhigh'])
         self.assertEqual(routing.effort_for(3, ['low', 'high'], long=True), 'high')
