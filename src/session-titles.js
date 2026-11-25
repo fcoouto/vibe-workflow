@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import { resolve } from "node:path"
 import { classify } from "./pr-advice.js"
-import { artifact, branchOf, defaultRun, readFacts } from "./session-facts.js"
+import { artifact, branchOf, commonDir, defaultRun, readFacts } from "./session-facts.js"
 
 export const MARK = "\uFFFB"
 export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
@@ -217,6 +217,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const top = await realpath(found.top).catch(() => found.top)
     const file = top + absolute.slice(found.top.length)
     await load(sessionID, admitted, known)
+    const held = sessions.get(sessionID)?.task
+    // The task's first plan, with the spec's topic, written in another checkout of the same repository, moves the task
+    // there (its spec may sit in the main checkout while the work happens in a worktree). Branch evidence from the old
+    // checkout does not belong to the new one.
+    const adopt = found.kind === "plan" && held && held.top !== top && !held.plan && found.slug === held.slug &&
+      await sameRepository(held.top, top)
     if (!current(sessionID, admitted)) return
     const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false, diag: null }
     const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null,
@@ -224,8 +230,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
     else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
     else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
+    else if (adopt && entry.task === held) entry.task = { ...held, top, plan: file, remembered: null, seen: null }
     keep(sessionID, entry)
     await save(sessionID, entry)
+  }
+
+  async function sameRepository(a, b) {
+    const [left, right] = await Promise.all([commonDir({ top: a, run }), commonDir({ top: b, run })])
+    return left !== null && left === right
   }
 
   // The top of a session's parent chain; itself when it has no parent, null when a read fails or the chain is too long.
@@ -367,10 +379,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     let cells = task.cells
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
-      const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered,
-        fallback: project ?? task.top, run })
-      if (facts.head && facts.head === facts.branch) task.remembered = facts.head
+      const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered, seen: task.seen,
+        bound: task.bound, fallback: project ?? task.top, run })
       const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
+      if (facts.head && facts.head === facts.branch) task.remembered = facts.head
+      // The branch seen here lets the PR be found once the checkout is removed or detached, even if it was never pushed
+      // from this session; it is looked up only then, so an unpushed checkout still makes no gh call.
+      if (facts.branch && facts.branch !== facts.base.replace(/^origin\//, "")) task.seen = clip(facts.branch)
       entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
         pr: PR_STATES.includes(facts.pr?.state) ? facts.pr.state : null, declared: facts.declared.length,
         done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }

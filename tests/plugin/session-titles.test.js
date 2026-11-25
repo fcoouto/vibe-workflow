@@ -138,6 +138,11 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     if (args[0] === "status") await facts.statusGate
     if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` +
       (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+    if (args.includes("--git-common-dir")) {
+      const common = facts.common?.[options?.cwd]
+      if (!common) throw Error("not a repository")
+      return `${common}\n`
+    }
     if (args[0] === "rev-parse") return "origin/main\n"
     return facts.changed.join("\n")
   }
@@ -1155,6 +1160,85 @@ test("a background git push still records its branch", async (t) => {
   Object.assign(h.facts, { branch: "feat/x", upstream: false })
   await background(h, "sh_push", "git push -u origin feat/x")
   assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x")
+})
+
+const ago = (ms) => new Date(Date.now() - ms).toISOString()
+const later = () => new Date(Date.now() + 60000).toISOString()
+
+test("a removed worktree with a seen branch reaches 5 cells, and an unpushed checkout makes no gh call", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false, prs: { "feat/x": [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  await h.end()
+  assert.equal(h.calls.gh.length, 0)
+  assert.equal(h.storage.data.get(KEY).task.seen, "feat/x")
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 5, false))
+})
+
+test("a PR opened before the bind is not credited through the seen branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false, prs: { "feat/x": [{ state: "MERGED", title: "old", createdAt: ago(60000) }] } })
+  await h.end()
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+
+test("the default branch is never remembered as the seen branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "main", upstream: true, prs: { main: [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  assert.equal(h.storage.data.get(KEY).task.seen, null)
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("with cleanup on, a detached present checkout shows 4 and reaches 5 once removed", async (t) => {
+  const h = await host(t, { cleanup: true, project: join(tmpdir(), "session-primary-elsewhere") })
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false })
+  await h.end()
+  Object.assign(h.facts, { branch: null, prs: { "feat/x": [{ state: "MERGED", title: "x", createdAt: later() }] } })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 4, true))
+  rmSync(h.root, { recursive: true, force: true })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 5, false))
+})
+
+test("only the first same-topic plan in a checkout of the same repository adopts the task", async (t) => {
+  const dirs = {}
+  for (const name of ["wt", "third", "elsewhere"]) {
+    dirs[name] = realpathSync(mkdtempSync(join(tmpdir(), `session-${name}-`)))
+    t.after(() => rmSync(dirs[name], { recursive: true, force: true }))
+  }
+  const plan = (dir, name = "2026-11-20-fix-auth") => `${dir}/docs/superpowers/plans/${name}.md`
+  const scenario = async (prepare) => {
+    const h = await host(t)
+    h.facts.common = { [h.root]: "/repo/.git", [dirs.wt]: "/repo/.git", [dirs.third]: "/repo/.git", [dirs.elsewhere]: "/other/.git" }
+    await h.write(SPEC)
+    Object.assign(h.facts, { branch: "feat/old", upstream: false })
+    await h.end()
+    await prepare(h)
+    return h.storage.data.get(KEY).task
+  }
+  let task = await scenario(async (h) => { h.facts.branch = "feat/switched"; await h.write(plan(dirs.wt)) })
+  assert.deepEqual([task.top, task.plan, task.remembered, task.seen], [dirs.wt, plan(dirs.wt), null, null])
+  task = await scenario(async (h) => { await h.write(plan(dirs.wt)); await h.write(plan(dirs.third)) })
+  assert.equal(task.top, dirs.wt, "a second plan does not move the task again")
+  task = await scenario((h) => h.write(plan(dirs.wt, "2026-11-20-other-thing")))
+  assert.deepEqual([task.plan, task.seen], [null, "feat/old"], "another topic")
+  task = await scenario((h) => h.write(plan(dirs.elsewhere)))
+  assert.equal(task.plan, null, "another repository")
+  task = await scenario(async (h) => { delete h.facts.common[dirs.wt]; await h.write(plan(dirs.wt)) })
+  assert.equal(task.plan, null, "a failed read")
 })
 
 test("a rename during slow fact reads is kept", async (t) => {
