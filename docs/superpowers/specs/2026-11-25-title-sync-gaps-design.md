@@ -85,7 +85,8 @@ carries the new `location.directory`.
 ### 1. One owner (F1)
 
 - `here`: the realpath of `ctx.location.directory`, computed once; `project`: `ctx.location.project.id`. A copy with
-  no location keeps today's behavior (memory only, every session its own); real hosts always give one.
+  no location keeps today's behavior (memory only, every session its own), so the one-owner guarantee applies to
+  hosts that supply a location; OpenCode 2.3.2 always does.
 - `owns(info)`: `realpath(info.location.directory) === here` (realpaths cached, bounded). A failed session read or
   realpath means "unknown": the copy does nothing this time and does not remember the session as checked, so the
   next event retries.
@@ -95,26 +96,31 @@ carries the new `location.directory`.
   `project` as well as `location`.
 - `bind`, `record`, `relabel` and `evaluate` check `owns` on the session read each already makes; in `evaluate` it is
   the read that fetches the title, so a session that moved during a slow fact read is not written.
-- A per-session generation number in each copy: forgetting a session bumps it; every job notes it when it starts
-  and skips its title update and its save when it changed. (A title update already sent cannot be recalled; that
-  window is the time of one session read.)
+- A per-session generation number in each copy: forgetting a session bumps it. A job notes the generation when it
+  is QUEUED (not when it starts), and checks it before publishing a loaded record into memory, before a title
+  update and before a save; on a change it does nothing. A child bind also re-checks root ownership after the parent
+  walk. (A title update already sent cannot be recalled; that window is the time of one session read.) Generations
+  are kept only for the last 256 forgotten sessions; dropping an older one could only matter to a job that waited
+  through 256 moves.
 - `session.moved` (new subscription): every copy forgets the session (memory, checked, saved snapshot, pending
-  requests, generation bump) with no I/O. The destination copy (the event's `location.directory` equals `here`)
-  queues one evaluation on the session's chain, as a turn end when the session is not running (rule of §3), so a
-  move that changed task facts or removed `WAITING` is corrected. If the destination copy loads only after the
-  move's own events (seen once in the lab, for a session moved while idle), the title is corrected at the session's
-  next turn start or end. A move the agent makes mid-turn applies within that turn, and the turn's end is evaluated
-  by the new owner.
-- Broadcast events cost nothing in copies that do not hold the session: request events and shell exits act only on
-  sessions bound in this copy's memory; the child-end wake-up (`wakeRoot`) is skipped when the copy holds no bound
-  session.
+  requests, generation bump), with no I/O. Nothing is evaluated on the move itself: when the destination copy is
+  already loaded it receives the move's own turn-end event and evaluates as owner then (the source copy, owner at
+  the move's start, may have removed `WAITING`; that end restores it); when the destination copy is not loaded yet
+  it misses the move event too, so a move-time evaluation could not help. In that cold case (seen once in the lab,
+  for a session moved while idle) the session's next turn start repairs the label and its next turn end the cells.
+  A move the agent makes mid-turn applies within that turn, whose end is evaluated by the new owner.
+- Cost in copies that do not own a session: one cold ownership read per session per copy lifetime (turn-end events
+  carry no folder, so a copy must read the session once to learn it is not the owner); after that, nothing.
+  Request events and shell exits act only on sessions bound in this copy's memory (no I/O otherwise). The child-end
+  wake-up (`wakeRoot`) stays as today, so a root restored from storage after a reload is still woken by its child.
 
 ### 2. Waiting requests (F2)
 
 - New subscriptions: `permission.asked` (`data.id`, `data.sessionID`), `permission.replied` (`data.requestID`,
   `data.sessionID`), `form.created` (`data.form.id`, `data.form.sessionID`), `form.replied` and `form.cancelled`
   (`data.id`, `data.sessionID`).
-- `pending`: session id → set of request ids (at most 16 per session; bound sessions only). An ask adds its id and
+- `pending`: session id → set of request ids (at most 16 per session, bound sessions only; a 17th id is ignored, so
+  with more than 16 open requests the label may clear before the last one is answered). An ask adds its id and
   queues `relabel(sessionID, true)`. A reply or cancel removes its id only if present (an unmatched reply is
   ignored); when the set becomes empty it queues `relabel(sessionID, false)`, which writes only while the session is
   running (rule of §3), so an idle session's `WAITING` is never removed by a stray reply.
@@ -123,21 +129,27 @@ carries the new `location.directory`.
   fresh, which also covers a replacement task bound in the current turn). It reads the title, applies the existing
   silence rule, keeps the topic, writes `compose(topic, task.cells, waiting)` only if it differs, and saves `last`.
 - The pending set is cleared at the root's own turn start and turn end (a blocking request cannot outlive them),
-  never by a child-triggered evaluation. Requests raised in child sessions are not tracked.
+  never by a child-triggered evaluation. Requests raised in child sessions are not tracked. A missed reply leaves
+  `WAITING` until the root's next turn boundary (accepted: the alternative is polling). A non-blocking form created
+  while a turn runs shows `WAITING` while the agent keeps working, until it is answered or the turn ends.
 
 ### 3. Running since this server started (F3)
 
-- `started = Date.now() - process.uptime() * 1000 - 250` (250 ms of slack), computed once per copy; it is the same in
-  every copy of one server process, including after a plugin reload.
+- `started = Date.now() - process.uptime() * 1000`, computed once per copy, with no slack: a run is started by the
+  server after its process starts, so its busy time is never earlier. It is the same in every copy of one server
+  process, including after a plugin reload (the process, and so its uptime, continue).
 - `running(time)`: `time.busy` finite and at or after `started`, and no finite `time.idle` at or after `time.busy`.
   Used for children (replacing the 10-minute age rule and the `time.updated` read) and for the root.
-- Claim: a run killed by a server restart reads as not running; a run OpenCode resumes after a restart is expected to
-  get a new busy time and read as running (not verified). The ended-run exclusion (`{ id, at }`) is unchanged.
+- Claim: a run killed by a server restart reads as not running. A run OpenCode resumes after a restart is a run
+  started by the new process, so its busy time is later than `started` and it reads as running; this follows from the
+  busy time being the run's start (observed) and was not observed with a real resume (none happened within 70 s in
+  the lab). The ended-run exclusion (`{ id, at }`) is unchanged.
 
 ### 4. Background shells (F4)
 
 - In `execute.after`, a completed shell call whose `result.metadata.shellID` is a string and
-  `result.metadata.status === "running"` is tracked: shell id → session id (at most 64). An id that already exited
+  `result.metadata.status === "running"` is tracked: shell id → session id (at most 64; a 65th drops the oldest
+  tracked shell, whose session may then show `WAITING` early). An id that already exited
   (a bounded list of the last 64 exited ids) is not tracked, so a very fast command that exits before the hook runs
   cannot stay "running". The existing push/PR recording is unaffected, background or not.
 - `shell.exited` (new subscription) removes the id. When the session has no other tracked shell, a check is queued
@@ -157,8 +169,10 @@ carries the new `location.directory`.
   otherwise `seen`, but only when the checkout is `gone` or `detached`. An existing checkout on its unpushed branch
   still makes no `gh` call, and a failed read holds the cells.
 - A PR found through `seen` counts only if its `createdAt` (requested in the same `gh` call) is at or after the
-  task's `bound` time minus one minute; a task without `bound` does not use `seen`. This keeps a reused branch name
-  from crediting an older merged PR. (The same risk through `remembered` is unchanged and stays documented.)
+  task's `bound` time, with no allowance; a task without `bound` does not use `seen`. This keeps a reused branch name
+  from crediting a PR opened before the task. It cannot tell this task's PR from a later, unrelated PR on the same
+  branch name; the lookup trusts the newest PR created after the bind. (The older risk through `remembered` is
+  unchanged and stays documented.)
 
 ### 6. Subagent writes bind the root (F7)
 
@@ -170,7 +184,8 @@ carries the new `location.directory`.
 ### 7. A plan adopts the task (F9)
 
 - In `bind`, a plan in a checkout other than the task's adopts the task when all hold: the task has no plan yet;
-  the plan's topic (date and `-design` stripped, as for specs) equals the task's; and both checkouts report the same
+  the plan's topic (date and `-design` stripped, as for specs; a plan is often written on a later day than its spec)
+  equals the task's; and both checkouts report the same
   `git rev-parse --path-format=absolute --git-common-dir` (two successful reads; a failed read means no adoption).
 - Adoption changes `top` and `plan`, keeps the spec and cells, and resets `remembered` and `seen` (branch evidence
   from the old checkout does not belong to the new one). It happens at most once per task because the task then has
@@ -187,7 +202,10 @@ carries the new `location.directory`.
   turn runs is cleared at the turn's end.
 - A session stuck busy within one server run (a host fault) keeps `WAITING` off until the server restarts.
 - A sub-second `WAITING` may flash between a background shell's exit and the resumed turn (the user's choice).
-- A reused branch name can still credit an older PR through `remembered` (unchanged).
+- A reused branch name can still credit an older PR through `remembered` (unchanged), and a later unrelated PR on
+  the same branch name through `seen`.
+- Two specs with the same topic on different days are one topic to the plan adoption.
+- More than 16 open requests, or more than 64 running background shells, can clear or set the label early.
 
 ## Constraints
 
@@ -202,22 +220,29 @@ No new background work: every new read happens on an event the plugin already re
   shared storage, both receiving every event, hooks run only in the copy for the session's folder):
   - F1: the lab's sequence (spec bound in the main checkout, moved, plan bound in the worktree, moved back) keeps
     the plan and cells; a record from another project is ignored and a legacy record loads only in its folder; a
-    failed ownership read retries on the next event; a non-owner makes no session read, `gh` call or storage write
-    for request events, shell exits and turn ends of a session it never held; a move during a slow evaluation writes
-    neither title nor storage in the old copy; the destination copy corrects the title on the move.
+    failed ownership read retries on the next event; a non-owner makes one cold session read per session and then
+    none, and no `gh` call or storage write, for turn ends, request events and shell exits; a move (destination
+    taken from `data.location.directory`, source and destination copies both loaded) during a slow evaluation or a
+    slow storage read writes neither title nor storage in the old copy and publishes no stale record, and the move's
+    turn end is evaluated once, by the destination; a close during a delayed storage write writes nothing after; a
+    child end that is the first event after a reload restores and wakes its stored root.
   - F2: ask → `WAITING` with no git reads; reply → removed while running; overlapping requests; cancel; an unmatched
-    reply leaves an idle session's `WAITING`; no write before the first meter or for a task bound this turn; the set
-    is cleared at the root's turn boundaries and not by a child-triggered evaluation.
-  - F3: a child busy for 11 minutes counts as running; a busy time before the server start reads idle for the child
-    and the root; a busy time just after it reads running.
+    reply leaves an idle session's `WAITING`; a dropped reply keeps `WAITING` until the root's next boundary; no write
+    before the first meter or for a task bound this turn; the set is cleared at the root's turn boundaries and not by
+    a child-triggered evaluation; a 17th request is ignored.
+  - F3: a child busy for 11 minutes counts as running; a busy time 1 ms before the server start reads idle for the
+    child and the root, and 1 ms after reads running; two copies registered at different times compute the same
+    start.
   - F4: a running background shell holds the label at a turn end; its exit with nothing running sets `WAITING`; two
-    shells; an exit before the hook; a background `git push` still records its branch.
-  - F5: a removed worktree with a seen branch reaches 5 cells; a detached checkout does too; a failed `stat` or
-    `status` read holds the cells; an unpushed existing checkout makes no `gh` call; a PR created before the bind
-    does not count.
+    shells; an exit before the hook; a 65th shell drops the oldest; a background `git push` still records its branch.
+  - F5 (fixtures carry `createdAt`): a removed worktree with a seen branch reaches 5 cells; with cleanup on, a
+    detached but present checkout shows 4 and reaches 5 once removed; a failed `stat` or `status` read holds the
+    cells; an unpushed existing checkout makes no `gh` call; a PR created 30 s before the bind does not count; the
+    `remembered` path behaves as today.
   - F7: a child's spec write binds the root through the root's queue; a child in another folder does not.
-  - F9: a same-topic first plan in a linked worktree adopts the task and resets the branch evidence; a different
-    topic, a second plan, another repository, or a failed read does not.
+  - F9: a same-topic first plan in a linked worktree adopts the task and resets the branch evidence, also when the
+    main checkout switched branch between the spec and the plan; a different topic, a second plan, another
+    repository, or a failed read does not.
   - The existing suite stays green, including "an unchanged turn writes nothing to storage".
 - Live, in the same lab: rerun the scenarios that confirmed F1, F2 (permission and question), F4, F5, F7 and F9
   against the changed plugin, and F3 with the 13-minute child; each must now show the expected title.
