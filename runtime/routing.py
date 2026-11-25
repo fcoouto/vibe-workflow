@@ -10,7 +10,7 @@ FACTS = {'files': ('1-2', '3+', 'cross-system'), 'spec': ('exact', 'prose', 'ope
          'risk': ('reversible', 'shared', 'critical')}
 BASE = dict(planning=3, review=2, investigation=2, implementation=1, testing=1, writing=1)
 BAR = (0.55, 0.80, 1.0)
-LONG_HOURS = 2
+LONG_HOURS = 4
 FRONTIER = 0.90
 NEAR_SCORE = 0.97
 NEAR_PRICE = 0.5
