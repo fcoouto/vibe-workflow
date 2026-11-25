@@ -249,7 +249,7 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
     "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
-    "permission.replied", "form.replied", "form.cancelled"])
+    "permission.replied", "form.replied", "form.cancelled", "shell.exited"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -1066,6 +1066,95 @@ test("requests of unbound or child sessions do nothing", async (t) => {
   await ask(h, "permission.asked", "per_1", "ses_2")
   await ask(h, "form.created", "frm_1", "child_1")
   assert.deepEqual([h.calls.get.length, h.calls.update.length], [before.get, before.update])
+})
+
+const background = (h, id, command = "sleep 45") => h.shell(command, "ses_1", { result: { content: [], metadata: { shellID: id, status: "running" } } })
+const exited = (h, id) => { h.push({ type: "shell.exited", data: { id, exit: 0, status: "exited" } }); return settle() }
+
+test("a running background shell keeps WAITING off at a turn end, and its exit with nothing running sets it", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  await exited(h, "sh_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a background shell's exit while the session runs again writes nothing", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await h.end()
+  await h.start()
+  h.facts.active = ["ses_1"]
+  const writes = h.calls.update.length
+  await exited(h, "sh_1")
+  assert.equal(h.calls.update.length, writes)
+})
+
+test("with two background shells only the last exit labels", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await background(h, "sh_1")
+  await background(h, "sh_2")
+  await h.end()
+  await exited(h, "sh_1")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  await exited(h, "sh_2")
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a shell that exits before its hook runs is never tracked", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await exited(h, "sh_fast")
+  await background(h, "sh_fast")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("a 65th background shell drops the oldest", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  for (let i = 0; i <= 64; i++) await background(h, `sh_${i}`)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
+  for (let i = 1; i <= 64; i++) await exited(h, `sh_${i}`)
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+
+test("a finished shell result is never tracked, and an unbound session's shell exit costs no read", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await h.shell("ls", "ses_1", { result: { content: [], metadata: { shellID: "sh_done", status: "exited", exit: 0 } } })
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+  await h.shell("sleep 9", "ses_2", { result: { content: [], metadata: { shellID: "sh_other", status: "running" } } })
+  const reads = { get: h.calls.get.length, list: h.calls.list }
+  await exited(h, "sh_other")
+  assert.deepEqual([h.calls.get.length, h.calls.list], [reads.get, reads.list])
+})
+
+test("a background git push still records its branch", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  Object.assign(h.facts, { branch: "feat/x", upstream: false })
+  await background(h, "sh_push", "git push -u origin feat/x")
+  assert.equal(h.storage.data.get(KEY).task.remembered, "feat/x")
 })
 
 test("a rename during slow fact reads is kept", async (t) => {

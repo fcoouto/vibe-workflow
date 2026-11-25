@@ -46,14 +46,15 @@ const REQUESTS = {
   "form.cancelled": (data) => [data?.sessionID, data?.id, false],
 }
 const MAX_PENDING = 16
-const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS)]
+const MAX_SHELLS = 64
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited"]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
-  const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map()
-  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear(); pending.clear() }
+  const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
+  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
@@ -330,6 +331,28 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry)
   }
 
+  // Background shells: the agent is resumed when one exits, so a session with one running is not waiting on the user.
+  // An id that already exited is never tracked (a fast command can exit before the tool hook runs).
+  const hasShell = (sessionID) => [...shells.values()].includes(sessionID)
+  function track(shellID, sessionID) {
+    if (exited.has(shellID)) return
+    shells.set(shellID, sessionID)
+    if (shells.size > MAX_SHELLS) shells.delete(shells.keys().next().value)
+  }
+  function shellExited(shellID) {
+    if (typeof shellID !== "string") return
+    exited.add(shellID)
+    if (exited.size > MAX_SHELLS) exited.delete(exited.values().next().value)
+    const sessionID = shells.get(shellID)
+    if (!shells.delete(shellID) || hasShell(sessionID) || !sessions.get(sessionID)?.task) return
+    // OpenCode normally resumes the agent within milliseconds; the user chose an immediate WAITING over waiting for a
+    // turn that may never come, accepting a possible sub-second flash.
+    enqueue(sessionID, async (admitted) => {
+      const now = await activity(sessionID, { withSelf: true })
+      if (!now.children && !now.self) await relabel(sessionID, true, admitted)
+    })
+  }
+
   async function evaluate(sessionID, ended, fromChild, admitted) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
@@ -361,7 +384,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
-    const next = compose(topic, cells, ended && cells < 5 && !busy.children)
+    const next = compose(topic, cells, ended && cells < 5 && !busy.children && !hasShell(sessionID))
     if (next !== title) await ctx.session.update({ sessionID, title: next })
     if (sessions.get(sessionID) !== entry || entry.task !== task) return
     Object.assign(task, { cells, fresh: false })
@@ -375,7 +398,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await ctx.tool.hook("execute.after", async (event) => {
       try {
         if (event.status !== "completed" || typeof event.sessionID !== "string") return
-        const input = event.input
+        const input = event.input, metadata = event.result?.metadata
+        if (SHELLS.has(event.tool) && typeof metadata?.shellID === "string" && metadata.status === "running") track(metadata.shellID, event.sessionID)
         if (event.tool === "write") {
           if (typeof input?.path === "string" && ARTIFACT.test(input.path)) await enqueue(event.sessionID, (admitted) => route(event.sessionID, input.path, admitted))
         } else if (SHELLS.has(event.tool) && typeof input?.command === "string" &&
@@ -388,6 +412,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       try {
         for await (const event of stream) {
           if (REQUESTS[event?.type]) { request(...REQUESTS[event.type](event.data)); continue }
+          if (event?.type === "shell.exited") { shellExited(event.data?.id); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
           if (event.type === "session.moved") forget(sessionID)
