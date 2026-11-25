@@ -94,7 +94,8 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
       ...(facts.finished.includes(id) && { busy: now - 2000, idle: now - 1000 }) }
   }
   const ctx = {
-    ...(located && { location: { directory: root } }), storage,
+    // The copy that runs a session's hooks is the one for the session's folder, as on the real host.
+    ...(located && { location: { directory } }), storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
     session: {
       get: async ({ sessionID }) => {
@@ -159,11 +160,95 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
 
+// Two or more plugin copies, one per folder, as OpenCode runs them: one shared storage and session table, every copy
+// receives every event, and a tool hook runs only in the copy for the session's current folder.
+async function world(t, { folders = ["main", "wt"], project = "p1", projects = {}, started = Date.now() - 60 * 60 * 1000 } = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "session-world-")))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const dirs = Object.fromEntries(folders.map((name) => [name, join(base, name)]))
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
+  const storage = memoryStorage(), table = new Map(), preference = { state: "on" }
+  const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, gate: null, storageGate: null, getGate: null,
+    updateGate: null, failGet: new Set() }
+  const sessionOf = (id) => table.get(id) ?? { location: dirs[folders[0]] }
+  const copies = {}
+  for (const name of folders) {
+    const calls = { get: 0, gh: 0, set: 0, update: [] }, hooks = []
+    let stream
+    const ctx = {
+      location: { directory: dirs[name], project: { id: projects[name] ?? project } },
+      storage: { data: storage.data,
+        get: async (key) => { await facts.storageGate; return storage.get(key) },
+        set: async (key, value) => { calls.set++; return storage.set(key, value) },
+        remove: (key) => storage.remove(key), scan: (options) => storage.scan(options) },
+      tool: { hook: async (hookName, handler) => hooks.push([hookName, handler]) },
+      session: {
+        get: async ({ sessionID }) => {
+          calls.get++
+          await facts.getGate
+          if (facts.failGet.has(sessionID)) throw Error("get")
+          const s = sessionOf(sessionID)
+          return { id: sessionID, title: s.title ?? "Fix login flow", location: { directory: s.location }, time: s.time ?? {},
+            ...(s.parentID && { parentID: s.parentID }) }
+        },
+        list: async () => ({ data: [], cursor: { previous: null, next: null } }),
+        update: async ({ sessionID, title }) => {
+          calls.update.push([sessionID, title])
+          await facts.updateGate
+          table.set(sessionID, { ...sessionOf(sessionID), title })
+        },
+      },
+      event: { subscribe: ({ signal }) => (stream = pushable(signal)) },
+    }
+    const run = async (command, args) => {
+      if (command === "gh") {
+        calls.gh++
+        await facts.gate
+        return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
+      }
+      if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` + (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+      if (args[0] === "rev-parse") return "origin/main\n"
+      return facts.changed.join("\n")
+    }
+    const registered = await registerSessionTitles(ctx, { run, started, settings: { inspect: async () => preference },
+      gitWorkflow: { inspect: async () => ({ state: "on", project: dirs[folders[0]], worktree_cleanup: false }) } })
+    t.after(() => registered.close())
+    copies[name] = { ctx, calls, hooks, registered, push: (event) => stream.push(event) }
+  }
+  const push = async (event) => { for (const copy of Object.values(copies)) copy.push(event); await settle() }
+  const hookIn = async (copy, event) => { for (const [hookName, handler] of copy.hooks) if (hookName === "execute.after") await handler(event) }
+  const hook = (event) => hookIn(Object.values(copies).find((c) => c.ctx.location.directory === sessionOf(event.sessionID).location), event)
+  return { dirs, copies, table, facts, storage, preference,
+    session: (id, folder, more = {}) => table.set(id, { location: dirs[folder], ...more }),
+    write: (path, id = "ses_1") => hook({ tool: "write", status: "completed", sessionID: id, input: { path } }),
+    start: (id = "ses_1") => push({ type: "session.execution.started", data: { sessionID: id } }),
+    end: (id = "ses_1") => push({ type: "session.execution.succeeded", data: { sessionID: id } }),
+    move: async (id, folder) => {
+      const from = sessionOf(id).location
+      table.set(id, { ...sessionOf(id), location: dirs[folder] })
+      await push({ type: "session.moved", location: { directory: from }, data: { sessionID: id, location: { directory: dirs[folder] } } })
+    },
+    // A move whose event this world never delivers, as if a copy had missed it.
+    moveSilently: (id, folder) => table.set(id, { ...sessionOf(id), location: dirs[folder] }),
+    writeIn: (copy, path, id = "ses_1") => hookIn(copies[copy], { tool: "write", status: "completed", sessionID: id, input: { path } }),
+    title: (id = "ses_1") => table.get(id)?.title,
+    record: (id = "ses_1") => storage.data.get(`session-titles/${id}`) }
+}
+
+// A stored binding as an earlier turn left it: the session's title is the meter it last wrote.
+function seed(w, id, folder, more = {}) {
+  const record = { location: w.dirs[folder], project: "p1", at: 1, last: compose("Fix login flow", 1, true), silenced: false,
+    diag: null, task: { top: w.dirs[folder], spec: `${w.dirs[folder]}/docs/superpowers/specs/2026-11-25-x-design.md`, plan: null,
+      remembered: null, cells: 1, slug: "x", fresh: false }, ...more }
+  w.storage.data.set(`session-titles/${id}`, record)
+  w.table.set(id, { ...(w.table.get(id) ?? { location: w.dirs[folder] }), title: record.last })
+}
+
 test("a spec write binds without renaming; turn boundaries write the meter and label", async (t) => {
   const h = await host(t)
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
-    "session.execution.failed", "session.execution.interrupted"])
+    "session.execution.failed", "session.execution.interrupted", "session.moved"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -277,14 +362,15 @@ test("cleanup counts only while the git workflow feature is on", async (t) => {
   assert.equal(h.titles.get("ses_1"), "￻▰▰▰▰▰ Fix login flow")
 })
 
-test("children, events without a session and unbound sessions write nothing; failed and interrupted evaluate", async (t) => {
+test("a child's spec write binds its root, never the child; events without a session and unbound sessions write nothing; failed and interrupted evaluate", async (t) => {
   const h = await host(t)
   await h.write(SPEC, "child_1")
   await h.end("child_1")
+  assert.deepEqual(h.calls.update.map(([id]) => id), ["ses_1"], "the child's end wakes the root it bound")
   h.push({ type: "session.execution.succeeded", data: {} })
   h.push({ type: "session.execution.succeeded" })
   await h.end("ses_2")
-  assert.deepEqual(h.calls.update, [])
+  assert.equal(h.calls.update.length, 1)
   await h.write(SPEC)
   await h.emit("session.execution.failed")
   assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
@@ -655,6 +741,203 @@ test("a hanging list read is cut off and reads as nothing running", async (t) =>
   h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
   await new Promise((done) => setTimeout(done, 200))
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("the lab move sequence keeps the plan", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  const spec = `${w.dirs.wt}/docs/superpowers/specs/2026-11-25-x-design.md`, plan = `${w.dirs.wt}/docs/superpowers/plans/2026-11-25-x.md`
+  mkdirSync(join(w.dirs.wt, "docs/superpowers/plans"), { recursive: true })
+  writeFileSync(plan, "**Files:** `src/app.js`\n")
+  await w.write(spec)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  await w.move("ses_1", "wt")
+  await w.write(plan)
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 4, true))
+  await w.move("ses_1", "main")
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 4, true), "the meter never goes back")
+  assert.deepEqual([w.record().task.plan, w.record().task.cells, w.record().project], [plan, 4, "p1"])
+})
+
+test("a record from another project is ignored and a legacy record loads only in its folder", async (t) => {
+  const w = await world(t)
+  for (const [id, more, loaded] of [["ses_a", { project: "other" }, false], ["ses_b", { project: undefined }, true]]) {
+    w.session(id, "main")
+    seed(w, id, "main", more)
+    w.facts.changed = ["src/app.js"]
+    await w.end(id)
+    assert.equal(w.title(id) === compose("Fix login flow", 2, true), loaded, id)
+  }
+  w.session("ses_c", "main")
+  seed(w, "ses_c", "wt", { project: undefined })
+  await w.end("ses_c")
+  assert.equal(w.title("ses_c"), compose("Fix login flow", 1, true), "a legacy record saved in another folder is not loaded")
+  assert.equal(w.record("ses_c").at, 1)
+})
+
+test("a failed ownership read retries on the next event", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.facts.failGet.add("ses_1")
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  w.facts.failGet.delete("ses_1")
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 2, true))
+})
+
+test("a non-owner makes one cold ownership read and no gh call or storage write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  const reads = w.copies.wt.calls.get
+  for (let i = 0; i < 3; i++) await w.end()
+  assert.ok(reads >= 1 && reads <= 2, `cold reads ${reads}`)
+  assert.equal(w.copies.wt.calls.get, reads, "no further reads for the session's own turn events")
+  assert.deepEqual([w.copies.wt.calls.gh, w.copies.wt.calls.set, w.copies.wt.calls.update.length], [0, 0, 0])
+  assert.ok(w.copies.main.calls.gh > 0, "the owner evaluated")
+})
+
+test("a move during a slow evaluation or a slow storage read writes nothing in the old copy", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  const before = { ...w.copies.main.calls, update: w.copies.main.calls.update.length }
+  w.facts.changed = ["src/app.js"]
+  w.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [before.update, before.set])
+
+  const v = await world(t)
+  v.session("ses_2", "main")
+  seed(v, "ses_2", "main")
+  v.facts.storageGate = new Promise((done) => { release = done })
+  v.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_2" } })
+  await settle()
+  await v.move("ses_2", "wt")
+  release()
+  await settle()
+  assert.deepEqual([v.copies.main.calls.update.length, v.copies.main.calls.set], [0, 0], "no stale record published or written")
+})
+
+test("a close during a slow evaluation starts no new write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  await w.end()
+  w.copies.main.registered.close()
+  release()
+  await settle()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [0, 0])
+})
+
+test("a copy that missed a move does not write the session", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  w.moveSilently("ses_1", "wt")
+  const before = { update: w.copies.main.calls.update.length, set: w.copies.main.calls.set }
+  w.facts.changed = ["src/app.js"]
+  await w.end()
+  assert.deepEqual([w.copies.main.calls.update.length, w.copies.main.calls.set], [before.update, before.set])
+})
+
+test("a move during a slow title update starts no storage write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.updateGate = new Promise((done) => { release = done })
+  w.facts.changed = ["src/app.js"]
+  w.copies.main.push({ type: "session.execution.succeeded", data: { sessionID: "ses_1" } })
+  await settle()
+  assert.equal(w.copies.main.calls.update.length, 1, "the update is in flight")
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  assert.equal(w.copies.main.calls.set, 0)
+})
+
+test("a load interrupted by a move does not publish a stale binding", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  let release
+  w.facts.storageGate = new Promise((done) => { release = done })
+  w.copies.main.push({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+  await settle()
+  await w.move("ses_1", "wt")
+  release()
+  await settle()
+  w.facts.storageGate = null
+  const newer = `${w.dirs.wt}/docs/superpowers/specs/2026-11-26-y-design.md`
+  await w.write(newer)
+  await w.end()
+  w.moveSilently("ses_1", "main")
+  await w.end()
+  assert.equal(w.record().task.spec, newer, "the main copy never held the older binding")
+})
+
+test("a hook delivered to a copy that does not own the session does nothing", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  await w.writeIn("wt", `${w.dirs.main}/docs/superpowers/specs/2026-11-25-x-design.md`)
+  assert.equal(w.record(), undefined)
+})
+
+test("the move's turn end is evaluated once, by the destination", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  await w.end()
+  const gh = { main: w.copies.main.calls.gh, wt: w.copies.wt.calls.gh }
+  await w.start()
+  await w.move("ses_1", "wt")
+  await w.end()
+  assert.deepEqual([w.copies.main.calls.gh - gh.main, w.copies.wt.calls.gh - gh.wt], [0, 1])
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+})
+
+test("a child end that comes first after a reload restores and wakes its stored root", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  seed(w, "ses_1", "main", { last: compose("Fix login flow", 1, false) })
+  w.table.set("ses_1", { ...w.table.get("ses_1"), title: compose("Fix login flow", 1, false) })
+  await w.end("child_1")
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+})
+
+test("a child's spec write binds the root, and a child in another folder does not", async (t) => {
+  const w = await world(t)
+  const spec = (dir) => `${dir}/docs/superpowers/specs/2026-11-25-x-design.md`
+  w.session("ses_1", "main")
+  w.session("child_1", "main", { parentID: "ses_1" })
+  await w.write(spec(w.dirs.main), "child_1")
+  assert.equal(w.record().task.spec, spec(w.dirs.main))
+  assert.equal(w.record("child_1"), undefined)
+  await w.end()
+  assert.equal(w.title(), compose("Fix login flow", 1, true))
+  w.session("ses_2", "main")
+  w.session("child_2", "wt", { parentID: "ses_2" })
+  await w.write(spec(w.dirs.wt), "child_2")
+  assert.equal(w.record("ses_2"), undefined)
 })
 
 test("a rename during slow fact reads is kept", async (t) => {

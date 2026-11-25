@@ -35,24 +35,66 @@ const KEY = "session-titles/"
 const ARTIFACT = /(?:^|\/)docs\/superpowers\/(?:specs|plans)\/[^/]+\.md$/
 const SHELLS = new Set(["bash", "shell"])
 const RECORDING = new Set(["push", "pr_create", "pr_merge"])
-const TYPES = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
+const TURNS = ["session.execution.started", "session.execution.succeeded", "session.execution.failed",
   "session.execution.interrupted"]
+const TYPES = [...TURNS, "session.moved"]
+const MAX_GENERATIONS = 256
+const MAX_PARENTS = 1024
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
+  const generations = new Map(), parents = new Map(), reals = new Map()
   const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear() }
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
+  const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
+  const here = where ? await realpath(where).catch(() => where) : null
   const on = async () => !controller.signal.aborted && (await settings.inspect()).state === "on"
+
+  // One plugin copy runs per folder and every copy receives every session's events, so only the copy for a session's
+  // current folder owns it: it alone loads, writes and saves. A move makes every copy forget the session; a job whose
+  // session was forgotten after it was queued (its generation changed) publishes and writes nothing.
+  const generation = (sessionID) => generations.get(sessionID) ?? 0
+  const current = (sessionID, admitted) => !controller.signal.aborted && generation(sessionID) === admitted
   const enqueue = (sessionID, job) => {
-    const next = (chains.get(sessionID) ?? Promise.resolve()).then(job).catch(() => {})
+    const admitted = generation(sessionID)
+    const next = (chains.get(sessionID) ?? Promise.resolve()).then(() => job(admitted)).catch(() => {})
     chains.set(sessionID, next)
     next.then(() => { if (chains.get(sessionID) === next) chains.delete(sessionID) })
     return next
   }
+  function forget(sessionID) {
+    sessions.delete(sessionID)
+    checked.delete(sessionID)
+    saved.delete(sessionID)
+    const next = generation(sessionID) + 1
+    generations.delete(sessionID)
+    generations.set(sessionID, next)
+    if (generations.size > MAX_GENERATIONS) generations.delete(generations.keys().next().value)
+  }
+  // A session read that also remembers the session's parent (or that it has none), so later walks need no read.
+  async function read(sessionID) {
+    const info = await ctx.session.get({ sessionID })
+    parents.delete(sessionID)
+    parents.set(sessionID, typeof info?.parentID === "string" ? info.parentID : null)
+    if (parents.size > MAX_PARENTS) parents.delete(parents.keys().next().value)
+    return info
+  }
+  // true or false, or undefined when the folder cannot be read (the caller then does nothing and retries later).
+  async function owns(info) {
+    if (!where) return true
+    const dir = info?.location?.directory
+    if (typeof dir !== "string") return undefined
+    if (!reals.has(dir)) {
+      if (reals.size > 256) reals.delete(reals.keys().next().value)
+      reals.set(dir, await realpath(dir).catch(() => dir))
+    }
+    return reals.get(dir) === here
+  }
 
-  // The binding is kept in plugin storage so a server restart does not freeze the meter. A record is read once per
-  // server lifetime and only by the instance of the project that saved it; any storage error leaves memory only.
+  // The binding is kept in plugin storage so a server restart does not freeze the meter. The owner reads a record once
+  // per server lifetime; it accepts one saved by any folder of its project (a record without a project, saved before
+  // projects were recorded, only from its own folder). Any storage error leaves memory only.
   function keep(sessionID, entry) {
     sessions.delete(sessionID)
     sessions.set(sessionID, entry)
@@ -86,21 +128,27 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   function restore(task) {
     if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
       typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
-      !(task.spec || task.plan)) return null
+      !(task.spec || task.plan) || !(task.seen === undefined || short(task.seen)) ||
+      !(task.bound === undefined || task.bound === null || finite(task.bound))) return null
     const { top, spec, plan, remembered, cells, slug, fresh } = task
-    return { top, spec, plan, remembered, cells, slug, fresh }
+    return { top, spec, plan, remembered, cells, slug, fresh, seen: task.seen ?? null, bound: task.bound ?? null }
   }
 
-  async function load(sessionID) {
+  // `known` is a session read the caller already made, so loading costs no second read.
+  async function load(sessionID, admitted, known) {
     if (sessions.has(sessionID) || checked.has(sessionID)) return
+    let mine
+    try { mine = await owns(known ?? await read(sessionID)) } catch { return }
+    if (mine === undefined || !current(sessionID, admitted)) return
     checked.add(sessionID)
     if (checked.size > MAX_SESSIONS * 8) checked.delete(checked.values().next().value)
+    if (!mine) return
     try {
       const record = await storage?.get(KEY + sessionID)
-      if (record?.location !== where) return
+      if (!record || (typeof record.project === "string" ? record.project !== project : record.location !== where)) return
       const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
         silenced: record.silenced === true, diag: diagOf(record.diag) }
-      if (!entry.task && !entry.silenced) return
+      if ((!entry.task && !entry.silenced) || !current(sessionID, admitted)) return
       keep(sessionID, entry)
       saved.set(sessionID, JSON.stringify(entry))
     } catch {}
@@ -108,6 +156,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
 
   // A failed remove can leave a finished task behind; it is only read again after the session leaves memory, and a
   // finished task then shows its last meter again until the next spec write. The 128-record cap is shared by projects.
+  // Every caller saves only an entry that is still this copy's memory of the session; a move or close removes it, so no
+  // save starts for a forgotten session.
   async function save(sessionID, entry) {
     try {
       if (!storage) return
@@ -118,7 +168,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         saved.delete(sessionID)
         return
       }
-      await storage.set(KEY + sessionID, { location: where, at: Date.now(), task: entry.task, last: entry.last,
+      await storage.set(KEY + sessionID, { location: where, project, at: Date.now(), task: entry.task, last: entry.last,
         silenced: entry.silenced, diag: entry.diag ?? null })
       saved.set(sessionID, snapshot)
       if (known) return
@@ -133,17 +183,34 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     } catch {}
   }
 
-  async function bind(sessionID, path) {
+  // A spec or plan write. A child's write binds its root; the bind runs on the root's queue so it cannot race the root's
+  // own evaluation. `directory` is the folder of the session that wrote, which a relative path resolves against.
+  async function route(sessionID, path, admitted) {
     if (!await on()) return
-    const session = await ctx.session.get({ sessionID })
-    if (session.parentID) return
-    const absolute = resolve(session.location.directory, path), found = artifact(absolute)
+    const info = await read(sessionID)
+    const directory = info?.location?.directory
+    if (typeof directory !== "string") return
+    if (typeof info.parentID !== "string") {
+      if (await owns(info) === true) await bind(sessionID, path, directory, admitted, info)
+      return
+    }
+    const root = await rootOf(sessionID)
+    if (!root || root === sessionID) return
+    const rootInfo = await read(root)
+    if (await owns(rootInfo) !== true) return
+    await enqueue(root, (rootAdmitted) => bind(root, path, directory, rootAdmitted, rootInfo))
+  }
+
+  async function bind(sessionID, path, directory, admitted, known) {
+    const absolute = resolve(directory, path), found = artifact(absolute)
     if (!found) return
     const top = await realpath(found.top).catch(() => found.top)
     const file = top + absolute.slice(found.top.length)
-    await load(sessionID)
+    await load(sessionID, admitted, known)
+    if (!current(sessionID, admitted)) return
     const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false, diag: null }
-    const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true }
+    const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null,
+      bound: Date.now() }
     if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
     else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
     else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
@@ -156,7 +223,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     try {
       let id = sessionID
       for (let hops = 0; hops <= MAX_HOPS; hops++) {
-        const { parentID } = await ctx.session.get({ sessionID: id })
+        const parentID = parents.has(id) ? parents.get(id) : (await read(id), parents.get(id))
         if (typeof parentID !== "string") return id
         id = parentID
       }
@@ -195,11 +262,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   // At a push, PR create or PR merge the checkout still has its branch; after cleanup only this record can find the PR.
-  async function record(sessionID) {
+  async function record(sessionID, admitted) {
     if (!await on()) return
-    await load(sessionID)
+    const info = await read(sessionID)
+    if (info.parentID || await owns(info) !== true) return
+    await load(sessionID, admitted, info)
     const entry = sessions.get(sessionID), task = entry?.task
-    if (controller.signal.aborted || !task || entry.silenced || (await ctx.session.get({ sessionID })).parentID) return
+    if (!current(sessionID, admitted) || !task || entry.silenced) return
     const branch = await branchOf({ top: task.top, run })
     if (!branch || task.remembered === branch || sessions.get(sessionID) !== entry || entry.task !== task) return
     task.remembered = branch
@@ -212,15 +281,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   async function wakeRoot(sessionID, created) {
     const received = Date.now()
     const at = typeof created === "number" && Math.abs(created - received) <= 5 * 60 * 1000 ? created : received
-    if (!await on()) return
+    if (parents.get(sessionID) === null || !await on()) return
     const root = await rootOf(sessionID)
-    if (root && root !== sessionID) await enqueue(root, () => evaluate(root, true, { id: sessionID, at }))
+    if (root && root !== sessionID) await enqueue(root, (admitted) => evaluate(root, true, { id: sessionID, at }, admitted))
   }
 
-  async function evaluate(sessionID, ended, fromChild = null) {
+  async function evaluate(sessionID, ended, fromChild, admitted) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
-      await load(sessionID)
+      await load(sessionID, admitted)
     }
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
@@ -242,8 +311,9 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
     }
     const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
-    const title = (await ctx.session.get({ sessionID })).title ?? ""
-    if (controller.signal.aborted || (fromChild && busy.self)) return
+    const info = await read(sessionID)
+    if (!current(sessionID, admitted) || (fromChild && busy.self) || await owns(info) !== true) return
+    const title = info.title ?? ""
     if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
@@ -263,10 +333,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         if (event.status !== "completed" || typeof event.sessionID !== "string") return
         const input = event.input
         if (event.tool === "write") {
-          if (typeof input?.path === "string" && ARTIFACT.test(input.path)) await enqueue(event.sessionID, () => bind(event.sessionID, input.path))
+          if (typeof input?.path === "string" && ARTIFACT.test(input.path)) await enqueue(event.sessionID, (admitted) => route(event.sessionID, input.path, admitted))
         } else if (SHELLS.has(event.tool) && typeof input?.command === "string" &&
           classify(input.command).some(({ kind }) => RECORDING.has(kind))) {
-          await enqueue(event.sessionID, () => record(event.sessionID))
+          await enqueue(event.sessionID, (admitted) => record(event.sessionID, admitted))
         }
       } catch {}
     })
@@ -274,9 +344,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       try {
         for await (const event of stream) {
           const sessionID = event?.data?.sessionID
-          if (typeof sessionID === "string" && TYPES.includes(event.type)) {
-            enqueue(sessionID, () => evaluate(sessionID, event.type !== TYPES[0]))
-            if (event.type !== TYPES[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
+          if (typeof sessionID !== "string") continue
+          if (event.type === "session.moved") forget(sessionID)
+          else if (TURNS.includes(event.type)) {
+            enqueue(sessionID, (admitted) => evaluate(sessionID, event.type !== TURNS[0], null, admitted))
+            if (event.type !== TURNS[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }
         }
       } catch {}
