@@ -1,6 +1,6 @@
 # Claude quota evidence
 
-Status: approach accepted on 26 November 2026; written design pending approval.
+Status: written design approved on 26 November 2026.
 The user chose to defer automatic exact-route fallback. This is the exhaustion
 step before [subscription usage balancing](2026-11-20-subscription-usage-balancing-design.md).
 
