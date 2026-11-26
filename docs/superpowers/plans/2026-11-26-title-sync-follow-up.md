@@ -12,6 +12,7 @@
 
 **Approved execution scope:** Tasks 1–3. The OpenCode 2.3.2 model-free lab qualified shared preference fencing
 but found no shell-list read in the plugin context. The user deferred Tasks 4–5 and their live checks.
+Onboarding #399 changed the Title Sync setting to be checkout-local; preference fencing follows that scope.
 
 ## Global Constraints
 

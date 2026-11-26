@@ -174,7 +174,8 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
 
 // Two or more plugin copies, one per folder, as OpenCode runs them: one shared storage and session table, every copy
 // receives every event, and a tool hook runs only in the copy for the session's current folder.
-async function world(t, { folders = ["main", "wt"], project = "p1", projects = {}, started = Date.now() - 60 * 60 * 1000 } = {}) {
+async function world(t, { folders = ["main", "wt"], project = "p1", projects = {}, separateSettings = false,
+  started = Date.now() - 60 * 60 * 1000 } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "session-world-")))
   t.after(() => rmSync(base, { recursive: true, force: true }))
   const dirs = Object.fromEntries(folders.map((name) => [name, join(base, name)]))
@@ -235,7 +236,9 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
       if (args[0] === "rev-parse") return "origin/main\n"
       return facts.changed.join("\0")
     }
-    const registered = await registerSessionTitles(ctx, { run, started, settings: { inspect: async () => facts.inspect?.() ?? preference },
+    const root = separateSettings || (projects[name] && projects[name] !== project) ? dirs[name] : dirs[folders[0]]
+    const registered = await registerSessionTitles(ctx, { run, started,
+      settings: { inspect: async () => ({ root, ...(facts.inspect?.() ?? preference) }) },
       gitWorkflow: { inspect: async () => ({ state: "on", project: dirs[folders[0]], worktree_cleanup: false }) } })
     t.after(() => registered.close())
     copies[name] = { ctx, calls, hooks, registered, push: (event) => stream.push(event) }
@@ -560,6 +563,21 @@ test("preference publication for a different project does not cancel a pending t
   w.facts.gate = new Promise((done) => { release = done })
   await w.end()
   w.copies.wt.registered.preferenceSaved?.(false)
+  release()
+  await settle()
+  assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
+test("a different checkout's Title Sync preference does not cancel work in this checkout", async (t) => {
+  const w = await world(t, { separateSettings: true })
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.facts.changed = ["src/app.js"]
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  await w.end()
+  assert.equal(w.copies.main.calls.gh, 1)
+  w.copies.wt.registered.preferenceSaved(false)
   release()
   await settle()
   assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")

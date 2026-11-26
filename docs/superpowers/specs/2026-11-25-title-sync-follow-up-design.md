@@ -101,7 +101,8 @@ made after the new bind as belonging to the previous task.
 ### Turn titles off
 
 With Title Sync off, a new workflow does not bind or overwrite a title. Onboarding publishes the saved off
-state to the plugin copies before reporting success. Preview, cancellation, and a failed save do not touch titles.
+state to plugin copies that share the saving checkout's settings before reporting success. Other checkouts
+keep their own preferences. Preview, cancellation, and a failed save do not touch titles.
 No title cleanup on disable, move, or activation while off. Leave existing titles and active bindings intact.
 Do not scan sessions on disable. A write already sent to OpenCode cannot be recalled; fence queued writes
 when the off state is published. Turning Title Sync back on restores normal behavior on subsequent events.

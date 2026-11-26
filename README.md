@@ -36,9 +36,10 @@ GitHub's auto-delete of merged branches is off, it also offers to turn it on.
 Last, it asks whether to show a five-step meter in the session title, with
 `WAITING` while the chat needs you. This is opt-in and off by default.
 OpenCode says what it will save, then saves your answers; your client's own edit
-permission still applies. The choices live in `.vibe-workflow/settings.json`. In a
-linked worktree, the Smart Router file stays in the worktree and the git
-workflow choices are saved in the main checkout.
+permission still applies. The choices live in `.vibe-workflow/settings.json`,
+always saved in a worktree: from the main checkout, OpenCode creates one and
+moves the chat there first. Git workflow choices apply once that branch is
+merged into main.
 
 In an onboarded project, agents set each subagent's model when one applies: a
 model you or their skill name, else Smart Router's pick when it is on, else

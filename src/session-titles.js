@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
-import { relative, resolve } from "node:path"
+import { isAbsolute, relative, resolve } from "node:path"
 import { classify } from "./pr-advice.js"
 import { artifact, branchOf, commonDir, defaultRun, readFacts, readPlanPaths } from "./session-facts.js"
 
@@ -60,8 +60,6 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
-  const canonical = ctx.location?.project?.canonical
-  const projectKey = where && project ? JSON.stringify([project, typeof canonical === "string" ? canonical : null]) : null
   let preference = { revision: 0, copies: 0 }, leave = () => {}
   const close = () => { controller.abort(); leave(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear() }
   const unavailable = { registered: false, close, preferenceSaved: () => {} }
@@ -650,14 +648,17 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         }
       } catch {}
     })
-    if (projectKey) {
+    // Settings are saved at the checkout root, which several location copies may share.
+    let preferenceRoot
+    try { if (where) preferenceRoot = (await settings.inspect()).root } catch {}
+    if (typeof preferenceRoot === "string" && isAbsolute(preferenceRoot)) {
       const registry = globalThis[PREFERENCES] ??= new Map()
-      if (!registry.has(projectKey)) registry.set(projectKey, preference)
-      preference = registry.get(projectKey)
+      if (!registry.has(preferenceRoot)) registry.set(preferenceRoot, preference)
+      preference = registry.get(preferenceRoot)
       preference.copies++
       leave = () => {
         leave = () => {}
-        if (--preference.copies === 0) registry.delete(projectKey)
+        if (--preference.copies === 0) registry.delete(preferenceRoot)
       }
     }
     ;(async () => {
