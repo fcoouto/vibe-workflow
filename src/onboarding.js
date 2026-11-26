@@ -48,8 +48,14 @@ export async function registerOnboarding(ctx, projects, checkSetup, prGuard, tit
       }
       const values = prefs ? Object.fromEntries(["enabled", "agent_merge", "worktree_cleanup"].filter((key) => key in request)
         .map((key) => [key, request[key]])) : request.enabled
-      const ready = async (enabled, allowFetch) => !enabled ? { state: "off", reason: null } : prefs ? prGuard()
-        : feature === "session_titles" ? titlesGuard() : checkSetup(signal, allowFetch)
+      const ready = async (enabled, allowFetch) => {
+        if (!enabled) return { state: "off", reason: null }
+        if (prefs) {
+          const { reason } = await inspectGitWorkflow()
+          return reason === "project_root_unavailable" ? { state: "setup_needed", reason } : prGuard()
+        }
+        return feature === "session_titles" ? titlesGuard() : checkSetup(signal, allowFetch)
+      }
       const proposed = await project.preview(values)
       if (proposed.state === "blocked") return output(proposed)
       if (request.op === "preview") {

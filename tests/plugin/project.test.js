@@ -564,10 +564,11 @@ test("worktree mode snapshot covers main's file", async (t) => {
 })
 
 test("worktree mode inherits main-only metadata without widening its file access", async (t) => {
-  for (const existing of [false, true]) {
+  for (const [existing, sourceMode] of [[false, 0o600], [false, 0o644], [true, 0o640]]) {
     const router = { smart_router: { enabled: true } }
-    const { saving, own, path, writeOwn } = await linkedFixture(t, { version: 1, features: [router], extra: "keep" })
-    await chmod(path, 0o600)
+    const { saving, own, path, folder, writeOwn } = await linkedFixture(t, { version: 1, features: [router], extra: "keep" })
+    await chmod(folder, 0o700)
+    await chmod(path, sourceMode)
     if (existing) {
       await writeOwn({ version: 1, features: [router] })
       await chmod(own, 0o644)

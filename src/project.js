@@ -268,7 +268,8 @@ export function createProjectSettings(directory, feature = "smart_router", { atP
         const body = JSON.stringify({ ...value, version: 1, features }, null, 2) + "\n"
         if (Buffer.byteLength(body) > limit) return blocked("project_settings_invalid")
         const target = join(folder, `.settings-${randomUUID()}.tmp`)
-        const mode = (latest.data.mode ?? 0o644) & (latest.data.materialize ? latest.data.main.mode : 0o777)
+        // A copied file may lose the source directory's protection or inherit a different group.
+        const mode = (latest.data.mode ?? 0o644) & (latest.data.materialize ? latest.data.main.mode & 0o600 : 0o777)
         const file = await open(target, "wx", mode)
         temporary = target
         try {

@@ -90,7 +90,8 @@ preserved, the worktree's winning on a name clash.
 - When main has no file, the effective settings are the worktree file alone.
 - Missing entries and top-level keys inherited from main are written even if all answers stay the
   same. The runtime reads for Smart Router and session titles use the checkout's own file.
-  When copying inherited settings, the destination mode allows no access that either file's mode disallows.
+  When copying inherited settings, the destination is owner-only and allows no owner access
+  that either file's mode disallows.
 
 ### Runtime reads
 

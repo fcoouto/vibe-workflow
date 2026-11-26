@@ -277,8 +277,8 @@ test("operational git workflow inspection reads main, never onboarding's worktre
   assert.equal(assertCalls.length, 0)
 })
 
-test("operational git workflow inspection fails closed when the main checkout cannot be resolved", async (t) => {
-  const { execute } = await fixture(t, async () => {}, async (root) => {
+test("git workflow can save locally but reports unavailable when main cannot be resolved", async (t) => {
+  const { execute, root } = await fixture(t, async () => {}, async (root) => {
     const bare = join(root, "bare.git"), linked = join(root, "linked")
     gitIn(root, "init", "-q", "--bare", bare)
     gitIn(bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked)
@@ -292,6 +292,16 @@ test("operational git workflow inspection fails closed when the main checkout ca
   const actual = await prefs(execute, { op: "inspect" })
   assert.deepEqual([actual.state, actual.reason, actual.agent_merge, actual.worktree_cleanup],
     ["blocked", "project_root_unavailable", undefined, undefined])
+  const choice = { enabled: true, agent_merge: true, worktree_cleanup: false }
+  const preview = await prefs(execute, { op: "preview", ...choice })
+  const unavailable = { state: "setup_needed", reason: "project_root_unavailable" }
+  assert.deepEqual(preview.readiness, unavailable)
+  const applied = await prefs(execute, { op: "apply", ...choice, expected_snapshot: preview.snapshot })
+  assert.equal(applied.state, "saved")
+  assert.deepEqual(applied.readiness, unavailable)
+  const file = JSON.parse(await readFile(join(root, "linked", ".vibe-workflow", "settings.json"), "utf8"))
+  assert.deepEqual(file.features, [{ git_workflow: choice }])
+  assert.equal((await prefs(execute, { op: "inspect" })).state, "blocked")
 })
 
 test("a denied native edit from a linked worktree writes nothing", async (t) => {
@@ -386,7 +396,9 @@ test("the procedure fixes the flow: up-front count, one report format, recovery 
   const flat = text.replace(/\s+/g, " ")
   for (const phrase of ["Before step 1, check where the session runs", "`git rev-parse --path-format=absolute --absolute-git-dir --git-common-dir`",
     "`worktree_create` with the name `onboard-vibe-workflow`", "`session.move`", "never save in the main checkout instead",
-    "When `root` differs from `project`, add before the last line",
+    "When `root` differs from `project` and Git workflow readiness does not have reason `project_root_unavailable`",
+    "those used for the questions, including Smart Router's `previous_enabled` from question 1.",
+    "Git workflow: Saved locally — the main checkout could not be resolved; agent merge and cleanup are unavailable.",
     "**Git workflow and cleanup take effect only after this branch is merged into main.**",
     "committing and merging that file is the user's step"]) {
     assert.ok(flat.includes(phrase), phrase)

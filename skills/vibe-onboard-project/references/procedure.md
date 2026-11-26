@@ -97,6 +97,8 @@ not a git repository, needs no move.
    with the preview's `project` and `client`:
    **Project: <project>. Client: <client>. Up to five short questions.** Add that the
    choices are saved in this checkout's settings file, the preview's `path`.
+   If you moved, stop before asking or saving unless the preview's `root` is the
+   confirmed destination worktree.
    Their answers are the consent to save.
 2. Ask question 1. The preview's `previous_enabled` is the saved value; `null`
    means nothing is saved. For `false`, that gives Leave it off (Current) first and
@@ -130,9 +132,15 @@ not a git repository, needs no move.
    only its readiness. If the first session titles preview is
    blocked, skip question 5, leave session titles off and report
    **Session titles: not saved.** followed by the fixed reason.
-7. If an answer changes a proposal, preview that feature again with the selected
+7. Keep the `previous_*` values from the previews used to ask the questions.
+   If an answer changes a proposal, preview that feature again with the selected
    booleans (`enabled`, `agent_merge` and `worktree_cleanup` for git workflow;
-   Turn off git guidance is all three `false`; `enabled` for session titles). If every preview says `change: "none"` and no
+   Turn off git guidance is all three `false`; `enabled` for session titles).
+   Before accepting a fresh snapshot, compare its `previous_*` values to those used
+   for the questions, including Smart Router's `previous_enabled` from question 1.
+   If a value changed (including to or from `null`), stop before saving, explain
+   that settings changed, and ask the user to run onboarding again.
+   If every preview says `change: "none"` and no
    GitHub change is pending, say **Nothing to change.**, keep the saved choices and
    stop. A yes to question 4 counts as a change, so it is never swallowed by that stop.
    Otherwise say what will be saved, in one plain line per change and not as a
@@ -140,8 +148,7 @@ not a git repository, needs no move.
    .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
    Name the preview's full `path`, and add that committing and merging that file is the user's step.
    Say it in order: the Saving line comes before anything is applied, and a cancel at any question or a denied native file-edit permission means no GitHub change.
-8. Keep the `previous_*` values from the previews used to ask the questions. Apply
-   Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
+8. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
    `snapshot`. The features share one file, so then
    preview `git_workflow` again with the answered values. Compare its
@@ -182,6 +189,7 @@ not a git repository, needs no move.
    - Git workflow, `ready`, agents merge: Git workflow: On · Agents merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
    - Git workflow, `ready`, cleanup on: Git workflow: On · I merge, cleanup on — reminders registered; not yet observed in this OpenCode. Advisory, not enforced. (Agents merge: Git workflow: On · Agents merge, cleanup on — …)
    - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.) Add ", cleanup on" after the merge choice when cleanup is on.
+   - Git workflow saved or unchanged, `setup_needed` with `project_root_unavailable`: Git workflow: Saved locally — the main checkout could not be resolved; agent merge and cleanup are unavailable.
    - Git workflow, any other `setup_needed` reason: give the reported reason.
    - Session titles, `off`: Session titles: Off — titles are left alone.
    - Session titles, `ready`: Session titles: On — updated at the end of each turn.
@@ -189,7 +197,8 @@ not a git repository, needs no move.
 
    Add the GitHub line from step 5 or step 9 when question 4 ran or was skipped for a reason.
    An enabled preference is not proof of account availability or entitlement.
-   When `root` differs from `project`, add before the last line:
+   When `root` differs from `project` and Git workflow readiness does not have reason
+   `project_root_unavailable`, add before the last line:
    **Git workflow and cleanup take effect only after this branch is merged into main.**
    Smart Router and session titles apply in this worktree now and in the project after the merge.
    Offer to open the pull request with `vibe-pull-requests`; do not merge unasked.
