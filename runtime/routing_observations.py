@@ -26,11 +26,23 @@ class LocalSource:
         from runtime import opencode_account
         return opencode_account.quota_problem(self.settings_path, route, now)
 
+    def quota_for_billing(self, route, now, fact):
+        """The quota of the account `fact` proved; a login changed since its billing read is `billing_unverified`."""
+        from runtime import opencode_account
+        return opencode_account.quota_problem(self.settings_path, route, now, producer=fact['producer'])
+
     def windows(self, pool, now, stored=None):
         stored = _read(window_path(self.settings_path)) if stored is None else stored
         return [dict(value, id=key) for key, value in stored.get('pools', {}).get(pool, {}).items()]
 
 PAID = {'provider_blocked': 'blocked', 'provider_managed': 'enabled', 'unknown': 'unknown'}
+REFUSALS = ('quota_exhausted', 'billing_unverified')
+
+
+def _quota(source, route, now, fact):
+    if callable(getattr(source, 'quota_for_billing', None)):
+        return source.quota_for_billing(copy.deepcopy(route), now, fact)
+    return source.quota(copy.deepcopy(route), now)
 
 
 def eligible(routes, source, now=None):
@@ -44,7 +56,8 @@ def eligible(routes, source, now=None):
             reason = 'billing_unverified'
         else:
             try:
-                reason = 'quota_exhausted' if source.quota(copy.deepcopy(route), now) == 'quota_exhausted' else None
+                reason = _quota(source, route, now, found)
+                reason = reason if reason in REFUSALS else None
             except Exception:
                 reason = None  # Only positive, fresh account-bound evidence refuses for quota.
         if reason:

@@ -36,7 +36,7 @@ On demand only (a demanded stale route, preactivation or native preparation), ne
 pure check or `--serve`. One reader at a time, a fixed reason and FAILURE_BACKOFF after a failure, no retry. Under
 the test runner's private home the installed client is never found.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 import fcntl
 import hashlib
@@ -46,10 +46,13 @@ import os
 import re
 import secrets
 import selectors
+import signal
 import subprocess
+import threading
 import time
 
-from runtime import processes as lifecycle, routing, routing_observations as observations, routing_paths, storage
+from runtime import claude_quota, processes as lifecycle, routing, routing_observations as observations, \
+    routing_paths, storage
 
 PATH = 'claude-native-subscription'
 POOL = 'claude-subscription'
@@ -183,28 +186,51 @@ class _Session:
 
 
 def exchange(command, environ, timeout=TIMEOUT):
-    """(initialize payload, usage payload, wall time just before `get_usage` was sent); the group is stopped after."""
-    try:
-        process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
-                                   start_new_session=True, close_fds=True)
-    except OSError:
-        raise ReadError('claude_unavailable') from None
-    normal, init = False, None
-    try:
-        session = _Session(process, time.monotonic() + timeout)
-        session.send('vw-init', 'initialize')
-        init = session.response('vw-init')
-        started = time.time()
-        session.send('vw-usage', 'get_usage')
-        use = session.response('vw-usage')
-        normal = True
-    except (ReadError, OSError) as error:
-        error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
-        raise
-    finally:
-        lifecycle._stop(process, normal)
-    return init, use, started
+    """(initialize payload, usage payload, wall time just before `get_usage` was sent, wall time when its answer was
+    read); the group is stopped after, and cleanup never moves the receipt time."""
+    cancelled = reading = False
+
+    def cancel(signum, frame):
+        nonlocal cancelled
+        if not cancelled:
+            cancelled = True
+            if reading:
+                raise KeyboardInterrupt
+
+    with ExitStack() as owned:
+        # Latch cancellation through spawn and reap. Only interrupt blocking protocol I/O once cleanup is registered.
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                owned.callback(signal.signal, sig, signal.signal(sig, cancel))
+        try:
+            process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
+                                       start_new_session=True, close_fds=True)
+        except OSError:
+            raise ReadError('claude_unavailable') from None
+        # Stop the entire group before reaping its leader, even if the leader exited after a valid reply.
+        owned.callback(lifecycle._stop, process, False)
+        init = None
+        try:
+            reading = True
+            if cancelled:
+                raise KeyboardInterrupt
+            session = _Session(process, time.monotonic() + timeout)
+            owned.callback(session.selector.close)
+            session.send('vw-init', 'initialize')
+            init = session.response('vw-init')
+            started = time.time()
+            session.send('vw-usage', 'get_usage')
+            use = session.response('vw-usage')
+            received = time.time()
+        except (ReadError, OSError) as error:
+            error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
+            raise
+        finally:
+            reading = False
+    if cancelled:
+        raise KeyboardInterrupt
+    return init, use, started, received
 
 
 # -- parsing -----------------------------------------------------------------------------------------------------
@@ -269,6 +295,8 @@ def _time(value):
 
 
 def _percent(value):
+    if type(value) is int and not 0 <= value <= 100:
+        raise ReadError('claude_usage_invalid')  # before the float conversion below, which a huge integer overflows
     if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
         raise ReadError('claude_usage_invalid')
     return value
@@ -405,51 +433,41 @@ def scopes(use, models):
             for _, item in sorted(found.items())]
 
 
-def scope_state(settings_path, route, now):
-    """How the current account's model-scoped limits bear on `route` (user decision 2026-11-16: scope by model):
-    None when none names its model (the account-wide windows hold), 'exhausted' when one names it at 100% with its
-    reset ahead, else 'scoped' (one names it, or one names no catalog model: quota unknown for every Claude route)."""
-    from runtime import native_catalog
-    scoped = (account(settings_path, now) or {}).get('scoped') or []
-    if not scoped:
-        return None
+def _bound_exhaustion(settings_path, route, now, native):
+    """`(binding_current, remaining)` from one state read: whether `native` is still the current account's binding,
+    and the seconds until its bound quota's reset (None when that account has no usable quota row). This takes no
+    lock; it is the gate's private read, and `exhaustion_left` is its public number-or-None form."""
+    from runtime import native_catalog, opencode_account
+    if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
+            or opencode_account.family(route) != 'claude':
+        return False, None
+    state = _state(settings_path)
+    current = _current(state, now)
+    if current is None or opencode_account._native(current) != native:
+        return False, None
+    found = state.get('quota')
+    if type(found) is not dict or found.get('key') != current['key'] \
+            or found.get('generation') != current['generation']:
+        return True, None
+    snapshot = native_catalog.stored(settings_path, CLIENT)
+    bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
     alias = route.get('model') if type(route.get('model')) is str else ''
-    entry = next((item for item in (native_catalog.stored(settings_path, CLIENT) or {}).get('models') or []
-                  if type(item) is dict and item.get('alias') == alias), {})
-    words, state = _tokens(alias) | _tokens(entry.get('resolved')), None
-    for item in scoped:
-        if item['matched'] and not _family(item['name']) <= words:
-            continue  # another model's limit
-        if item['matched'] and item['utilization'] >= 100 and item['reset'] > now:
-            return 'exhausted'
-        state = 'scoped'
-    return state
+    return True, claude_quota.remaining(found.get('record'), alias, snapshot['models'] if bound else [], now=now)
 
 
-def _quota_gate(settings_path, route, now, native):
-    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
-        return None, None
-    left = observations.trust_left((account(settings_path, now) or {}).get('observed_at'), now)  # the scoped read
-    return ('quota_exhausted', left) if left is not None else (None, None)
+def exhaustion_left(settings_path, route, now, *, native=None):
+    """Seconds until the account's confirmed exhaustion ends for this OpenCode Claude route, or None.
 
-
-def quota_problem(settings_path, route, now, native=False):
-    """`quota_exhausted` for a route a model-scoped limit names at 100% with its reset ahead, read at most
-    EXHAUSTED_RECHECK_SECONDS ago (a provider may reset early); the OpenCode Claude producer passes `native=True` for
-    its route on this same login. Never headroom, never a claim."""
-    return _quota_gate(settings_path, route, now, native)[0]
-
-
-def quota_retry_after(settings_path, route, now, native=False):
-    return _quota_gate(settings_path, route, now, native)[1]
-
-
-def exhausted_stale(settings_path, route, now, native=False):
-    """E1: whether a model-scoped limit still names `route` at 100% but was read too long ago to refuse."""
-    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
-        return False
-    at = (account(settings_path, now) or {}).get('observed_at')
-    return routing._amount(at) and now - at > observations.EXHAUSTED_RECHECK_SECONDS
+    `native` is the opaque native binding of the billing read that proved this route's account (`opencode_account`'s
+    record). Omitted, it is the current OpenCode Claude account's own binding, or None without one. A binding that no
+    longer matches the account gives None: no quota is applied. This takes no lock."""
+    from runtime import opencode_account
+    if native is None:
+        found = opencode_account._account(settings_path, 'claude', now)
+        native = found['native'] if found is not None else None
+    if native is None:
+        return None
+    return _bound_exhaustion(settings_path, route, now, native)[1]
 
 
 # -- the private store -------------------------------------------------------------------------------------------
@@ -483,18 +501,22 @@ def _proved(state, key=None):
     return None
 
 
-def account(settings_path, now):
-    """The current complete account record `{key, generation, observed_at, client_version, overflow, usage_at}`
-    proved by its identity, or None when absent, pending, legacy, incoherent or stale."""
-    if settings_path is None:
-        return None
-    state = _state(settings_path)
+def _current(state, now):
+    """The current account record within `state` (see `account`), so several checks can share one read."""
     found = state.get('account')
     if type(found) is not dict or 'pending' in found or _proved(state) is None \
             or not routing._amount(found.get('observed_at')) \
             or not (0 <= now - found['observed_at'] <= observations.FRESH_SECONDS):
         return None
     return found
+
+
+def account(settings_path, now):
+    """The current complete account record `{key, generation, observed_at, client_version, overflow, usage_at}`
+    proved by its identity, or None when absent, pending, legacy, incoherent or stale."""
+    if settings_path is None:
+        return None
+    return _current(_state(settings_path), now)
 
 
 def bound_id(window, key):
@@ -553,14 +575,15 @@ def _connection(key, generation):
     return 'account:%s:%s' % (key, generation)
 
 
+def _binding_of(current):
+    return dict(client_version=current['client_version'],
+                connection=_connection(current['key'], current['generation']), controls=CONTROLS)
+
+
 def binding(settings_path):
     """The native catalog binding of the current account read (its key and generation), or None."""
     current = account(settings_path, int(time.time()))
-    if current is None:
-        return None
-    return dict(client_version=current['client_version'], connection=_connection(current['key'],
-                                                                                 current['generation']),
-                controls=CONTROLS)
+    return None if current is None else _binding_of(current)
 
 
 @contextmanager
@@ -610,18 +633,32 @@ def _transition(settings_path, step):
         observations._write(path, value)
 
 
+def _quota_change(state, expected, sample, now):
+    """The change merging one exchange's quota evidence into the state, for the expected `(key, generation)` that the
+    state still proves. Evidence from another key or generation is never carried over."""
+    key, generation = expected
+    if _proved(state, key) != generation:
+        raise ValueError('observation_store_invalid')
+    found = state.get('quota')
+    bound = type(found) is dict and found.get('key') == key and found.get('generation') == generation
+    record = claude_quota.merge(found.get('record') if bound else None, sample, now=now)
+    return dict(quota=dict(key=key, generation=generation, record=record))
+
+
 def _fence(state, held):
     """Before an exchange: keep in `held`, for this attempt only, what the old state proves (key, generation, record),
     and leave an unprovable in-flight state (no identity; a pending account under a random fence), so that an
     interrupted or unrecorded observation never carries the generation forward."""
     generation = _proved(state)
     held.update(generation=generation, key=state['identity']['key'] if generation else None,
-                account=state.get('account'), fence=secrets.token_hex(16))
-    return dict(identity=None, account=dict(pending=True, generation=held['fence']))
+                account=state.get('account'), fence=dict(pending=True, generation=secrets.token_hex(16)))
+    if generation:
+        held['fence']['suspended'] = dict(key=held['key'], generation=generation)
+    return dict(identity=None, account=held['fence'])
 
 
 def _ours(state, held):
-    return state.get('identity') is None and state.get('account') == dict(pending=True, generation=held.get('fence'))
+    return state.get('identity') is None and state.get('account') == held['fence']
 
 
 def _settle(state, held):
@@ -631,11 +668,16 @@ def _settle(state, held):
     return dict(identity=dict(key=held['key'], generation=held['generation']), account=held['account'])
 
 
+class _FenceLost(Exception):
+    """This refresh no longer owns its observation and must not publish or set backoff."""
+
+
 def _observe(key, held):
-    """The exchange's account observation, recorded before its catalog or usage is validated: the proved generation
-    only for the same key with this attempt's fence untouched, else a fresh random one; the account stays pending."""
+    """Record an observation only with this attempt's fence; keep the proved generation only for the same key."""
     def step(state):
-        same = held.get('generation') and key == held.get('key') and _ours(state, held)
+        if not _ours(state, held):
+            raise _FenceLost()
+        same = held.get('generation') and key == held.get('key')
         held['observed'] = held['generation'] if same else secrets.token_hex(16)
         return dict(identity=dict(key=key, generation=held['observed']),
                     account=dict(pending=True, generation=held['observed']))
@@ -668,13 +710,14 @@ def _fresh(settings_path, need, now):
                and stored[key]['observed_at'] > boundary for key in need)
 
 
-def _record(settings_path, init, use, started, held):
-    """Store one exchange's account, catalog and windows. The account and telemetry are checked before anything is
-    written. Then, in order: the observed identity (the generation `held` proves for this key under this attempt's
-    untouched fence, else a fresh random one) with a pending account, before the catalog is checked; the catalog
-    bound to it; the complete account; and only after every row is stored, the confirmed exchange. A usage problem
-    still records the account and catalog, with no confirmed exchange, so no earlier row stays usable. Rows are bound
-    to the key and generation, so another account's or generation's rows never match; nothing earlier is re-dated."""
+def _record(settings_path, init, use, started, received, held):
+    """Store one exchange's account, catalog, quota evidence and windows. The account and telemetry are checked before
+    anything is written. Then, in order: the observed identity under this attempt's untouched fence (the generation
+    `held` proves for this key, else a fresh random one) with a pending account, before the catalog is checked; the
+    catalog bound to it; the complete account with the quota evidence merged, even when the usage snapshot is refused;
+    and only after every row is stored, the confirmed exchange. A usage problem still records the account and catalog,
+    with no confirmed exchange, so no earlier row stays usable. Rows are bound to the key and generation, so another
+    account's or generation's rows never match; nothing earlier is re-dated."""
     from runtime import native_catalog
     key = parse_identity(init, use)
     check_quiet(use)
@@ -682,6 +725,7 @@ def _record(settings_path, init, use, started, held):
     generation = held['observed']
     key, version, models = parse_account(init, use)
     now = int(time.time())
+    sample = claude_quota.evidence(use, models, started=started, received=received)
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
         scoped = scopes(use, models)
@@ -692,7 +736,9 @@ def _record(settings_path, init, use, started, held):
                    usage_at=None, scoped=scoped)
     native_catalog.store_snapshot(settings_path, CLIENT, dict(binding=dict(
         client_version=version, connection=_connection(key, generation), controls=CONTROLS), models=models))
-    _transition(settings_path, _expect(key, generation, dict(account=current)))
+    def publish(state):
+        return dict(account=current, **_quota_change(state, (key, generation), sample, now))
+    _transition(settings_path, publish)
     if problem is not None:
         raise problem
     token = row_account(current)
@@ -731,12 +777,12 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             _transition(settings_path, lambda state: _fence(state, held))  # unstored: no exchange starts
             try:
                 try:
-                    init, use, started = exchange(command or default_command(environ), environ, timeout)
+                    init, use, started, received = exchange(command or default_command(environ), environ, timeout)
                 except (ReadError, OSError) as error:
                     if not getattr(error, 'initialized', False):  # transport only, before any account material
                         _transition(settings_path, lambda state: _settle(state, held))
                     raise  # after initialization the fence stays: unprovable, rotated on the next success
-                windows = _record(settings_path, init, use, started, held)
+                windows = _record(settings_path, init, use, started, received, held)
                 if not windows:
                     raise ReadError('claude_usage_unconfirmed')
                 if not set(need) <= {item['id'] for item in windows}:
@@ -747,6 +793,8 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                     _save(settings_path, failure=dict(at=int(time.time()) - FAILURE_BACKOFF + CACHE_CEILING,
                                                       reason='claude_usage_unconfirmed'))
                     return dict(state='failed', reason='claude_usage_unconfirmed')
+            except _FenceLost:
+                return dict(state='failed', reason='observation_store_invalid')
             except ReadError as error:
                 # An explicit account-level refusal ends the earlier account confirmation and its continuity (its
                 # fact, catalog binding and generation); stored window rows stay as observed history, unusable.
@@ -764,3 +812,135 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
         return dict(state='failed', reason=str(error))
     except (OSError, ValueError, storage.StorageError):
         return dict(state='failed', reason='observation_store_invalid')
+
+
+# -- the trigger probe -------------------------------------------------------------------------------------------
+PROBE_FILE = 'claude-limit-probe.json'
+PROBE_LOCK = '.claude-limit-probe.lock'
+PROBE_INTERVAL = 60  # seconds before the same native account key may be probed again
+PROBE_KEYS = 8  # native accounts with a live probe start at once; another account waits, and no start is evicted
+
+
+class _Skip(Exception):
+    """A probe that publishes nothing and reports `skipped`."""
+
+
+def _hint(reset_at, now):
+    """A usable trigger hint: a whole-second reset after `now`, within a week plus the clock margin."""
+    return type(reset_at) is int and now < reset_at <= now + claude_quota.LENGTHS['7d'] + storage.CLOCK_MARGIN
+
+
+OVERFLOW = ('enabled', 'disabled', 'unknown')  # the states `_overflow` stores
+
+
+def _complete(current):
+    """Whether a current account record has the metadata `_record` stores: a supported overflow state, the client
+    version, the usage time (None or a time) and the scoped list (None when unreadable)."""
+    return all(field in current for field in ('client_version', 'overflow', 'usage_at', 'scoped')) \
+        and current['overflow'] in OVERFLOW and routing._text(current['client_version']) \
+        and (current['usage_at'] is None or routing._amount(current['usage_at'])) \
+        and (current['scoped'] is None or type(current['scoped']) is list)
+
+
+def _bound(state, expected, now):
+    """The complete, fresh current account record when it is the login `expected` names, else None. A proved login
+    whose stored metadata is partial is malformed private state: it raises rather than admitting or publishing."""
+    current = _current(state, now)
+    if current is None or (current['key'], current['generation']) != expected:
+        return None
+    if not _complete(current):
+        raise ReadError('observation_store_invalid')
+    return current
+
+
+def _starts(path):
+    """The probe starts `{key: started_at}` of the cooldown file: none when the file is absent. Its content must be
+    the probe's own object, and a JSON null, or any other shape, is an error, never repaired or taken as absent."""
+    if not os.path.lexists(path):
+        return {}
+    record = storage.read_json(path)
+    if type(record) is not dict or set(record) != {'version', 'accounts'} or type(record['version']) is not int \
+            or record['version'] != 1:
+        raise ReadError('observation_store_invalid')
+    accounts = record['accounts']
+    if type(accounts) is not dict or len(accounts) > PROBE_KEYS \
+            or not all(_hex(key) and routing._amount(at) for key, at in accounts.items()):
+        raise ReadError('observation_store_invalid')
+    return accounts
+
+
+def _admit(starts, key, now):
+    """The live starts plus this one, or None when `key` may not start. A start is live while `now - started_at` is
+    under PROBE_INTERVAL, a negative elapsed time included, so a backwards clock fails closed for that account only.
+    A full cooldown refuses a new account rather than evicting a live start."""
+    live = {item: at for item, at in starts.items() if now - at < PROBE_INTERVAL}
+    if key in live or len(live) >= PROBE_KEYS:
+        return None
+    return {**live, key: now}
+
+
+def _ended(state, key, generation):
+    """Retire only this exact generation, including its suspension or pending re-observation."""
+    pending = state.get('account')
+    suspended = state.get('identity') is None and type(pending) is dict and pending.get('pending') is True \
+        and pending.get('suspended') == dict(key=key, generation=generation)
+    if not suspended and _proved(state, key) != generation:
+        raise _Skip()
+    return dict(account=None, identity=None)
+
+
+def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None, timeout=TIMEOUT):
+    """`{state}` of one bounded native probe under the login `expected` names (its key and generation).
+
+    `stored`: usable evidence merged under that login. `skipped`: no current login, busy or cooling down, no usable
+    evidence, an out-of-range hint (at start or at commit), or a different proved login. `failed`: a malformed request
+    or private state, unsupported or unproved identity, refused telemetry, timeout or a transport problem. Only the
+    probe lock is held during the child; account state is read, never fenced, until the short commit."""
+    try:
+        from runtime import native_catalog
+        environ = os.environ if environ is None else environ
+        key, generation = expected if type(expected) is tuple and len(expected) == 2 else (None, None)
+        if not _hex(key) or not _hex(generation) or type(reset_at) is not int:
+            return dict(state='failed')
+        if not _hint(reset_at, int(time.time())):
+            return dict(state='skipped')
+        command = command or default_command(environ)
+        with storage._locked(_store(settings_path), block=False, lock=PROBE_LOCK) as path:
+            if path is None:
+                return dict(state='skipped')
+            probe = path.parent / PROBE_FILE
+            starts = _starts(probe)
+            state = observations._read(path)
+            now = int(time.time())
+            if not _hint(reset_at, now):
+                return dict(state='skipped')
+            if _bound(state, (key, generation), now) is None:
+                return dict(state='skipped')
+            admitted = _admit(starts, key, now)
+            if admitted is None:
+                return dict(state='skipped')
+            observations._write(probe, dict(version=1, accounts=admitted))
+            init, use, started, received = exchange(command, environ, timeout)
+            check_quiet(use)
+            if parse_identity(init, use) != key:
+                _transition(settings_path, lambda state: _ended(state, key, generation))
+                return dict(state='skipped')
+
+            def commit(state):
+                at = int(time.time())
+                current = _bound(state, (key, generation), at)
+                if current is None or not _hint(reset_at, at):
+                    raise _Skip()
+                snapshot = native_catalog.stored(settings_path, CLIENT)
+                bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
+                sample = claude_quota.evidence(use, snapshot['models'] if bound else [], started=started,
+                                               received=received)
+                if sample is None or not sample['meters'] and not sample['scopes_complete']:
+                    raise _Skip()
+                return _quota_change(state, (key, generation), sample, at)
+            _transition(settings_path, commit)
+            return dict(state='stored')
+    except _Skip:
+        return dict(state='skipped')
+    except (ReadError, OSError, ValueError, KeyboardInterrupt):  # a cancelled exchange has already cleaned up its child
+        return dict(state='failed')

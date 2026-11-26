@@ -207,14 +207,16 @@ expectations; the expectations are the contract.
 
 Decided by the user: the paid-overflow setting never excludes a plan. A plan
 with extra usage enabled (or unknown) still has its included quota, and it should
-be used. The only capacity rule is quota: when a plan's quota reading shows 100%
-(exhausted), its models stop being recommended until the reading resets. Below
-100%, every plan is eligible, whatever its overflow setting.
+be used. Paid overflow does not affect quota eligibility or grant spending
+authority.
 
-- This is the existing quota check, unchanged: positive, fresh exhaustion
-  excludes (`quota_exhausted`); stale or missing readings never do. Claude
-  stops at 100% of its 5-hour or 7-day window or a model-scoped limit; Go stops
-  when any of its meters is limited or at 100%.
+- The quota check excludes a route (`quota_exhausted`) only on positive, fresh
+  exhaustion evidence or an active ChatGPT pause. Claude's confirmed 5-hour
+  and 7-day windows apply to the subscription path; a recognized model-scoped
+  weekly limit applies only to matching models on that path. Claude and Go
+  meter-based exclusions may lapse before reset if the reading ages out.
+  The [balancing design](2026-11-20-subscription-usage-balancing-design.md#what-ships-today)
+  records the reader and freshness limits.
 - Work already running is not affected. The router only advises on new work, so
   the last task can finish its few remaining calls past 100%, as the user has
   observed providers allow.
@@ -244,9 +246,9 @@ share of the plan (for example at 50%).
   The error can arrive as an HTTP 429 before the stream opens, or as
   `response.failed` after streaming has begun. Detect the first through the
   `http.response` hook for the `openai` provider (clone the body before
-  reading it), and the second through OpenCode's own session error, which
-  already recognizes this code (the string is present in the OpenCode 2.2.6
-  program). The builder verifies which surface carries the code in each case.
+  reading it). The plugin also listens for OpenCode's `provider.chatgpt-limit`
+  error on `session.step.failed`. The event path is covered by synthetic tests,
+  not a live limit failure.
 - **Resume.** After a 429, the selector reads Codex once with
   `account/rateLimits/read` (zero tokens, one short process, the read the
   previous version shipped as `runtime/codex_rate_limits.py`). The mark lasts

@@ -141,7 +141,7 @@ async function fixture(body, models = listed(info()), extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["config/routes.json", "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "skills/vibe-onboard-project/SKILL.md",
+  for (const name of ["config/routes.json", "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })
@@ -749,6 +749,106 @@ test("cleanup aborts the subscription", async () => {
     for (let i = 0; i < 20 && !events.finished(); i++) await pause(25)
     assert.equal(events.finished(), true)
   } finally { await rm(f.root, { recursive: true }) }
+})
+
+// The verified provider.unknown weekly notice; its reset is 2030-01-02T10:00:00Z, inside the window from 2030-01-01.
+const claudeNotice = "You've hit your weekly limit · resets 10am (UTC) Resets at 2030-01-02T10:00:00.000Z."
+const claudeNow = Date.parse("2030-01-01T00:00:00.000Z")
+const claudeRows = [{ type: "assistant", id: "msg_1", model: { providerID: "claude-agent", id: "claude-haiku-5-5", variant: "high" } }]
+const claudeFailed = (root) => ({ id: "evt_claude_1", created: 1795132800000, type: "session.step.failed", durable: true,
+  location: { directory: root }, data: { sessionID: "ses_1", assistantMessageID: "msg_1",
+    error: { type: "provider.unknown", message: claudeNotice } } })
+const claudeLog = `import sys
+open("argv.log", "a").write(" ".join(sys.argv[1:]) + "\\n")
+open("stdin.log", "a").write(sys.stdin.read())
+print('{"state":"stored"}')
+`
+const count = async (path) => (await readFile(path, "utf8").catch(() => "")).split("\n").filter(Boolean).length
+
+test("a Claude weekly-limit failure hands only its reset to the internal probe, beside ChatGPT's branch", async () => {
+  const real = Date.now
+  Date.now = () => claudeNow
+  const events = feed()
+  const f = await fixture(claudeLog, listed(info()), { event: { subscribe: events.subscribe } })
+  try {
+    f.h.ctx.session.context = async () => claudeRows
+    assert.deepEqual(events.calls.map((opts) => opts.types), [["session.step.failed"]])
+    events.push(claudeFailed(f.root))
+    for (let i = 0; i < 50 && !(await runs(f.root)).length; i++) await pause(50)
+    assert.match((await runs(f.root))[0], /^--state-dir .* --claude-limit$/)
+    assert.equal(await readFile(join(f.root, "stdin.log"), "utf8"), '{"reset_at":1893578400}')
+    events.push(failed(limit))
+    for (let i = 0; i < 50 && (await runs(f.root)).length < 2; i++) await pause(50)
+    assert.match((await runs(f.root))[1], /--chatgpt-limit$/)
+    assert.equal((await runs(f.root)).length, 2)
+  } finally { Date.now = real; await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a Claude failure does nothing while Smart Router is off", async () => {
+  const real = Date.now
+  Date.now = () => claudeNow
+  const events = feed()
+  const f = await fixture(claudeLog, listed(info()), { event: { subscribe: events.subscribe } })
+  try {
+    await preference(f.root, false)
+    f.h.ctx.session.context = async () => claudeRows
+    events.push(claudeFailed(f.root))
+    await pause(400)
+    assert.deepEqual(await runs(f.root), [])
+  } finally { Date.now = real; await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("unloading aborts a running Claude probe, which gets SIGTERM and is not retried", async () => {
+  const real = Date.now
+  Date.now = () => claudeNow
+  const hung = `import signal, sys, time
+open("started.log", "a").write("started\\n")
+signal.signal(signal.SIGTERM, lambda *args: (open("term.log", "a").write("term\\n"), sys.exit(0)))
+time.sleep(60)
+`
+  const events = feed()
+  const f = await fixture(hung, listed(info()), { event: { subscribe: events.subscribe } })
+  try {
+    f.h.ctx.session.context = async () => claudeRows
+    events.push(claudeFailed(f.root))
+    for (let i = 0; i < 50 && !(await count(join(f.root, "started.log"))); i++) await pause(50)
+    await f.cleanup()
+    for (let i = 0; i < 50 && !(await count(join(f.root, "term.log"))); i++) await pause(50)
+    assert.equal(await count(join(f.root, "term.log")), 1)
+    await pause(300)
+    assert.equal(await count(join(f.root, "started.log")), 1)
+  } finally { Date.now = real; await rm(f.root, { recursive: true }) }
+})
+
+test("the internal probe is stopped only at 15 seconds and never retried", async () => {
+  const real = Date.now
+  const timer = globalThis.setTimeout
+  Date.now = () => claudeNow
+  let stopProbe
+  globalThis.setTimeout = (callback, ms, ...rest) => {
+    if (ms === 15000 && !stopProbe) { stopProbe = callback; return {} }
+    return timer(callback, ms, ...rest)
+  }
+  const hung = `import signal, sys, time
+open("started.log", "a").write("started\\n")
+signal.signal(signal.SIGTERM, lambda *args: (open("term.log", "a").write("term\\n"), sys.exit(0)))
+time.sleep(60)
+`
+  const events = feed()
+  const f = await fixture(hung, listed(info()), { event: { subscribe: events.subscribe } })
+  try {
+    f.h.ctx.session.context = async () => claudeRows
+    events.push(claudeFailed(f.root))
+    for (let i = 0; i < 50 && !stopProbe; i++) await pause(50)
+    assert.equal(typeof stopProbe, "function")
+    await pause(300)
+    assert.equal(await count(join(f.root, "term.log")), 0)
+    stopProbe()
+    for (let i = 0; i < 50 && !(await count(join(f.root, "term.log"))); i++) await pause(50)
+    assert.equal(await count(join(f.root, "term.log")), 1)
+    await pause(300)
+    assert.equal(await count(join(f.root, "started.log")), 1)
+  } finally { Date.now = real; globalThis.setTimeout = timer; await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
 const seatsRequest = { v: 1, seats: [{ seat: "Ada", model: "openai/gpt-x", variant: null }] }

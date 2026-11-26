@@ -2,13 +2,18 @@
 """One bounded advisory request. No launch, retry, installation or legacy state."""
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import sys
 import time
 
+# Run as a program, Python puts scripts/ first on the path, where this file would shadow the standard `select`
+# module that subprocess needs. Drop that entry only when it is first (python -I omits it), then import from the root.
+if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname(os.path.realpath(__file__)):
+    del sys.path[0]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import chatgpt_limit, council
+from runtime import chatgpt_limit, council, opencode_account
 from runtime.selector import check_setup, feedback_submit, refresh, result, select
 
 MAX_BYTES = 65536
@@ -47,6 +52,16 @@ def encode(answer):
     return data
 
 
+def claude_limit(state_dir, raw):
+    """The internal probe: `{"reset_at": <epoch seconds>}` in, only the probe's fixed state out."""
+    if len(raw) > MAX_BYTES:
+        raise ValueError()
+    request = json.loads(raw)
+    if type(request) is not dict or set(request) != {"reset_at"} or type(request["reset_at"]) is not int:
+        raise ValueError()
+    return opencode_account.probe_claude_limit(state_dir / "router.json", reset_at=request["reset_at"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", required=True)
@@ -54,6 +69,7 @@ def main():
     parser.add_argument("--allow-fetch", action="store_true")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--chatgpt-limit", action="store_true")
+    parser.add_argument("--claude-limit", action="store_true")
     parser.add_argument("--council-roster", action="store_true")
     parser.add_argument("--council-pick", action="store_true")
     parser.add_argument("--feedback", action="store_true")
@@ -66,6 +82,8 @@ def main():
         if args.chatgpt_limit:
             record = chatgpt_limit.mark(Path(args.state_dir), int(time.time()))
             answer = dict(state="marked", until=record["until"], source=record["source"])
+        elif args.claude_limit:
+            answer = claude_limit(Path(args.state_dir), sys.stdin.buffer.read(MAX_BYTES + 1))
         elif args.check_setup:
             answer = check_setup(state_dir=Path(args.state_dir), allow_fetch=args.allow_fetch)
         else:
@@ -77,8 +95,8 @@ def main():
             answer = call(json.loads(raw), state_dir=Path(args.state_dir))
         encoded = encode(answer)
     except (Exception, KeyboardInterrupt):
-        answer = dict(state="failed") if args.chatgpt_limit or args.council_roster or args.council_pick \
-            or args.feedback else \
+        answer = dict(state="failed") if args.chatgpt_limit or args.claude_limit or args.council_roster \
+            or args.council_pick or args.feedback else \
             dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
             else result("blocked", "selector_unavailable")
         encoded = (json.dumps(answer, separators=(",", ":")) + "\n").encode()
