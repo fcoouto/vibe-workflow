@@ -283,6 +283,11 @@ def _hints(source, item, now):
         return {}
 
 
+def _scope(item):
+    """The account scope a route's billing marker covers: its path, account and pool, hashable."""
+    return tuple(sorted(subscription_billing.scope(item).items()))
+
+
 def _expiry(source, item, now):
     """The route's expiry priority from its own hints, or None when it has no usable one."""
     return usage_balance.expiry_score(opencode_account.family(item), _hints(source, item, now), now=now)
@@ -313,10 +318,16 @@ def _balance(ordered, pool, qualifies):
                                          expiry=expiry)
         if [item['route'] for item in balanced] == [item['route'] for item in ordered]:
             return ordered
+        # One current marker per participating scope (path, account, pool); every candidate in a drifted scope is changed.
         current = int(time.time()) if pool['fixed'] is None else pool['fixed']
-        changed = [item['route'] for item in group
-                   if subscription_billing.marker(subscription_billing.fact(pool['source'], item, current), item,
-                                                  current) != item['account_marker']]
+        scopes = {_scope(item) for item in group}
+        returned = {}
+        for item in group:
+            if _scope(item) not in returned:
+                returned[_scope(item)] = subscription_billing.marker(
+                    subscription_billing.fact(pool['source'], item, current), item, current)
+        changed = [item['route'] for item in ordered
+                   if _scope(item) in scopes and returned[_scope(item)] != item['account_marker']]
         if not changed:
             return balanced
         pool['excluded'].extend(dict(route=route, reason='account_changed') for route in changed)

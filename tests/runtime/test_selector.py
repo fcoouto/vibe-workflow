@@ -874,15 +874,37 @@ def balance_body(*, go=(4, 20, 75), gpt=(3, 19, 78), claude=(3, 15, 76), extra=(
                 ("moonshot/kimi-x-1", 50, *go), *extra)
 
 
+SONNET_56 = "opencode-claude-subscription:claude-sonnet-5-6"
+KIMI = {n: f"opencode-go-subscription:kimi-x-{n}" for n in range(1, 7)}
+
+
+def alias_go(used):
+    """A healthy Go alias whose 5h window resets in one hour: its 5h score is (100 - used) / 20."""
+    return dict(GO_HEALTHY, **{"5h": fresh(used, 3600, 18000)})
+
+
+def alias_body():
+    """Sonnet 5-5 (price 6) is the baseline; sonnet 5-6 (6.5) and kimi 1-6 (7 to 8.25) are comparable with it."""
+    rows = [("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("openai/gpt-6-2-sol", 20, 3, 19, 78),
+            ("google/gemini-4-neon", 30, 4, 20, 61.4), ("anthropic/claude-sonnet-5-5", 40, 3, 15, 76),
+            ("anthropic/claude-sonnet-5-6", 45, 3, 17, 76)]
+    rows += [(f"moonshot/kimi-x-{n}", 50 + n, 3, 18 + n, 75) for n in range(1, 7)]
+    return body(*rows)
+
+
 class Hinted(Facts):
-    """Route-keyed ranking hints as the local source gives them; `drift` paths change account after the first read."""
+    """Route-keyed ranking hints as the local source gives them. `drift` paths change account on each route's second
+    billing read, so every alias of a drifted path is seen as changed after eligibility. `billed` logs every read."""
     def __init__(self, hints=None, *, drift=(), explode=False):
         super().__init__()
         self.hints, self.drift, self.explode, self.hint_reads = dict(hints or {}), set(drift), explode, []
+        self.billed, self.seen = [], {}
 
     def billing(self, route, now):
         found = super().billing(route, now)
-        if route["path"] in self.drift and self.reads[route["path"]] > 1:
+        self.billed.append(route["route"])
+        self.seen[route["route"]] = self.seen.get(route["route"], 0) + 1
+        if route["path"] in self.drift and self.seen[route["route"]] > 1:
             found["producer"] = "invented:changed"
         return found
 
@@ -986,6 +1008,53 @@ class BalanceTest(unittest.TestCase):
         for field in ("admission", "reservation", "spend_permit"):
             self.assertIs(result[field], False)
         self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+
+    def alias_heavy(self):
+        """Two Claude aliases share one scope, six Go aliases another. Baseline sonnet 5-5 (6); 5-6 (6.5); kimi 1-6
+        (7 to 8.25). 5h scores: kimi 1 = 2.0 up to kimi 6 = 4.0; Claude aliases 1.0. Anchor 75, bar 60."""
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("claude-agent", "claude-sonnet-5-6")]
+        models += [model("opencode-go", f"kimi-x-{n}") for n in range(1, 7)]
+        hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, SONNET_56: CLAUDE_PLAIN}
+        hints.update({KIMI[n]: alias_go(60 - 8 * (n - 1)) for n in range(1, 7)})
+        return models, hints
+
+    def test_an_alias_heavy_group_rechecks_each_scope_once_and_confirms_three(self):
+        models, hints = self.alias_heavy()
+        source = Hinted(hints)
+        phases = {}
+        real = {name: getattr(selector, name) for name in ("_balance", "_confirm")}
+
+        def measured(name):
+            def run(*args):
+                before = len(source.billed)
+                value = real[name](*args)
+                phases[name] = phases.get(name, 0) + len(source.billed) - before
+                return value
+            return run
+
+        with mock.patch.object(selector, "_balance", measured("_balance")), \
+                mock.patch.object(selector, "_confirm", measured("_confirm")):
+            result = self.select(source, models=models, raw=alias_body())
+        self.assertEqual(result["route"]["route"], KIMI[6])
+        self.assertEqual([item["route"] for item in result["alternatives"]], [KIMI[5], KIMI[4]])
+        self.assertEqual(len(source.billed) - sum(phases.values()), len(models))  # eligibility: one read per route
+        self.assertEqual(phases, {"_balance": 2, "_confirm": 3})  # one recheck per scope; three confirmed picks
+
+    def test_a_stale_baseline_beyond_the_pick_limit_is_still_excluded(self):
+        models, hints = self.alias_heavy()
+        result = self.select(Hinted(hints, drift={"opencode-claude-subscription"}), models=models, raw=alias_body())
+        self.assertEqual(result["route"]["route"], KIMI[1])
+        self.assertEqual([item["route"] for item in result["alternatives"]], [KIMI[2], KIMI[3]])
+        self.assertIn(dict(route=CLAUDE_ROUTE, reason="account_changed"), result["excluded"])
+        self.assertIn(dict(route=SONNET_56, reason="account_changed"), result["excluded"])
+
+    def test_a_drifted_scope_removes_every_changed_alias(self):
+        models, hints = self.alias_heavy()
+        result = self.select(Hinted(hints, drift={"opencode-go-subscription"}), models=models, raw=alias_body())
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertEqual([item["route"] for item in result["alternatives"]], [SONNET_56])
+        for n in range(1, 7):
+            self.assertIn(dict(route=KIMI[n], reason="account_changed"), result["excluded"])
 
 
 class ReviewBalanceTest(unittest.TestCase):
