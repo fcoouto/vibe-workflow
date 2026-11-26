@@ -1,18 +1,19 @@
 # Title Sync: catch up idle titles and show progress during a turn
 
 **Status:** draft design for findings 6 and 8, after [#404](https://github.com/fcoouto/vibe-workflow/pull/404).
-Independent design review completed. The disable-time rename tradeoff and design approval are pending.
+The earlier draft was independently reviewed. The user has since clarified task lifetime.
+The disable-time rename tradeoff and design approval are pending.
 
 ## What changes
 
 - **6 — Stale idle titles.** A successful numbered merge command in OpenCode can refresh another, idle chat's
-  title. After a restart, fix `WAITING` for runs the previous server left busy. The proposed disable cleanup
-  removes plugin prefixes, including from completed titles whose task record is gone. See the host limitation below.
+  title. After a restart, fix `WAITING` for runs the previous server left busy. Turning Title Sync off stops
+  updates. Optional prefix cleanup would cover only tasks still tracked. See the host limitation below.
 - **8 — Long turns.** An existing meter can advance between model steps as work reaches a file milestone. Git
   still decides progress and the regular turn-end check still reconciles the task.
 
-No polling, new model calls, webhooks, per-tool Git checks, or mid-turn GitHub calls for progress. Do not change
-artifact binding (finding 9), normal turn-end `gh` gating, the meter's stages, or the existing `WAITING` rules.
+No polling, new model calls, webhooks, per-tool Git checks, or mid-turn GitHub calls for progress. Keep the existing
+artifact triggers (no finding 9), normal turn-end `gh` gating, the meter's stages, and the existing `WAITING` rules.
 Like #404, this design coordinates copies within one OpenCode server. Concurrent servers writing the same
 project's titles are out of scope. Do not add a cross-process lock or persistent routing state.
 
@@ -80,34 +81,36 @@ background shells. Batch it once per owner activation if possible. If a running 
 or the host activity read fails, skip recovery for affected roots. The existing turn-boundary activity fallback
 is unchanged; it is not positive idle evidence for a new out-of-turn update.
 
+### A rename belongs to its task, not to the session
+
+Store the full active task, including its last written title and silence flag, or no record at all. Delete the
+whole record when the existing facts confirm completion, even when the final title stays as the user named it.
+Prune stale records whole through the existing bounded retention path. Keep no finished-title receipt or standalone
+silence flag. Do not add GitHub reads just to discover whether a silenced task ended.
+
+During the same task, preserve a manual rename and the existing opt-out behavior. A later write that the binder
+recognizes as a new task starts a fresh meter and topic, without carrying the old task's title or silence flag.
+For example, a distinct spec starts a new task even if the old one went silent before completion was observed.
+The old completion need not be proved again. A plan can start a task when there is no active binding. Updating
+the same spec, attaching its plan, or adopting another checkout for that plan does not reset a rename.
+Keep the existing first-meter timing: a bind does not write a title during the tool call. Do not treat a rename
+made after the new bind as belonging to the previous task.
+
 ### Turn titles off
 
-Trigger project-wide cleanup only after onboarding successfully saves an on→off change. Preview,
-cancellation, and a failed save do not touch any title. Do one project-scoped list of marked roots, including
-archived sessions, at most four pages of 50. The marker filter is a search hint; require `U+FFFB` **and** a valid
-meter prefix at the write. Strip only that prefix; keep the rest of the title byte-for-byte. List the session
-titles themselves rather than relying on task records, since five-cell titles have no record. Reject a lookalike
-without the marker or a title that was already renamed at the final read.
+With Title Sync off, a new workflow does not bind or overwrite a title. A project preference generation fences
+new title writes as soon as onboarding saves off. Preview, cancellation, and a failed save do not touch titles.
+
+**Decision pending:** leave titles as-is on disable, or attempt cleanup only for still-tracked tasks. The latter
+would use the existing bounded task records, not list historical sessions. The owner queues a final comparison
+of the current title to the exact last title it wrote. Only a match with a valid `U+FFFB` meter prefix qualifies;
+strip the prefix and preserve the topic. Completed, pruned, silenced, and renamed titles are not candidates.
 
 The [OpenCode session update API](https://opencode.ai/docs/api) has no expected-title or revision precondition.
-As with the existing meter, a manual rename between the final read and write can be overwritten. The queue
-orders plugin writes only. Disable cleanup can touch more sessions than a normal turn, so the choice is explicit.
-**Decision pending:** allow best-effort cleanup with this residual race, or defer automatic stripping until
-there is a conditional write. Do not add an unconditional bulk write or try to repair by overwriting again.
-
-Send each candidate to its current loaded owner's queue. A project preference generation fences new title
-writes as soon as off is saved; order cleanup behind writes already sent, including affected IDs even if the
-list snapshot missed their new prefix.
-If a cold copy later activates while the setting is explicitly off, run the same bounded pass for its directory.
-Recheck that the setting is still off and the title is still marked before each write. Re-enable, a move, or
-unload invalidates queued cleanup. On `session.moved` within the disabled project, the destination owner queues
-one targeted cleanup check for that session, even if its earlier project scan already passed it. No new scan.
-Preserve any live task. After a successful strip, remember the exact bare
-title with its task so the next ordinary evaluation after re-enable may resume the meter only if the title
-still matches. Do not clear a stored user opt-out. If the title changed while off, or saving the cleanup
-state failed, fall back to respecting the unmarked title. Finished sessions need no new record.
-Partial cleanup is best effort, does not undo a saved preference, and must not be reported as clearing all
-titles. Direct settings-file edits and uninstall do not trigger a project-wide cleanup.
+A manual rename between that final read and write can still be overwritten. If best effort is approved, order
+the cleanup behind plugin writes already sent, invalidate it on re-enable or unload, and let the destination
+owner retry once on a move within the disabled project. Preserve any live binding and do not treat a title
+stripped by the plugin as a manual rename. Never repair a mismatch with a second title write.
 
 ## 8. Advance an existing meter between steps
 
@@ -143,24 +146,25 @@ files touched.
   matching PR and no write on an unknown PR, wrong repository with the same number, nonzero exit, queued merge,
   implicit merge followed by a branch switch, or disabled/moved/silenced target. Check cleanup on and off,
   folder removal, and a cold owner. Verify the one-lookup budget and that unrelated turns did not change.
-- **Startup and disable:** persisted old busy timestamp versus a current or idle run, with a running child
-  and a running background shell that predates owner activation. Verify one bounded list, zero GitHub calls,
-  a completed and archived title without a record, an unmarked lookalike, preserved user topics and opt-outs,
-  and concurrent enable, move, close, and in-flight writes. On re-enable, a live task resumes only if the bare
-  title was not changed while off. A scan failure leaves the preference saved.
+- **Startup and binding:** persisted old busy timestamp versus a current or idle run, with a running child
+  and a running background shell that predates owner activation. Verify one bounded list and zero GitHub calls.
+  Check that a same-task plan preserves a rename, a distinct spec resets it, and completion and pruning leave
+  no title or silence receipt. A rename after the new bind stays with the new task.
+- **Disable:** a new workflow does not bind or change a title. If cleanup is approved, verify exact title matching
+  with active records, no writes to completed or pruned records, and enable, move, close, and in-flight write races.
 - **Progress:** two loader copies; root, descendant, and unrelated sessions; duplicate and multi-file steps;
   newly edited plan; reverted files; an untracked file; repeated hints; lost folder; and a title currently
   showing `WAITING`. Check local-read bounds and no mid-turn `gh` or first-title write. Check normal turn-end
   fallback and unchanged-turn storage behavior.
 - **Native qualification before acceptance:** use a fresh private OpenCode lab and a local `gh` shim. Cover
-  owner routing and worktree-removal delivery; project/directory list filters, including archived roots;
+  owner routing and worktree-removal delivery; exact-directory listing for startup recovery;
   restart/disable; and a meter advancing before a root finishes, with root and descendant changes. Prefer
   model-free checks for list, restart, removal, and settings behavior. Any additional live model turn requires
   separate authorization. Report untested host behavior as unverified.
 
 If a host capability is missing or fails qualification, do not ship the corresponding write path or claim
-its finding fixed. Shared routing is a gate for cross-copy merge and disable writes. Scoped listing and archived
-coverage are gates for project-wide disable cleanup. Positive activity evidence is a gate for recovery.
+its finding fixed. Shared routing is a gate for cross-copy merge and any disable writes. Scoped listing and
+positive activity evidence are gates for recovery.
 Worktree-removal delivery is optional: without it, retry only on owner activation or the next turn.
 The mid-turn progress path has its own proof and may ship separately. Bring any scope reduction back for approval.
 
