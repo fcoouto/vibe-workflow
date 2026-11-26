@@ -488,3 +488,142 @@ test("a worktree copy never turns session_titles on at the project path", async 
   const main = await create(linked, "session_titles", { atProject: true }).inspect()
   assert.deepEqual([main.root, main.state], [root, "not_onboarded"])
 })
+
+async function linkedFixture(t, mainValue) {
+  const f = await fixture(t)
+  gitIn(f.root, "init", "-q")
+  gitIn(f.root, "commit", "--allow-empty", "-qm", "fixture")
+  if (mainValue) await f.write(mainValue)
+  const linked = join(f.root, "linked")
+  gitIn(f.root, "worktree", "add", "-q", "--detach", linked)
+  const own = join(linked, ".vibe-workflow", "settings.json")
+  return { ...f, linked, own, mainBytes: () => readFile(f.path, "utf8"),
+    async writeOwn(value) { await mkdir(join(linked, ".vibe-workflow"), { recursive: true }); await writeFile(own, JSON.stringify(value)) },
+    saving: (feature) => f.create(linked, feature, { worktree: true }) }
+}
+const git3 = { git_workflow: { enabled: true, agent_merge: true, worktree_cleanup: false } }
+
+test("worktree mode saves only the worktree file", async (t) => {
+  const { saving, own, path, mainBytes } = await linkedFixture(t, { version: 1, features: [git3] })
+  const before = await mainBytes()
+  const preview = await saving("smart_router").preview()
+  assert.equal((await saving("smart_router").apply(true, preview.snapshot)).state, "saved")
+  assert.equal(await mainBytes(), before)
+  assert.equal(JSON.parse(await readFile(own, "utf8")).features.length, 2)
+  assert.equal(path === own, false)
+})
+
+test("worktree mode seeds from main and shows main's values as current", async (t) => {
+  const { saving, own } = await linkedFixture(t, { version: 1, features: [git3, { session_titles: { enabled: true } }] })
+  const preview = await saving("smart_router").preview()
+  assert.deepEqual([preview.previous_enabled, preview.change], [null, "create"])
+  assert.equal((await saving("smart_router").apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [git3, { session_titles: { enabled: true } }, { smart_router: { enabled: true } }])
+})
+
+test("worktree mode materializes main's choices when the checkout has no file, even for an unchanged answer", async (t) => {
+  const { saving, own, create, linked } = await linkedFixture(t, { version: 1, features: [{ session_titles: { enabled: true } }] })
+  assert.equal((await create(linked, "session_titles").inspect()).state, "not_onboarded")
+  const project = saving("session_titles"), preview = await project.preview(true)
+  assert.deepEqual([preview.previous_enabled, preview.change], [true, "create"])
+  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [{ session_titles: { enabled: true } }])
+  assert.equal((await saving("session_titles").preview(true)).change, "none")
+  assert.equal((await create(linked, "session_titles").inspect()).state, "on")
+})
+
+test("worktree mode completes a partial worktree file with main's entries", async (t) => {
+  const { saving, own, writeOwn } = await linkedFixture(t, { version: 1, features: [git3, { session_titles: { enabled: true } }] })
+  await writeOwn({ version: 1, features: [{ smart_router: { enabled: true } }] })
+  const project = saving("git_workflow"), preview = await project.preview({ enabled: true, agent_merge: false, worktree_cleanup: true })
+  assert.equal((await project.apply({ enabled: true, agent_merge: false, worktree_cleanup: true }, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(own, "utf8")).features, [
+    { git_workflow: { enabled: true, agent_merge: false, worktree_cleanup: true } },
+    { session_titles: { enabled: true } }, { smart_router: { enabled: true } }])
+})
+
+test("worktree mode keeps unknown entries and top-level keys from both files, the worktree winning a clash", async (t) => {
+  const { saving, own, writeOwn } = await linkedFixture(t, { version: 1, top: "main", only_main: 1,
+    features: [{ a: { x: 1 } }, { shared: { from: "main" } }] })
+  await writeOwn({ version: 1, top: "own", features: [{ shared: { from: "own" } }, { b: { y: 2 } }] })
+  const preview = await saving("session_titles").preview()
+  assert.equal((await saving("session_titles").apply(true, preview.snapshot)).state, "saved")
+  const written = JSON.parse(await readFile(own, "utf8"))
+  assert.deepEqual([written.top, written.only_main], ["own", 1])
+  assert.deepEqual(written.features, [{ a: { x: 1 } }, { shared: { from: "own" } }, { b: { y: 2 } }, { session_titles: { enabled: true } }])
+})
+
+test("worktree mode snapshot covers main's file", async (t) => {
+  const { saving, write, own } = await linkedFixture(t, { version: 1, features: [git3] })
+  const preview = await saving("smart_router").preview()
+  await write({ version: 1, features: [git3], later: true })
+  assert.equal((await saving("smart_router").apply(true, preview.snapshot)).reason, "project_settings_changed")
+  await assert.rejects(stat(own), { code: "ENOENT" })
+  const fresh = await saving("smart_router").preview()
+  assert.equal((await saving("smart_router").apply(true, fresh.snapshot)).state, "saved")
+})
+
+test("worktree mode inherits main-only metadata without widening its file access", async (t) => {
+  for (const [existing, sourceMode] of [[false, 0o600], [false, 0o644], [true, 0o640]]) {
+    const router = { smart_router: { enabled: true } }
+    const { saving, own, path, folder, writeOwn } = await linkedFixture(t, { version: 1, features: [router], extra: "keep" })
+    await chmod(folder, 0o700)
+    await chmod(path, sourceMode)
+    if (existing) {
+      await writeOwn({ version: 1, features: [router] })
+      await chmod(own, 0o644)
+    }
+    const project = saving("smart_router")
+    const preview = await project.preview(true)
+    assert.equal(preview.change, existing ? "update" : "create")
+    assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+    assert.equal((await stat(own)).mode & 0o777, 0o600)
+    assert.equal(JSON.parse(await readFile(own, "utf8")).extra, "keep")
+  }
+})
+
+test("worktree mode detects a source permission change after preview", async (t) => {
+  const { saving, own, path } = await linkedFixture(t, { version: 1, features: [git3] })
+  const project = saving("smart_router"), preview = await project.preview()
+  const mode = (await stat(path)).mode & 0o777
+  await chmod(path, mode === 0o600 ? 0o644 : 0o600)
+  assert.equal((await project.apply(true, preview.snapshot)).reason, "project_settings_changed")
+  await assert.rejects(stat(own), { code: "ENOENT" })
+})
+
+test("worktree mode blocks an invalid main file and writes nothing", async (t) => {
+  const { saving, own } = await linkedFixture(t, "{ not json")
+  const preview = await saving("smart_router").preview()
+  assert.deepEqual([preview.state, preview.reason], ["blocked", "project_settings_invalid"])
+  assert.equal((await saving("smart_router").apply(true, "0".repeat(64))).state, "blocked")
+  await assert.rejects(stat(own), { code: "ENOENT" })
+})
+
+test("worktree mode in a primary checkout saves at its root with no overlay", async (t) => {
+  const { root, create, path } = await fixture(t)
+  gitIn(root, "init", "-q")
+  const project = create(root, "smart_router", { worktree: true }), preview = await project.preview()
+  assert.equal(preview.change, "create")
+  assert.equal((await project.apply(true, preview.snapshot)).state, "saved")
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")).features, [{ smart_router: { enabled: true } }])
+})
+
+test("worktree mode saves in place outside git and in an unresolved linked worktree", async (t) => {
+  const { root, create } = await fixture(t)
+  const plain = join(root, "plain")
+  await mkdir(plain)
+  const p = create(plain, "smart_router", { worktree: true }), plainPreview = await p.preview()
+  assert.equal((await p.apply(true, plainPreview.snapshot)).state, "saved")
+  const bare = join(root, "bare.git"), linked = join(root, "linked")
+  execFileSync("git", ["init", "-q", "--bare", bare], { stdio: "pipe" })
+  execFileSync("git", ["-C", bare, "worktree", "add", "-q", "--orphan", "-b", "main", linked], { stdio: "pipe" })
+  const q = create(linked, "git_workflow", { worktree: true }), preview = await q.preview()
+  assert.equal(preview.state, "preview")
+  assert.equal((await q.apply({ enabled: true, agent_merge: false, worktree_cleanup: false }, preview.snapshot)).state, "saved")
+  assert.equal((await stat(join(linked, ".vibe-workflow", "settings.json"))).isFile(), true)
+})
+
+test("worktree with atProject throws unsupported options", async (t) => {
+  const { create, root } = await fixture(t)
+  assert.throws(() => create(root, "smart_router", { worktree: true, atProject: true }), /unsupported options/)
+})

@@ -536,27 +536,31 @@ export default {
       },
     }))
     const gitWorkflow = createProjectSettings(directory, "git_workflow", { atProject: true })
-    const sessionTitles = createProjectSettings(directory, "session_titles", { atProject: true })
+    const sessionTitles = createProjectSettings(directory, "session_titles")
+    // Onboarding saves at this checkout's root, seeded from main's file; the read instances above stay as they are.
+    const saving = (feature) => createProjectSettings(directory, feature, { worktree: true })
+    const savingRouter = saving("smart_router")
     const onboarded = async () => (await Promise.all([inspectRouter(), gitWorkflow.inspect(), sessionTitles.inspect()]))
       .some(({ state }) => state === "on" || state === "off")
     const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
       primary: async () => (await gitWorkflow.inspect()).project ?? null })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
-    await registerOnboarding(ctx, { smart_router: { ...project, inspect: inspectRouter,
+    await registerOnboarding(ctx, { smart_router: { ...savingRouter, inspect: inspectRouter,
       // A preview reports the saved state as previous_enabled; false means the router was off when it was read.
       async preview(...args) {
-        const result = await project.preview(...args)
+        const result = await savingRouter.preview(...args)
         if (result.previous_enabled === false) forgetOff()
         return result
       },
       async apply(...args) {
-      const result = await project.apply(...args)
+      const result = await savingRouter.apply(...args)
       if (result.enabled === false) forgetOff()
       return result
-    } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
+    } }, git_workflow: saving("git_workflow"), session_titles: saving("session_titles") }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
     () => advice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
-    () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })
+    () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" },
+    () => gitWorkflow.inspect())
     await registerSkill(ctx, "vibe-prepare-my-workspace")
     await registerSkill(ctx, "vibe-pull-requests")
     await registerCouncil(ctx, { roster: createRoster({ models: ctx.model ? models : async () => [], providers,

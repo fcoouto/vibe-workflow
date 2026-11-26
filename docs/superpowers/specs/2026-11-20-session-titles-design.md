@@ -188,7 +188,8 @@ project, removed afterwards:
 
 - A `session_titles` feature, `{"session_titles": {"enabled": true}}`, written by
   onboarding at the main project path, like `git_workflow`. Not onboarded or off means
-  no hooks do any work.
+  no hooks do any work. Update 2026-11-23: onboarding writes it at the session's checkout
+  root and the hooks read that checkout's own file (`2026-11-23-onboarding-in-worktree-design.md`).
 - Onboarding asks one more question, always (not tied to the git workflow answers),
   after the existing ones; the procedure's "up to four questions" becomes five. It
   recommends "on" (the setting itself stays off until answered). Its copy follows the
