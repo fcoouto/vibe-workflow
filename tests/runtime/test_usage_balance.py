@@ -274,5 +274,81 @@ class UsageBalanceTest(unittest.TestCase):
                                                 SCOPE: dict(meter(big, 144, 168))}), 3.75)
 
 
+def batch(earliest, latest, *, used=30, meters=True):
+    found = {'7d': dict(used_percent=used, earliest=earliest, latest=latest, reset_at=NOW + 72 * HOUR,
+                        duration=168 * HOUR, discrete=True)} if meters else {}
+    return dict(earliest=earliest, latest=latest, meters=found)
+
+
+class BatchTest(unittest.TestCase):
+    """One provider's ranking batch: a newer reply replaces it, a provably older one changes nothing, and an
+    overlapping one keeps only the combined interval. Stored meters are validated again on every read."""
+
+    def test_first_reply_publishes_its_meters(self):
+        published = usage_balance.batch_after(None, earliest=NOW - 60, latest=NOW,
+                                              meters=batch(NOW - 60, NOW)['meters'])
+        self.assertEqual(published, batch(NOW - 60, NOW))
+
+    def test_strictly_newer_reply_replaces_the_batch_even_without_meters(self):
+        previous = batch(NOW - 60, NOW)
+        for meters in (batch(NOW + 1, NOW + 2)['meters'], {}):
+            with self.subTest(meters=bool(meters)):
+                replaced = usage_balance.batch_after(previous, earliest=NOW + 1, latest=NOW + 2, meters=meters)
+                self.assertEqual(replaced, dict(earliest=NOW + 1, latest=NOW + 2, meters=meters))
+
+    def test_provably_older_reply_changes_nothing(self):
+        previous = batch(NOW - 60, NOW)
+        older = usage_balance.batch_after(previous, earliest=NOW - 400, latest=NOW - 61, meters={})
+        self.assertEqual(older, previous)
+
+    def test_overlapping_reply_discards_meters_and_keeps_the_combined_interval(self):
+        previous = batch(NOW - 60, NOW)
+        for earliest, latest in ((NOW, NOW + 30), (NOW - 30, NOW + 30), (NOW - 90, NOW - 60)):
+            with self.subTest(earliest=earliest, latest=latest):
+                merged = usage_balance.batch_after(previous, earliest=earliest, latest=latest,
+                                                   meters=batch(earliest, latest)['meters'])
+                self.assertEqual(merged, dict(earliest=min(NOW - 60, earliest), latest=max(NOW, latest), meters={}))
+
+    def test_equal_boundary_is_overlap_not_newer(self):
+        previous = batch(NOW - 60, NOW)
+        merged = usage_balance.batch_after(previous, earliest=NOW, latest=NOW + 1, meters={})
+        self.assertEqual(merged['meters'], {})
+        self.assertEqual(merged['latest'], NOW + 1)
+
+    def test_corrupt_stored_batch_is_treated_as_absent(self):
+        for previous in ('bad', dict(earliest='x', latest=NOW, meters={}), dict(earliest=NOW, latest=NOW - 1,
+                                                                                 meters={}),
+                         dict(earliest=NOW - 60, latest=NOW, meters={}, extra=True)):
+            with self.subTest(previous=previous):
+                replaced = usage_balance.batch_after(previous, earliest=NOW + 5, latest=NOW + 6, meters={})
+                self.assertEqual(replaced, dict(earliest=NOW + 5, latest=NOW + 6, meters={}))
+
+    def test_batch_inputs_are_not_mutated(self):
+        previous = batch(NOW - 60, NOW)
+        meters = batch(NOW - 30, NOW + 30)['meters']
+        before = copy.deepcopy((previous, meters))
+        usage_balance.batch_after(previous, earliest=NOW - 30, latest=NOW + 30, meters=meters)
+        self.assertEqual((previous, meters), before)
+
+    def test_stored_meters_are_rechecked_alone_on_read(self):
+        stored = dict(earliest=NOW - 60, latest=NOW, meters={
+            '7d': dict(used_percent=40, earliest=NOW - 60, latest=NOW, reset_at=NOW + 3600, duration=604800,
+                       discrete=True),
+            '5h': dict(used_percent='bad', earliest=NOW - 60, latest=NOW, reset_at=NOW + 3600, duration=18000,
+                       discrete=True),
+            'family:opus': dict(used_percent=10, earliest=NOW - 60, latest=NOW, reset_at=NOW + 3600,
+                                duration=604800, discrete=True, raw='response'),
+            'monthly': dict(used_percent=10, earliest=NOW - 60, latest=NOW, reset_at=NOW + 3600, duration=None,
+                            discrete=True),
+        })
+        kept = usage_balance.batch_meters(stored, now=NOW, keep=lambda key: key in ('7d', 'family:opus', '5h'))
+        self.assertEqual(sorted(kept), ['7d'])
+        self.assertEqual(usage_balance.batch_meters(stored, now=NOW + 900, keep=lambda key: True), {})
+        self.assertEqual(usage_balance.batch_meters('bad', now=NOW, keep=lambda key: True), {})
+        self.assertEqual(usage_balance.batch_meters(dict(stored, extra=1), now=NOW, keep=lambda key: True), {})
+        kept['7d']['used_percent'] = 99
+        self.assertEqual(stored['meters']['7d']['used_percent'], 40)
+
+
 if __name__ == '__main__':
     unittest.main()

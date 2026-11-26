@@ -35,6 +35,15 @@ class LocalSource:
         stored = _read(window_path(self.settings_path)) if stored is None else stored
         return [dict(value, id=key) for key, value in stored.get('pools', {}).get(pool, {}).items()]
 
+    def ranking_meters(self, route, now):
+        """Ranking hints of one kept candidate, bound to its `account_marker`. Only ranking reads them: a lost or
+        corrupt hint is dropped here and never becomes a pick, a pause or a refusal."""
+        from runtime import opencode_account
+        try:
+            return opencode_account.ranking_meters(self.settings_path, route, now, marker=route.get('account_marker'))
+        except Exception:
+            return {}
+
 PAID = {'provider_blocked': 'blocked', 'provider_managed': 'enabled', 'unknown': 'unknown'}
 REFUSALS = ('quota_exhausted', 'billing_unverified')
 

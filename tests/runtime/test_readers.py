@@ -636,6 +636,197 @@ class ReaderTest(unittest.TestCase):
         with self.assertRaisesRegex(self.openc.ReadError, "opencode_go_workspace_mismatch"):
             self.openc._go(found, dict(data=[dict(id="opencode-go", headers={"x-opencode-org-id": "other"})]))
 
+    def claude_sample(self, at, percent, *, five=None, scoped=None):
+        """One Claude usage reply received at `at`: `7d` at `percent`, `5h` at 20 unless `five` replaces it."""
+        rate = self.data["usage"]["rate_limits"]
+        rate["five_hour"] = five if five is not None else dict(utilization=20, resets_at=iso(self.now + 3600))
+        rate["seven_day"] = dict(utilization=percent, resets_at=iso(at + 86400))
+        rate["limits"] = []
+        rate["model_scoped"] = [] if scoped is None else [
+            dict(display_name="Invented", utilization=scoped, resets_at=iso(at + 86400))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=at):
+            return self.refresh(need=(), force=True)
+
+    def claude_hints(self, at, *, model="invented", native=None):
+        current = self.native.account(self.settings, at)
+        native = self.openc._native(current) if native is None else native
+        return self.native.ranking_meters(self.settings, dict(self.route, model=model), at, native=native)
+
+    def go_hints(self, at, *, route=None):
+        route = self.go_route if route is None else route
+        subscription_billing = importlib.import_module("runtime.subscription_billing")
+        marker = subscription_billing.marker(self.openc.billing_fact(self.settings, route, at), route, at)
+        return self.observations.LocalSource(self.settings).ranking_meters(dict(route, account_marker=marker), at)
+
+    def ranking_store(self, path):
+        return json.loads(path.read_text())
+
+    def test_claude_hints_keep_bound_windows_with_discrete_durations(self):
+        self.assertEqual(self.claude_sample(self.now, 30)["state"], "stored")
+        hints = self.claude_hints(self.now)
+        self.assertEqual((hints["7d"]["used_percent"], hints["5h"]["used_percent"]), (30, 20))
+        self.assertEqual(hints["7d"]["earliest"], self.now - 60)
+        self.assertEqual((hints["5h"]["duration"], hints["7d"]["duration"]), (18_000, 604_800))
+        self.assertTrue(all(hints[key]["discrete"] is True for key in ("5h", "7d")))
+
+    def test_malformed_five_hour_keeps_the_valid_sibling_of_a_newer_reply(self):
+        self.claude_sample(self.now, 30)
+        result = self.claude_sample(self.now + 120, 40, five=dict(utilization="bad", resets_at=iso(self.now + 3600)))
+        self.assertEqual(result["reason"], "claude_usage_invalid")
+        hints = self.claude_hints(self.now + 120)
+        self.assertEqual(hints["7d"]["used_percent"], 40)
+        self.assertNotIn("5h", hints)
+
+    def test_overlapping_low_headroom_reply_drops_hints_until_a_later_reply(self):
+        t1 = self.now
+        self.claude_sample(t1, 100)
+        native = self.openc._native(self.native.account(self.settings, t1))
+        self.assertEqual(self.claude_hints(t1)["7d"]["used_percent"], 100)
+        self.claude_sample(t1 + 30, 90)  # its earliest, t1 - 30, does not start after the batch's latest
+        self.assertEqual(self.claude_hints(t1 + 30), {})
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, t1 + 30, native=native),
+                         86400 - 30)  # the existing pause is not a ranking decision
+        self.claude_sample(t1 - 400, 10)  # a delayed, provably older reply restores nothing
+        self.assertEqual(self.claude_hints(t1 + 30), {})
+        self.claude_sample(t1 + 200, 94)
+        self.assertEqual(self.claude_hints(t1 + 200)["7d"]["used_percent"], 94)
+
+    def test_scoped_hint_follows_only_the_route_its_bound_catalog_covers(self):
+        self.claude_sample(self.now, 30, scoped=40)
+        self.assertIn("family:invented", self.claude_hints(self.now))
+        self.assertNotIn("family:invented", self.claude_hints(self.now, model="another-family"))
+        native_catalog = importlib.import_module("runtime.native_catalog")
+        with mock.patch.object(native_catalog, "stored", return_value=None):
+            self.assertNotIn("family:invented", self.claude_hints(self.now))
+        other = self.claude_hints(self.now, native="0" * 32)
+        self.assertEqual(other, {})
+
+    def test_cached_claude_hints_hold_only_meter_fields(self):
+        self.claude_sample(self.now, 30, scoped=40)
+        stored = self.ranking_store(self.native._store(self.settings))["quota"]["ranking"]
+        self.assertEqual(set(stored), {"earliest", "latest", "meters"})
+        for meter in stored["meters"].values():
+            self.assertEqual(set(meter), {"used_percent", "earliest", "latest", "reset_at", "duration", "discrete"})
+        self.assertNotIn("invented@example.invalid", json.dumps(stored))
+
+    def test_corrupt_stored_claude_hints_are_dropped_alone(self):
+        self.claude_sample(self.now, 30)
+        current = self.native.account(self.settings, self.now)
+        fields = dict(earliest=self.now - 60, latest=self.now, reset_at=self.now + 86400, duration=604800,
+                      discrete=True)
+        batch = dict(earliest=self.now - 60, latest=self.now, meters={
+            "7d": dict(fields, used_percent=30),
+            "5h": dict(fields, used_percent="bad", duration=18_000),
+            "bogus": dict(fields, used_percent=30),
+        })
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record=None, ranking=batch))
+        self.assertEqual(sorted(self.claude_hints(self.now)), ["7d"])
+
+    def test_claude_probe_weak_reply_replaces_the_batch_but_keeps_its_skip(self):
+        self.baseline()
+        before = self.quota_state()
+        rate = self.data["usage"]["rate_limits"]
+        self.data["usage"].update(rate_limits=dict(rate, five_hour=None, seven_day=None,
+                                                   limits=[dict(kind="unknown_kind", scope=None)]))
+        self.write(self.data)
+        self.assertIn("7d", before["ranking"]["meters"])
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        after = self.quota_state()
+        self.assertEqual(after["record"], before["record"])
+        self.assertEqual(after["ranking"]["meters"], {})
+
+    def test_claude_probe_publishes_its_reply_as_the_ranking_batch(self):
+        self.baseline()
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        hints = self.claude_hints(self.now)
+        self.assertEqual(hints["7d"]["used_percent"], 100)
+        self.assertNotIn("5h", hints)
+
+    def test_unavailable_claude_transport_renews_no_hint(self):
+        self.claude_sample(self.now, 30)
+        before = self.quota_state()["ranking"]
+        self.write(dict(mode="hang"))
+        self.assertEqual(self.refresh(timeout=0.1, force=True, need=())["reason"], "claude_timeout")
+        self.assertEqual(self.quota_state()["ranking"], before)
+
+    def test_go_hints_map_windows_and_count_rate_limited_as_full(self):
+        reset = self.now + 86400 * 3
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go", usage={
+                "rolling": go_meter(self.now + 3600, 20),
+                "weekly": go_meter(reset, 80, "rate-limited"),
+                "monthly": go_meter(self.now + 86400 * 10, 50),
+            })["state"], "stored")
+        hints = self.go_hints(self.now)
+        self.assertEqual((hints["5h"]["used_percent"], hints["7d"]["used_percent"], hints["monthly"]["used_percent"]),
+                         (20, 100, 50))
+        self.assertEqual((hints["5h"]["duration"], hints["5h"]["discrete"]), (18_000, True))
+        self.assertEqual(hints["7d"]["duration"], 604_800)
+        self.assertIsNone(hints["monthly"]["duration"])
+        self.assertEqual((hints["7d"]["earliest"], hints["7d"]["latest"]), (self.now, self.now))
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+
+    def test_go_hints_stop_after_a_key_change_and_keep_no_raw_response(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go")
+        old = self.go_hints(self.now)
+        self.assertIn("5h", old)
+        subscription_billing = importlib.import_module("runtime.subscription_billing")
+        marker = subscription_billing.marker(self.openc.billing_fact(self.settings, self.go_route, self.now),
+                                             self.go_route, self.now)
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={}, key="NEXT-KEY-SENTINEL", force=True)
+        source = self.observations.LocalSource(self.settings)
+        self.assertEqual(source.ranking_meters(dict(self.go_route, account_marker=marker), self.now), {})
+        stored = self.ranking_store(self.openc._store(self.settings))["go"]["go_quota"]["ranking"]
+        self.assertNotIn("NEXT-KEY-SENTINEL", json.dumps(stored))
+        self.assertNotIn("CREDENTIAL-SENTINEL", json.dumps(stored))
+
+    def test_same_second_go_sample_drops_hints_and_a_later_one_restores_them(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"rolling": go_meter(self.now + 3600, 20)})
+            self.opencode("go", force=True, usage={"rolling": go_meter(self.now + 3600, 60)})
+        self.assertEqual(self.go_hints(self.now), {})
+        later = self.now + 1
+        with mock.patch("time.time", return_value=later):
+            self.opencode("go", force=True, usage={"rolling": go_meter(self.now + 3600, 94)})
+        self.assertEqual(self.go_hints(later)["5h"]["used_percent"], 94)
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", force=True, usage={"rolling": go_meter(self.now + 3600, 10)})
+        self.assertEqual(self.go_hints(later)["5h"]["used_percent"], 94)
+
+    def test_same_second_healthy_go_sample_keeps_the_pause_and_drops_the_hint(self):
+        reset = self.now + 800
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"weekly": go_meter(reset, 80, "rate-limited")})
+            self.assertEqual(self.go_hints(self.now)["7d"]["used_percent"], 100)
+            self.opencode("go", force=True, usage={"weekly": go_meter(reset, 20)})
+        self.assertEqual(self.go_hints(self.now), {})
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+
+    def test_unavailable_go_transport_renews_no_hint(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go")
+        before = self.go_hints(self.now)
+        with mock.patch("time.time", return_value=self.now + 1), \
+                mock.patch.object(self.openc, "_go_request", create=True, return_value=None):
+            self.openc.refresh(self.settings, families=("go",), force=True, command=self.command, environ=self.environ)
+        self.assertEqual(self.go_hints(self.now + 1), before)
+
+    def test_ranking_reads_start_no_exchange_or_provider_request(self):
+        self.claude_sample(self.now, 30)
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go")
+        with mock.patch.object(self.native, "exchange", side_effect=AssertionError("no native read")), \
+                mock.patch.object(self.openc, "_go_request", create=True, side_effect=AssertionError("no request")):
+            self.assertIn("7d", self.claude_hints(self.now))
+            self.assertIn("5h", self.go_hints(self.now))
+
     def test_invalid_idle_and_unmodeled_limits_are_not_accepted(self):
         for meter in (dict(utilization=True, resets_at=None), dict(utilization=1, resets_at=None),
                       dict(utilization=0), dict(resets_at=None)):
@@ -985,7 +1176,8 @@ class ReaderTest(unittest.TestCase):
                 self.write(self.data)
                 with mock.patch("time.time", return_value=self.now):
                     self.assertEqual(self.probe(), dict(state="skipped"))
-                self.assertEqual(self.quota_state(), before)
+                # A recognized but unusable reply may replace the ranking batch; the exhaustion record never changes.
+                self.assertEqual(self.quota_state()["record"], before["record"])
                 self.data["usage"].update(rate_limits_available=True, rate_limits=rate)
 
     def test_probe_refuses_relative_symlinked_and_malformed_private_state(self):

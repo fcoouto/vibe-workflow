@@ -5,7 +5,11 @@ window. Only a fresh, verified 5-hour or weekly window with a discrete reset ear
 earliest time. Headroom, pace and expected longer siblings suppress a boost. Reordering moves only the slots of
 comparable, known candidates, and only when one from another subscription clears the minimum gain. Inputs are never
 mutated. Account binding, storage and selection belong to the caller.
+
+A provider's stored ranking batch holds the meters of its latest recognized usage reply and the interval they span.
+`batch_after` applies the one interval rule every provider shares; `batch_meters` re-checks a stored batch on read.
 """
+import copy
 import math
 import re
 
@@ -95,6 +99,35 @@ def _recognized(key):
 def _valid(key, value, now):
     """A fresh reading whose purported length matches its 5h or 7d key; anything else is unknown by itself."""
     return fresh_meter(value, now=now) and (key not in LENGTHS or value['duration'] in (None, LENGTHS[key]))
+
+
+def _batch_shape(value):
+    return type(value) is dict and set(value) == {'earliest', 'latest', 'meters'} and type(value['meters']) is dict \
+        and _safe_int(value['earliest']) and _safe_int(value['latest']) and 0 <= value['earliest'] <= value['latest']
+
+
+def batch_after(previous, *, earliest, latest, meters):
+    """The ranking batch after one recognized usage reply spanning `earliest` to `latest` (epoch seconds) with `meters`.
+
+    A reply that starts strictly after the stored batch's latest replaces it, even with no valid meters. A reply that
+    ends before the stored batch's earliest is provably older and changes nothing. Any other reply overlaps: its meters
+    are discarded, and the combined interval becomes the boundary that a later reply must clear. A malformed stored
+    batch counts as absent. Inputs are never mutated."""
+    old = previous if _batch_shape(previous) else None
+    if old is None or earliest > old['latest']:
+        return dict(earliest=earliest, latest=latest, meters=copy.deepcopy(meters))
+    if latest < old['earliest']:
+        return copy.deepcopy(old)
+    return dict(earliest=min(old['earliest'], earliest), latest=max(old['latest'], latest), meters={})
+
+
+def batch_meters(batch, *, now, keep):
+    """The fresh, well-formed meters of a stored batch whose key `keep` accepts; a malformed or stale meter is dropped
+    alone, and a malformed batch yields none. The result is a copy."""
+    if not _batch_shape(batch):
+        return {}
+    return {key: copy.deepcopy(value) for key, value in batch['meters'].items()
+            if keep(key) and fresh_meter(value, now=now)}
 
 
 def _missing_sibling(key, fresh, siblings):

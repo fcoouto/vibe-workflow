@@ -39,7 +39,7 @@ import tempfile
 import time
 
 from runtime import chatgpt_limit, claude_usage, continuity, processes as lifecycle, routing, \
-    routing_observations as observations, routing_paths, storage, subscription_billing
+    routing_observations as observations, routing_paths, storage, subscription_billing, usage_balance
 
 PATHS = dict(claude='opencode-claude-subscription', chatgpt='opencode-chatgpt-subscription',
              go='opencode-go-subscription')
@@ -304,14 +304,34 @@ def _go_meter(name, meter, observed_at):
     return entry if _go_valid(name, entry) else None
 
 
+GO_RANKING = ('5h', '7d', 'monthly')  # Go's rolling and weekly windows, aliased to the account windows
+GO_ALIAS = dict(rolling='5h', weekly='7d')
+
+
+def _go_hint(name, meter, entry, started):
+    """The ranking meter of one Go row already validated as `entry` (the same parse); `rate-limited` counts as full."""
+    return GO_ALIAS.get(name, name), dict(
+        used_percent=100 if entry['exhausted'] else meter['percent'], earliest=started, latest=entry['observed_at'],
+        reset_at=entry['reset_at'], duration=None if name == 'monthly' else GO_WINDOWS[name], discrete=True)
+
+
 def _go_sample(key, deadline):
+    """`(started, exhaustion meters, ranking)` of one provider read. `ranking` is `(received, hints)` only for a usage
+    object, so a failed transport renews no ranking batch; `started` is stamped before the request."""
     started = int(time.time())
     answer = _go_request(key, deadline)
     received = int(time.time())
     usage = answer.get('usage') if type(answer) is dict else None
-    return started, {name: entry for name in GO_WINDOWS
-                     if (entry := _go_meter(name, usage.get(name), received)) is not None} \
-        if type(usage) is dict and 0 <= started <= received else {}
+    if type(usage) is not dict or not 0 <= started <= received:
+        return started, {}, None
+    meters, hints = {}, {}
+    for name in GO_WINDOWS:
+        entry = _go_meter(name, usage.get(name), received)
+        if entry is not None:
+            meters[name] = entry
+            alias, hint = _go_hint(name, usage[name], entry, started)
+            hints[alias] = hint
+    return started, meters, (received, hints)
 
 
 def _bound_go(part, key, generation):
@@ -322,9 +342,21 @@ def _bound_go(part, key, generation):
     return {}
 
 
+def _go_ranking(part, key, generation, sample):
+    """The Go ranking batch after `sample`: a recognized usage answer replaces it under the interval rule; a failed
+    read keeps the batch the same key and generation already hold."""
+    quota = part.get('go_quota')
+    previous = quota.get('ranking') if type(quota) is dict and quota.get('key') == key \
+        and quota.get('generation') == generation else None
+    if sample[2] is None:
+        return previous
+    received, hints = sample[2]
+    return usage_balance.batch_after(previous, earliest=sample[0], latest=received, meters=hints)
+
+
 def _merge_go(previous, sample, now):
     """Retain known meters across clock rollback; exhaustion wins a same-second tie, recovery must be newer."""
-    started, meters = sample
+    started, meters = sample[0], sample[1]
     found = {name: previous[name] for name in GO_WINDOWS if _go_valid(name, previous.get(name))}
     for name, entry in meters.items():
         old = found.get(name)
@@ -416,6 +448,27 @@ def billing_fact(settings_path, route, now):
 def native_current(settings_path, now):
     """Whether the OpenCode Claude fact is current, so its stored native login is the current one (key, generation)."""
     return _account(settings_path, 'claude', now) is not None
+
+
+def ranking_meters(settings_path, route, now, *, marker):
+    """Ranking hints for `route`'s account, valid only while its current billing marker is `marker` (the candidate's
+    marker from `eligible`). Claude reads its bound batch; Go reads its key-bound batch when the provider supports
+    the usage read. Empty when anything is unproved, stale, changed or malformed; never an exhaustion input."""
+    name = family(route)
+    if name is None or route.get('pool') != POOLS[name] or type(marker) is not str:
+        return {}
+    if subscription_billing.marker(billing_fact(settings_path, route, now), route, now) != marker:
+        return {}
+    found = _account(settings_path, name, now)
+    if found is None:
+        return {}
+    if name == 'claude':
+        return claude_usage.ranking_meters(settings_path, route, now, native=found['native'])
+    quota = _part(observations._read(_store(settings_path)), 'go').get('go_quota')
+    if found.get('go_usage') is not True or type(quota) is not dict \
+            or quota.get('key') != found['key'] or quota.get('generation') != found['generation']:
+        return {}
+    return usage_balance.batch_meters(quota.get('ranking'), now=now, keep=lambda key: key in GO_RANKING)
 
 
 def _quota_gate(settings_path, route, now, producer=None):
@@ -548,7 +601,8 @@ def _record(settings_path, name, rows, held, command, environ, deadline):
             change = dict(account=record, failure=None)
             if name == 'go' and sample is not None:
                 meters = _merge_go(_bound_go(part, key, generation), sample, record['observed_at'])
-                change['go_quota'] = dict(key=key, generation=generation, meters=meters)
+                change['go_quota'] = dict(key=key, generation=generation, meters=meters,
+                                          ranking=_go_ranking(part, key, generation, sample))
             return change
         _transition(settings_path, name, publish)
         return None
