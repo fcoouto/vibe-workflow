@@ -10,9 +10,18 @@ const LOOKUP_MS = 2000
 // The same window as the probe's check in runtime/storage.py: 7 days plus CLOCK_MARGIN.
 const WINDOW = 7 * 86400 + 60
 
+// At most MAX_MESSAGE code points. Each code point is at least one UTF-16 unit and at most two, so longer text is
+// refused before counting, and counting stops at the first code point past the limit.
+function withinLimit(text) {
+  if (text.length > 2 * MAX_MESSAGE) return false
+  let count = 0
+  for (const _ of text) if (++count > MAX_MESSAGE) return false
+  return true
+}
+
 // The reset in whole epoch seconds, or null unless the timestamp is a real UTC instant.
 function resetOf(message) {
-  if (typeof message !== "string" || [...message].length > MAX_MESSAGE) return null
+  if (typeof message !== "string" || !withinLimit(message)) return null
   const match = NOTICE.exec(message)
   if (!match) return null
   const [, , stamp, fraction = "."] = match
@@ -31,7 +40,7 @@ export function createClaudeLimitHandler(ctx, { location, signal, enabled, probe
     return reset > seconds && reset <= seconds + WINDOW
   }
   const sameLocation = (other) => typeof other?.directory === "string" && isAbsolute(other.directory)
-    && other.directory === location.directory && (other.workspaceID ?? null) === (location.workspaceID ?? null)
+    && other.directory === location.directory && other.workspaceID === location.workspaceID
   const remember = (id) => {
     seen.add(id)
     if (seen.size > MAX_SEEN) seen.delete(seen.values().next().value)

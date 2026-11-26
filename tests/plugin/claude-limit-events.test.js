@@ -70,12 +70,52 @@ test("the reset must be after now and within seven days plus the storage margin"
   }
 })
 
+test("the 512 limit counts code points: astral characters at 512 are accepted and at 513 are refused", async () => {
+  const head = "You've hit your weekly limit · resets "
+  const tail = " Resets at 2030-01-02T10:00:00.000Z."
+  const notice512 = (total) => head + "\u{1D518}".repeat(total - [...head].length - [...tail].length) + tail
+  const fits = notice512(512)
+  const over = notice512(513)
+  assert.equal([...fits].length, 512)
+  assert.ok(fits.length > 512)
+  assert.equal([...over].length, 513)
+  assert.ok(over.length <= 1024)
+  for (const [message, accepted] of [[fits, true], [over, false]]) {
+    const h = harness()
+    h.handler(withError({ type: "provider.unknown", message }))
+    await flush()
+    assert.equal(h.calls.probe.length, accepted ? 1 : 0, String([...message].length))
+  }
+})
+
+test("counting stops at the limit and a message over 1024 units is refused before any counting", async () => {
+  const original = String.prototype[Symbol.iterator]
+  const steps = { count: 0 }
+  String.prototype[Symbol.iterator] = function () {
+    const iterator = original.call(this)
+    return { next() { steps.count += 1; return iterator.next() }, [Symbol.iterator]() { return this } }
+  }
+  try {
+    const h = harness()
+    const count = (message) => {
+      steps.count = 0
+      h.handler(withError({ type: "provider.unknown", message }))
+      return steps.count
+    }
+    assert.ok(count("x".repeat(1000)) <= 513)
+    assert.equal(count("x".repeat(1025)), 0)
+    assert.equal(count("\u{1D518}".repeat(1000)) <= 513, true)
+  } finally {
+    String.prototype[Symbol.iterator] = original
+  }
+})
+
 test("the notice needs a nonempty single-line clause and fits in 512 characters", async () => {
   const head = "You've hit your weekly limit · resets "
   const tail = " Resets at 2030-01-02T10:00:00.000Z."
   const fits = head + "x".repeat(512 - head.length - tail.length) + tail
   assert.equal([...fits].length, 512)
-  const bad = [head + "x".repeat(513 - head.length - tail.length), head + "a\nb" + tail, head + "a\rb" + tail,
+  const bad = [head + "x".repeat(513 - head.length - tail.length) + tail, head + "a\nb" + tail, head + "a\rb" + tail,
     "You've hit your weekly limit · resets  Resets at 2030-01-02T10:00:00.000Z.", head.trimEnd() + tail]
   for (const message of bad) {
     const h = harness()
@@ -127,6 +167,23 @@ test("only the same directory and an equal workspace (absent equals absent) can 
     h.handler(failure({ location: eventLocation }))
     await flush()
     assert.equal(h.calls.probe.length, allowed ? 1 : 0, JSON.stringify(eventLocation))
+  }
+})
+
+test("an explicit null workspaceID is not an absent one, in either direction", async () => {
+  const place = (workspaceID) => workspaceID === undefined ? { directory } : { directory, workspaceID }
+  const cases = [
+    [place(undefined), { directory, workspaceID: null }, false],
+    [place(null), { directory }, false],
+    [place(null), { directory, workspaceID: null }, true],
+    [place("wsp_1"), { directory, workspaceID: null }, false],
+    [place(null), { directory, workspaceID: "wsp_1" }, false],
+  ]
+  for (const [plugin, eventLocation, allowed] of cases) {
+    const h = harness({ location: plugin })
+    h.handler(failure({ location: eventLocation }))
+    await flush()
+    assert.equal(h.calls.probe.length, allowed ? 1 : 0, JSON.stringify([plugin, eventLocation]))
   }
 })
 
