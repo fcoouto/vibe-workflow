@@ -45,12 +45,13 @@ class LocalSource:
             return {}
 
     def usage_refresh_due(self, route, now):
-        """Whether the on-demand usage read behind this candidate's hints is due. Only ChatGPT has one; the answer
-        schedules a background read and never changes a pick."""
+        """Whether the on-demand usage read behind this candidate's hints is due, asked for the binding its
+        `account_marker` names and no other. Only ChatGPT has one; the answer schedules a background read and never
+        changes a pick."""
         from runtime import opencode_account
         try:
-            return opencode_account.family(route) == 'chatgpt' \
-                and opencode_account.chatgpt_usage_due(self.settings_path, now)
+            return opencode_account.chatgpt_usage_due(self.settings_path, route, now,
+                                                      marker=route.get('account_marker'))
         except Exception:
             return False
 

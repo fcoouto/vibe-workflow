@@ -35,6 +35,20 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(self.storage._read(target), dict(version=1, previous=True))
         self.assertEqual([p.name for p in target.parent.iterdir() if p.name.startswith(".observations-")], [])
 
+    def test_the_write_stays_strict_and_storable_only_reports_what_it_would_refuse(self):
+        target = self.root / "state/cache.json"
+        with self.storage._locked(target) as path:
+            self.storage._write(path, dict(version=1, kept=True))
+        decoded = json.loads('{"version":1,"hint":1e400}')  # valid JSON text that decodes as infinity
+        self.assertEqual(decoded["hint"], float("inf"))
+        self.assertFalse(self.storage.storable(decoded))
+        self.assertFalse(self.storage.storable(dict(version=1, hint=float("nan"))))
+        self.assertTrue(self.storage.storable(dict(version=1, hint=None)))
+        with self.assertRaises(ValueError):
+            self.storage._write(target, decoded)
+        self.assertEqual(self.storage._read(target), dict(version=1, kept=True))
+        self.assertEqual([p.name for p in target.parent.iterdir() if p.name.startswith(".observations-")], [])
+
     def test_symlink_hardlink_and_public_files_are_refused(self):
         original = self.root / "original.json"
         original.write_text('{"version":1}')

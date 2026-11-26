@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import stat
 import sys
 import tempfile
@@ -317,6 +318,43 @@ class CodexWindowsTest(unittest.TestCase):
                 gone = True
                 break
         self.assertTrue(gone)
+
+    def test_a_helper_left_in_the_group_is_gone_once_its_launcher_answered_and_exited(self):
+        # A launcher that starts a helper in its own process group, answers and exits at once. The helper ignores
+        # SIGTERM and SIGHUP and holds no pipe: only the guard, still the leader of that group, can end it.
+        facts = self.dir / 'helper.json'
+        helper = 'import json, os, signal, sys, time\n' \
+                 'signal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n' \
+                 'open(sys.argv[1] + ".new", "w").write(json.dumps(dict(pid=os.getpid(), group=os.getpgrp())))\n' \
+                 'os.replace(sys.argv[1] + ".new", sys.argv[1])\ntime.sleep(20)\n'  # a bounded natural exit
+        body = 'import os, subprocess\n' \
+               'subprocess.Popen([sys.executable, "-c", %r, %r], stdin=subprocess.DEVNULL, ' \
+               'stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n' \
+               'while not os.path.exists(%r):\n    time.sleep(0.01)\n' % (helper, str(facts), str(facts))
+        result = dict(rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200))))
+        command = fake_codex(self.dir, body + RESULT % (str(self.methods), json.dumps(result)))
+        armed = [True]
+
+        def reap():  # one bounded signal to a helper this test left behind; disarmed once it was seen gone
+            if armed and facts.exists():
+                try:
+                    os.kill(json.loads(facts.read_text())['pid'], signal.SIGKILL)
+                except (OSError, ValueError, KeyError):
+                    pass
+        self.addCleanup(reap)
+        with mock.patch('time.time', return_value=NOW):
+            hints = codex_reset.read_windows(environ=self.env, command=command)
+        self.assertEqual(hints['7d']['used_percent'], 90)  # the answer buffered before the launcher exited arrives
+        found = json.loads(facts.read_text())
+        self.assertNotIn(found['group'], (found['pid'], os.getpgrp()))  # the guard's group, not its own or ours
+        end = time.monotonic() + 2  # far inside the five-second bound of the read, whose alarm died with the guard
+        while armed and time.monotonic() < end:
+            try:
+                os.kill(found['pid'], 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                armed.clear()
+        self.assertFalse(armed, 'the helper outlived its launcher and the read')
 
     def test_the_guard_adds_one_transient_parent_and_changes_nothing_the_child_sees(self):
         seen = self.dir / 'seen.json'

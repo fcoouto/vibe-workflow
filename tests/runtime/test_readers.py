@@ -49,6 +49,23 @@ def deep(depth):
     return value
 
 
+def unstorable(path, mark):
+    """Rewrite the private store `path` so the field `mark(value, token)` sets to `token` holds the raw JSON number
+    1e400: it decodes as infinity, which strict JSON cannot write back."""
+    value = json.loads(path.read_text())
+    mark(value, "UNSTORABLE-NUMBER")
+    raw = json.dumps(value)
+    assert raw.count('"UNSTORABLE-NUMBER"') == 1
+    path.write_text(raw.replace('"UNSTORABLE-NUMBER"', "1e400"))
+
+
+def strict(path):
+    """The store at `path`, read as strict JSON: an infinite or NaN number fails."""
+    value = json.loads(path.read_text())
+    json.dumps(value, allow_nan=False)
+    return value
+
+
 class ReaderTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -843,13 +860,15 @@ class ReaderTest(unittest.TestCase):
     def hints_for(self, route, at, marker):
         return self.observations.LocalSource(self.settings).ranking_meters(dict(route, account_marker=marker), at)
 
-    def switch_on_account_read(self, switch, *, number, before):
-        """Run `switch` once, around the `number`th read of the OpenCode account store: before that read when `before`,
-        otherwise right after it. Later reads, and the switch's own reads, then see the other login."""
+    def switch_on_account_read(self, switch, *, number, before, store=None):
+        """Run `switch` once, around the `number`th read of `store` (the OpenCode account store unless named): before
+        that read when `before`, otherwise right after it. Later reads, and the switch's own reads, then see the other
+        login."""
         real, seen = self.observations._read, []
+        store = self.openc.STORE_FILE if store is None else store
 
         def read(path):
-            if path.name != self.openc.STORE_FILE:
+            if path.name != store:
                 return real(path)
             seen.append(path)
             if len(seen) == number and before:
@@ -884,10 +903,14 @@ class ReaderTest(unittest.TestCase):
         marker = self.marker_of(self.route, self.now)
         own = self.hints_for(self.route, self.now, marker)
         self.assertEqual(own["7d"]["used_percent"], 30)
-        # The second account read, the one that could pair this marker with another login, runs after the switch.
-        with self.switch_on_account_read(self.become_second_login, number=2, before=True):
+        # The marker's record is read from the OpenCode store first. The native store, the remaining read and the one
+        # that could pair this marker with another login's meters, is read after the switch.
+        with self.switch_on_account_read(self.become_second_login, number=1, before=True,
+                                         store=self.native.STORE_FILE):
             hints = self.hints_for(self.route, self.now, marker)
-        self.assertIn(hints, (own, {}))  # never the other login's 100% weekly meter
+        self.assertEqual(hints, {})  # the old marker gets nothing: never the other login's 100% weekly meter
+        self.assertNotEqual(self.marker_of(self.route, self.now), marker)  # the switch really happened
+        self.assertEqual(self.claude_hints(self.now)["7d"]["used_percent"], 100)
 
     def test_claude_publishes_the_pause_when_ranking_processing_fails(self):
         usage_balance = importlib.import_module("runtime.usage_balance")
@@ -931,6 +954,55 @@ class ReaderTest(unittest.TestCase):
             self.assertEqual(self.opencode("go", usage={"weekly": go_meter(self.now + 86400, 100, "rate-limited")},
                                            force=True)["state"], "stored")
         self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+
+    def test_an_unstorable_claude_hint_blocks_neither_a_publication_nor_the_confirmed_pause(self):
+        store = self.native._store(self.settings)
+        spoil = lambda value, token: value["quota"]["ranking"]["meters"]["7d"].update(used_percent=token)  # noqa: E731
+        self.assertEqual(self.claude_sample(self.now - 200, 100)["state"], "stored")
+        self.assertEqual(self.quota_state()["ranking"]["meters"]["7d"]["used_percent"], 100)
+        unstorable(store, spoil)
+        self.assertEqual(self.claude_sample(self.now, 100)["state"], "stored")  # a newer reply still publishes
+        native = self.openc._native(self.native.account(self.settings, self.now))
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now, native=native), 86400)
+        self.assertEqual(strict(store)["quota"]["ranking"]["meters"]["7d"]["used_percent"], 100)  # its own batch
+        record = self.quota_state()["record"]
+        unstorable(store, spoil)
+        self.write(dict(mode="hang"))  # a read that observes nothing: only the state's own bookkeeping is written
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(timeout=0.1, force=True, need=())["reason"], "claude_timeout")
+        quota = strict(store)["quota"]
+        self.assertEqual(quota["record"], record)  # the confirmed pause, exactly as it was
+        self.assertIsNone(quota["ranking"])  # the batch that could not be stored is unknown, not repaired
+        self.assertEqual(self.claude_hints(self.now), {})
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now, native=native), 86400)
+
+    def test_a_cached_go_month_beyond_the_provider_horizon_is_unknown_and_earns_no_boost(self):
+        usage_balance = importlib.import_module("runtime.usage_balance")
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go", usage={
+                "weekly": go_meter(self.now + 86400, 40),  # 60% left with a day of seven to go: 4.2
+                "monthly": go_meter(self.now + 10 * 86400, 50)})["state"], "stored")
+        hints = self.go_hints(self.now)
+        self.assertEqual(sorted(hints), ["7d", "monthly"])
+        self.assertIsNone(hints["monthly"]["duration"])  # the month keeps its unknown length
+        self.assertAlmostEqual(usage_balance.expiry_score("go", hints, now=self.now), 4.2)
+        horizon = self.now + 31 * 86400 + self.storage.CLOCK_MARGIN  # the native parser's own bound for a month
+
+        def month(reset_at):
+            def step(part):
+                ranking = json.loads(json.dumps(part["go_quota"]["ranking"]))
+                ranking["meters"]["monthly"]["reset_at"] = reset_at
+                return dict(go_quota=dict(part["go_quota"], ranking=ranking))
+            self.openc._transition(self.settings, "go", step)
+            return self.go_hints(self.now)
+        for label, reset_at in (("a year", self.now + 365 * 86400), ("one second past", horizon + 1)):
+            with self.subTest(label=label):
+                hints = month(reset_at)
+                self.assertEqual(sorted(hints), ["7d"])  # the implausible month is unknown by itself
+                self.assertEqual(usage_balance.expiry_score("go", hints, now=self.now), 1.0)  # so nothing is boosted
+        hints = month(horizon)
+        self.assertEqual(sorted(hints), ["7d", "monthly"])
+        self.assertAlmostEqual(usage_balance.expiry_score("go", hints, now=self.now), 4.2)
 
     def test_stale_claude_batch_with_a_fresh_dated_meter_ranks_nothing(self):
         self.claude_sample(self.now, 30)
@@ -1909,8 +1981,10 @@ class ChatgptUsageTest(unittest.TestCase):
         marker = self.marker(at, route) if marker is None else marker
         return self.observations.LocalSource(self.settings).ranking_meters(dict(route, account_marker=marker), at)
 
-    def due(self, at):
-        return self.openc.chatgpt_usage_due(self.settings, at)
+    def due(self, at, *, marker=None):
+        """Whether a read is due for the candidate whose marker is `marker` (the current one at `at` by default)."""
+        marker = self.marker(at) if marker is None else marker
+        return self.openc.chatgpt_usage_due(self.settings, self.gpt_route, at, marker=marker)
 
     def usage(self):
         return json.loads(self.openc._store(self.settings).read_text())["chatgpt"].get("chatgpt_usage")
@@ -2021,7 +2095,7 @@ class ChatgptUsageTest(unittest.TestCase):
         self.assertEqual(self.reads, 2)
         again = start + 60
         self.assertFalse(self.due(again - 1))  # a clock behind the start record starts nothing
-        self.chatgpt(force=True, at=again)  # the account stays current through the checks below
+        self.chatgpt(force=True, at=again + 1)  # the account proof stays current through the checks below
         for later, expected in ((60, False), (899, False), (900, True)):  # no reset reached: only the 900-second age
             self.assertIs(self.due(again + later), expected, later)
 
@@ -2047,12 +2121,43 @@ class ChatgptUsageTest(unittest.TestCase):
 
     def test_a_binding_that_expires_while_waiting_to_start_reads_nothing(self):
         self.chatgpt()
-        last = self.now + self.storage.FRESH_SECONDS  # the account record's last current second
-        self.assertEqual(self.read(last, locked=last + 1), "unbound")
+        expiry = self.now + self.storage.FRESH_SECONDS  # the proof is 900 seconds old: billing no longer accepts it
+        route = self.gpt_route
+        self.assertIsNotNone(self.marker(expiry - 1))
+        self.assertIsNone(self.marker(expiry))  # ordinary billing's own boundary, which the worker shares
+        self.assertEqual(self.read(expiry - 1, locked=expiry), "unbound")  # it expired while waiting for the lock
+        self.assertEqual(self.read(expiry), "unbound")
         self.assertEqual(self.reads, 0)
         self.assertIsNone(self.usage())  # not even a start record
-        self.assertEqual(self.read(last, locked=last), "stored")  # held in time, the same call reads
+        self.assertFalse(self.openc.chatgpt_usage_due(self.settings, route, expiry, marker=self.marker(expiry - 1)))
+        self.assertEqual(self.read(expiry - 1, locked=expiry - 1), "stored")  # held in time, the same call reads
         self.assertEqual(self.reads, 1)
+
+    def test_a_binding_that_expires_exactly_at_publication_stores_no_reading(self):
+        self.chatgpt()
+        expiry = self.now + self.storage.FRESH_SECONDS
+        self.assertEqual(self.read(expiry - 5, finished=expiry - 1, published=expiry), "unbound")
+        self.assertEqual(self.reads, 1)
+        usage = self.usage()
+        self.assertEqual((usage["ok"], usage["finished"], usage["ranking"]), (False, None, None))
+        self.chatgpt(force=True, at=expiry)
+        self.assertEqual(self.hints(expiry), {})
+
+    def test_a_due_check_answers_only_for_the_binding_of_its_candidate(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now), "stored")  # the first login holds a fresh reading: nothing is due
+        source = self.observations.LocalSource(self.settings)
+        candidate = dict(self.gpt_route, account_marker=self.marker(self.now))  # as eligibility marked it
+        self.assertIs(source.usage_refresh_due(candidate, self.now), False)
+        # The login rotates after the candidate got its hints and before the due check.
+        self.assertEqual(self.chatgpt("another-subject", force=True)["state"], "stored")
+        rotated = dict(self.gpt_route, account_marker=self.marker(self.now))
+        self.assertNotEqual(rotated["account_marker"], candidate["account_marker"])
+        self.assertIs(source.usage_refresh_due(candidate, self.now), False)  # never the new login's answer
+        self.assertIs(source.usage_refresh_due(rotated, self.now), True)  # which owes its own first read
+        self.assertIs(source.usage_refresh_due(self.gpt_route, self.now), False)  # no marker: no answer
+        self.assertIs(source.usage_refresh_due(dict(self.go_route, account_marker=rotated["account_marker"]),
+                                               self.now), False)
 
     def test_a_binding_that_expires_while_waiting_to_publish_stores_no_reading(self):
         self.chatgpt()
@@ -2118,7 +2223,7 @@ class ChatgptUsageTest(unittest.TestCase):
                 self.assertEqual(([item["account_marker"] for item in kept], excluded), ([marker], []))
                 patched, seen = self.racing_store(self.publish_usage, before=before)
                 with patched:
-                    self.assertTrue(self.due(self.now))
+                    self.assertTrue(self.due(self.now, marker=marker))
                     self.assertEqual(self.hints(self.now, marker=marker), {})
 
     def test_a_publication_during_acquisition_starts_no_provider_read(self):
@@ -2134,15 +2239,16 @@ class ChatgptUsageTest(unittest.TestCase):
                 self.assertEqual(result, dict(state="fresh", reason=None, families={}))
 
     def stubborn_worker(self, timeout):
-        """An isolated worker process reading through a synthetic Codex child that never answers and ignores the end
-        of its input, SIGTERM and SIGHUP. Returns `(worker, facts, armed)` once the child is in the exchange: `facts`
-        holds the child's pid and process group, and clearing `armed` disarms the leftover cleanup."""
-        reached, facts = self.root / "reached.fifo", self.root / "codex.json"
+        """An isolated worker process reading through a synthetic Codex child that never answers, ignores the end of
+        its input and SIGHUP, and survives SIGTERM, acknowledging each one in the file `facts["acked"]`. Returns
+        `(worker, facts, armed)` once the child is in the exchange: `facts` also holds the child's pid and process
+        group, and clearing `armed` disarms the leftover cleanup."""
+        reached, facts, acked = self.root / "reached.fifo", self.root / "codex.json", self.root / "sigterm.acked"
         os.mkfifo(reached)
         codex = self.root / "codex"
         codex.write_text("#!%s\n" % sys.executable + "\n".join((
             "import json, os, signal, sys, time",
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "signal.signal(signal.SIGTERM, lambda *args: open(%r, 'w').close())" % str(acked),
             "signal.signal(signal.SIGHUP, signal.SIG_IGN)",
             "open(%r, 'w').write(json.dumps(dict(pid=os.getpid(), group=os.getpgrp())))" % str(facts),
             "sys.stdin.readline()",
@@ -2175,7 +2281,7 @@ class ChatgptUsageTest(unittest.TestCase):
             worker.wait(10)
         self.addCleanup(stop_worker)
         self.assertTrue(reached_barrier(reached, lambda: worker.poll() is None))
-        return worker, json.loads(facts.read_text()), armed
+        return worker, dict(json.loads(facts.read_text()), acked=acked), armed
 
     def gone_within(self, pid, seconds, armed):
         """Whether `pid` disappears within `seconds`; seen gone, the leftover cleanup is disarmed."""
@@ -2200,14 +2306,17 @@ class ChatgptUsageTest(unittest.TestCase):
         # The worker's own shutdown sends SIGTERM to the guard's group, waits, then sends SIGKILL. Here the worker
         # dies in between: the group got SIGTERM, which the child ignores, and no SIGKILL ever follows.
         worker, child, armed = self.stubborn_worker(2.0)
-        started = time.monotonic()
         self.assertNotIn(child["group"], (child["pid"], os.getpgrp(), worker.pid))  # the guard's own group
         os.killpg(child["group"], signal.SIGTERM)
+        end = time.monotonic() + 5
+        while not child["acked"].exists() and time.monotonic() < end:
+            time.sleep(0.02)
+        self.assertTrue(child["acked"].exists(), "the Codex child never received the group's SIGTERM")
+        os.kill(child["pid"], 0)  # it received that SIGTERM and survived it: only the deadline is left to end it
         worker.kill()
         worker.wait(10)
         self.assertTrue(self.gone_within(child["pid"], 6, armed),
                         "SIGTERM to the group ended the deadline: the Codex child outlived its killed worker")
-        self.assertGreater(time.monotonic() - started, 1.0)  # ended by the deadline, not by the ignored SIGTERM
 
     def test_a_partial_valid_result_is_a_success_and_does_not_trigger_each_pick(self):
         self.chatgpt()
@@ -2373,6 +2482,65 @@ class ChatgptUsageTest(unittest.TestCase):
                 self.openc._transition(self.settings, "chatgpt", lambda part: dict(chatgpt_usage=usage))
                 self.assertEqual(sorted(self.hints(self.now)), expected)
                 self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
+
+    def test_an_unstorable_chatgpt_hint_cannot_block_a_go_account_transition(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now), "stored")
+        store = self.openc._store(self.settings)
+        before = strict(store)["chatgpt"]
+        pause = {"weekly": go_meter(self.now + 86400, 100, "rate-limited")}
+
+        def go(**options):
+            with mock.patch("time.time", return_value=self.now):
+                return ReaderTest.opencode(self, "go", usage=pause, **options)["state"]
+        unstorable(store, lambda value, token: value["chatgpt"]["chatgpt_usage"]["ranking"]["meters"]["7d"].update(
+            used_percent=token))
+        self.assertEqual(go(), "stored")  # the other family's account and pause are still written
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+        after = strict(store)["chatgpt"]
+        self.assertEqual((after["account"], after["identity"]), (before["account"], before["identity"]))
+        self.assertIsNone(after["chatgpt_usage"]["ranking"])  # only the batch that cannot be stored is gone
+        self.assertEqual({name: value for name, value in after["chatgpt_usage"].items() if name != "ranking"},
+                         {name: value for name, value in before["chatgpt_usage"].items() if name != "ranking"})
+        self.assertEqual(self.hints(self.now), {})  # unknown: never a repaired reading with invented headroom
+        self.assertFalse(self.due(self.now))  # and the read's own spacing still stands
+        unstorable(store, lambda value, token: value["chatgpt"]["chatgpt_usage"].update(reset=token))
+        self.assertEqual(go(force=True), "stored")
+        after = strict(store)["chatgpt"]
+        self.assertEqual((after["account"], after["identity"]), (before["account"], before["identity"]))
+        self.assertIsNone(after["chatgpt_usage"])  # a usage record that still cannot be stored goes whole
+        self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
+        self.assertEqual(self.hints(self.now), {})
+
+    def test_an_unstorable_chatgpt_hint_does_not_stop_its_own_next_read(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now, self.meters(self.now, five=(40, 30))), "stored")
+        store = self.openc._store(self.settings)
+        unstorable(store, lambda value, token: value["chatgpt"]["chatgpt_usage"]["ranking"]["meters"]["7d"].update(
+            used_percent=token))
+        self.assertEqual(self.hints(self.now + 59), {})  # read as stored, the spoiled meter is dropped alone
+        later = self.now + 60  # the 5-hour reset passed: the next read is due, and its start record must be storable
+        self.assertEqual(self.read(later, self.meters(later, weekly=(70, 7200))), "stored")
+        self.assertEqual(self.hints(later)["7d"]["used_percent"], 70)
+        self.assertEqual(strict(store)["chatgpt"]["chatgpt_usage"]["ok"], True)
+
+    def test_an_unstorable_go_hint_is_dropped_and_the_confirmed_go_pause_survives(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(ReaderTest.opencode(self, "go", usage={
+                "weekly": go_meter(self.now + 86400, 100, "rate-limited")})["state"], "stored")
+        store = self.openc._store(self.settings)
+        before = strict(store)["go"]
+        self.assertEqual(before["go_quota"]["ranking"]["meters"]["7d"]["used_percent"], 100)
+        unstorable(store, lambda value, token: value["go"]["go_quota"]["ranking"]["meters"]["7d"].update(
+            used_percent=token))
+        self.assertEqual(self.chatgpt()["state"], "stored")  # another family's account is still recorded
+        self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
+        after = strict(store)["go"]
+        self.assertEqual((after["account"], after["identity"]), (before["account"], before["identity"]))
+        self.assertEqual(after["go_quota"]["meters"], before["go_quota"]["meters"])  # the confirmed pause, untouched
+        self.assertIsNone(after["go_quota"]["ranking"])
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+        self.assertEqual(self.hints(self.now, route=self.go_route), {})
 
     def test_a_healthy_hint_leaves_an_active_pause_unchanged(self):
         self.chatgpt()

@@ -647,10 +647,13 @@ def _owned(path):
 
 def _transition(settings_path, step):
     """One read-validate-write of the producer state under its lock: `step(state)` validates the state just read and
-    returns the change to write (ValueError aborts with nothing written)."""
+    returns the change to write (ValueError aborts with nothing written). An optional ranking batch that strict JSON
+    cannot store is dropped first, so it never blocks the account or its pause record."""
     with observations._locked(_store(settings_path)) as path:
         value = _owned(path)
         value.update(step(value))
+        if 'quota' in value:
+            value['quota'] = usage_balance.storable_ranking(value['quota'])
         observations._write(path, value)
 
 

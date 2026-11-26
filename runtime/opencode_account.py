@@ -312,6 +312,7 @@ def _go_meter(name, meter, observed_at):
 
 GO_RANKING = ('5h', '7d', 'monthly')  # Go's rolling and weekly windows, aliased to the account windows
 GO_ALIAS = dict(rolling='5h', weekly='7d')
+GO_NATIVE = {GO_ALIAS.get(name, name): name for name in GO_WINDOWS}  # a ranking key's native window
 
 
 def _go_hint(name, meter, entry, started):
@@ -384,13 +385,32 @@ def _part(state, family):
     return value if type(value) is dict else {}
 
 
+def _storable(value):
+    """The store as the strict write can store it. The file is shared, so one hint that cannot be written back would
+    block every family's account and pause updates. Only optional ranking state goes: an unstorable batch becomes
+    unknown, and a ChatGPT usage record that still cannot be stored goes whole, which leaves its read due. Accounts,
+    identities and pause meters are never altered; if they cannot be stored, the strict write still refuses."""
+    if storage.storable(value):
+        return value
+    kept = dict(value)
+    for name, part in value.items():
+        if type(part) is dict:
+            part = kept[name] = dict(part)
+            if 'go_quota' in part:
+                part['go_quota'] = usage_balance.storable_ranking(part['go_quota'])
+            if 'chatgpt_usage' in part:
+                usage = usage_balance.storable_ranking(part['chatgpt_usage'])
+                part['chatgpt_usage'] = usage if storage.storable(usage) else None
+    return kept
+
+
 def _transition(settings_path, family, step):
     """One read-validate-write of one family's state under the store lock (ValueError aborts)."""
     with observations._locked(_store(settings_path)) as path:
         value = continuity._owned(path)
         part = _part(value, family)
         value[family] = dict(part, **step(part))
-        observations._write(path, value)
+        observations._write(path, _storable(value))
 
 
 def _complete(part, now):
@@ -401,6 +421,14 @@ def _complete(part, now):
             or not 0 <= now - found['observed_at'] <= observations.FRESH_SECONDS:
         return None
     return found
+
+
+def _billable(part, now):
+    """The complete, proved account record while ordinary billing still accepts its proof. `_complete` keeps a record
+    through its 900th second for the account reader's own schedule; `subscription_billing.problem` calls it stale from
+    that second on, and so does this."""
+    record = _complete(part, now)
+    return record if record is not None and now - record['observed_at'] < observations.FRESH_SECONDS else None
 
 
 def _account(settings_path, family, now):
@@ -498,7 +526,10 @@ def ranking_meters(settings_path, route, now, *, marker):
     if name != 'go' or record.get('go_usage') is not True or type(quota) is not dict \
             or quota.get('key') != record['key'] or quota.get('generation') != record['generation']:
         return {}
-    return usage_balance.batch_meters(quota.get('ranking'), now=now, keep=lambda key: key in GO_RANKING)
+    hints = usage_balance.batch_meters(quota.get('ranking'), now=now, keep=lambda key: key in GO_RANKING)
+    # A cached hint must pass the native parser's reset horizon again: the month has no duration to bound it.
+    return {key: value for key, value in hints.items() if _go_valid(GO_NATIVE[key], dict(
+        exhausted=False, reset_at=value['reset_at'], observed_at=value['latest']))}
 
 
 def _usage(part, record):
@@ -523,13 +554,20 @@ def _usage_due(usage, now):
         now - started >= storage.FRESH_SECONDS or not routing._amount(reset) or now >= reset)
 
 
-def chatgpt_usage_due(settings_path, now):
-    """Whether an on-demand Codex usage read is due for the complete, proved and fresh ChatGPT OAuth account. A pure
-    local read: no account, no proof or an unreadable store is never due."""
+def chatgpt_usage_due(settings_path, route, now, *, marker):
+    """Whether an on-demand Codex usage read is due for the ChatGPT candidate `route`, answered only while its billing
+    marker is still `marker` (the candidate's marker from `eligible`). One read of the account store supplies both the
+    marker's record and its usage record, so a login that rotated after the candidate was marked is never answered
+    for. A pure local read: no account, no current proof, another binding or an unreadable store is never due."""
     try:
+        if family(route) != 'chatgpt' or route.get('pool') != POOLS['chatgpt'] or type(marker) is not str:
+            return False
         part = _part(observations._read(_store(settings_path)), 'chatgpt')
         record = _complete(part, now)
-        return record is not None and _usage_due(_usage(part, record), now)
+        if record is None or subscription_billing.marker(_fact('chatgpt', record, route, 'unknown'), route,
+                                                         now) != marker:
+            return False
+        return _usage_due(_usage(part, record), now)
     except (OSError, ValueError, TypeError):
         return False
 
@@ -543,13 +581,15 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
     written before the exchange: a killed worker leaves the cooldown, not a retry. The reading is published only while
     the same key and generation are still the complete, proved account; a failed read keeps the batch already held.
     Both checks read the clock while holding the account lock, so a wait for it can neither shorten the spacing nor
-    carry a binding past its freshness. A success is spaced from the exchange start its meters carry; a failure cools
-    down from the exchange's completion."""
+    carry a binding past its freshness. The worker takes no candidate: it binds to the account proof it finds at the
+    start, and that proof must be one ordinary billing still accepts, at the start and again at publication (stale
+    once it is 900 seconds old). A success is spaced from the exchange start its meters carry; a failure cools down
+    from the exchange's completion."""
     try:
         if not isinstance(settings_path, Path) or not settings_path.is_absolute():
             return 'failed'
         store = _store(settings_path)
-        if _complete(_part(observations._read(store), 'chatgpt'), int(time.time())) is None:
+        if _billable(_part(observations._read(store), 'chatgpt'), int(time.time())) is None:
             return 'unbound'  # before the lock, so an absent store is not created to say so
         with storage._locked(store, block=False, lock=CHATGPT_LOCK) as held:
             if held is None:
@@ -558,7 +598,7 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
 
             def start(part):
                 now = int(time.time())  # read while the account lock is held
-                record = _complete(part, now)
+                record = _billable(part, now)
                 usage = _usage(part, record) if record else None
                 if record is None or not _usage_due(usage, now):
                     skip.append('unbound' if record is None else 'not_due')
@@ -576,7 +616,7 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
             finished = int(time.time())  # the exchange's completion: what a failure cools down from
 
             def publish(part):
-                record = _complete(part, int(time.time()))  # read while the account lock is held
+                record = _billable(part, int(time.time()))  # read while the account lock is held
                 usage = _usage(part, record) if record else None
                 if usage is None or continuity._proved(part, bound['key']) != bound['generation'] \
                         or usage.get('started') != bound['started'] or usage.get('ok') is not False:

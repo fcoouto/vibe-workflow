@@ -288,6 +288,12 @@ def _scope(item):
     return tuple(sorted(subscription_billing.scope(item).items()))
 
 
+def _binding(item):
+    """The account binding a route was marked with: its scope and the marker `eligible` gave it. Aliases of one login
+    share it; a newer marker of the same scope is another binding."""
+    return _scope(item), item['account_marker']
+
+
 def _clock(pool):
     """The time of this step of the decision; a fixed clock stays fixed."""
     return int(time.time()) if pool['fixed'] is None else pool['fixed']
@@ -348,7 +354,8 @@ def _balance(ordered, pool, qualifies):
                    if _scope(item) in scopes and returned[_scope(item)] != item['account_marker']]
         if not changed:
             pool['reordered'] = frozenset(item['route'] for item in group)  # the participants `_settle` guards
-            pool['expires'] = min(ends)  # and the first second their readings no longer support the reorder
+            # The readings support the reorder from the clock they were ranked at until the first of them ends.
+            pool['ranked'], pool['expires'] = now, min(ends)
             return balanced
         pool['excluded'].extend(dict(route=route, reason='account_changed') for route in changed)
         return [item for item in ordered if item['route'] not in changed]
@@ -357,11 +364,13 @@ def _balance(ordered, pool, qualifies):
 
 
 def _settle(ordered, pool, qualifies):
-    """`_balance`, then the final `_confirm`. A participant of a reorder that changes only at that final check discards
-    the reorder, and so does a supporting reading that resets or ages out before the check ends: the surviving routes
-    are confirmed once more, in their original group order, with no new reads beyond that confirmation and no restored
-    exclusions."""
-    pool['reordered'], pool['expires'] = None, None
+    """`_balance`, then the final `_confirm`. A reorder is discarded when that final check proves the binding of one of
+    its participants gone, or when a supporting reading no longer holds once the check ends: it reset or aged out, or
+    the clock stepped back behind the one it was ranked at. A route that changes at the final check proves its binding
+    (scope and original marker) gone for every alias carrying it, one confirmed a moment earlier included; a newer
+    marker of the same scope is untouched. The surviving routes are then confirmed once more, in their original group
+    order, with no new reads beyond that confirmation and no restored exclusions."""
+    pool['reordered'], pool['ranked'], pool['expires'] = None, None, None
     balanced = _balance(ordered, pool, qualifies)
     participants = pool['reordered']
     if not participants:
@@ -369,10 +378,13 @@ def _settle(ordered, pool, qualifies):
     mark = len(pool['excluded'])
     chosen = _confirm(balanced, pool, 3, qualifies)
     drifted = {entry['route'] for entry in pool['excluded'][mark:] if entry['reason'] == 'account_changed'}
-    if not drifted & participants and _clock(pool) < pool['expires']:
+    lost = {_binding(item) for item in ordered if item['route'] in drifted}
+    stale = [item['route'] for item in ordered if _binding(item) in lost]
+    if not participants.intersection(stale) and pool['ranked'] <= _clock(pool) < pool['expires']:
         return chosen
     changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
-    return _confirm([item for item in ordered if item['route'] not in changed], pool, 3, qualifies)
+    pool['excluded'].extend(dict(route=route, reason='account_changed') for route in stale if route not in changed)
+    return _confirm([item for item in ordered if item['route'] not in changed.union(stale)], pool, 3, qualifies)
 
 
 def _usage_refresh(group, pool, qualifies):

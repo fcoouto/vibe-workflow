@@ -9,7 +9,7 @@ import unittest
 
 from runtime import routing
 from runtime import routing_paths
-from runtime import council, feedback, native_catalog, scores, selector, usage_balance
+from runtime import council, feedback, native_catalog, scores, selector, subscription_billing, usage_balance
 from unittest import mock
 try:
     from runtime.selector import select
@@ -852,6 +852,7 @@ CLAUDE_ROUTE = "opencode-claude-subscription:claude-sonnet-5-5"
 GO_ROUTE = "opencode-go-subscription:kimi-x-1"
 CHATGPT_ROUTE = "opencode-chatgpt-subscription:gpt-6-2-sol"
 HAIKU_ROUTE = "opencode-claude-subscription:claude-haiku-5-5"
+TERRA_ROUTE = "opencode-chatgpt-subscription:gpt-6-2-terra"
 TASK_CRITICAL = dict(files="1-2", spec="exact", risk="critical")
 
 
@@ -895,19 +896,22 @@ def alias_body():
 class Hinted(Facts):
     """Route-keyed ranking hints as the local source gives them. `drift` paths change account on each route's second
     billing read, so every alias of a drifted path is seen as changed after eligibility. `billed` logs every read."""
-    def __init__(self, hints=None, *, drift=(), late=(), explode=False):
+    def __init__(self, hints=None, *, drift=(), late=(), rotate=None, explode=False):
         super().__init__()
         self.hints, self.drift, self.late, self.explode = dict(hints or {}), set(drift), set(late), explode
+        self.rotate = dict(rotate or {})
         self.hint_reads, self.billed, self.seen = [], [], {}
 
     def billing(self, route, now):
         """`drift` paths change on a route's second read (after eligibility); `late` paths on its third (the final
-        `_confirm` read, after the scope recheck)."""
+        `_confirm` read, after the scope recheck). A `rotate` path changes for every alias at once, after that many
+        reads of the path: one login rotating between two of its aliases' reads."""
         found = super().billing(route, now)
         self.billed.append(route["route"])
         self.seen[route["route"]] = self.seen.get(route["route"], 0) + 1
         if (route["path"] in self.drift and self.seen[route["route"]] > 1) \
-                or (route["path"] in self.late and self.seen[route["route"]] > 2):
+                or (route["path"] in self.late and self.seen[route["route"]] > 2) \
+                or self.reads[route["path"]] > self.rotate.get(route["path"], self.reads[route["path"]]):
             found["producer"] = "invented:changed"
         return found
 
@@ -922,10 +926,11 @@ class Due(Hinted):
     """A hinted source that also answers whether the on-demand ChatGPT usage read is due, and logs each question."""
     def __init__(self, hints=None, *, due=True, **options):
         super().__init__(hints, **options)
-        self.due, self.due_reads = due, []
+        self.due, self.due_reads, self.due_markers = due, [], []
 
     def usage_refresh_due(self, route, now):
         self.due_reads.append(route["route"])
+        self.due_markers.append(route.get("account_marker"))
         if isinstance(self.due, Exception):
             raise self.due
         return self.due
@@ -1085,6 +1090,66 @@ class BalanceTest(unittest.TestCase):
         self.assertEqual([item["route"] for item in result["alternatives"]], [SONNET_56])
         for n in range(1, 7):
             self.assertIn(dict(route=KIMI[n], reason="account_changed"), result["excluded"])
+
+    def test_a_later_alias_that_changed_invalidates_the_promoted_alias_of_the_same_binding(self):
+        # Baseline Claude (6); the promoted ChatGPT alias sol (7); a later ChatGPT alias terra (10), too dear to be
+        # comparable. ChatGPT reads: two for eligibility, one scope recheck, then sol's confirmation. The login rotates
+        # before terra's: sol was confirmed under a binding that terra's read proves gone.
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol"),
+                  model("openai", "gpt-6-2-terra")]
+        raw = balance_body(extra=[("openai/gpt-6-2-terra", 60, 5, 25, 78)])
+        hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, CHATGPT_ROUTE: CHATGPT_SOON}
+        steady = self.select(Hinted(hints), models=models, raw=raw)
+        self.assertEqual(steady["route"]["route"], CHATGPT_ROUTE)  # without the rotation, sol is promoted
+        self.assertEqual([item["route"] for item in steady["alternatives"]], [CLAUDE_ROUTE, TERRA_ROUTE])
+        source = Hinted(hints, rotate={"opencode-chatgpt-subscription": 4})
+        result = self.select(source, models=models, raw=raw)
+        self.assertEqual((result["state"], result["route"]["route"]), ("selected", CLAUDE_ROUTE))
+        self.assertEqual(result["alternatives"], [])
+        self.assertEqual(sorted(entry["route"] for entry in result["excluded"] if entry["reason"] == "account_changed"),
+                         sorted([CHATGPT_ROUTE, TERRA_ROUTE]))  # each alias of the lost binding, once
+        self.assertEqual(len(source.billed), 3 + 2 + 3 + 1)  # eligibility, scopes, confirmation, then Claude alone
+
+    def test_an_invalidated_binding_is_its_scope_and_original_marker(self):
+        # After the scope recheck, sol and terra still carry the old ChatGPT marker and nova a newer one of the same
+        # scope. Terra's confirmation proves the old binding gone: sol goes with it, nova and Claude stay.
+        names = dict(base=CLAUDE_ROUTE, sol=CHATGPT_ROUTE, terra=TERRA_ROUTE,
+                     nova="opencode-chatgpt-subscription:gpt-6-2-nova")
+        login = {names["base"]: "claude", names["sol"]: "old", names["terra"]: "old", names["nova"]: "new"}
+        source = Facts()
+
+        def fact(item, producer):
+            return dict(producer="invented:" + producer, path=item["path"], account=item["account"],
+                        pool=item["pool"], observed_at=NOW, valid_until=NOW + 900, paid_crossover="provider_blocked")
+        items = {}
+        for position, (name, item) in enumerate(zip(names, routing_paths.routes(
+                [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol"),
+                 model("openai", "gpt-6-2-terra"), model("openai", "gpt-6-2-nova")]))):
+            marker = subscription_billing.marker(fact(item, login[item["route"]]), item, NOW)
+            items[name] = dict(item, account_marker=marker, price=6 + position, score=76)
+        current = dict(login, **{names["terra"]: "new"})  # the rotation is visible from terra's read on
+        source.billing = lambda route, now: fact(route, current[route["route"]])
+        ordered = [items[name] for name in ("base", "sol", "terra", "nova")]
+        pool = dict(source=source, fixed=NOW, excluded=[])
+
+        def promoted(ordered, pool, qualifies):
+            pool.update(reordered=frozenset((names["base"], names["sol"])), expires=NOW + 60, ranked=NOW)
+            return [items[name] for name in ("sol", "base", "terra", "nova")]
+        with mock.patch.object(selector, "_balance", promoted):
+            chosen = selector._settle(ordered, pool, lambda item: True)
+        self.assertEqual([item["route"] for item in chosen], [names["base"], names["nova"]])
+        self.assertEqual(sorted(entry["route"] for entry in pool["excluded"]), sorted([names["sol"], names["terra"]]))
+        self.assertEqual({entry["reason"] for entry in pool["excluded"]}, {"account_changed"})
+
+    def test_the_price_bound_is_inclusive_at_exactly_one_and_a_half_times_the_baseline(self):
+        # 0.225 is 1.5 times 0.15, and 1.5 * 0.15 is 0.22499999999999998 in binary: the bound is still met. One
+        # millionth more on the output price is one proxy tick (0.00000025) above it.
+        self.assertLess(1.5 * 0.15, 0.225)
+        exact = self.select(Hinted(self.hints), raw=balance_body(claude=(0.15, 0.15, 76), go=(0.225, 0.225, 75)))
+        self.assertEqual((exact["route"]["route"], exact["route"]["price"]), (GO_ROUTE, 0.225))
+        self.assertEqual([(item["route"], item["price"]) for item in exact["alternatives"]], [(CLAUDE_ROUTE, 0.15)])
+        above = self.select(Hinted(self.hints), raw=balance_body(claude=(0.15, 0.15, 76), go=(0.225, 0.225001, 75)))
+        self.assertEqual((above["route"]["route"], above["alternatives"][0]["price"]), (CLAUDE_ROUTE, 0.22500025))
 
 
 class ReviewBalanceTest(unittest.TestCase):
@@ -1253,6 +1318,19 @@ class MovingClockTest(unittest.TestCase):
         result = self.select(Ticking(hints, self.clock, jump_at=5, jump=10), Fetch(balance_body()))
         self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
 
+    def test_a_clock_that_steps_back_during_confirmation_discards_the_promotion(self):
+        # The readings were ranked at NOW. The fifth billing read, in the final confirmation, finds the clock ten
+        # seconds earlier: the ranked snapshot is now dated in the future and supports nothing.
+        weekly = fresh(90, 7200, 604800)
+        steady = self.select(Ticking(self.hints(weekly), self.clock), Fetch(balance_body()))
+        self.assertEqual(steady["route"]["route"], CHATGPT_ROUTE)
+        self.clock[0] = NOW
+        source = Ticking(self.hints(weekly), self.clock, jump_at=5, jump=-10)
+        result = self.select(source, Fetch(balance_body()))  # asserts that no account is excluded as changed
+        self.assertEqual((result["state"], result["route"]["route"]), ("selected", CLAUDE_ROUTE))
+        self.assertEqual([item["route"] for item in result["alternatives"]], [CHATGPT_ROUTE])
+        self.assertEqual(len(source.billed), 8)  # one more local confirmation of the two routes, no more
+
     def test_a_reading_the_scorer_ignores_cannot_cancel_a_valid_promotion(self):
         # ChatGPT's weekly reading stays valid throughout. Beside it sits a well-formed `5h` row that claims a
         # 60-second window: the scorer ignores it, so its reset during the slow confirmation ends nothing.
@@ -1321,6 +1399,17 @@ class UsageRefreshTest(unittest.TestCase):
         self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
         self.assertIs(result["usage_refresh"], True)
         self.assertEqual(source.due_reads, [CHATGPT_ROUTE])
+        self.assertEqual(source.due_markers, [result["route"]["account_marker"]])  # asked for this binding only
+
+    def test_a_chatgpt_rival_at_exactly_the_price_bound_asks_for_a_read(self):
+        source = Due(self.weekly)
+        result = self.select(source, raw=balance_body(claude=(0.15, 0.15, 76), gpt=(0.225, 0.225, 78)))
+        self.assertEqual((result["route"]["route"], result.get("usage_refresh")), (CLAUDE_ROUTE, True))
+        above = Due(self.weekly)
+        result = self.select(above, raw=balance_body(claude=(0.15, 0.15, 76), gpt=(0.225, 0.225001, 78)))
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(above.due_reads, [])
 
     def test_an_unknown_chatgpt_baseline_without_a_comparable_rival_asks_for_nothing(self):
         for label, raw in (("price", balance_body(gpt=(1, 5, 78))), ("score", balance_body(gpt=(3, 11, 80)))):

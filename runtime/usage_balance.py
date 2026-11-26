@@ -9,6 +9,7 @@ mutated. Account binding, storage and selection belong to the caller.
 A provider's stored ranking batch holds the meters of its latest recognized usage reply and the interval they span.
 `batch_after` applies the one interval rule every provider shares; `batch_meters` re-checks a stored batch on read.
 """
+from fractions import Fraction
 import math
 import re
 
@@ -27,7 +28,8 @@ KEY = re.compile(r'5h|7d|monthly|(?:family|model):.+|duration:[1-9][0-9]*')
 HEADROOM_USED = 90  # more than 90% used leaves under 10 points, and blocks every boost on the route
 SCORE_FLOOR = 0.01  # 1% of the window length, so a score tops out at 100
 MIN_GAIN = 0.25
-PRICE_RATIO = 1.5
+PRICE_RATIO = Fraction(3, 2)  # at most 1.5 times the baseline's price, compared exactly
+PRICE_UNITS = 4_000_000  # a price proxy is (3 * input + output) / 4 of six-decimal prices: steps of 0.00000025
 SCORE_RATIO = 0.97
 TOLERANCE = routing.TOLERANCE
 
@@ -179,11 +181,27 @@ def expiry_score(family, meters, *, now):
     return best
 
 
+def storable_ranking(holder):
+    """`holder`, a stored record keeping an optional ranking batch under `ranking`, as strict JSON can store it. A
+    batch that cannot be written back is dropped whole, to unknown: it is never repaired into a reading. Anything
+    else in the record, a confirmed pause included, is returned untouched."""
+    if type(holder) is not dict or storage.storable(holder.get('ranking')):
+        return holder
+    return dict(holder, ranking=None)
+
+
+def _price_units(value):
+    """A price proxy as a whole number of 0.00000025 steps, the grid every catalog price sits on. Exact rational
+    arithmetic: no binary rounding at the bound and no overflow for any finite price."""
+    return round(Fraction(value) * PRICE_UNITS)
+
+
 def comparable(candidate, baseline):
-    """Within the price proxy and adjusted score bounds of the baseline winner; the score bound alone uses the tolerance."""
+    """Within the price proxy and adjusted score bounds of the baseline winner. The price bound is inclusive and exact
+    on the catalog's price grid, with no tolerance; the score bound alone uses the tolerance."""
     if not all(_number(item.get(field)) for item in (candidate, baseline) for field in ('price', 'score')):
         return False
-    return candidate['price'] <= PRICE_RATIO * baseline['price'] \
+    return _price_units(candidate['price']) <= PRICE_RATIO * _price_units(baseline['price']) \
         and candidate['score'] >= SCORE_RATIO * baseline['score'] - TOLERANCE
 
 

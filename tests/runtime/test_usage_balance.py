@@ -1,9 +1,10 @@
 """Expiry scoring and comparable slot order at a fixed clock; synthetic meters only, with no reads, probes or model calls."""
 import copy
+import json
 import math
 import unittest
 
-from runtime import usage_balance
+from runtime import scores, usage_balance
 
 NOW = 1893570000
 HOUR = 3600
@@ -157,9 +158,34 @@ class UsageBalanceTest(unittest.TestCase):
     def test_comparable_bounds(self):
         base = dict(price=2.0, score=1.0)
         self.assertTrue(usage_balance.comparable(dict(price=3.0, score=0.97), base))
-        self.assertFalse(usage_balance.comparable(dict(price=3.0000001, score=1.0), base))
+        self.assertFalse(usage_balance.comparable(dict(price=3.00000025, score=1.0), base))  # one price step above
         self.assertFalse(usage_balance.comparable(dict(price=2.0, score=0.969), base))
         self.assertFalse(usage_balance.comparable(dict(price=2.0), base))
+
+    def test_the_price_bound_is_exact_on_the_catalog_price_grid(self):
+        # The parser rounds each component price to six decimals and the proxy is (3 * input + output) / 4, so a price
+        # is a whole number of 0.00000025 steps. Binary multiplication by 1.5 misses some of them: 0.15 and 0.225.
+        def priced(*pairs):
+            rows = [dict(id='lab/m%d' % n, pricing=dict(prompt='%.12f' % (i * 1e-6), completion='%.12f' % (o * 1e-6)),
+                         benchmarks=dict(artificial_analysis=dict(intelligence_index=50)))
+                    for n, (i, o) in enumerate(pairs)]
+            cache = scores.parse_openrouter(json.dumps(dict(data=rows)).encode())
+            return [dict(price=scores.lookup(cache, 'm%d' % n, 'lab')['price'], score=1.0) for n in range(len(pairs))]
+        self.assertLess(1.5 * 0.15, 0.225)
+        base, edge, above = priced((0.15, 0.15), (0.225, 0.225), (0.225, 0.225001))
+        self.assertEqual((base['price'], edge['price'], above['price']), (0.15, 0.225, 0.22500025))
+        self.assertTrue(usage_balance.comparable(edge, base))
+        self.assertFalse(usage_balance.comparable(above, base))
+        for cents in range(2, 2001, 2):  # every even cent up to 20.00: the bound, then one step above it
+            with self.subTest(cents=cents):
+                bound = cents * 3 // 2 / 100
+                base, edge, above = priced((cents / 100, cents / 100), (bound, bound), (bound, bound + 0.000001))
+                self.assertTrue(usage_balance.comparable(edge, base))
+                self.assertFalse(usage_balance.comparable(above, base))
+        huge = dict(price=1e308, score=1.0)  # finite, but four million times it is not a float
+        self.assertTrue(usage_balance.comparable(huge, huge))
+        self.assertTrue(usage_balance.comparable(dict(price=1.5e300, score=1.0), dict(price=1e300, score=1.0)))
+        self.assertFalse(usage_balance.comparable(huge, dict(price=1e300, score=1.0)))
 
     def test_reorder_slots(self):
         self.assertEqual(reorder_names(['a', 'unknown', 'b', 'c', 'c-alias']), ['c', 'unknown', 'c-alias', 'b', 'a'])

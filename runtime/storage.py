@@ -96,6 +96,16 @@ def _locked(path, block=True, lock='.observations.lock'):
         os.close(fd)
 
 
+def storable(value):
+    """Whether `_write` can serialize `value`. A stored number such as `1e400` decodes as infinity, which strict JSON
+    never writes back; `_write` itself stays strict."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return True
+
+
 def _write(path, value):
     path = _resolved(path)
     private(path.parent, True)

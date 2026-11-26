@@ -21,12 +21,18 @@ MAX_MINUTES = 366 * 1440
 # The ranking read's guard: a short-lived parent of Codex, leader of its own process group. Its alarm kills that group
 # when the read's bound passes, whether or not the worker that started it is still alive. It never touches the pipes.
 # It outlives the worker's group SIGTERM, so a worker that dies before its SIGKILL leaves the deadline armed. The
-# handler is caught, not ignored: Codex starts with the default SIGTERM action, as without a guard.
+# handler is caught, not ignored: Codex starts with the default SIGTERM action, as without a guard. When its child
+# exits first, the alarm would die with the guard, so the guard, while it still leads the group, kills the group then
+# too: a helper the launcher left there cannot outlive the read. An answer already written stays in the pipe. A
+# descendant that left the group is out of its reach.
 GUARD = '''import os, signal, subprocess, sys
 signal.signal(signal.SIGTERM, lambda *args: None)
 signal.signal(signal.SIGALRM, lambda *args: os.killpg(0, signal.SIGKILL))
 signal.setitimer(signal.ITIMER_REAL, float(sys.argv[1]))
-sys.exit(subprocess.call(sys.argv[2:]))
+code = subprocess.call(sys.argv[2:])
+if os.getpgrp() == os.getpid():
+    os.killpg(0, signal.SIGKILL)
+sys.exit(code)
 '''
 MAX_LINE = 256 << 10
 MAX_MESSAGES = 64
@@ -171,7 +177,8 @@ def read_windows(*, timeout=TIMEOUT, environ=None, command=None):
     `earliest` is stamped just before the bounded exchange and `latest` when it returns: the interval bounds this
     exchange, not the age of the provider's accounting. Only a 5-hour or weekly window has a verified discrete reset.
     It refuses under `VCW_TEST_HOME`, as `read_reset` does. Codex runs under `GUARD`, so a worker killed mid-exchange
-    cannot leave it running past the bound, even when it ignores the end of its input."""
+    cannot leave it running past the bound, even when it ignores the end of its input, and a launcher that exits
+    cannot leave a helper behind in its group."""
     environ = os.environ if environ is None else environ
     try:
         if environ.get('VCW_TEST_HOME'):
