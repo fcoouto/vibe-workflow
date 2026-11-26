@@ -848,5 +848,191 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual((len(kept), excluded), (30, []))
 
 
+CLAUDE_ROUTE = "opencode-claude-subscription:claude-sonnet-5-5"
+GO_ROUTE = "opencode-go-subscription:kimi-x-1"
+CHATGPT_ROUTE = "opencode-chatgpt-subscription:gpt-6-2-sol"
+HAIKU_ROUTE = "opencode-claude-subscription:claude-haiku-5-5"
+TASK_CRITICAL = dict(files="1-2", spec="exact", risk="critical")
+
+
+def fresh(used, left, duration):
+    """A fresh, verified reading at NOW that resets `left` seconds later; a None duration has no discrete length."""
+    return dict(used_percent=used, earliest=NOW, latest=NOW, reset_at=NOW + left, duration=duration, discrete=True)
+
+
+GO_HEALTHY = {"5h": fresh(20, 3600, 18000), "7d": fresh(20, 4 * 86400, 604800),
+              "monthly": fresh(50, 10 * 86400, None)}  # 5h scores 4.0
+CLAUDE_PLAIN = {"7d": fresh(40, 6 * 86400, 604800)}  # 7d scores 1.0: no boost
+CHATGPT_SOON = {"5h": fresh(50, 3000, 18000), "7d": fresh(10, 6 * 86400, 604800)}  # 5h scores 3.0
+
+
+def balance_body(*, go=(4, 20, 75), gpt=(3, 19, 78), claude=(3, 15, 76), extra=()):
+    """Prices are (3 * input + output) / 4. The third lab's best is 75, so the level 2 bar is 60. Sonnet (price 6) is
+    the cheapest baseline; gpt (7) and kimi (8) are within 1.5x of it and above 97% of its score."""
+    return body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("openai/gpt-6-2-sol", 20, *gpt),
+                ("google/gemini-4-neon", 30, 4, 20, 61.4), ("anthropic/claude-sonnet-5-5", 40, *claude),
+                ("moonshot/kimi-x-1", 50, *go), *extra)
+
+
+class Hinted(Facts):
+    """Route-keyed ranking hints as the local source gives them; `drift` paths change account after the first read."""
+    def __init__(self, hints=None, *, drift=(), explode=False):
+        super().__init__()
+        self.hints, self.drift, self.explode, self.hint_reads = dict(hints or {}), set(drift), explode, []
+
+    def billing(self, route, now):
+        found = super().billing(route, now)
+        if route["path"] in self.drift and self.reads[route["path"]] > 1:
+            found["producer"] = "invented:changed"
+        return found
+
+    def ranking_meters(self, route, now):
+        self.hint_reads.append(route["route"])
+        if self.explode:
+            raise RuntimeError("PRIVATE-SENTINEL")
+        return self.hints.get(route["route"], {})
+
+
+class BalanceTest(unittest.TestCase):
+    """Ordinary picks: a comparable healthy subscription may be promoted; every guard keeps the baseline."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.models = [model("claude-agent", "claude-sonnet-5-5"), model("opencode-go", "kimi-x-1")]
+        self.hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, GO_ROUTE: GO_HEALTHY}
+
+    def select(self, source, *, models=None, raw=None, task=None):
+        request = dict(v=2, work_kind="review", task=dict(task or TASK), models=models or self.models)
+        return select(request, state_dir=self.root, source=source, fetch=Fetch(raw or balance_body()), now=NOW)
+
+    def test_a_healthy_comparable_go_route_is_promoted_over_the_claude_baseline(self):
+        source = Hinted(self.hints)
+        result = self.select(source)
+        self.assertEqual((result["state"], result["route"]["route"]), ("selected", GO_ROUTE))
+        self.assertEqual([item["route"] for item in result["alternatives"]], [CLAUDE_ROUTE])
+        self.assertEqual(set(source.hint_reads), {CLAUDE_ROUTE, GO_ROUTE})
+        self.assertNotIn("used_percent", json.dumps(result))
+        for field in ("admission", "reservation", "spend_permit"):
+            self.assertIs(result[field], False)
+
+    def test_an_unknown_go_route_keeps_the_claude_baseline_first(self):
+        result = self.select(Hinted({CLAUDE_ROUTE: CLAUDE_PLAIN}))
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
+    def test_go_below_the_score_or_price_bound_keeps_the_baseline_first(self):
+        for label, raw in (("score", balance_body(go=(4, 20, 73))), ("price", balance_body(go=(5, 25, 75)))):
+            with self.subTest(label=label):
+                result = self.select(Hinted(self.hints), raw=raw)
+                self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
+    def test_a_month_at_98_percent_blocks_the_go_boost(self):
+        go = dict(GO_HEALTHY, monthly=fresh(98, 10 * 86400, None))
+        result = self.select(Hinted({CLAUDE_ROUTE: CLAUDE_PLAIN, GO_ROUTE: go}))
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
+    def test_one_subscription_reads_no_hints(self):
+        source = Hinted(self.hints)
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("claude-agent", "claude-opus-5-5")]
+        result = self.select(source, models=models)
+        self.assertEqual((result["state"], result["route"]["route"], source.hint_reads),
+                         ("selected", CLAUDE_ROUTE, []))
+
+    def test_below_level_keeps_the_strongest_baseline(self):
+        raw = body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("openai/gpt-6-2-sol", 20, 3, 19, 78),
+                   ("google/gemini-4-neon", 30, 4, 20, 90), ("anthropic/claude-sonnet-5-5", 40, 3, 15, 76),
+                   ("moonshot/kimi-x-1", 50, 4, 20, 75))
+        result = self.select(Hinted(self.hints), raw=raw, task=TASK_CRITICAL)
+        self.assertEqual((result["state"], result["route"]["route"], result["below_level"], result["level"]),
+                         ("selected", CLAUDE_ROUTE, True, 3))
+
+    def test_a_near_floor_winner_keeps_its_order(self):
+        models = [model("claude-agent", "claude-haiku-5-5"), model("opencode-go", "kimi-x-1")]
+        source = Hinted({HAIKU_ROUTE: GO_HEALTHY, GO_ROUTE: GO_HEALTHY})
+        raw = balance_body(extra=[("anthropic/claude-haiku-5-5", 30, 1, 1, 59)])
+        result = self.select(source, models=models, raw=raw)
+        self.assertEqual((result["route"]["route"], result["below_level"]), (HAIKU_ROUTE, False))
+
+    def test_unrouted_entries_never_get_a_hint_lookup_or_join_the_result(self):
+        source = Hinted(self.hints)
+        models = self.models + [model("opencode", "free-x"), model("openrouter", "pay-y")]
+        result = self.select(source, models=models)
+        self.assertEqual(result["route"]["route"], GO_ROUTE)
+        self.assertEqual(set(source.hint_reads), {CLAUDE_ROUTE, GO_ROUTE})
+        self.assertNotIn("free-x", json.dumps(result))
+        self.assertNotIn("pay-y", json.dumps(result))
+
+    def test_a_changed_baseline_is_excluded_and_survivors_keep_baseline_order(self):
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol"),
+                  model("opencode-go", "kimi-x-1")]
+        hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, CHATGPT_ROUTE: CHATGPT_SOON, GO_ROUTE: GO_HEALTHY}
+        result = self.select(Hinted(hints, drift={"opencode-claude-subscription"}), models=models)
+        self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+        self.assertEqual([item["route"] for item in result["alternatives"]], [GO_ROUTE])
+        self.assertIn(dict(route=CLAUDE_ROUTE, reason="account_changed"), result["excluded"])
+
+    def test_a_changed_promoted_route_falls_back_to_the_baseline_order(self):
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol"),
+                  model("opencode-go", "kimi-x-1")]
+        hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, CHATGPT_ROUTE: CHATGPT_SOON, GO_ROUTE: GO_HEALTHY}
+        result = self.select(Hinted(hints, drift={"opencode-go-subscription"}), models=models)
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertEqual([item["route"] for item in result["alternatives"]], [CHATGPT_ROUTE])
+        self.assertIn(dict(route=GO_ROUTE, reason="account_changed"), result["excluded"])
+
+    def test_an_exploding_hint_read_leaves_the_selection_intact(self):
+        result = self.select(Hinted(self.hints, explode=True))
+        self.assertEqual((result["state"], result["route"]["route"]), ("selected", CLAUDE_ROUTE))
+        for field in ("admission", "reservation", "spend_permit"):
+            self.assertIs(result[field], False)
+        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(result))
+
+
+class ReviewBalanceTest(unittest.TestCase):
+    """Inside a review, balancing compares only the qualified independent group, with that group's own anchor."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def review(self, source, models, raw, reviewing="opencode-go/a-small"):
+        request = dict(v=2, work_kind="review", task=dict(TASK_CRITICAL), models=models, reviewing=reviewing)
+        return select(request, state_dir=self.root, source=source, fetch=Fetch(raw), now=NOW)
+
+    def test_the_known_independent_route_wins_over_a_same_lab_route_with_stronger_expiry(self):
+        # Claude-path rows carry the anthropic creator and ChatGPT-path rows the openai creator, as the scorer requires.
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("a/a-peer", 55, 0.2, 0.5, 67),
+                   ("anthropic/b-small", 60, 1, 5, 67), ("openai/c-x", 70, 2, 4, 67))
+        models = [model("opencode-go", "a-small"), model("opencode-go", "a-peer"), model("claude-agent", "b-small")]
+        source = Hinted({"opencode-go-subscription:a-peer": GO_HEALTHY,
+                         "opencode-claude-subscription:b-small": CLAUDE_PLAIN})
+        result = self.review(source, models, raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+
+    def test_independent_routes_compare_against_their_own_group_anchor(self):
+        # Overall, a-small (0.2) is the baseline; c-x costs 2.5, beyond 1.5x of it, but within 1.5x of b-small (2).
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("anthropic/b-small", 60, 1, 5, 67), ("openai/c-x", 70, 2, 4, 67))
+        models = [model("opencode-go", "a-small"), model("claude-agent", "b-small"), model("opencode-go", "c-x")]
+        source = Hinted({"opencode-claude-subscription:b-small": CLAUDE_PLAIN,
+                         "opencode-go-subscription:c-x": GO_HEALTHY})
+        result = self.review(source, models, raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("c-x", True))
+        self.assertEqual([item["model"] for item in result["alternatives"]], ["b-small"])
+
+    def test_no_independent_route_confirms_keeps_the_fallback_without_balancing(self):
+        # The author is on Claude (lab anthropic); a same-lab Go route would score 4.5 and so win if balanced.
+        raw = body(("anthropic/a-small", 50, 0.1, 0.5, 67), ("anthropic/a-peer", 55, 0.2, 0.5, 67),
+                   ("openai/b-small", 60, 1, 5, 67))
+        models = [model("claude-agent", "a-small"), model("opencode-go", "a-peer"), model("openai", "b-small")]
+        strong = {"5h": fresh(10, 3600, 18000), "7d": fresh(20, 4 * 86400, 604800)}  # 5h scores 4.5
+        source = Hinted({"opencode-claude-subscription:a-small": GO_HEALTHY,
+                         "opencode-go-subscription:a-peer": strong,
+                         "opencode-chatgpt-subscription:b-small": CHATGPT_SOON},
+                        drift={"opencode-chatgpt-subscription"})
+        result = self.review(source, models, raw, reviewing="claude-agent/a-small")
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+        self.assertIn(dict(route="opencode-chatgpt-subscription:b-small", reason="account_changed"), result["excluded"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,11 @@
 """Compose the tested advisory flow; never dispatch, admit, reserve or retry."""
 from pathlib import Path
+import copy
 import math
 import time
 
-from runtime import feedback, native_catalog, routing, routing_paths, routing_observations, scores, subscription_billing
+from runtime import feedback, native_catalog, opencode_account, routing, routing_paths, routing_observations, scores, \
+    subscription_billing, usage_balance
 
 CLAUDE = 'opencode-claude-subscription'
 
@@ -272,6 +274,57 @@ def _empty_reason(pool):
         else 'unscored' if pool['unscored'] == pool['kept'] else 'no_recommendation'
 
 
+def _hints(source, item, now):
+    """The route's ranking meters. A failed or absent read is no hint and never changes the pick."""
+    reader = getattr(source, 'ranking_meters', None)
+    try:
+        return reader(copy.deepcopy(item), now) if callable(reader) else {}
+    except Exception:
+        return {}
+
+
+def _expiry(source, item, now):
+    """The route's expiry priority from its own hints, or None when it has no usable one."""
+    return usage_balance.expiry_score(opencode_account.family(item), _hints(source, item, now), now=now)
+
+
+def _balance(ordered, pool, qualifies):
+    """The baseline order, with the slots of comparable qualifying routes refilled by expiry priority when another
+    subscription beats the baseline winner by the minimum gain. A changed account among the reordered routes (the
+    baseline included, even past `_confirm`'s limit) restores the baseline order without them. Optional: any failure
+    returns the baseline order, and `_confirm` remains the final binding check."""
+    if qualifies is None or not ordered or not qualifies(ordered[0]):
+        return ordered  # below level, or a near-floor winner: the original baseline behavior
+    try:
+        base, now = ordered[0], pool['now']
+        rivals = [item for item in ordered[1:] if qualifies(item) and usage_balance.comparable(item, base)]
+        if not any(item['path'] != base['path'] for item in rivals):
+            return ordered  # fewer than two subscriptions can compete: read nothing
+        base_expiry = _expiry(pool['source'], base, now)
+        if base_expiry is None:
+            return ordered
+        expiry = {base['route']: base_expiry}
+        for item in rivals:
+            score = _expiry(pool['source'], item, now)
+            if score is not None:
+                expiry[item['route']] = score
+        group = [base] + [item for item in rivals if item['route'] in expiry]
+        balanced = usage_balance.reorder(ordered, subscriptions={item['route']: item['path'] for item in group},
+                                         expiry=expiry)
+        if [item['route'] for item in balanced] == [item['route'] for item in ordered]:
+            return ordered
+        current = int(time.time()) if pool['fixed'] is None else pool['fixed']
+        changed = [item['route'] for item in group
+                   if subscription_billing.marker(subscription_billing.fact(pool['source'], item, current), item,
+                                                  current) != item['account_marker']]
+        if not changed:
+            return balanced
+        pool['excluded'].extend(dict(route=route, reason='account_changed') for route in changed)
+        return [item for item in ordered if item['route'] not in changed]
+    except Exception:
+        return ordered
+
+
 def _refresh_flag(answer, pool):
     if pool['had'] and scores.due(pool['cache'], sorted(pool['wanted']), pool['now']):
         answer['refresh'] = dict(wanted=sorted(pool['wanted']))
@@ -327,13 +380,14 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
         lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
         other = [item for item in ordered if lab is not None and qualifies(item)
                  and pool['labs'].get(item['route']) not in (None, lab)]
-        chosen = _confirm(other, pool, 3, qualifies)
+        chosen = _confirm(_balance(other, pool, qualifies), pool, 3, qualifies)
         independent = bool(chosen)
         if not chosen:
             failed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
             ordered = [item for item in ordered if item['route'] not in failed]
     if not independent:
-        chosen = _confirm(ordered, pool, 3, qualifies)
+        # A review with no qualified independent route keeps the original baseline order, never balanced.
+        chosen = _confirm(ordered if reviewing is not None else _balance(ordered, pool, qualifies), pool, 3, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
     reason = None if chosen else _empty_reason(pool)
