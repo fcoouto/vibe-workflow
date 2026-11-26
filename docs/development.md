@@ -702,9 +702,13 @@ Accepted limits, not guarantees:
   price bound is inclusive and exact: prices are compared in whole steps of 0.00000025, the grid of the price proxy,
   so a candidate at exactly 1.5 times the baseline is comparable and one step above it is not.
 
-Limit of coverage: fake Codex and OpenCode processes, invented meters, fixture clocks and isolated homes only. No live
-Codex read, model call, installed plugin or real pick was run. The `limitId` and `rateLimitsByLimitId` shape follows
-the plan's reference to OpenAI's app-server documentation and the answer shape recorded in
-`docs/superpowers/plans/2026-11-20-smart-router-auto-selection.md`; it was neither re-read nor observed live for this
-change, so a Codex version that answers another shape yields no hint and the baseline order. Other Codex and OpenCode
-versions are unverified.
+Live qualification (26 November 2026, `a4bb5f6`): one usage-only read per provider in isolated router state. Go
+returned 5-hour, weekly and monthly meters. Codex returned a weekly meter in the `codex` bucket; both the single
+view and the map entry identified that bucket. Claude returned a weekly account meter and a weekly Fable-family
+meter. The family hint applied to all three matching routes and no others. Claude's full snapshot reported
+`claude_window_missing` because there was no 5-hour meter, but the two weekly ranking hints remained usable.
+
+A local level-2 review comparison with balancing off and on used the same live readings and cached scores. Both
+returned the same advisory picks: no qualifying route on another subscription met the price and score bounds.
+Fixtures cover cross-subscription promotion; this live pass verified baseline behavior, not a promotion or behavior
+under an installed plugin. No inference ran, no reset was observed, and other client versions remain unverified.
