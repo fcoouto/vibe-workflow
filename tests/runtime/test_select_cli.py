@@ -139,11 +139,12 @@ class UsageRefreshCliTest(unittest.TestCase):
         opencode_account._transition(self.state / "router.json", "chatgpt", lambda part: dict(
             identity=binding, account=dict(binding, observed_at=int(time.time()))))
 
+    def run_process(self, raw, *flags, state=None):
+        return subprocess.run([sys.executable, "-B", str(SCRIPT), "--state-dir", str(state or self.state), *flags],
+                              input=raw, capture_output=True, timeout=60, cwd=self.root, env=self.env)
+
     def run_cli(self, raw, *flags, state=None):
-        done = subprocess.run([sys.executable, "-B", str(SCRIPT), "--state-dir", str(state or self.state),
-                               "--usage-refresh", *flags], input=raw, capture_output=True, timeout=60,
-                              cwd=self.root, env=self.env)
-        return done.stdout
+        return self.run_process(raw, "--usage-refresh", *flags, state=state).stdout
 
     def usage(self):
         return json.loads((self.state / self.account.STORE_FILE).read_text())["chatgpt"].get("chatgpt_usage")
@@ -158,13 +159,27 @@ class UsageRefreshCliTest(unittest.TestCase):
 
     def test_a_combined_mode_fails_and_does_neither_job(self):
         for flags in (["--council-pick"], ["--council-roster"], ["--check-setup"], ["--check-setup", "--allow-fetch"],
-                      ["--refresh"], ["--chatgpt-limit"], ["--claude-limit"], ["--feedback"]):
+                      ["--allow-fetch"], ["--refresh"], ["--chatgpt-limit"], ["--claude-limit"], ["--feedback"],
+                      ["--allow-fetch", "--refresh"], ["--allow-fetch", "--council-pick"]):
             with self.subTest(flags=flags):
-                self.assertEqual(self.run_cli(b"{}", *flags), b'{"state":"failed"}\n')
+                done = self.run_process(b"{}", "--usage-refresh", *flags)
+                self.assertEqual((done.returncode, done.stdout), (0, b'{"state":"failed"}\n'))
         self.assertFalse(self.entered.exists())
         self.assertIsNone(self.usage())
         self.assertEqual(sorted(path.name for path in self.state.iterdir() if not path.name.startswith(".")),
                          [self.account.STORE_FILE])  # no limit mark, score cache or other mode's state
+
+    def test_allow_fetch_keeps_its_rule_for_every_call_that_is_not_the_worker(self):
+        for flags in (["--allow-fetch"], ["--allow-fetch", "--refresh"], ["--allow-fetch", "--council-pick"],
+                      ["--allow-fetch", "--chatgpt-limit"], ["--allow-fetch", "--feedback"]):
+            with self.subTest(flags=flags):
+                done = self.run_process(b"{}", *flags)
+                self.assertEqual((done.returncode, done.stdout), (2, b""))
+                self.assertIn(b"--allow-fetch needs --check-setup", done.stderr)
+        self.assertFalse(self.entered.exists())
+        self.assertIsNone(self.usage())
+        self.assertEqual(sorted(path.name for path in self.state.iterdir() if not path.name.startswith(".")),
+                         [self.account.STORE_FILE])  # refused before any mode's work, as before
 
     def test_exact_stdin_runs_one_bound_read_and_answers_only_its_state(self):
         self.assertEqual(self.run_cli(b"{}"), b'{"state":"stored"}\n')

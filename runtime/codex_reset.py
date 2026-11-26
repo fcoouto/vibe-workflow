@@ -131,14 +131,15 @@ def _claims(snapshot, received):
 
 def _windows(result, started, received):
     """Ranking meters of the `codex` bucket in one answer. Its entry under `rateLimitsByLimitId` decides which meters
-    exist; without that entry, the single view does when it names the bucket. A window length whose readings disagree,
-    within one view or between the two, is dropped alone."""
+    exist; without that entry, the single view does. Either must state `limitId: "codex"` itself: the map key alone
+    proves no scope, since it can stand for a missing ID. A window length whose readings disagree, within one view or
+    between the two, is dropped alone."""
     listed, single = result.get('rateLimitsByLimitId'), result.get('rateLimits')
     views = []
     if type(listed) is dict and BUCKET in listed:
         entry = listed[BUCKET]
-        if type(entry) is not dict or entry.get('limitId') not in (None, BUCKET):
-            return {}  # the preferred entry contradicts itself: nothing else may stand in for it
+        if type(entry) is not dict or entry.get('limitId') != BUCKET:
+            return {}  # the preferred entry does not name the bucket itself: nothing else may stand in for it
         views.append(_claims(entry, received))
     if type(single) is dict and single.get('limitId') == BUCKET:
         views.append(_claims(single, received))

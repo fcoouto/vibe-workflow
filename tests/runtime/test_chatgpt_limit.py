@@ -223,7 +223,19 @@ class CodexWindowsTest(unittest.TestCase):
         unnamed = dict(rateLimits=self.bucket(weekly, limit=None))  # slots alone never identify the plan bucket
         mislabeled = dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='codex_other')))
         broken = dict(rateLimits=self.bucket(weekly), rateLimitsByLimitId=dict(codex='x'))
+        # The map key alone proves no scope: the entry must state `limitId: "codex"` itself. An entry without it is
+        # still the preferred view, so the single view never stands in for it.
+        absent = dict(primary=weekly, secondary=None)
+        missing = dict(rateLimitsByLimitId=dict(codex=absent))
+        null = dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit=None)))
+        missing_beside_single = dict(rateLimits=self.bucket(weekly), rateLimitsByLimitId=dict(codex=absent))
+        null_beside_single = dict(rateLimits=self.bucket(weekly),
+                                  rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit=None)))
         for label, result in (('other', other), ('unnamed', unnamed), ('mislabeled', mislabeled), ('broken', broken),
+                              ('missing', missing), ('null', null), ('missing beside single', missing_beside_single),
+                              ('null beside single', null_beside_single),
+                              ('empty text', dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='')))),
+                              ('other case', dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='Codex')))),
                               ('empty', {}), ('list', dict(rateLimits=[weekly]))):
             with self.subTest(label=label):
                 self.assertEqual(self.read(result), {})
@@ -294,6 +306,11 @@ class CodexWindowsTest(unittest.TestCase):
         result['rateLimits'] = dict(primary=self.window(40, FIVE, 100), secondary=self.window(90, FIVE, 200))
         command = fake_codex(self.dir, RESULT % (str(self.methods), json.dumps(result)))
         self.assertEqual(codex_reset.read_reset(now=NOW, environ=self.env, command=command), NOW + 200)
+        self.assertEqual(self.read(result)['7d']['used_percent'], 90)  # the same answer, read by its named bucket
+        del result['rateLimitsByLimitId']['codex']['limitId']  # no stated identity: no hint, the same pause reset
+        command = fake_codex(self.dir, RESULT % (str(self.methods), json.dumps(result)))
+        self.assertEqual(codex_reset.read_reset(now=NOW, environ=self.env, command=command), NOW + 200)
+        self.assertEqual(self.read(result), {})
 
 
 if __name__ == '__main__':

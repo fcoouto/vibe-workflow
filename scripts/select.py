@@ -88,7 +88,8 @@ def main():
     parser.add_argument("--feedback", action="store_true")
     parser.add_argument("--usage-refresh", action="store_true")
     args = parser.parse_args()
-    if args.allow_fetch and not args.check_setup:
+    # The worker refuses every other mode itself, with its fixed state; all other calls keep the usage error.
+    if args.allow_fetch and not args.check_setup and not args.usage_refresh:
         parser.error("--allow-fetch needs --check-setup")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
