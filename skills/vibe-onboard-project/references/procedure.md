@@ -83,20 +83,29 @@ exactly as written, apart from the markers and the saved choice's place.
 
 ## Steps
 
+Before step 1, check where the session runs: `git rev-parse --path-format=absolute --absolute-git-dir --git-common-dir`.
+When both paths are the same in a git repository, the session is in the primary checkout.
+Say in one line that you are creating a worktree and moving this chat there. Call
+`worktree_create` with the name `onboard-vibe-workflow` (another name when it exists), move the
+session to the returned directory with `session.move`, and confirm the working directory in a
+later step, because the move applies at the next step boundary. If any part fails, stop and
+say why; never save in the main checkout instead. A linked worktree, or a directory that is
+not a git repository, needs no move.
+
 1. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview"}`. If blocked, explain
    the fixed reason and stop. Otherwise, before question 1, write the opening line
    with the preview's `project` and `client`:
-   **Project: <project>. Client: <client>. Up to five short questions.** When `root`
-   differs, the session is in a worktree; add that Smart Router is saved in this
-   worktree and the git workflow and session title choices in the main checkout.
+   **Project: <project>. Client: <client>. Up to five short questions.** Add that the
+   choices are saved in this checkout's settings file, the preview's `path`.
+   If you moved, stop before asking or saving unless the preview's `root` is the
+   confirmed destination worktree.
    Their answers are the consent to save.
 2. Ask question 1. The preview's `previous_enabled` is the saved value; `null`
    means nothing is saved. For `false`, that gives Leave it off (Current) first and
    Turn it on (Recommended) second.
 3. Call `vibe_workflow_onboard` with `{"v":1,"op":"preview","feature":"git_workflow"}`.
    If that preview is blocked, explain the fixed reason, skip questions 2, 3 and 4 and
-   leave git workflow guidance off; for `project_root_unavailable`, say the main
-   checkout could not be found from this worktree and onboarding must run there.
+   leave git workflow guidance off.
    Otherwise ask question 2. The preview's `previous_enabled` and
    `previous_agent_merge` hold the saved choice: `previous_enabled` `false` is Turn
    off git guidance; otherwise `previous_agent_merge` `true` is Agents merge their own and `false` is I merge them;
@@ -122,37 +131,47 @@ exactly as written, apart from the markers and the saved choice's place.
    again with `{"v":1,"op":"preview","feature":"session_titles","enabled":true}` and use
    only its readiness. If the first session titles preview is
    blocked, skip question 5, leave session titles off and report
-   **Session titles: not saved.** followed by the fixed reason; for
-   `project_root_unavailable`, say onboarding must run from the main checkout.
-7. If an answer changes a proposal, preview that feature again with the selected
+   **Session titles: not saved.** followed by the fixed reason.
+7. Keep the `previous_*` values from the previews used to ask the questions.
+   If an answer changes a proposal, preview that feature again with the selected
    booleans (`enabled`, `agent_merge` and `worktree_cleanup` for git workflow;
-   Turn off git guidance is all three `false`; `enabled` for session titles). If every preview says `change: "none"` and no
-   GitHub change is pending, say **Nothing to change.**, keep the saved choices and
-   stop. A yes to question 4 counts as a change, so it is never swallowed by that stop.
+   Turn off git guidance is all three `false`; `enabled` for session titles).
+   Before accepting a fresh snapshot, compare its `previous_*` values to those used
+   for the questions, including Smart Router's `previous_enabled` from question 1.
+   If a value changed (including to or from `null`), stop before saving, explain
+   that settings changed, and ask the user to run onboarding again.
+   If every preview says `change: "none"` and no GitHub change is pending, say
+   **Nothing to change.** and keep the saved choices. If Git workflow readiness
+   has reason `project_root_unavailable`, report its saved-local status from
+   step 10. Then stop.
+   A yes to question 4 counts as a change, so it is never swallowed by that stop.
    Otherwise say what will be saved, in one plain line per change and not as a
    question, for example **Saving: Smart Router On, Git workflow I merge them, cleanup on, Session titles On —
    .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
-   Use the full `path` when `root` differs. Session titles are saved in the main checkout too.
-   For git workflow, add that the main checkout's
-   settings file will change and that committing it is the user's step.
+   Name the preview's full `path`, and add that committing and merging that file is the user's step.
    Say it in order: the Saving line comes before anything is applied, and a cancel at any question or a denied native file-edit permission means no GitHub change.
 8. Apply Smart Router first: call `vibe_workflow_onboard` with `v: 1`,
    `op: "apply"`, the preview's `enabled`, and `expected_snapshot` set to its
    `snapshot`. The features share one file, so then
-   preview `git_workflow` again with the answered values. If its `change` and
-   values match what the user answered, apply it with all three booleans and that
-   fresh `snapshot`, for example
+   preview `git_workflow` again with the answered values. Compare its
+   `previous_enabled`, `previous_agent_merge`, and `previous_worktree_cleanup`
+   with the values used for the questions, including `null`. Do not compare
+   `change`: the first save can turn `create` into `update` without changing
+   any git workflow choice. If the previous values still match, apply with all
+   three answered booleans and the fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"git_workflow","enabled":true,"agent_merge":false,"worktree_cleanup":true,"expected_snapshot":"<snapshot>"}`;
-   otherwise ask the affected question again and say why. The user's answers are the
+   if a previous value changed, ask the affected question again and say why.
+   The user's answers are the
    consent; native file-edit permission is the only other prompt, and it stays the
    client's. If edit is denied, permission is unavailable or apply fails for any
    reason, do not write another way: never import or run the plugin's files outside the tool, and never write the settings file yourself.
-   Unless question 5 was skipped, apply session titles last, the same way: preview `session_titles` again with the
-   answered `enabled` and apply it with that fresh `snapshot`, for example
+   Unless question 5 was skipped, apply session titles last, the same way: preview
+   `session_titles` again with the answered `enabled`. Ask again if `previous_enabled`
+   changed from the value used for question 5. Apply with the confirmed answer
+   and fresh `snapshot`, for example
    `{"v":1,"op":"apply","feature":"session_titles","enabled":true,"expected_snapshot":"<snapshot>"}`.
    Report each feature that was not saved as **<Feature>: not saved.** followed by how
-   to recover, for example **Git workflow: not saved. Run onboarding from the main
-   checkout.** If settings changed or the result is lost, inspect with a fresh preview
+   to recover, for example **Git workflow: not saved. Run onboarding again.** If settings changed or the result is lost, inspect with a fresh preview
    instead of repeating apply, and ask the affected question again if the proposal
    changed. If apply reports `project_settings_lossy`, say that existing numbers cannot
    be preserved by the writer. Do not rewrite the file; ask the user to review it.
@@ -172,6 +191,7 @@ exactly as written, apart from the markers and the saved choice's place.
    - Git workflow, `ready`, agents merge: Git workflow: On · Agents merge — reminders registered; not yet observed in this OpenCode. Advisory, not enforced.
    - Git workflow, `ready`, cleanup on: Git workflow: On · I merge, cleanup on — reminders registered; not yet observed in this OpenCode. Advisory, not enforced. (Agents merge: Git workflow: On · Agents merge, cleanup on — …)
    - Git workflow, `setup_needed` with `guard_unavailable`: Git workflow: On · I merge — guidance only; reminders are not available in this OpenCode. (Agents merge: Git workflow: On · Agents merge — guidance only; reminders are not available in this OpenCode.) Add ", cleanup on" after the merge choice when cleanup is on.
+   - Git workflow saved or unchanged, `setup_needed` with `project_root_unavailable`: Git workflow: Saved locally — the main checkout could not be resolved; agent merge and cleanup are unavailable.
    - Git workflow, any other `setup_needed` reason: give the reported reason.
    - Session titles, `off`: Session titles: Off — titles are left alone.
    - Session titles, `ready`: Session titles: On — updated at the end of each turn.
@@ -179,8 +199,10 @@ exactly as written, apart from the markers and the saved choice's place.
 
    Add the GitHub line from step 5 or step 9 when question 4 ran or was skipped for a reason.
    An enabled preference is not proof of account availability or entitlement.
-   When `root` differs and Smart Router was saved, add before the last line:
-   **Smart Router is saved only in this worktree. Merge this branch into main so it applies to the project.**
+   When `root` differs from `project` and Git workflow readiness does not have reason
+   `project_root_unavailable`, add before the last line:
+   **Git workflow and cleanup take effect only after this branch is merged into main.**
+   Smart Router and session titles apply in this worktree now and in the project after the merge.
    Offer to open the pull request with `vibe-pull-requests`; do not merge unasked.
    Finish with one line: **Run onboarding again to change them.**
 

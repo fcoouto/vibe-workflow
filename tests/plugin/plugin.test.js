@@ -1562,6 +1562,39 @@ else:
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 
+// A completed spec write makes titles read their settings before binding the session.
+async function titlesReadStorage(t, { own, main }) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "titles-wiring-")))
+  t.after(() => rm(root, { recursive: true }))
+  const git = (...args) => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture",
+    "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], { stdio: "pipe" })
+  git("init", "-q")
+  git("commit", "--allow-empty", "-qm", "fixture")
+  const linked = join(root, "linked")
+  git("worktree", "add", "-q", "--detach", linked)
+  for (const [dir, enabled] of [[root, main], [linked, own]]) {
+    await mkdir(join(dir, ".vibe-workflow"), { recursive: true })
+    await writeFile(join(dir, ".vibe-workflow", "settings.json"), JSON.stringify({ version: 1, features: [{ session_titles: { enabled } }] }))
+  }
+  const events = feed(), reads = [], after = []
+  const h = host(linked, { state_dir: join(root, "state") }, undefined, {
+    event: { subscribe: events.subscribe },
+    storage: { get: async (key) => { reads.push(key) }, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
+    session: { hook: async () => {}, get: async () => ({ location: { directory: linked } }) },
+  })
+  h.ctx.tool.hook = async (name, handler) => { if (name === "execute.after") after.push(handler) }
+  const cleanup = await (await load()).setup(h.ctx)
+  t.after(() => cleanup?.())
+  for (const hook of after) await hook({ status: "completed", tool: "write", sessionID: "ses_1",
+    input: { path: "docs/superpowers/specs/2026-11-23-fixture-design.md" } })
+  return reads
+}
+
+test("session titles follow the checkout's own file, not main's", async (t) => {
+  assert.ok((await titlesReadStorage(t, { own: true, main: false })).length > 0)
+  assert.equal((await titlesReadStorage(t, { own: false, main: true })).length, 0)
+})
+
 // A Map-backed ctx.storage like the host's: JSON values, scan by prefix with an `after` cursor and a `limit`.
 function memoryStorage(entries = new Map()) {
   return {

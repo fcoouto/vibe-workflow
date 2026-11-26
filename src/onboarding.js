@@ -17,34 +17,45 @@ export async function registerSkill(ctx, skill) {
 
 const features = ["smart_router", "git_workflow", "session_titles"]
 
-export async function registerOnboarding(ctx, projects, checkSetup, prGuard, titlesGuard) {
+export async function registerOnboarding(ctx, projects, checkSetup, prGuard, titlesGuard, inspectGitWorkflow) {
   await registerSkill(ctx, name)
   await ctx.tool.transform((editor) => editor.add({
     name: toolName,
-    description: `Preview or save a confirmed project preference: Smart Router (default) or git workflow guidance ` +
-      `(feature "git_workflow"), or session titles (feature "session_titles"). Follow the ${name} skill.`,
+    description: `Preview or save a confirmed project preference: Smart Router (default), git workflow guidance, or session titles. ` +
+      `For merge and cleanup decisions, use op "inspect", feature "git_workflow", to read the main checkout only. Follow the ${name} skill.`,
     input: {
       type: "object", additionalProperties: false, required: ["v", "op"],
       properties: {
-        v: { type: "integer", const: 1 }, op: { enum: ["preview", "apply"] }, feature: { enum: features },
+        v: { type: "integer", const: 1 }, op: { enum: ["preview", "apply", "inspect"] }, feature: { enum: features },
         enabled: { type: "boolean" }, agent_merge: { type: "boolean" }, worktree_cleanup: { type: "boolean" },
         expected_snapshot: { type: "string", pattern: snapshotPattern.source },
       },
     },
     execute: async (request, invocation) => {
       const feature = request?.feature ?? "smart_router", prefs = feature === "git_workflow"
-      if (!request || request.v !== 1 || !["preview", "apply"].includes(request.op) || !features.includes(feature) ||
+      if (!request || request.v !== 1 || !["preview", "apply", "inspect"].includes(request.op) || !features.includes(feature) ||
           Object.keys(request).some((key) => !["v", "op", "feature", "enabled", "agent_merge", "worktree_cleanup", "expected_snapshot"].includes(key)) ||
           (("agent_merge" in request || "worktree_cleanup" in request) && !prefs) ||
           ["enabled", "agent_merge", "worktree_cleanup"].some((key) => key in request && typeof request[key] !== "boolean")) {
         return output(blocked("invalid_request"))
       }
       const { signal } = invocation, project = projects[feature]
+      if (signal?.aborted) return output(blocked("project_settings_cancelled"))
+      if (request.op === "inspect") {
+        if (!prefs || Object.keys(request).length !== 3) return output(blocked("invalid_request"))
+        const { state, reason, enabled, agent_merge, worktree_cleanup } = await inspectGitWorkflow()
+        return output({ state, reason, enabled, agent_merge, worktree_cleanup })
+      }
       const values = prefs ? Object.fromEntries(["enabled", "agent_merge", "worktree_cleanup"].filter((key) => key in request)
         .map((key) => [key, request[key]])) : request.enabled
-      const ready = async (enabled, allowFetch) => !enabled ? { state: "off", reason: null } : prefs ? prGuard()
-        : feature === "session_titles" ? titlesGuard() : checkSetup(signal, allowFetch)
-      if (signal?.aborted) return output(blocked("project_settings_cancelled"))
+      const ready = async (enabled, allowFetch) => {
+        if (!enabled) return { state: "off", reason: null }
+        if (prefs) {
+          const { reason } = await inspectGitWorkflow()
+          return reason === "project_root_unavailable" ? { state: "setup_needed", reason } : prGuard()
+        }
+        return feature === "session_titles" ? titlesGuard() : checkSetup(signal, allowFetch)
+      }
       const proposed = await project.preview(values)
       if (proposed.state === "blocked") return output(proposed)
       if (request.op === "preview") {

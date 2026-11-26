@@ -93,6 +93,9 @@ kept as is, so a project saved under it is asked again by onboarding:
   the worktree's own file. A task branch can edit its own copy, so a worktree copy
   must never grant merge authority. This differs from the per-worktree file Smart
   Router keeps, by design and for this feature only.
+  Update 2026-11-23: onboarding now writes at the session's checkout root, in a worktree,
+  seeded from main's file (`2026-11-23-onboarding-in-worktree-design.md`). Reads are
+  unchanged: this feature still reads main only, so a worktree file never grants merge.
 - A missing, unreadable or invalid entry means `enabled: false` and
   `agent_merge: false`.
 - `project.js` becomes feature-aware (validation and read/write of a named feature
