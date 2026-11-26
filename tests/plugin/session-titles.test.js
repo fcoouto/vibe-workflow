@@ -82,6 +82,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   let stream, subscribed
   const parentOf = (id) => facts.parents[id] ?? (id.startsWith("child") ? "ses_1" : undefined)
   const timeOf = (id) => {
+    if (facts.times?.[id]) return facts.times[id]
     const now = Date.now()
     // stale: busy before this server started (a run killed by a restart); longBusy: busy for 11 minutes in this run.
     if (facts.busyAt[id] !== undefined) return { created: facts.busyAt[id] - 5000, updated: facts.busyAt[id], busy: facts.busyAt[id] }
@@ -267,7 +268,7 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   assert.equal(h.calls.update.length, 2)
 })
 
-test("default or empty titles take the spec slug; topic switches only when untouched", async (t) => {
+test("default titles take the spec slug and a distinct spec replaces the previous topic", async (t) => {
   for (const initial of ["New session - 2026-11-20T10:11:12.345Z", ""]) {
     const h = await host(t)
     h.titles.set("ses_1", initial)
@@ -290,7 +291,7 @@ test("default or empty titles take the spec slug; topic switches only when untou
   h.titles.set("ses_1", "￻▰▱▱▱▱ WAITING · My words")
   await h.write(SPEC)
   await h.end()
-  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · My words")
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · fix auth")
 })
 
 test("facts drive cells 2 to 5, never decrease, and cell 5 releases the session", async (t) => {
@@ -388,7 +389,7 @@ test("a child's spec write binds its root, never the child; events without a ses
   assert.equal(h.titles.get("ses_1"), "￻▰▰▱▱▱ WAITING · Fix login flow")
 })
 
-test("a removed prefix silences the session and an unchanged title is not rewritten", async (t) => {
+test("a removed prefix silences its task, but a different spec starts fresh", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -397,11 +398,44 @@ test("a removed prefix silences the session and an unchanged title is not rewrit
   h.titles.set("ses_1", "Plain title")
   h.facts.changed = ["z.js"]
   await h.end()
-  await h.write(OTHER)
+  await h.write(PLAN)
   await h.end()
-  await h.start()
-  assert.equal(h.calls.update.length, 1)
   assert.equal(h.titles.get("ses_1"), "Plain title")
+  const reads = h.calls.run.length
+  h.facts.changed = []
+  await h.write(OTHER)
+  assert.equal(h.calls.run.length, reads)
+  assert.equal(h.calls.update.length, 1)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · add cache")
+})
+
+test("new-task rename wins even before the first new meter", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.write(OTHER)
+  h.titles.set("ses_1", "New manual name")
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "New manual name")
+  assert.equal(h.calls.update.length, 1)
+})
+
+test("confirmed completion retires the whole task without changing a manual title", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.titles.set("ses_1", "My own title")
+  h.facts.prs["feat/x"] = [{ state: "MERGED", title: "x" }]
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "My own title")
+  assert.equal(h.storage.data.has(KEY), false)
+
+  h.facts.prs = {}
+  h.facts.times = { ses_1: { busy: h.started + 20, idle: h.started + 10 } }
+  await h.write(PLAN)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · fix auth")
 })
 
 test("settings off, not onboarded or invalid do no work", async (t) => {
@@ -1382,7 +1416,7 @@ test("a binding survives a restart through plugin storage", async (t) => {
   assert.equal(second.titles.get("ses_1"), compose("Fix login flow", 2, true))
 })
 
-test("reaching cell 5 removes the stored binding, and a silenced session stays stored across a restart", async (t) => {
+test("completion drops its binding and task silence survives a restart until rebind", async (t) => {
   const storage = memoryStorage()
   const h = await host(t, { storage })
   await h.write(SPEC)
@@ -1401,9 +1435,20 @@ test("reaching cell 5 removes the stored binding, and a silenced session stays s
   h.registered.close()
   const again = await host(t, { storage, root: h.root })
   again.titles.set("ses_2", "My own title")
-  await again.write(OTHER, "ses_2")
   await again.end("ses_2")
   assert.equal(again.titles.get("ses_2"), "My own title")
+  await again.write(OTHER, "ses_2")
+  await again.end("ses_2")
+  assert.equal(again.titles.get("ses_2"), "￻▰▱▱▱▱ WAITING · add cache")
+})
+
+test("a legacy taskless silence record cannot silence a new binding", async (t) => {
+  const h = await host(t)
+  h.storage.data.set(KEY, { location: h.root, at: 1, task: null, last: null, silenced: true })
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · Fix login flow")
+  assert.equal(h.storage.data.get(KEY).silenced, false)
 })
 
 test("a record saved by another project's instance is ignored", async (t) => {

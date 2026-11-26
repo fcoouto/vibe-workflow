@@ -144,9 +144,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
       typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
       !(task.spec || task.plan) || !(task.seen === undefined || short(task.seen)) ||
-      !(task.bound === undefined || task.bound === null || finite(task.bound))) return null
+      !(task.bound === undefined || task.bound === null || finite(task.bound)) ||
+      !(task.resetFrom === undefined || text(task.resetFrom))) return null
     const { top, spec, plan, remembered, cells, slug, fresh } = task
-    return { top, spec, plan, remembered, cells, slug, fresh, seen: task.seen ?? null, bound: task.bound ?? null }
+    return { top, spec, plan, remembered, cells, slug, fresh, seen: task.seen ?? null, bound: task.bound ?? null,
+      ...(task.resetFrom != null && { resetFrom: task.resetFrom }) }
   }
 
   // `known` is a session read the caller already made, so loading costs no second read.
@@ -163,7 +165,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       if (!record || (typeof record.project === "string" ? record.project !== project : record.location !== where)) return
       const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
         silenced: record.silenced === true, diag: diagOf(record.diag) }
-      if ((!entry.task && !entry.silenced) || !current(sessionID, admitted)) return
+      if (!entry.task || !current(sessionID, admitted)) return
       keep(sessionID, entry)
       saved.set(sessionID, JSON.stringify(entry))
     } catch {}
@@ -178,7 +180,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       if (!storage) return
       const snapshot = JSON.stringify(entry), known = saved.has(sessionID)
       if (saved.get(sessionID) === snapshot) return
-      if (!entry.task && !entry.silenced) {
+      if (!entry.task) {
         await storage.remove(KEY + sessionID)
         saved.delete(sessionID)
         return
@@ -197,6 +199,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       entries.sort((a, b) => (a.value?.at ?? 0) - (b.value?.at ?? 0))
       for (const { key } of entries.slice(0, Math.max(0, entries.length - MAX_SESSIONS))) await storage.remove(key)
     } catch {}
+  }
+
+  async function retire(sessionID, entry) {
+    entry.task = null
+    await save(sessionID, entry)
+    if (sessions.get(sessionID) === entry) {
+      sessions.delete(sessionID)
+      pending.delete(sessionID)
+    }
   }
 
   // A spec or plan write. A child's write binds its root; the bind runs on the root's queue so it cannot race the root's
@@ -233,11 +244,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const adopt = found.kind === "plan" && held && held.top !== top && !held.plan && found.slug === held.slug &&
       await sameRepository(held.top, top)
     if (!current(sessionID, admitted)) return
-    const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false, diag: null }
-    const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null,
-      bound: Date.now() }
-    if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
-    else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
+    let entry = sessions.get(sessionID)
+    if (!held || (found.kind === "spec" && held.spec !== file)) {
+      const title = known.title ?? ""
+      const reused = held || finite(known.time?.idle) || (title.startsWith(MARK) && PREFIX.test(title))
+      const task = { top, spec: found.kind === "spec" ? file : null, plan: found.kind === "plan" ? file : null,
+        remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null, bound: Date.now(),
+        ...(reused && { resetFrom: title }) }
+      entry = { task, last: null, silenced: false, diag: null }
+    }
     else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
     else if (adopt && entry.task === held) entry.task = { ...held, top, plan: file, remembered: null, seen: null }
     keep(sessionID, entry)
@@ -405,15 +420,22 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const info = await read(sessionID)
     if ((fromChild && busy.self) || await owns(info) !== true || !current(sessionID, admitted)) return
     const title = info.title ?? ""
-    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
+    const reset = task.fresh && typeof task.resetFrom === "string"
+    const renamed = reset && title !== task.resetFrom && Boolean(title) && !DEFAULT_TITLE.test(title)
+    if (renamed || (entry.last !== null && !PREFIX.test(title))) {
+      if (cells === 5) await retire(sessionID, entry)
+      else { entry.silenced = true; await save(sessionID, entry) }
+      return
+    }
     const kept = strip(title)
-    const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
+    const topic = !kept || DEFAULT_TITLE.test(kept) || reset ? task.slug : kept
     const next = compose(topic, cells, ended && cells < 5 && !busy.children && !hasShell(sessionID))
     if (next !== title) await ctx.session.update({ sessionID, title: next })
     if (sessions.get(sessionID) !== entry || entry.task !== task) return
+    if (cells === 5) { await retire(sessionID, entry); return }
     Object.assign(task, { cells, fresh: false })
+    delete task.resetFrom
     entry.last = next
-    if (cells === 5) entry.task = null
     await save(sessionID, entry)
   }
 
