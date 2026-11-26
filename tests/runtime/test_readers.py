@@ -1,5 +1,6 @@
 """Reader extraction must preserve identity, quiet metadata and refuse-only meters."""
 from datetime import datetime, timezone
+import faulthandler
 import importlib
 import json
 import os
@@ -540,7 +541,103 @@ class ReaderTest(unittest.TestCase):
         return self.native._state(self.settings).get("quota")
 
     def clear_cooldown(self):
-        (self.native._store(self.settings).parent / "claude-limit-probe.json").unlink(missing_ok=True)
+        self.cooldown_path().unlink(missing_ok=True)
+
+    def cooldown_path(self):
+        return self.native._store(self.settings).parent / "claude-limit-probe.json"
+
+    def write_cooldown(self, accounts):
+        self.write_raw_cooldown(json.dumps(dict(version=1, accounts=accounts)))
+
+    def write_raw_cooldown(self, raw):
+        """Private, as the probe writes it: an unsafe mode would fail for the wrong reason."""
+        self.cooldown_path().write_text(raw)
+        self.cooldown_path().chmod(0o600)
+
+    def acquire_as(self, email, at):
+        """Ordinary acquisition under another login at `at`: the native read, then OpenCode's fact of it. Neither
+        touches the probe's cooldown."""
+        self.data["initialize"]["account"]["email"] = email
+        self.write(self.data)
+        with mock.patch("time.time", return_value=at):
+            self.assertEqual(self.refresh(need=(), force=True)["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        self.write(self.data)
+
+    def test_cooldown_is_kept_per_native_account_across_an_a_b_a_sequence(self):
+        self.baseline()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.acquire_as("other@example.invalid", self.now + 1)
+        with mock.patch("time.time", return_value=self.now + 2):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.acquire_as("invented@example.invalid", self.now + 3)
+        before = self.trace.read_text()
+        with mock.patch("time.time", return_value=self.now + 3):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertEqual(self.trace.read_text(), before)
+        with mock.patch("time.time", return_value=self.now + 60):
+            self.assertEqual(self.probe(), dict(state="stored"))
+
+    def test_cooldown_holds_at_most_eight_live_accounts_and_never_evicts(self):
+        self.baseline()
+        current = self.native.account(self.settings, self.now)["key"]
+        seven = {f"{number:032x}": self.now for number in range(1, 8)}
+        self.write_cooldown(seven)
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(len(json.loads(self.cooldown_path().read_text())["accounts"]), 8)
+        self.write_cooldown(dict(seven, **{f"{8:032x}": self.now}))
+        before = self.cooldown_path().read_text()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+        self.assertEqual(self.cooldown_path().read_text(), before)
+        self.write_cooldown({f"{number:032x}": self.now for number in range(1, 8)} | {current: self.now - 10})
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+        self.write_cooldown({f"{number:032x}": self.now for number in range(1, 9)})
+        with mock.patch("time.time", return_value=self.now + 60):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(json.loads(self.cooldown_path().read_text())["accounts"], {current: self.now + 60})
+
+    def test_negative_elapsed_fails_closed_for_its_own_account_only(self):
+        self.baseline()
+        current = self.native.account(self.settings, self.now)["key"]
+        self.write_cooldown({current: self.now + 5})
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        with mock.patch("time.time", return_value=self.now + 64):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+        with mock.patch("time.time", return_value=self.now + 65):
+            self.assertEqual(self.probe(), dict(state="stored"))
+
+    def test_malformed_cooldown_map_fails_without_a_native_read_or_repair(self):
+        self.baseline()
+        current = self.native.account(self.settings, self.now)["key"]
+        live = f"{1:032x}"
+        bad = [
+            json.dumps(dict(version=2, accounts={})), json.dumps(dict(version=1)),
+            json.dumps(dict(version=1, accounts=[])), json.dumps(dict(version=1, accounts={"bad": self.now})),
+            json.dumps(dict(version=1, accounts={live: "x"})), json.dumps(dict(version=1, accounts={live: True})),
+            json.dumps(dict(version=1, accounts={live: self.now}, key=current)),
+            json.dumps(dict(version=1, accounts={f"{number:032x}": self.now for number in range(1, 10)})),
+            json.dumps(dict(version=1, key=current, started_at=self.now)), "[]",
+        ]
+        self.trace.unlink(missing_ok=True)
+        for raw in bad:
+            with self.subTest(raw=raw[:60]):
+                self.write_raw_cooldown(raw)
+                with mock.patch("time.time", return_value=self.now):
+                    self.assertEqual(self.probe(), dict(state="failed"))
+                self.assertEqual(self.cooldown_path().read_text(), raw)
+                self.assertFalse(self.trace.exists())
 
     def test_probe_publishes_confirmed_weekly_exhaustion_under_the_proved_login(self):
         self.baseline()
@@ -618,8 +715,7 @@ class ReaderTest(unittest.TestCase):
                           account=dict(current, generation=second, observed_at=self.now + 90))
         self.assertEqual(run(self.now + 90, second), dict(state="skipped"))
         self.assertEqual(run(self.now + 120, second), dict(state="stored"))
-        (self.native._store(self.settings).parent / "claude-limit-probe.json").write_text(
-            json.dumps(dict(version=1, key="d" * 32, started_at=self.now + 120)))
+        self.write_cooldown({"d" * 32: self.now + 120})
         self.assertEqual(run(self.now + 121, second), dict(state="stored"))
 
     def test_probe_limit_starts_only_for_the_login_it_is_given(self):
@@ -720,13 +816,11 @@ class ReaderTest(unittest.TestCase):
         self.baseline()
         self.weekly_only()
         self.trace.unlink(missing_ok=True)
-        path = self.native._store(self.settings).parent / "claude-limit-probe.json"
-        path.write_text(json.dumps(dict(version=1, key="bad", started_at=1)))
+        self.write_cooldown({"bad": 1})
         with mock.patch("time.time", return_value=self.now):
             self.assertEqual(self.probe(), dict(state="failed"))
-        path.write_text(json.dumps(dict(version=1, key=self.native.account(self.settings, self.now)["key"],
-                                        started_at=self.now - 3600)))
-        path.chmod(0o644)
+        self.write_cooldown({self.native.account(self.settings, self.now)["key"]: self.now - 3600})
+        self.cooldown_path().chmod(0o644)
         with mock.patch("time.time", return_value=self.now):
             self.assertEqual(self.probe(), dict(state="failed"))
         self.assertFalse(self.trace.exists())
@@ -842,6 +936,51 @@ class ReaderTest(unittest.TestCase):
             worker.join(10)
         self.assertEqual(results, [dict(state="stored")])
         self.assertEqual(len(calls), 1)
+
+    def test_a_slow_usage_exchange_blocks_no_second_probe_or_selection(self):
+        selector_tests = importlib.import_module("tests.runtime.test_selector")
+        selector = importlib.import_module("runtime.selector")
+        scores = importlib.import_module("runtime.scores")
+        faulthandler.dump_traceback_later(60, exit=True)  # watchdog: a missing barrier handshake must not hang the run
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
+        self.data["initialize"]["models"] = [dict(value="claude-opus-5-5", resolvedModel="claude-opus-5-5",
+                                                  supportsEffort=False)]
+        self.baseline()
+        fetch = selector_tests.Fetch(selector_tests.BODY)
+        self.assertEqual(scores.refresh(self.settings.parent, [], self.now, fetch=fetch), "stored")
+        reached, release = self.settings.parent / "reached.fifo", self.settings.parent / "release.fifo"
+        os.mkfifo(reached)
+        os.mkfifo(release)
+        self.write(dict(self.data, mode="barrier", reached=str(reached), release=str(release)))
+        self.trace.unlink(missing_ok=True)
+
+        class Local(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+        request = dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="reversible"),
+                       models=[selector_tests.model("claude-agent", "claude-opus-5-5")])
+        results, reached_seen = [], False
+        with mock.patch("time.time", return_value=self.now):
+            worker = threading.Thread(target=lambda: results.append(self.probe()))
+            worker.start()
+            try:
+                with open(reached) as signal:  # get_usage is in flight: the child is spawned and blocked on `release`
+                    reached_seen = signal.read() == "1"
+                self.assertTrue(reached_seen)
+                self.assertIsNotNone(self.openc.billing_fact(self.settings, self.route, self.now))
+                self.assertEqual(self.probe(), dict(state="skipped"))
+                answer = selector.select(request, state_dir=self.settings.parent, source=Local(self.settings),
+                                         fetch=fetch, now=self.now)
+                self.assertEqual(answer["state"], "selected", answer)
+                self.assertEqual(answer["route"]["provider"], "claude-agent")
+                self.assertTrue(worker.is_alive())
+            finally:
+                if reached_seen:
+                    with open(release, "w"):
+                        pass
+                worker.join(10)
+        self.assertEqual(results, [dict(state="stored")])
+        self.assertEqual(self.probe_requests(), ["initialize", "get_usage"])
 
     def test_probe_timeout_publishes_nothing(self):
         self.baseline()

@@ -2,13 +2,17 @@
 """One bounded advisory request. No launch, retry, installation or legacy state."""
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import sys
 import time
 
-# Replace, not prepend: this file is named select.py, and its own directory would shadow the stdlib select module.
-sys.path[0] = str(Path(__file__).resolve().parents[1])
+# Run as a program, Python puts scripts/ first on the path, where this file would shadow the standard `select`
+# module that subprocess needs. Drop that entry only when it is first (python -I omits it), then import from the root.
+if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname(os.path.realpath(__file__)):
+    del sys.path[0]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from runtime import chatgpt_limit, council, opencode_account, storage
 from runtime.selector import check_setup, feedback_submit, refresh, result, select
 

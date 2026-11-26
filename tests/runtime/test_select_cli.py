@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "select.py"
@@ -61,6 +62,50 @@ class SelectCliSizeTest(unittest.TestCase):
         self.assertEqual(len(kept) + answer["unmatched_more"], len(entries))
         self.assertGreater(answer["unmatched_more"], 0)
         self.assertLessEqual(len(out), LIMIT)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+HARNESS = """
+import json, runpy, sys
+from pathlib import Path
+script, state = sys.argv[1], sys.argv[2]
+sys.argv = [script, "--state-dir", state, "--claude-limit"]
+before = list(sys.path)
+try:
+    runpy.run_path(script, run_name="__main__")
+except SystemExit:
+    pass
+print(json.dumps(dict(first=before[0], kept=before[0] in sys.path, head=sys.path[0],
+                      scripts=str(Path(script).resolve().parent) in sys.path)), file=sys.stderr)
+"""
+SCRIPT_RUN = "import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(sys.argv[1]).resolve().parent))\n"
+
+
+class SelectPathTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name).resolve() / "state"
+        self.state.mkdir(mode=0o700)
+        self.request = json.dumps({"reset_at": int(time.time()) + 3600}).encode()
+
+    def run_harness(self, code):
+        done = subprocess.run([sys.executable, *code], input=self.request, capture_output=True, timeout=60)
+        return done.stdout, json.loads(done.stderr.decode().strip().splitlines()[-1])
+
+    def test_isolated_mode_keeps_its_stdlib_entry_and_runs(self):
+        out, path = self.run_harness(["-I", "-c", HARNESS, str(SCRIPT), str(self.state)])
+        self.assertTrue(path["kept"], path)
+        self.assertEqual(path["head"], str(ROOT))
+        self.assertFalse(path["scripts"])
+        self.assertEqual(out, b'{"state":"skipped"}\n')
+
+    def test_script_run_drops_its_own_directory_and_answers(self):
+        out, path = self.run_harness(["-B", "-c", SCRIPT_RUN + HARNESS, str(SCRIPT), str(self.state)])
+        self.assertEqual(path["first"], str(SCRIPT.parent))
+        self.assertEqual(path["head"], str(ROOT))
+        self.assertFalse(path["scripts"])
+        self.assertEqual(out, b'{"state":"skipped"}\n')
 
 
 if __name__ == "__main__":

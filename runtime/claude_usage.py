@@ -786,6 +786,7 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
 PROBE_FILE = 'claude-limit-probe.json'
 PROBE_LOCK = '.claude-limit-probe.lock'
 PROBE_INTERVAL = 60  # seconds before the same native account key may be probed again
+PROBE_KEYS = 8  # native accounts with a live probe start at once; another account waits, and no start is evicted
 
 
 class _Skip(Exception):
@@ -803,14 +804,25 @@ def _bound(state, expected, now):
     return current if current is not None and (current['key'], current['generation']) == expected else None
 
 
-def _cooling(record, key, now):
-    """Whether `key` was probed less than PROBE_INTERVAL seconds ago, a backwards clock included."""
+def _starts(record):
+    """The probe starts `{key: started_at}` of a valid cooldown file. Any other shape is an error, never repaired."""
     if not record:
-        return False
-    if set(record) != {'version', 'key', 'started_at'} or not _hex(record['key']) \
-            or type(record['started_at']) is not int:
+        return {}
+    accounts = record.get('accounts') if set(record) == {'version', 'accounts'} else None
+    if type(accounts) is not dict or len(accounts) > PROBE_KEYS \
+            or not all(_hex(key) and type(at) is int for key, at in accounts.items()):
         raise ReadError('observation_store_invalid')
-    return record['key'] == key and now - record['started_at'] < PROBE_INTERVAL
+    return accounts
+
+
+def _admit(starts, key, now):
+    """The live starts plus this one, or None when `key` may not start. A start is live while `now - started_at` is
+    under PROBE_INTERVAL, a negative elapsed time included, so a backwards clock fails closed for that account only.
+    A full cooldown refuses a new account rather than evicting a live start."""
+    live = {item: at for item, at in starts.items() if now - at < PROBE_INTERVAL}
+    if key in live or len(live) >= PROBE_KEYS:
+        return None
+    return {**live, key: now}
 
 
 def _ended(state, expected, now):
@@ -839,10 +851,13 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
                 return dict(state='skipped')
             now = int(time.time())
             probe = path.parent / PROBE_FILE
-            if _bound(observations._read(path), (key, generation), now) is None \
-                    or _cooling(observations._read(probe), key, now):
+            starts = _starts(observations._read(probe))
+            if _bound(observations._read(path), (key, generation), now) is None:
                 return dict(state='skipped')
-            observations._write(probe, dict(version=1, key=key, started_at=now))
+            admitted = _admit(starts, key, now)
+            if admitted is None:
+                return dict(state='skipped')
+            observations._write(probe, dict(version=1, accounts=admitted))
             init, use, started, received = exchange(command, environ, timeout)
             check_quiet(use)
             if parse_identity(init, use) != key:
