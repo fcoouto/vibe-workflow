@@ -329,11 +329,29 @@ def _balance(ordered, pool, qualifies):
         changed = [item['route'] for item in ordered
                    if _scope(item) in scopes and returned[_scope(item)] != item['account_marker']]
         if not changed:
+            pool['reordered'] = frozenset(item['route'] for item in group)  # the participants `_settle` guards
             return balanced
         pool['excluded'].extend(dict(route=route, reason='account_changed') for route in changed)
         return [item for item in ordered if item['route'] not in changed]
     except Exception:
         return ordered
+
+
+def _settle(ordered, pool, qualifies):
+    """`_balance`, then the final `_confirm`. A participant of a reorder that changes only at that final check discards
+    the reorder: the surviving routes are confirmed once more, in their original group order, with no new reads beyond
+    that confirmation and no restored exclusions."""
+    pool['reordered'] = None
+    balanced = _balance(ordered, pool, qualifies)
+    participants = pool['reordered']
+    if not participants:
+        return _confirm(balanced, pool, 3, qualifies)
+    mark = len(pool['excluded'])
+    chosen = _confirm(balanced, pool, 3, qualifies)
+    if not {entry['route'] for entry in pool['excluded'][mark:] if entry['reason'] == 'account_changed'} & participants:
+        return chosen
+    changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
+    return _confirm([item for item in ordered if item['route'] not in changed], pool, 3, qualifies)
 
 
 def _refresh_flag(answer, pool):
@@ -391,14 +409,14 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
         lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
         other = [item for item in ordered if lab is not None and qualifies(item)
                  and pool['labs'].get(item['route']) not in (None, lab)]
-        chosen = _confirm(_balance(other, pool, qualifies), pool, 3, qualifies)
+        chosen = _settle(other, pool, qualifies)
         independent = bool(chosen)
         if not chosen:
             failed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
             ordered = [item for item in ordered if item['route'] not in failed]
     if not independent:
         # A review with no qualified independent route keeps the original baseline order, never balanced.
-        chosen = _confirm(ordered if reviewing is not None else _balance(ordered, pool, qualifies), pool, 3, qualifies)
+        chosen = _confirm(ordered, pool, 3, qualifies) if reviewing is not None else _settle(ordered, pool, qualifies)
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
     reason = None if chosen else _empty_reason(pool)

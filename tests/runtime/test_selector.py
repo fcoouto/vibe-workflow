@@ -895,16 +895,19 @@ def alias_body():
 class Hinted(Facts):
     """Route-keyed ranking hints as the local source gives them. `drift` paths change account on each route's second
     billing read, so every alias of a drifted path is seen as changed after eligibility. `billed` logs every read."""
-    def __init__(self, hints=None, *, drift=(), explode=False):
+    def __init__(self, hints=None, *, drift=(), late=(), explode=False):
         super().__init__()
-        self.hints, self.drift, self.explode, self.hint_reads = dict(hints or {}), set(drift), explode, []
-        self.billed, self.seen = [], {}
+        self.hints, self.drift, self.late, self.explode = dict(hints or {}), set(drift), set(late), explode
+        self.hint_reads, self.billed, self.seen = [], [], {}
 
     def billing(self, route, now):
+        """`drift` paths change on a route's second read (after eligibility); `late` paths on its third (the final
+        `_confirm` read, after the scope recheck)."""
         found = super().billing(route, now)
         self.billed.append(route["route"])
         self.seen[route["route"]] = self.seen.get(route["route"], 0) + 1
-        if route["path"] in self.drift and self.seen[route["route"]] > 1:
+        if (route["path"] in self.drift and self.seen[route["route"]] > 1) \
+                or (route["path"] in self.late and self.seen[route["route"]] > 2):
             found["producer"] = "invented:changed"
         return found
 
@@ -1048,6 +1051,18 @@ class BalanceTest(unittest.TestCase):
         self.assertIn(dict(route=CLAUDE_ROUTE, reason="account_changed"), result["excluded"])
         self.assertIn(dict(route=SONNET_56, reason="account_changed"), result["excluded"])
 
+    def test_a_participant_changed_at_the_final_check_keeps_the_survivors_in_baseline_order(self):
+        # Balanced order is Go, ChatGPT, Claude. Go changes only at `_confirm`'s own read: the survivors must be
+        # confirmed in baseline order (Claude first), not in the reordered remainder (ChatGPT first).
+        models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol"),
+                  model("opencode-go", "kimi-x-1")]
+        hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, CHATGPT_ROUTE: CHATGPT_SOON, GO_ROUTE: GO_HEALTHY}
+        result = self.select(Hinted(hints, late={"opencode-go-subscription"}), models=models)
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertEqual([item["route"] for item in result["alternatives"]], [CHATGPT_ROUTE])
+        self.assertEqual([entry for entry in result["excluded"] if entry["reason"] == "account_changed"],
+                         [dict(route=GO_ROUTE, reason="account_changed")])
+
     def test_a_drifted_scope_removes_every_changed_alias(self):
         models, hints = self.alias_heavy()
         result = self.select(Hinted(hints, drift={"opencode-go-subscription"}), models=models, raw=alias_body())
@@ -1087,6 +1102,22 @@ class ReviewBalanceTest(unittest.TestCase):
         result = self.review(source, models, raw)
         self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("c-x", True))
         self.assertEqual([item["model"] for item in result["alternatives"]], ["b-small"])
+
+    def test_an_independent_participant_changed_at_the_final_check_keeps_the_group_order(self):
+        # Independent group in baseline order: b-small (Claude, 2), d-x (ChatGPT, 2.25), c-x (Go, 2.5). Balanced:
+        # c-x, d-x, b-small. c-x changes only at `_confirm`'s read, so the group is confirmed again in baseline order.
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("anthropic/b-small", 60, 1, 5, 67),
+                   ("openai/c-x", 70, 2, 4, 67), ("openai/d-x", 80, 1, 6, 67))
+        models = [model("opencode-go", "a-small"), model("claude-agent", "b-small"), model("openai", "d-x"),
+                  model("opencode-go", "c-x")]
+        source = Hinted({"opencode-claude-subscription:b-small": CLAUDE_PLAIN,
+                         "opencode-chatgpt-subscription:d-x": CHATGPT_SOON,
+                         "opencode-go-subscription:c-x": GO_HEALTHY}, late={"opencode-go-subscription"})
+        result = self.review(source, models, raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+        self.assertEqual([item["model"] for item in result["alternatives"]], ["d-x"])
+        self.assertEqual([entry for entry in result["excluded"] if entry["reason"] == "account_changed"],
+                         [dict(route="opencode-go-subscription:c-x", reason="account_changed")])
 
     def test_no_independent_route_confirms_keeps_the_fallback_without_balancing(self):
         # The author is on Claude (lab anthropic); a same-lab Go route would score 4.5 and so win if balanced.
