@@ -547,3 +547,37 @@ the user's own logins and `claude-agent/sonnet` as the coordinator.
 - A state folder created with mode 0755 makes storage refuse it: every route is
   `billing_unverified` and the pick answers `no_eligible_route`. The first run of
   this check hit that through its own setup.
+
+## Claude subscription limits: what is known
+
+The design is `docs/superpowers/specs/2026-11-26-claude-quota-evidence-design.md`; this section
+records what the code accepts and bounds. Its meter evidence comes from the native usage read, not
+from the failure text.
+
+Failure trigger (`src/claude-limit-events.js`, OpenCode 2.3.2): a `session.step.failed` whose
+`data.error.type` is `provider.unknown` and whose message is exactly the observed weekly form,
+`You've hit your weekly limit · resets <clause> Resets at <ISO UTC timestamp>.` The clause is
+never parsed, has no newline, and the whole message is at most 512 characters. The timestamp may
+carry 0 to 3 fractional digits; it must be a real UTC instant and is floored to Unix seconds.
+Five-hour notices, generic 429s, auth errors, other providers and forged or embedded text do not
+trigger. The model comes from the failed assistant row (`data.assistantMessageID`) in the failure's
+own session and location, through `session.context`. It must be `claude-agent` with a model ID. The
+session's current model is never used. The event location must match the plugin's directory string
+and workspace ID (both absent counts as equal), with no symlink resolution. Smart Router must be on.
+
+Bounds: one lookup or probe at a time per plugin instance; a failure that arrives meanwhile is
+dropped, never queued. The lookup has a 2-second deadline and a late result is discarded. Duplicate
+event IDs are remembered for the last 256 events. The probe runs `--claude-limit` with only
+`{"reset_at": <seconds>}` on stdin, with a 15-second timeout that sends `SIGTERM`, and is never
+retried. The reset must be after now and within 7 days plus 60 seconds, checked again before launch.
+The Python side allows one probe in flight across instances and one start per account per 60 seconds.
+The probe reads only meters from the native exchange. A pause applies to a route only when a
+confirmed meter is exhausted, valid and resets in the future. Picks never wait for the probe.
+
+Unknowns: an unrecognized notice, shape or context row starts nothing and is not guessed. A
+missing, null, malformed, conflicting or unrecognized meter is unknown, and it neither extends nor
+clears a pause.
+
+Limit of coverage: the tests use invented fixtures, fake runners and synthetic child processes, all
+in isolated homes. No live quota check, model call or end-to-end failure was run. Other OpenCode and
+Claude Code versions are unverified.

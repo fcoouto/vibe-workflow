@@ -101,7 +101,7 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr.decode())
         files = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
         expected = {"index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js",
-                    "package.json", "README.md", "LICENSE", "assets/logo.png",
+                    "src/claude-limit-events.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
                     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/scripts/check.py", "skills/vibe-prepare-my-workspace/partners.json",

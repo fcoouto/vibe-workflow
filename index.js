@@ -10,6 +10,7 @@ import { registerOnboarding, registerSkill } from "./src/onboarding.js"
 import { registerAdvice } from "./src/advice.js"
 import { createProjectSettings } from "./src/project.js"
 import { registerSessionTitles } from "./src/session-titles.js"
+import { createClaudeLimitHandler } from "./src/claude-limit-events.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MAX_BYTES = 65536
@@ -323,7 +324,8 @@ export default {
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
       const setup = operation === "check_setup", council = operation === "council", pick = operation === "council_pick"
       const refresh = operation === "refresh", mark = operation === "mark", rate = operation === "feedback"
-      const fallback = () => council || pick || rate ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
+      const claude = operation === "claude_limit"
+      const fallback = () => council || pick || rate || claude ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
       if (closed || signal?.aborted || typeof directory !== "string" || !isAbsolute(directory)
@@ -342,6 +344,7 @@ export default {
           if (setup) args.push("--check-setup", ...allowFetch ? ["--allow-fetch"] : [])
           if (refresh) args.push("--refresh")
           if (mark) args.push("--chatgpt-limit")
+          if (claude) args.push("--claude-limit")
           if (council) args.push("--council-roster")
           if (pick) args.push("--council-pick")
           if (rate) args.push("--feedback")
@@ -349,7 +352,7 @@ export default {
         } catch { resolve(fallback()); return }
         active.add(stop)
         signal?.addEventListener("abort", stop, { once: true })
-        timer = setTimeout(stop, refresh ? 15000 : mark || rate ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
+        timer = setTimeout(stop, refresh || claude ? 15000 : mark || rate ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
         child.stdin.on("error", stop)
         child.stdout.on("data", (chunk) => {
           size += chunk.length
@@ -364,7 +367,7 @@ export default {
           signal?.removeEventListener("abort", stop)
           try {
             if (failed || code !== 0) throw Error()
-            if (refresh || mark) return resolve(null)
+            if (refresh || mark || claude) return resolve(null)
             const value = JSON.parse(Buffer.concat(chunks).toString("utf8"))
             if (setup) {
               if (value.state === "ready" && value.reason === null) return resolve({ state: "ready", reason: null })
@@ -403,11 +406,15 @@ export default {
       } catch {} finally { marking = false }
     }
     const subscription = new AbortController()
+    const claudeLimit = createClaudeLimitHandler(ctx, { location: ctx.location, signal: subscription.signal,
+      enabled: async () => (await inspectRouter()).state === "on",
+      probe: (request) => runRouter(request, { directory, stateDir: state, signal: subscription.signal, operation: "claude_limit" }) })
     // OpenCode 2.2.6 ignores session.error with a warning; the step failure carries the error in data.
     if (ctx.event?.subscribe) (async () => {
       for await (const event of await ctx.event.subscribe({ types: ["session.step.failed"], signal: subscription.signal })) {
         const error = event?.data?.error ?? event?.error ?? event?.properties?.error
         if (error?.type === "provider.chatgpt-limit") markLimit()
+        claudeLimit(event)
       }
     })().catch(() => {})
     await ctx.tool.transform((editor) => editor.add({
