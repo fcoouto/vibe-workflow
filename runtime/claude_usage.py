@@ -668,11 +668,16 @@ def _settle(state, held):
     return dict(identity=dict(key=held['key'], generation=held['generation']), account=held['account'])
 
 
+class _FenceLost(Exception):
+    """This refresh no longer owns its observation and must not publish or set backoff."""
+
+
 def _observe(key, held):
-    """The exchange's account observation, recorded before its catalog or usage is validated: the proved generation
-    only for the same key with this attempt's fence untouched, else a fresh random one; the account stays pending."""
+    """Record an observation only with this attempt's fence; keep the proved generation only for the same key."""
     def step(state):
-        same = held.get('generation') and key == held.get('key') and _ours(state, held)
+        if not _ours(state, held):
+            raise _FenceLost()
+        same = held.get('generation') and key == held.get('key')
         held['observed'] = held['generation'] if same else secrets.token_hex(16)
         return dict(identity=dict(key=key, generation=held['observed']),
                     account=dict(pending=True, generation=held['observed']))
@@ -707,8 +712,8 @@ def _fresh(settings_path, need, now):
 
 def _record(settings_path, init, use, started, received, held):
     """Store one exchange's account, catalog, quota evidence and windows. The account and telemetry are checked before
-    anything is written. Then, in order: the observed identity (the generation `held` proves for this key under this
-    attempt's untouched fence, else a fresh random one) with a pending account, before the catalog is checked; the
+    anything is written. Then, in order: the observed identity under this attempt's untouched fence (the generation
+    `held` proves for this key, else a fresh random one) with a pending account, before the catalog is checked; the
     catalog bound to it; the complete account with the quota evidence merged, even when the usage snapshot is refused;
     and only after every row is stored, the confirmed exchange. A usage problem still records the account and catalog,
     with no confirmed exchange, so no earlier row stays usable. Rows are bound to the key and generation, so another
@@ -788,6 +793,8 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                     _save(settings_path, failure=dict(at=int(time.time()) - FAILURE_BACKOFF + CACHE_CEILING,
                                                       reason='claude_usage_unconfirmed'))
                     return dict(state='failed', reason='claude_usage_unconfirmed')
+            except _FenceLost:
+                return dict(state='failed', reason='observation_store_invalid')
             except ReadError as error:
                 # An explicit account-level refusal ends the earlier account confirmation and its continuity (its
                 # fact, catalog binding and generation); stored window rows stay as observed history, unusable.
@@ -901,12 +908,13 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
         with storage._locked(_store(settings_path), block=False, lock=PROBE_LOCK) as path:
             if path is None:
                 return dict(state='skipped')
+            probe = path.parent / PROBE_FILE
+            starts = _starts(probe)
+            state = observations._read(path)
             now = int(time.time())
             if not _hint(reset_at, now):
                 return dict(state='skipped')
-            probe = path.parent / PROBE_FILE
-            starts = _starts(probe)
-            if _bound(observations._read(path), (key, generation), now) is None:
+            if _bound(state, (key, generation), now) is None:
                 return dict(state='skipped')
             admitted = _admit(starts, key, now)
             if admitted is None:

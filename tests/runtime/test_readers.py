@@ -778,6 +778,25 @@ class ReaderTest(unittest.TestCase):
         self.assertFalse(self.trace.exists())
         self.assertFalse(self.cooldown_path().exists())
 
+    def test_reset_expiring_during_locked_state_read_never_admits_a_probe(self):
+        self.baseline()
+        self.trace.unlink(missing_ok=True)
+        current = self.native.account(self.settings, self.now)
+        clock, read = [self.now], self.observations._read
+
+        def expire(path):
+            state = read(path)
+            clock[0] = self.now + 1
+            return state
+
+        with mock.patch("time.time", side_effect=lambda: clock[0]), \
+                mock.patch.object(self.observations, "_read", side_effect=expire):
+            self.assertEqual(self.native.probe_limit(
+                self.settings, expected=(current["key"], current["generation"]), reset_at=self.now + 1,
+                command=self.command, environ=self.environ), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.cooldown_path().exists())
+
     def test_probe_without_a_current_binding_skips_before_any_native_read(self):
         self.assertEqual(self.probe(), dict(state="skipped"))
         self.assertFalse(self.settings.parent.exists())
@@ -891,10 +910,12 @@ class ReaderTest(unittest.TestCase):
             return reply
 
         def finish_probe(*args):
+            if phase == "received":
+                reply = proceed(*args)
             release.set()
             worker.join(10)
             self.assertEqual(results, [dict(state="skipped")])
-            return proceed(*args)
+            return reply if phase == "received" else proceed(*args)
 
         with mock.patch("time.time", return_value=self.now), mock.patch.object(self.native, "exchange", probe_response):
             worker = threading.Thread(target=lambda: results.append(self.probe()))
@@ -909,6 +930,8 @@ class ReaderTest(unittest.TestCase):
                     expected = self.native.account(self.settings, self.now)
                     self.assertEqual(old["generation"] != expected["generation"], rotate)
                     self.write({"mode": "hang"} if phase == "transport" else self.data)
+                    if phase == "received":
+                        self.weekly_only()
                     hook = "parse_account" if phase == "observed" else "exchange"
                     proceed = getattr(self.native, hook)
                     with mock.patch.object(self.native, hook, finish_probe):
@@ -924,9 +947,21 @@ class ReaderTest(unittest.TestCase):
         self.assertIsNone(current)
         self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now))
 
-    def test_valid_refresh_after_probe_retires_suspended_generation_qualifies_fresh(self):
-        refreshed, old, current = self.competing_refresh("fenced")
-        self.assertEqual(refreshed["state"], "stored")
+    def test_retired_fence_discards_reply_even_when_child_starts_after_retirement(self):
+        refreshed, _, current = self.competing_refresh("fenced")
+        self.assertEqual(refreshed["state"], "failed")
+        self.assertIsNone(current)
+
+    def test_received_reply_cannot_publish_quota_after_probe_retires_its_fence(self):
+        refreshed, old, current = self.competing_refresh("received")
+        self.assertEqual(refreshed["state"], "failed")
+        self.assertIsNone(current)
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now))
+        self.write(payload(self.now))
+        recheck = self.now + self.native.FAILURE_BACKOFF - 120  # Only the baseline's backoff has elapsed.
+        with mock.patch("time.time", return_value=recheck):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+        current = self.native.account(self.settings, recheck)
         self.assertEqual(current["key"], old["key"])
         self.assertNotEqual(current["generation"], old["generation"])
         self.assertFalse(self.quota_state()["record"]["meters"]["7d"]["exhausted"])
