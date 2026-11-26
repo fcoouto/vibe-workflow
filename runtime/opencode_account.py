@@ -34,7 +34,7 @@ import tempfile
 import time
 
 from runtime import chatgpt_limit, claude_usage, continuity, processes as lifecycle, routing, \
-    routing_observations as observations, routing_paths, subscription_billing
+    routing_observations as observations, routing_paths, storage, subscription_billing
 
 PATHS = dict(claude='opencode-claude-subscription', chatgpt='opencode-chatgpt-subscription',
              go='opencode-go-subscription')
@@ -467,3 +467,25 @@ def _record(settings_path, name, rows, held, command, environ, deadline):
         _transition(settings_path, name, lambda part: dict(
             ended if ended is not None else kept(part), failure=dict(at=int(time.time()), reason=reason)))
         return reason
+
+
+def probe_claude_limit(settings_path, *, reset_at, command=None, environ=None, timeout=claude_usage.TIMEOUT):
+    """`{state}` of one native probe under the current proved OpenCode Claude login (`claude_usage.probe_limit`).
+
+    The OpenCode fact's native digest must match the complete native account read after it, so a race skips. The
+    probe never waits for, or fences, ordinary account reads."""
+    now = int(time.time())
+    try:
+        if type(reset_at) is not int or not isinstance(settings_path, Path):
+            return dict(state='failed')
+        storage.private(settings_path.parent, True)
+        found = _account(settings_path, 'claude', now)
+        observations._read(_store(settings_path))
+        state = observations._read(claude_usage._store(settings_path))
+    except (OSError, ValueError):
+        return dict(state='failed')
+    current = claude_usage._current(state, now)
+    if found is None or current is None or _native(current) != found['native']:
+        return dict(state='skipped')
+    return claude_usage.probe_limit(settings_path, expected=(current['key'], current['generation']),
+                                    reset_at=reset_at, command=command, environ=environ, timeout=timeout)

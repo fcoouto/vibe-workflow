@@ -2,12 +2,17 @@
 from datetime import datetime, timezone
 import importlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "select.py"
 
 
 def iso(at):
@@ -510,6 +515,392 @@ class ReaderTest(unittest.TestCase):
         state.update(c._fence(state, next_held))
         state.update(c._observe("a" * 32, next_held)(state))
         self.assertNotEqual(next_held["observed"], "b" * 32)
+
+    def add_models(self, *pairs):
+        self.data["initialize"]["models"] += [dict(value=alias, resolvedModel=resolved, supportsEffort=False)
+                                              for alias, resolved in pairs]
+
+    def baseline(self):
+        """A proved OpenCode Claude login with a healthy reading and its stored catalog; the fixture is native again.
+        It is observed before the probes, since only a provably newer observation may replace its meters."""
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now - 120):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        self.write(self.data)
+
+    def probe(self, reset_at=None):
+        return self.openc.probe_claude_limit(self.settings, reset_at=self.now + 3600 if reset_at is None else reset_at,
+                                             command=self.command, environ=self.environ)
+
+    def probe_requests(self):
+        return [json.loads(line)["request"]["subtype"] for line in self.trace.read_text().splitlines()]
+
+    def quota_state(self):
+        return self.native._state(self.settings).get("quota")
+
+    def clear_cooldown(self):
+        (self.native._store(self.settings).parent / "claude-limit-probe.json").unlink(missing_ok=True)
+
+    def test_probe_publishes_confirmed_weekly_exhaustion_under_the_proved_login(self):
+        self.baseline()
+        self.weekly_only()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(self.probe_requests(), ["initialize", "get_usage"])
+        source = self.observations.LocalSource(self.settings)
+        kept, excluded = self.observations.eligible([self.route], source, self.now)
+        self.assertEqual((kept, excluded), ([], [dict(route=self.route["route"], reason="quota_exhausted")]))
+
+    def test_probe_pauses_only_the_scope_it_confirms_and_the_hint_is_not_a_meter_bound(self):
+        self.add_models(("other", "other-current"))
+        self.baseline()
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Other", utilization=100, resets_at=iso(self.now + 7200))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(reset_at=self.now + 3600), dict(state="stored"))
+        self.assertEqual(self.native.exhaustion_left(self.settings, dict(self.route, model="other"), self.now), 7200)
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now))
+
+    def test_one_observation_can_apply_two_exhausted_scopes(self):
+        self.add_models(("other", "other-current"), ("third", "third-current"))
+        self.baseline()
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Other", utilization=100, resets_at=iso(self.now + 7200)),
+            dict(display_name="Third", utilization=100, resets_at=iso(self.now + 3600))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(self.native.exhaustion_left(self.settings, dict(self.route, model="other"), self.now), 7200)
+        self.assertEqual(self.native.exhaustion_left(self.settings, dict(self.route, model="third"), self.now), 3600)
+
+    def test_probe_classifies_scopes_from_the_stored_catalog_only(self):
+        self.add_models(("other", "other-current"))
+        self.baseline()
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Other", utilization=100, resets_at=iso(self.now + 7200))]
+        self.data["initialize"]["models"] = [dict(value="renamed", resolvedModel="renamed-current",
+                                                  supportsEffort=False)]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(self.native.exhaustion_left(self.settings, dict(self.route, model="other"), self.now), 7200)
+        native_catalog = importlib.import_module("runtime.native_catalog")
+        stored = native_catalog.stored(self.settings, "claude-code")
+        self.assertEqual([item["alias"] for item in stored["models"]], ["invented", "other"])
+
+    def test_absent_catalog_still_permits_a_valid_weekly_account_wide_mark(self):
+        self.baseline()
+        self.weekly_only()
+        native_catalog = importlib.import_module("runtime.native_catalog")
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(native_catalog, "stored", return_value=None):
+            self.assertEqual(self.probe(), dict(state="stored"))
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now), 600)
+
+    def test_probe_cooldown_skips_before_sixty_seconds_on_a_backwards_clock_and_across_generations(self):
+        self.baseline()
+        self.weekly_only()
+        current = self.native.account(self.settings, self.now)
+        key, first, second = current["key"], current["generation"], "e" * 32
+
+        def run(at, generation=first, owner=key):
+            with mock.patch("time.time", return_value=at):
+                return self.native.probe_limit(self.settings, expected=(owner, generation), reset_at=self.now + 3600,
+                                               command=self.command, environ=self.environ)
+        self.assertEqual(run(self.now), dict(state="stored"))
+        self.assertEqual(run(self.now + 59), dict(state="skipped"))
+        self.assertEqual(run(self.now + 60), dict(state="stored"))
+        self.assertEqual(run(self.now + 10), dict(state="skipped"))
+        self.native._save(self.settings, identity=dict(key=key, generation=second),
+                          account=dict(current, generation=second, observed_at=self.now + 90))
+        self.assertEqual(run(self.now + 90, second), dict(state="skipped"))
+        self.assertEqual(run(self.now + 120, second), dict(state="stored"))
+        (self.native._store(self.settings).parent / "claude-limit-probe.json").write_text(
+            json.dumps(dict(version=1, key="d" * 32, started_at=self.now + 120)))
+        self.assertEqual(run(self.now + 121, second), dict(state="stored"))
+
+    def test_probe_limit_starts_only_for_the_login_it_is_given(self):
+        self.baseline()
+        self.weekly_only()
+        current = self.native.account(self.settings, self.now)
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now):
+            for expected in ((current["key"], "f" * 32), ("e" * 32, current["generation"])):
+                self.assertEqual(self.native.probe_limit(self.settings, expected=expected, reset_at=self.now + 3600,
+                                                         command=self.command, environ=self.environ),
+                                 dict(state="skipped"))
+            self.assertEqual(self.native.probe_limit(self.settings, expected=("bad", current["generation"]),
+                                                     reset_at=self.now + 3600, command=self.command,
+                                                     environ=self.environ), dict(state="failed"))
+        self.assertFalse(self.trace.exists())
+
+    def test_probe_accepts_the_allowed_reset_range_and_rejects_its_edges_outside(self):
+        self.baseline()
+        self.weekly_only()
+        margin = self.storage.CLOCK_MARGIN
+        with mock.patch("time.time", return_value=self.now):
+            for offset, expected in [(0, "skipped"), (1, "stored"), (7 * 86400 + margin, "stored"),
+                                     (7 * 86400 + margin + 1, "skipped")]:
+                with self.subTest(offset=offset):
+                    self.clear_cooldown()
+                    self.trace.unlink(missing_ok=True)
+                    self.assertEqual(self.probe(reset_at=self.now + offset), dict(state=expected))
+                    self.assertEqual(self.trace.exists(), expected == "stored")
+
+    def test_probe_hint_expiring_during_its_exchange_publishes_nothing(self):
+        self.baseline()
+        self.weekly_only()
+        clock, before, real = [self.now], self.quota_state(), self.native.exchange
+
+        def expire(*args, **kwargs):
+            clock[0] = self.now + 3600
+            return real(*args, **kwargs)
+        with mock.patch("time.time", side_effect=lambda: clock[0]), \
+                mock.patch.object(self.native, "exchange", side_effect=expire):
+            self.assertEqual(self.probe(reset_at=self.now + 3600), dict(state="skipped"))
+        self.assertEqual(self.quota_state(), before)
+
+    def test_probe_without_a_current_binding_skips_before_any_native_read(self):
+        self.settings.parent.mkdir(mode=0o700)
+        self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+
+    def test_probe_with_an_expired_or_pending_binding_skips(self):
+        self.baseline()
+        self.weekly_only()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now + self.observations.FRESH_SECONDS + 1):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.native._save(self.settings, account=dict(pending=True, generation="a" * 32))
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+
+    def test_probe_skips_unconfirmed_or_missing_usable_evidence_without_publishing(self):
+        self.baseline()
+        before = self.quota_state()
+        rate = self.data["usage"]["rate_limits"]
+        for change in (dict(rate_limits_available=False),
+                       dict(rate_limits=dict(rate, five_hour=None, seven_day=None,
+                                             limits=[dict(kind="unknown_kind", scope=None)]))):
+            with self.subTest(change=sorted(change)):
+                self.clear_cooldown()
+                self.data["usage"].update(change)
+                self.write(self.data)
+                with mock.patch("time.time", return_value=self.now):
+                    self.assertEqual(self.probe(), dict(state="skipped"))
+                self.assertEqual(self.quota_state(), before)
+                self.data["usage"].update(rate_limits_available=True, rate_limits=rate)
+
+    def test_probe_refuses_relative_symlinked_and_malformed_private_state(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        self.trace.unlink(missing_ok=True)
+        link = self.root / "link"
+        link.symlink_to(self.settings.parent)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.openc.probe_claude_limit(Path("relative-state/router.json"), reset_at=self.now + 3600,
+                                                           command=self.command, environ=self.environ),
+                             dict(state="failed"))
+            self.assertEqual(self.openc.probe_claude_limit(link / "router.json", reset_at=self.now + 3600,
+                                                           command=self.command, environ=self.environ),
+                             dict(state="failed"))
+            original = self.native._store(self.settings).read_text()
+            self.native._store(self.settings).write_text(json.dumps(dict(version=2)))
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.native._store(self.settings).write_text(original)
+        self.assertEqual(self.quota_state(), before)
+        self.assertFalse(self.trace.exists())
+
+    def test_probe_refuses_unsafe_or_malformed_cooldown_state(self):
+        self.baseline()
+        self.weekly_only()
+        self.trace.unlink(missing_ok=True)
+        path = self.native._store(self.settings).parent / "claude-limit-probe.json"
+        path.write_text(json.dumps(dict(version=1, key="bad", started_at=1)))
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        path.write_text(json.dumps(dict(version=1, key=self.native.account(self.settings, self.now)["key"],
+                                        started_at=self.now - 3600)))
+        path.chmod(0o644)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertFalse(self.trace.exists())
+
+    def test_probe_unsupported_identity_and_nonzero_telemetry_fail_without_publishing(self):
+        self.baseline()
+        self.weekly_only()
+        before, current = self.quota_state(), self.native.account(self.settings, self.now)
+        self.data["initialize"]["account"]["apiProvider"] = "bedrock"
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(self.native.account(self.settings, self.now), current)
+        self.assertEqual(self.quota_state(), before)
+        self.clear_cooldown()
+        self.data["initialize"]["account"]["apiProvider"] = "firstParty"
+        self.data["usage"]["session"]["total_cost_usd"] = 0.01
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(self.quota_state(), before)
+
+    def test_a_proved_different_login_ends_only_the_still_current_binding(self):
+        self.baseline()
+        self.data["initialize"]["account"]["email"] = "other@example.invalid"
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertIsNone(self.native.account(self.settings, self.now))
+        self.assertIsNone(self.openc._account(self.settings, "claude", self.now))
+
+    def test_a_login_rotated_during_the_probe_is_not_invalidated(self):
+        self.baseline()
+        self.data["initialize"]["account"]["email"] = "other@example.invalid"
+        self.weekly_only()
+        real = self.native.exchange
+
+        def rotate(*args, **kwargs):
+            result = real(*args, **kwargs)
+            current = self.native.account(self.settings, self.now)
+            self.native._save(self.settings, identity=dict(key="d" * 32, generation="c" * 32),
+                              account=dict(current, key="d" * 32, generation="c" * 32))
+            return result
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=rotate):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertEqual(self.native.account(self.settings, self.now)["key"], "d" * 32)
+
+    def test_a_binding_rotated_during_the_exchange_skips_the_commit(self):
+        self.baseline()
+        self.weekly_only()
+        before, real = self.quota_state(), self.native.exchange
+
+        def rotate(*args, **kwargs):
+            result = real(*args, **kwargs)
+            current = self.native.account(self.settings, self.now)
+            self.native._save(self.settings, identity=dict(key="d" * 32, generation="c" * 32),
+                              account=dict(current, key="d" * 32, generation="c" * 32))
+            return result
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=rotate):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertEqual(self.native.account(self.settings, self.now)["key"], "d" * 32)
+        self.assertEqual(self.quota_state(), before)
+
+    def test_probe_skips_when_the_native_login_changes_between_its_reads(self):
+        self.baseline()
+        self.weekly_only()
+        self.trace.unlink(missing_ok=True)
+        real = self.native.account
+
+        def rotate_after_read(settings, now):
+            found = real(settings, now)
+            self.native._save(settings, identity=dict(key="d" * 32, generation="c" * 32),
+                              account=dict(found, key="d" * 32, generation="c" * 32))
+            return found
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "account", side_effect=rotate_after_read):
+            self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+
+    def test_a_running_probe_blocks_no_ordinary_read_and_a_second_consumer_starts_no_exchange(self):
+        self.baseline()
+        self.weekly_only()
+        entered, release, calls, results = threading.Event(), threading.Event(), [], []
+        real = self.native.exchange
+
+        def gated(*args, **kwargs):
+            calls.append(args)
+            if len(calls) > 1:
+                raise AssertionError("second native exchange")
+            entered.set()
+            release.wait(10)
+            return real(*args, **kwargs)
+
+        class Local(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+        models = [dict(provider="claude-agent", id="invented", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=gated):
+            worker = threading.Thread(target=lambda: results.append(self.probe()))
+            worker.start()
+            self.assertTrue(entered.wait(10))
+            self.assertIsNotNone(self.openc.billing_fact(self.settings, self.route, self.now))
+            answer = self.council.roster(dict(v=1, models=models), state_dir=self.settings.parent,
+                                         source=Local(self.settings), now=self.now)
+            self.assertEqual([seat["status"] for seat in answer["seats"]], ["ok"])
+            self.assertTrue(worker.is_alive())
+            self.assertEqual(self.probe(), dict(state="skipped"))
+            release.set()
+            worker.join(10)
+        self.assertEqual(results, [dict(state="stored")])
+        self.assertEqual(len(calls), 1)
+
+    def test_probe_timeout_publishes_nothing(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        self.write(dict(mode="hang"))
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.openc.probe_claude_limit(self.settings, reset_at=self.now + 3600,
+                                                           command=self.command, environ=self.environ, timeout=0.2),
+                             dict(state="failed"))
+        self.assertEqual(self.quota_state(), before)
+
+    def test_probe_interruption_publishes_nothing_and_releases_its_lock(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.probe()
+        self.assertEqual(self.quota_state(), before)
+        with self.storage._locked(self.native._store(self.settings), block=False,
+                                  lock=".claude-limit-probe.lock") as path:
+            self.assertIsNotNone(path)
+
+
+class ClaudeLimitCliTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
+
+    def run_cli(self, raw, state=None, cwd=None):
+        done = subprocess.run([sys.executable, "-B", str(SCRIPT), "--state-dir", str(state or self.state),
+                               "--claude-limit"], input=raw, capture_output=True, timeout=60,
+                              cwd=cwd or self.root, env=dict(os.environ, VCW_TEST_HOME=str(self.root)))
+        return done.stdout
+
+    def test_valid_request_without_a_binding_answers_only_the_state(self):
+        request = json.dumps(dict(reset_at=int(time.time()) + 3600)).encode()
+        self.assertEqual(self.run_cli(request), b'{"state":"skipped"}\n')
+
+    def test_malformed_requests_answer_failed_only(self):
+        for raw in (b"not json", b'{"reset_at": "3600"}', b'{"reset_at": true}', b'{"reset_at": 1.5}', b"{}", b"[1]",
+                    b'{"reset_at": 1, "extra": 1}', b"x" * 65537):
+            with self.subTest(raw=raw[:24]):
+                self.assertEqual(self.run_cli(raw), b'{"state":"failed"}\n')
+
+    def test_relative_symlinked_missing_or_unsafe_state_fails(self):
+        request = json.dumps(dict(reset_at=int(time.time()) + 3600)).encode()
+        link = self.root / "link"
+        link.symlink_to(self.state)
+        self.assertEqual(self.run_cli(request, state=link), b'{"state":"failed"}\n')
+        self.assertEqual(self.run_cli(request, state=self.root / "missing"), b'{"state":"failed"}\n')
+        self.assertEqual(self.run_cli(request, state=Path("state"), cwd=self.root), b'{"state":"failed"}\n')
+        (self.state / "claude-account.json").write_text(json.dumps(dict(version=2)))
+        self.assertEqual(self.run_cli(request), b'{"state":"failed"}\n')
 
 
 if __name__ == "__main__":

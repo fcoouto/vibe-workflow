@@ -780,3 +780,90 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
         return dict(state='failed', reason=str(error))
     except (OSError, ValueError, storage.StorageError):
         return dict(state='failed', reason='observation_store_invalid')
+
+
+# -- the trigger probe -------------------------------------------------------------------------------------------
+PROBE_FILE = 'claude-limit-probe.json'
+PROBE_LOCK = '.claude-limit-probe.lock'
+PROBE_INTERVAL = 60  # seconds before the same native account key may be probed again
+
+
+class _Skip(Exception):
+    """A probe that publishes nothing and reports `skipped`."""
+
+
+def _hint(reset_at, now):
+    """A usable trigger hint: a whole-second reset after `now`, within a week plus the clock margin."""
+    return type(reset_at) is int and now < reset_at <= now + claude_quota.LENGTHS['7d'] + storage.CLOCK_MARGIN
+
+
+def _bound(state, expected, now):
+    """The complete, fresh current account record when it is the login `expected` names, else None."""
+    current = _current(state, now)
+    return current if current is not None and (current['key'], current['generation']) == expected else None
+
+
+def _cooling(record, key, now):
+    """Whether `key` was probed less than PROBE_INTERVAL seconds ago, a backwards clock included."""
+    if not record:
+        return False
+    if set(record) != {'version', 'key', 'started_at'} or not _hex(record['key']) \
+            or type(record['started_at']) is not int:
+        raise ReadError('observation_store_invalid')
+    return record['key'] == key and now - record['started_at'] < PROBE_INTERVAL
+
+
+def _ended(state, expected, now):
+    """Ends the login `expected` names only while it is still the complete, fresh, current account."""
+    return dict(account=None, identity=None) if _bound(state, expected, now) is not None else {}
+
+
+def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None, timeout=TIMEOUT):
+    """`{state}` of one bounded native probe under the login `expected` names (its key and generation).
+
+    `stored`: usable evidence merged under that login. `skipped`: no current login, busy or cooling down, no usable
+    evidence, an out-of-range hint (at start or at commit), or a different proved login. `failed`: a malformed request
+    or private state, unsupported or unproved identity, refused telemetry, timeout or a transport problem. Only the
+    probe lock is held during the child; account state is read, never fenced, until the short commit."""
+    from runtime import native_catalog
+    environ = os.environ if environ is None else environ
+    try:
+        key, generation = expected if type(expected) is tuple and len(expected) == 2 else (None, None)
+        if not _hex(key) or not _hex(generation) or type(reset_at) is not int:
+            return dict(state='failed')
+        if not _hint(reset_at, int(time.time())):
+            return dict(state='skipped')
+        command = command or default_command(environ)
+        with storage._locked(_store(settings_path), block=False, lock=PROBE_LOCK) as path:
+            if path is None:
+                return dict(state='skipped')
+            now = int(time.time())
+            probe = path.parent / PROBE_FILE
+            if _bound(observations._read(path), (key, generation), now) is None \
+                    or _cooling(observations._read(probe), key, now):
+                return dict(state='skipped')
+            observations._write(probe, dict(version=1, key=key, started_at=now))
+            init, use, started, received = exchange(command, environ, timeout)
+            check_quiet(use)
+            if parse_identity(init, use) != key:
+                _transition(settings_path, lambda state: _ended(state, (key, generation), int(time.time())))
+                return dict(state='skipped')
+
+            def commit(state):
+                at = int(time.time())
+                current = _bound(state, (key, generation), at)
+                if current is None or not _hint(reset_at, at):
+                    raise _Skip()
+                snapshot = native_catalog.stored(settings_path, CLIENT)
+                bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
+                sample = claude_quota.evidence(use, snapshot['models'] if bound else [], started=started,
+                                               received=received)
+                if sample is None or not sample['meters'] and not sample['scopes_complete']:
+                    raise _Skip()
+                return _quota_change(state, (key, generation), sample, at)
+            _transition(settings_path, commit)
+            return dict(state='stored')
+    except _Skip:
+        return dict(state='skipped')
+    except (ReadError, OSError, ValueError):
+        return dict(state='failed')
