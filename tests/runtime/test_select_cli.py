@@ -1,5 +1,6 @@
 """The select CLI keeps a pick alive when its answer is large: UTF-8 output, then a truncated unmatched list."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -106,6 +107,87 @@ class SelectPathTest(unittest.TestCase):
         self.assertEqual(path["head"], str(ROOT))
         self.assertFalse(path["scripts"])
         self.assertEqual(out, b'{"state":"skipped"}\n')
+
+
+CODEX = """#!%s
+import json, sys
+open(%r, "a").write("entered\\n")
+sys.stdin.readline(); print(json.dumps(dict(id=1, result={})), flush=True)
+sys.stdin.readline(); sys.stdin.readline()
+print(json.dumps(dict(id=2, result=dict(rateLimitsByLimitId=dict(codex=dict(limitId="codex", primary=dict(
+    usedPercent=90, windowDurationMins=10080, resetsAt=%d), secondary=None))))), flush=True)
+"""
+
+
+class UsageRefreshCliTest(unittest.TestCase):
+    """The private `--usage-refresh` mode: exact `{}` in, one fixed state out, never beside another mode."""
+    def setUp(self):
+        from runtime import opencode_account
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.state = self.root / "state"
+        self.entered = self.root / "entered.log"
+        tools = self.root / "bin"
+        tools.mkdir()
+        (tools / "codex").write_text(CODEX % (sys.executable, str(self.entered), int(time.time()) + 7200))
+        (tools / "codex").chmod(0o700)
+        # Only the fake `codex` is on PATH, in a private home, without the test-home refusal: a read would be seen.
+        self.env = dict(PATH=str(tools), HOME=str(self.root))
+        self.account = opencode_account
+        binding = dict(key="a" * 32, generation="b" * 32)
+        opencode_account._transition(self.state / "router.json", "chatgpt", lambda part: dict(
+            identity=binding, account=dict(binding, observed_at=int(time.time()))))
+
+    def run_cli(self, raw, *flags, state=None):
+        done = subprocess.run([sys.executable, "-B", str(SCRIPT), "--state-dir", str(state or self.state),
+                               "--usage-refresh", *flags], input=raw, capture_output=True, timeout=60,
+                              cwd=self.root, env=self.env)
+        return done.stdout
+
+    def usage(self):
+        return json.loads((self.state / self.account.STORE_FILE).read_text())["chatgpt"].get("chatgpt_usage")
+
+    def test_malformed_stdin_fails_before_the_codex_reader_is_entered(self):
+        for raw in (b"", b"not json", b"[]", b"null", b'{"a": 1}', b'{"wanted": []}', b"{} ", b"{}\n", b"{}{}",
+                    b"x" * 65537):
+            with self.subTest(raw=raw[:24]):
+                self.assertEqual(self.run_cli(raw), b'{"state":"failed"}\n')
+        self.assertFalse(self.entered.exists())
+        self.assertIsNone(self.usage())  # not even a start record
+
+    def test_a_combined_mode_fails_and_does_neither_job(self):
+        for flags in (["--council-pick"], ["--council-roster"], ["--check-setup"], ["--check-setup", "--allow-fetch"],
+                      ["--refresh"], ["--chatgpt-limit"], ["--claude-limit"], ["--feedback"]):
+            with self.subTest(flags=flags):
+                self.assertEqual(self.run_cli(b"{}", *flags), b'{"state":"failed"}\n')
+        self.assertFalse(self.entered.exists())
+        self.assertIsNone(self.usage())
+        self.assertEqual(sorted(path.name for path in self.state.iterdir() if not path.name.startswith(".")),
+                         [self.account.STORE_FILE])  # no limit mark, score cache or other mode's state
+
+    def test_exact_stdin_runs_one_bound_read_and_answers_only_its_state(self):
+        self.assertEqual(self.run_cli(b"{}"), b'{"state":"stored"}\n')
+        self.assertEqual(self.entered.read_text().splitlines(), ["entered"])
+        self.assertEqual(self.run_cli(b"{}"), b'{"state":"not_due"}\n')
+        self.assertEqual(self.entered.read_text().splitlines(), ["entered"])
+        self.assertEqual(self.usage()["ok"], True)
+
+    def test_an_unbound_or_unsafe_state_answers_without_a_read(self):
+        missing = self.root / "missing"
+        self.assertEqual(self.run_cli(b"{}", state=missing), b'{"state":"unbound"}\n')
+        self.assertFalse(missing.exists())
+        link = self.root / "link"
+        link.symlink_to(self.state)
+        for unsafe in (link, Path("state"), self.state / ".." / "state"):
+            with self.subTest(unsafe=unsafe):
+                self.assertEqual(self.run_cli(b"{}", state=unsafe), b'{"state":"failed"}\n')
+        self.assertFalse(self.entered.exists())
+
+    def test_the_test_home_refuses_the_read(self):
+        self.env["VCW_TEST_HOME"] = str(self.root)
+        self.assertEqual(self.run_cli(b"{}"), b'{"state":"failed"}\n')
+        self.assertFalse(self.entered.exists())
 
 
 if __name__ == "__main__":

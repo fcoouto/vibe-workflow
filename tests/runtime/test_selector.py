@@ -9,7 +9,7 @@ import unittest
 
 from runtime import routing
 from runtime import routing_paths
-from runtime import feedback, native_catalog, scores, selector
+from runtime import council, feedback, native_catalog, scores, selector, usage_balance
 from unittest import mock
 try:
     from runtime.selector import select
@@ -918,6 +918,19 @@ class Hinted(Facts):
         return self.hints.get(route["route"], {})
 
 
+class Due(Hinted):
+    """A hinted source that also answers whether the on-demand ChatGPT usage read is due, and logs each question."""
+    def __init__(self, hints=None, *, due=True, **options):
+        super().__init__(hints, **options)
+        self.due, self.due_reads = due, []
+
+    def usage_refresh_due(self, route, now):
+        self.due_reads.append(route["route"])
+        if isinstance(self.due, Exception):
+            raise self.due
+        return self.due
+
+
 class BalanceTest(unittest.TestCase):
     """Ordinary picks: a comparable healthy subscription may be promoted; every guard keeps the baseline."""
     def setUp(self):
@@ -928,8 +941,10 @@ class BalanceTest(unittest.TestCase):
         self.hints = {CLAUDE_ROUTE: CLAUDE_PLAIN, GO_ROUTE: GO_HEALTHY}
 
     def select(self, source, *, models=None, raw=None, task=None):
+        """One pick in a state folder of its own: a score cache left by an earlier pick would hide this one's `raw`."""
         request = dict(v=2, work_kind="review", task=dict(task or TASK), models=models or self.models)
-        return select(request, state_dir=self.root, source=source, fetch=Fetch(raw or balance_body()), now=NOW)
+        state = Path(tempfile.mkdtemp(dir=self.root))
+        return select(request, state_dir=state, source=source, fetch=Fetch(raw or balance_body()), now=NOW)
 
     def test_a_healthy_comparable_go_route_is_promoted_over_the_claude_baseline(self):
         source = Hinted(self.hints)
@@ -1124,14 +1139,181 @@ class ReviewBalanceTest(unittest.TestCase):
         raw = body(("anthropic/a-small", 50, 0.1, 0.5, 67), ("anthropic/a-peer", 55, 0.2, 0.5, 67),
                    ("openai/b-small", 60, 1, 5, 67))
         models = [model("claude-agent", "a-small"), model("opencode-go", "a-peer"), model("openai", "b-small")]
-        strong = {"5h": fresh(10, 3600, 18000), "7d": fresh(20, 4 * 86400, 604800)}  # 5h scores 4.5
-        source = Hinted({"opencode-claude-subscription:a-small": GO_HEALTHY,
-                         "opencode-go-subscription:a-peer": strong,
-                         "opencode-chatgpt-subscription:b-small": CHATGPT_SOON},
-                        drift={"opencode-chatgpt-subscription"})
+        strong = {"5h": fresh(10, 3600, 18000), "7d": fresh(20, 4 * 86400, 604800),
+                  "monthly": fresh(50, 10 * 86400, None)}  # 5h scores 4.5, with every sibling Go needs
+        self.assertAlmostEqual(usage_balance.expiry_score("go", strong, now=NOW), 4.5)
+        source = Due({"opencode-claude-subscription:a-small": CLAUDE_PLAIN,
+                      "opencode-go-subscription:a-peer": strong,
+                      "opencode-chatgpt-subscription:b-small": CHATGPT_SOON},
+                     drift={"opencode-chatgpt-subscription"})
         result = self.review(source, models, raw, reviewing="claude-agent/a-small")
         self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("a-small", False))
+        self.assertEqual([item["model"] for item in result["alternatives"]], ["a-peer"])  # baseline order, unbalanced
         self.assertIn(dict(route="opencode-chatgpt-subscription:b-small", reason="account_changed"), result["excluded"])
+        self.assertEqual(source.hint_reads, [])  # the fallback group is never balanced, so no hint is read there
+        self.assertEqual(source.due_reads, [])  # and it is no decision group for a usage read
+        self.assertNotIn("usage_refresh", result)
+
+    def test_a_fallback_group_that_keeps_chatgpt_and_a_rival_is_neither_balanced_nor_a_reason_to_read(self):
+        # The author is on ChatGPT (lab openai). The only independent route, on Claude, changes account, so the
+        # fallback holds ChatGPT's c-x (2.5) and a same-lab Go route c-y (2.75) that would score 4.5 if balanced.
+        raw = body(("anthropic/b-small", 60, 1, 5, 67), ("openai/c-x", 70, 2, 4, 67), ("openai/c-y", 75, 2, 5, 67))
+        models = [model("claude-agent", "b-small"), model("openai", "c-x"), model("opencode-go", "c-y")]
+        strong = {"5h": fresh(10, 3600, 18000), "7d": fresh(20, 4 * 86400, 604800),
+                  "monthly": fresh(50, 10 * 86400, None)}
+        source = Due({"opencode-chatgpt-subscription:c-x": {"7d": fresh(0, 604800, 604800)},
+                      "opencode-go-subscription:c-y": strong}, drift={"opencode-claude-subscription"})
+        result = self.review(source, models, raw, reviewing="openai/c-x")
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("c-x", False))
+        self.assertEqual([item["model"] for item in result["alternatives"]], ["c-y"])
+        self.assertIn(dict(route="opencode-claude-subscription:b-small", reason="account_changed"), result["excluded"])
+        self.assertEqual((source.hint_reads, source.due_reads), ([], []))
+        self.assertNotIn("usage_refresh", result)
+
+    def test_an_independent_group_with_chatgpt_and_another_subscription_asks_for_a_due_read(self):
+        raw = body(("a/a-small", 50, 0.1, 0.5, 67), ("anthropic/b-small", 60, 1, 5, 67), ("openai/d-x", 80, 1, 6, 67))
+        models = [model("opencode-go", "a-small"), model("claude-agent", "b-small"), model("openai", "d-x")]
+        source = Due({"opencode-claude-subscription:b-small": CLAUDE_PLAIN})
+        result = self.review(source, models, raw)
+        self.assertEqual((result["route"]["model"], result["reviewer_independent"]), ("b-small", True))
+        self.assertIs(result["usage_refresh"], True)
+        self.assertEqual(source.due_reads, ["opencode-chatgpt-subscription:d-x"])
+        alone = self.review(Due(), [model("opencode-go", "a-small"), model("openai", "d-x")], raw)
+        self.assertEqual((alone["route"]["model"], alone["reviewer_independent"]), ("d-x", True))
+        self.assertNotIn("usage_refresh", alone)  # the same-lab Go route is outside the independent group
+
+
+class UsageRefreshTest(unittest.TestCase):
+    """`usage_refresh` marks a due ChatGPT read only for the group that could actually be balanced."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol")]
+        self.weekly = {CLAUDE_ROUTE: {"7d": fresh(40, 72 * 3600, 604800)}}  # the reference Claude reading: 1.4
+
+    def select(self, source, *, models=None, raw=None, task=None):
+        """One pick in a state folder of its own: a score cache left by an earlier pick would hide this one's `raw`."""
+        request = dict(v=2, work_kind="review", task=dict(task or TASK), models=models or self.models)
+        state = Path(tempfile.mkdtemp(dir=self.root))
+        result = select(request, state_dir=state, source=source, fetch=Fetch(raw or balance_body()), now=NOW)
+        for field in ("admission", "reservation", "spend_permit"):
+            self.assertIs(result[field], False)
+        self.assertNotIn("used_percent", json.dumps(result))
+        self.assertIn(result.get("usage_refresh"), (None, True))  # present only as true
+        return result
+
+    def test_the_hint_decides_the_order_and_a_reset_is_never_imputed(self):
+        without = self.select(Due(self.weekly))
+        self.assertEqual(without["route"]["route"], CLAUDE_ROUTE)  # no ChatGPT hint: the baseline
+        closing = dict(self.weekly, **{CHATGPT_ROUTE: {"7d": fresh(90, 7200, 604800)}})  # 8.4
+        self.assertEqual(self.select(Due(closing))["route"]["route"], CHATGPT_ROUTE)
+        renewed = dict(self.weekly, **{CHATGPT_ROUTE: {"7d": fresh(0, 604800, 604800)}})  # a fresh reset scores 1.0
+        self.assertEqual(self.select(Due(renewed))["route"]["route"], CLAUDE_ROUTE)
+        unread = dict(self.weekly, **{CHATGPT_ROUTE: {"7d": dict(fresh(90, 7200, 604800), reset_at=NOW)}})
+        self.assertEqual(self.select(Due(unread))["route"]["route"], CLAUDE_ROUTE)  # reset, not reread: unknown
+
+    def test_an_unknown_chatgpt_baseline_with_a_comparable_rival_asks_for_a_read(self):
+        source = Due(self.weekly)
+        result = self.select(source, raw=balance_body(gpt=(3, 11, 78)))  # ChatGPT (5) is the baseline; Claude costs 6
+        self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+        self.assertIs(result["usage_refresh"], True)
+        self.assertEqual(source.due_reads, [CHATGPT_ROUTE])
+
+    def test_an_unknown_chatgpt_baseline_without_a_comparable_rival_asks_for_nothing(self):
+        for label, raw in (("price", balance_body(gpt=(1, 5, 78))), ("score", balance_body(gpt=(3, 11, 80)))):
+            with self.subTest(label=label):
+                source = Due(self.weekly)
+                result = self.select(source, raw=raw)
+                self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+                self.assertNotIn("usage_refresh", result)
+                self.assertEqual(source.due_reads, [])
+
+    def test_a_comparable_chatgpt_rival_of_another_baseline_asks_for_a_read(self):
+        source = Due(self.weekly)
+        result = self.select(source)
+        self.assertEqual((result["route"]["route"], result["usage_refresh"]), (CLAUDE_ROUTE, True))
+        beyond = Due(self.weekly)
+        self.assertNotIn("usage_refresh", self.select(beyond, raw=balance_body(gpt=(5, 25, 78))))  # 10 > 1.5 x 6
+        self.assertEqual(beyond.due_reads, [])
+
+    def test_a_read_that_is_not_due_or_cannot_be_judged_is_not_requested(self):
+        self.assertNotIn("usage_refresh", self.select(Due(self.weekly, due=False)))
+        for answer in (None, 1, "yes", dict(state="due")):
+            with self.subTest(answer=answer):
+                self.assertNotIn("usage_refresh", self.select(Due(self.weekly, due=answer)))
+        failing = self.select(Due(self.weekly, due=RuntimeError("PRIVATE-SENTINEL")))
+        self.assertEqual((failing["state"], failing["route"]["route"]), ("selected", CLAUDE_ROUTE))
+        self.assertNotIn("usage_refresh", failing)
+        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(failing))
+        plain = Hinted(self.weekly)  # a source without the method never asks
+        self.assertNotIn("usage_refresh", self.select(plain))
+
+    def test_same_login_aliases_or_groups_without_chatgpt_ask_for_nothing(self):
+        aliases = Due()
+        raw = balance_body(extra=[("openai/gpt-6-2-terra", 60, 3, 20, 78)])
+        result = self.select(aliases, models=[model("openai", "gpt-6-2-sol"), model("openai", "gpt-6-2-terra")],
+                             raw=raw)
+        self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual((aliases.due_reads, aliases.hint_reads), ([], []))
+        others = Due({CLAUDE_ROUTE: CLAUDE_PLAIN, GO_ROUTE: GO_HEALTHY})
+        result = self.select(others, models=[model("claude-agent", "claude-sonnet-5-5"),
+                                             model("opencode-go", "kimi-x-1")])
+        self.assertEqual(result["route"]["route"], GO_ROUTE)
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(others.due_reads, [])
+
+    def test_a_near_floor_winner_asks_for_nothing(self):
+        near = Due()
+        raw = balance_body(extra=[("anthropic/claude-haiku-5-5", 30, 1, 1, 59)])
+        result = self.select(near, models=[model("claude-agent", "claude-haiku-5-5"), model("openai", "gpt-6-2-sol")],
+                             raw=raw)
+        self.assertEqual((result["route"]["route"], result["below_level"]), (HAIKU_ROUTE, False))
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(near.due_reads, [])
+
+    def test_a_below_level_winner_asks_for_nothing(self):
+        below = Due()
+        raw = body(("anthropic/claude-opus-5-5", 10, 5, 25, 80), ("openai/gpt-6-2-sol", 20, 3, 19, 78),
+                   ("google/gemini-4-neon", 30, 4, 20, 90), ("anthropic/claude-sonnet-5-5", 40, 3, 15, 76),
+                   ("moonshot/kimi-x-1", 50, 4, 20, 85))  # the third lab's best is 80: neither route reaches level 3
+        result = self.select(below, raw=raw, task=TASK_CRITICAL)
+        self.assertIs(result["below_level"], True)
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(below.due_reads, [])
+
+    def test_a_removed_route_never_carries_the_demand(self):
+        # ChatGPT itself changed account: its stale route asks for nothing.
+        gone = Due(self.weekly, drift={"opencode-chatgpt-subscription"})
+        result = self.select(gone)
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertIn(dict(route=CHATGPT_ROUTE, reason="account_changed"), result["excluded"])
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(gone.due_reads, [])
+        # The only other subscription changed: the surviving ChatGPT aliases have nothing to compete with.
+        raw = balance_body(extra=[("openai/gpt-6-2-terra", 60, 3, 20, 78)])
+        models = self.models + [model("openai", "gpt-6-2-terra")]
+        alone = Due(self.weekly, drift={"opencode-claude-subscription"})
+        result = self.select(alone, models=models, raw=raw)
+        self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+        self.assertIn(dict(route=CLAUDE_ROUTE, reason="account_changed"), result["excluded"])
+        self.assertNotIn("usage_refresh", result)
+        self.assertEqual(alone.due_reads, [])
+        # A changed third subscription leaves the ChatGPT and Claude pair standing: the read is still wanted.
+        three = self.models + [model("opencode-go", "kimi-x-1")]
+        pair = Due(dict(self.weekly, **{GO_ROUTE: GO_HEALTHY}), drift={"opencode-go-subscription"})
+        result = self.select(pair, models=three)
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+        self.assertIs(result["usage_refresh"], True)
+
+    def test_a_council_pick_never_asks_for_a_read(self):
+        source = Due(self.weekly)
+        answer = council.pick(dict(v=1, count=2, models=self.models), state_dir=self.root / "state", source=source,
+                              fetch=Fetch(balance_body()), now=NOW)
+        self.assertEqual(answer["state"], "picked")
+        self.assertNotIn("usage_refresh", answer)
+        self.assertEqual(source.due_reads, [])
 
 
 if __name__ == "__main__":

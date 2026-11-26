@@ -1,4 +1,5 @@
 """Reader extraction must preserve identity, quiet metadata and refuse-only meters."""
+import base64
 from datetime import datetime, timezone
 import faulthandler
 from contextlib import contextmanager
@@ -1809,6 +1810,480 @@ print(json.dumps([gone, child.returncode is not None]), file=sys.stderr)
         self.assertEqual(self.cooldown_path().read_text(), "null")
         self.assertFalse(self.trace.exists())
         self.assertEqual(self.quota_state(), before)
+
+
+def jwt(sub):
+    """An unsigned access token whose payload names `sub`, as the account reader decodes it."""
+    part = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")  # noqa: E731
+    return ".".join((part(dict(alg="none")), part(dict(sub=sub)), "signature"))
+
+
+def codex_meter(at, used, left, duration, *, received=None, discrete=True):
+    """One Codex ranking meter of a read spanning `at` to `received`, as `codex_reset.read_windows` returns it."""
+    return dict(used_percent=used, earliest=at, latest=at if received is None else received, reset_at=at + left,
+                duration=duration, discrete=discrete)
+
+
+def reached_barrier(path, alive, timeout=20):
+    """Whether the fake child announced itself on the FIFO `path` before `alive()` turned false or `timeout` passed.
+    Bounded: a worker that never spawns the child fails the test and cannot hang it."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        end = time.monotonic() + timeout
+        while True:
+            try:
+                if os.read(fd, 1) == b"1":
+                    return True
+            except BlockingIOError:
+                pass
+            if not alive() or time.monotonic() >= end:
+                return False
+            time.sleep(0.02)
+    finally:
+        os.close(fd)
+
+
+def release_barrier(path, alive, timeout=5):
+    """Let the fake child waiting on the FIFO `path` go on. Nonblocking and bounded: a child that already left, or
+    never arrived, cannot hold the test."""
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            return
+        except OSError:
+            if not alive() or time.monotonic() >= end:
+                return
+            time.sleep(0.02)
+
+
+class ChatgptUsageTest(unittest.TestCase):
+    """The on-demand Codex hint: bound to the proved OpenCode ChatGPT OAuth connection, one worker, durable spacing."""
+    setUp = ReaderTest.setUp
+    write = ReaderTest.write
+    WEEK, FIVE = 604_800, 18_000
+
+    def chatgpt(self, sub="invented-subject", *, value=None, force=False, at=None):
+        """Observe OpenCode's selected `openai` credential: browser OAuth for `sub` unless `value` replaces it."""
+        value = dict(type="oauth", methodID="chatgpt-token-sharing", access=jwt(sub)) if value is None else value
+        self.write(dict(mode="opencode", answers={"/api/credential": dict(data=[
+            dict(id="invented-openai", integrationID="openai", active=True, value=value)])}))
+        with mock.patch("time.time", return_value=self.now if at is None else at):
+            return self.openc.refresh(self.settings, families=("chatgpt",), command=self.command,
+                                      environ=self.environ, force=force)
+
+    @property
+    def gpt_route(self):
+        return dict(self.route, route="opencode-chatgpt-subscription:first", provider="openai",
+                    pool="chatgpt-subscription", account="chatgpt-plan")
+
+    def meters(self, at, *, weekly=(90, 7200), five=(40, 3600), received=None):
+        found = {}
+        if weekly is not None:
+            found["7d"] = codex_meter(at, *weekly, self.WEEK, received=received)
+        if five is not None:
+            found["5h"] = codex_meter(at, *five, self.FIVE, received=received)
+        return found
+
+    def read(self, at, meters=None, *, finished=None):
+        """One refresh at `at` whose Codex read returns `meters` (default: weekly and 5-hour) at `finished`."""
+        clock = [at, at if finished is None else finished]
+        answer = self.meters(at, received=finished) if meters is None else meters
+        with mock.patch("time.time", side_effect=lambda: clock.pop(0) if len(clock) > 1 else clock[0]), \
+                mock.patch.object(self.openc.codex_reset, "read_windows", return_value=answer) as reader:
+            state = self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ)
+        self.reads = getattr(self, "reads", 0) + reader.call_count
+        return state
+
+    def marker(self, at, route=None):
+        route = self.gpt_route if route is None else route
+        billing = importlib.import_module("runtime.subscription_billing")
+        return billing.marker(self.openc.billing_fact(self.settings, route, at), route, at)
+
+    def hints(self, at, *, marker=None, route=None):
+        route = self.gpt_route if route is None else route
+        marker = self.marker(at, route) if marker is None else marker
+        return self.observations.LocalSource(self.settings).ranking_meters(dict(route, account_marker=marker), at)
+
+    def due(self, at):
+        return self.openc.chatgpt_usage_due(self.settings, at)
+
+    def usage(self):
+        return json.loads(self.openc._store(self.settings).read_text())["chatgpt"].get("chatgpt_usage")
+
+    def assert_lock_free(self):
+        with self.storage._locked(self.openc._store(self.settings), block=False,
+                                  lock=self.openc.CHATGPT_LOCK) as path:
+            self.assertIsNotNone(path)
+
+    def test_a_proved_oauth_connection_stores_bound_hints_and_nothing_else(self):
+        self.assertEqual(self.chatgpt()["state"], "stored")
+        self.assertTrue(self.due(self.now))
+        self.assertEqual(self.hints(self.now), {})
+        self.assertEqual(self.read(self.now, finished=self.now + 2), "stored")
+        hints = self.hints(self.now + 2)
+        self.assertEqual((hints["7d"]["used_percent"], hints["5h"]["duration"]), (90, 18_000))
+        self.assertEqual((hints["7d"]["earliest"], hints["7d"]["latest"]), (self.now, self.now + 2))
+        stored = self.usage()
+        self.assertEqual(set(stored), {"key", "generation", "started", "finished", "ok", "reset", "ranking"})
+        self.assertEqual(set(stored["ranking"]), {"earliest", "latest", "meters"})
+        for meter in stored["ranking"]["meters"].values():
+            self.assertEqual(set(meter), {"used_percent", "earliest", "latest", "reset_at", "duration", "discrete"})
+        text = self.openc._store(self.settings).read_text()
+        self.assertNotIn("invented-subject", text)
+        self.assertNotIn(jwt("invented-subject"), text)
+        self.assert_lock_free()
+
+    def test_an_api_key_or_an_unproved_connection_starts_no_read(self):
+        self.reads = 0
+        self.assertEqual(self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ), "unbound")
+        self.assertFalse(self.settings.parent.exists())  # an absent store is not created to say so
+        for label, value in (("api key", dict(type="api", key="CREDENTIAL-SENTINEL")),
+                             ("other method", dict(type="oauth", methodID="other", access=jwt("invented-subject"))),
+                             ("no subject", dict(type="oauth", methodID="chatgpt-token-sharing", access="opaque"))):
+            with self.subTest(label=label):
+                self.assertEqual(self.chatgpt(value=value, force=True)["families"]["chatgpt"],
+                                 "opencode_chatgpt_unsupported")
+                self.assertFalse(self.due(self.now))
+                self.assertEqual(self.read(self.now), "unbound")
+        self.chatgpt(force=True)
+        self.openc._transition(self.settings, "chatgpt", lambda part: self.continuity._fence(part, {}))
+        self.assertFalse(self.due(self.now))  # a pending account proves no binding
+        self.assertEqual(self.read(self.now), "unbound")
+        self.chatgpt(force=True)
+        stale = self.now + self.storage.FRESH_SECONDS + 1
+        self.assertFalse(self.due(stale))  # nor does an account read that is no longer current
+        self.assertEqual(self.read(stale), "unbound")
+        self.assertEqual(self.reads, 0)
+        self.assertIsNone(self.usage())
+
+    def test_a_second_worker_is_busy_while_the_first_holds_the_lock_and_blocks_nothing(self):
+        faulthandler.dump_traceback_later(60, exit=True)  # watchdog: a missing barrier handshake must not hang the run
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
+        self.chatgpt()
+        self.settings.parent.mkdir(mode=0o700, exist_ok=True)
+        reached, release, spawned = (self.root / name for name in ("reached.fifo", "release.fifo", "spawned.log"))
+        os.mkfifo(reached)
+        os.mkfifo(release)
+        answer = dict(rateLimitsByLimitId=dict(codex=dict(limitId="codex", primary=dict(
+            usedPercent=90, windowDurationMins=10_080, resetsAt=self.now + 7200), secondary=None)))
+        codex = self.root / "codex"
+        codex.write_text("#!%s\n" % sys.executable + "\n".join((
+            "import json, sys",
+            "open(%r, 'a').write('spawned\\n')" % str(spawned),
+            "json.loads(sys.stdin.readline()); print(json.dumps(dict(id=1, result={})), flush=True)",
+            "sys.stdin.readline(); sys.stdin.readline()",
+            "open(%r, 'w').write('1')" % str(reached),   # the rate-limit read is in flight
+            "open(%r).read()" % str(release),             # until the test releases it
+            "print(json.dumps(dict(id=2, result=json.loads(%r))), flush=True)" % json.dumps(answer))) + "\n")
+        codex.chmod(0o700)
+        run = lambda: self.openc.refresh_chatgpt_usage(  # noqa: E731
+            self.settings, environ=self.environ, command=[str(codex)])
+        results, reached_seen = [], False
+        worker = threading.Thread(target=lambda: results.append(run()))
+        worker.start()
+        try:
+            reached_seen = reached_barrier(reached, worker.is_alive)
+            self.assertTrue(reached_seen)
+            self.assertEqual(run(), "busy")
+            self.assertEqual(run(), "busy")
+            self.assertFalse(self.due(int(time.time())))  # the start record already spaces other instances
+            current = int(time.time())
+            self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, current))  # no store lock held
+            with self.observations._locked(self.openc._store(self.settings), block=False) as path:
+                self.assertIsNotNone(path)
+            with mock.patch.object(self.openc, "_call", side_effect=AssertionError("no account exchange")):
+                self.assertEqual(self.openc.refresh(self.settings, families=("chatgpt",), command=self.command,
+                                                    environ=self.environ)["state"], "fresh")
+            self.assertTrue(worker.is_alive())
+        finally:
+            release_barrier(release, worker.is_alive)
+            worker.join(10)
+        self.assertEqual(results, ["stored"])
+        self.assertEqual(spawned.read_text().splitlines(), ["spawned"])  # one read while the first worker held the lock
+        self.assertEqual(self.hints(int(time.time()))["7d"]["used_percent"], 90)
+        self.assert_lock_free()
+
+    def test_a_success_spaces_the_follow_up_by_age_or_the_earliest_known_reset(self):
+        self.chatgpt()
+        start = self.now
+        self.assertEqual(self.read(start, self.meters(start, five=(40, 30))), "stored")  # 5-hour reset at +30
+        self.assertFalse(self.due(start + 30))
+        self.assertFalse(self.due(start + 59))
+        self.assertTrue(self.due(start + 60))  # post-reset demand, never sooner than 60 seconds after that start
+        self.assertEqual(self.read(start + 59), "not_due")
+        self.assertEqual(sorted(self.hints(start + 59)), ["7d"])  # each meter expires alone, at its own reset
+        self.assertEqual(self.read(start + 60, self.meters(start + 60)), "stored")
+        self.assertEqual(self.reads, 2)
+        again = start + 60
+        self.assertFalse(self.due(again - 1))  # a clock behind the start record starts nothing
+        self.chatgpt(force=True, at=again)  # the account stays current through the checks below
+        for later, expected in ((60, False), (899, False), (900, True)):  # no reset reached: only the 900-second age
+            self.assertIs(self.due(again + later), expected, later)
+
+    def test_a_partial_valid_result_is_a_success_and_does_not_trigger_each_pick(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now, self.meters(self.now, five=None)), "stored")
+        self.assertEqual(sorted(self.hints(self.now)), ["7d"])
+        for later in (0, 1, 60, 61, 600, 899):
+            self.assertFalse(self.due(self.now + later), later)
+            self.assertEqual(self.read(self.now + later), "not_due")
+        self.assertEqual(self.reads, 1)
+
+    def test_a_failed_read_cools_down_from_its_completion_and_keeps_a_still_fresh_batch(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now, self.meters(self.now, five=(40, 30))), "stored")
+        start, finish = self.now + 60, self.now + 64
+        self.assertEqual(self.read(start, {}, finished=finish), "failed")  # nothing usable in the answer
+        self.assertEqual((self.usage()["ok"], self.usage()["finished"]), (False, finish))
+        self.assertEqual(self.hints(finish)["7d"]["used_percent"], 90)  # an unavailable read renews and removes nothing
+        self.chatgpt(force=True, at=finish + 899)
+        self.assertFalse(self.due(finish + 899))
+        self.assertEqual(self.read(finish + 899), "not_due")
+        self.assertTrue(self.due(finish + 900))
+        self.assertEqual(self.reads, 2)
+        self.assert_lock_free()
+
+    def test_an_interrupted_worker_releases_the_lock_and_leaves_the_durable_cooldown(self):
+        self.chatgpt()
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.openc.codex_reset, "read_windows", side_effect=KeyboardInterrupt) as reader:
+            self.assertEqual(self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ), "failed")
+        self.assertEqual(reader.call_count, 1)
+        self.assert_lock_free()
+        self.assertEqual((self.usage()["ok"], self.usage()["finished"]), (False, None))
+        self.chatgpt(force=True, at=self.now + 899)
+        self.assertFalse(self.due(self.now + 899))
+        self.assertEqual(self.read(self.now + 899), "not_due")
+        self.assertTrue(self.due(self.now + 900))
+        self.assertEqual(self.reads, 0)
+
+    def test_a_killed_worker_releases_the_os_lock_and_the_start_record_suppresses_another_read(self):
+        self.chatgpt()
+        reached = self.root / "reached.fifo"
+        os.mkfifo(reached)
+        codex = self.root / "codex"
+        codex.write_text("#!%s\n" % sys.executable + "\n".join((
+            "import sys",
+            "sys.stdin.readline()",
+            "open(%r, 'w').write('1')" % str(reached),
+            "sys.stdin.read()")) + "\n")  # never answers; the killed worker's closed pipe releases it
+        codex.chmod(0o700)
+        harness = "\n".join((
+            "import sys",
+            "from pathlib import Path",
+            "from runtime import opencode_account",
+            "environ = dict(PATH='/usr/bin:/bin', HOME=sys.argv[2])",
+            "print(opencode_account.refresh_chatgpt_usage(Path(sys.argv[1]), environ=environ, command=[sys.argv[3]]))"))
+        root = Path(__file__).resolve().parents[2]
+        worker = subprocess.Popen([sys.executable, "-B", "-c", harness, str(self.settings), str(self.root), str(codex)],
+                                  cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  env=dict(os.environ, PYTHONPATH=str(root)))
+        self.addCleanup(worker.stdout.close)
+        try:
+            self.assertTrue(reached_barrier(reached, lambda: worker.poll() is None))
+            self.assertEqual(self.read(int(time.time())), "busy")  # the worker holds the OS lock mid-exchange
+        finally:
+            worker.kill()
+            worker.wait(10)
+        self.assertEqual(worker.stdout.read(), b"")  # it never reported
+        self.assert_lock_free()
+        started = self.usage()["started"]
+        self.assertEqual((self.usage()["ok"], self.usage()["finished"]), (False, None))
+        self.chatgpt(force=True, at=started + 899)
+        self.assertFalse(self.due(started + 899))
+        self.assertEqual(self.read(started + 899), "not_due")
+        self.assertTrue(self.due(started + 900))
+        self.assertEqual(self.reads, 0)
+
+    def test_a_new_binding_gets_no_hints_after_the_old_read_releases(self):
+        self.chatgpt()
+        old = self.marker(self.now)
+        entered, release, results = threading.Event(), threading.Event(), []
+
+        def gated(**kwargs):
+            entered.set()
+            release.wait(10)
+            return self.meters(self.now)
+        with mock.patch.object(self.openc.codex_reset, "read_windows", side_effect=gated):
+            worker = threading.Thread(target=lambda: results.append(
+                self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ)))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(10))
+                self.assertEqual(self.chatgpt("another-subject", force=True)["state"], "stored")  # rotation, observed
+            finally:
+                release.set()
+                worker.join(10)
+        self.assertEqual(results, ["unbound"])
+        current = int(time.time())
+        new = self.marker(current)
+        self.assertNotEqual(new, old)
+        self.assertEqual(self.hints(current, marker=new), {})
+        self.assertEqual(self.hints(current, marker=old), {})
+        self.assertIsNone(self.usage()["ranking"])  # the old login's start record holds no reading
+        self.assertTrue(self.due(current))  # the new binding owes its own read
+        self.assert_lock_free()
+
+    def test_a_logout_or_rotation_invalidates_stored_hints(self):
+        self.chatgpt()
+        self.assertEqual(self.read(self.now), "stored")
+        marker = self.marker(self.now)
+        self.assertIn("7d", self.hints(self.now, marker=marker))
+        self.chatgpt(value=dict(type="api", key="CREDENTIAL-SENTINEL"), force=True)  # logout to an API key
+        self.assertEqual(self.observations.LocalSource(self.settings).ranking_meters(
+            dict(self.gpt_route, account_marker=marker), self.now), {})
+        self.chatgpt(force=True)  # the same subject again, but continuity ended: a new generation
+        self.assertEqual(self.hints(self.now), {})
+        self.assertTrue(self.due(self.now))
+
+    def test_go_shaped_fields_in_a_chatgpt_record_yield_no_hints(self):
+        self.chatgpt()
+        record = self.openc._account(self.settings, "chatgpt", self.now)
+        meter = lambda left, duration: dict(used_percent=20, earliest=self.now, latest=self.now,  # noqa: E731
+                                            reset_at=self.now + left, duration=duration, discrete=True)
+        batch = dict(earliest=self.now, latest=self.now, meters={
+            "5h": meter(3600, 18_000), "7d": meter(86400, 604_800), "monthly": meter(10 * 86400, None)})
+        self.openc._transition(self.settings, "chatgpt", lambda part: dict(
+            account=dict(part["account"], go_usage=True),
+            go_quota=dict(key=record["key"], generation=record["generation"], meters={}, ranking=batch)))
+        self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
+        self.assertEqual(self.hints(self.now), {})  # Go's decoder never reads a ChatGPT record
+        self.openc._transition(self.settings, "chatgpt", lambda part: dict(chatgpt_usage=dict(
+            key=record["key"], generation=record["generation"], started=self.now, finished=self.now, ok=True,
+            reset=self.now + 3600, ranking=batch)))
+        self.assertEqual(sorted(self.hints(self.now)), ["5h", "7d"])  # and ChatGPT's own keeps no Go-only window
+
+    def test_chatgpt_shaped_fields_in_a_go_record_yield_no_hints(self):
+        opencode = ReaderTest.opencode
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(opencode(self, "go", usage={})["state"], "stored")
+        record = self.openc._account(self.settings, "go", self.now)
+        batch = dict(earliest=self.now, latest=self.now, meters=self.meters(self.now))
+        self.openc._transition(self.settings, "go", lambda part: dict(chatgpt_usage=dict(
+            key=record["key"], generation=record["generation"], started=self.now, finished=self.now, ok=True,
+            reset=self.now + 3600, ranking=batch)))
+        self.assertEqual(self.hints(self.now, route=self.go_route), {})
+
+    def test_corrupt_usage_state_is_dropped_alone(self):
+        self.chatgpt()
+        record = self.openc._account(self.settings, "chatgpt", self.now)
+        good = codex_meter(self.now, 90, 7200, self.WEEK)
+        base = dict(key=record["key"], generation=record["generation"], started=self.now, finished=self.now, ok=True,
+                    reset=self.now + 7200, ranking=dict(earliest=self.now, latest=self.now, meters={"7d": good}))
+        mixed = dict(earliest=self.now, latest=self.now, meters={
+            "7d": good, "5h": dict(good, used_percent="bad"), "monthly": good, "family:x": good, "duration:0": good,
+            "duration:1209600": codex_meter(self.now, 50, 10 * 86400, 1_209_600, discrete=False),
+            "duration:86400": dict(good, earliest=self.now - 5)})  # outside its batch's interval
+        for label, usage, expected in (
+                ("valid", base, ["7d"]), ("other key", dict(base, key="0" * 32), []),
+                ("other generation", dict(base, generation="0" * 32), []), ("list", [1], []),
+                ("deep", dict(base, ranking=deep(700)), []),
+                ("bad batch", dict(base, ranking=dict(earliest=self.now, latest=self.now, meters=[good])), []),
+                ("mixed", dict(base, ranking=mixed), ["7d", "duration:1209600"])):
+            with self.subTest(label=label):
+                self.openc._transition(self.settings, "chatgpt", lambda part: dict(chatgpt_usage=usage))
+                self.assertEqual(sorted(self.hints(self.now)), expected)
+                self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
+
+    def test_a_healthy_hint_leaves_an_active_pause_unchanged(self):
+        self.chatgpt()
+        limit = importlib.import_module("runtime.chatgpt_limit")
+        state = self.settings.parent
+        limit.mark(state, self.now, reader=lambda **kw: self.now + 7200)
+        before = (state / limit.FILE).read_bytes()
+        self.assertEqual(self.read(self.now, self.meters(self.now, weekly=(0, 7200), five=(0, 3600))), "stored")
+        self.assertEqual((state / limit.FILE).read_bytes(), before)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.gpt_route, self.now), "quota_exhausted")
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.gpt_route, self.now), 7200)
+        kept, excluded = self.observations.eligible([self.gpt_route], self.observations.LocalSource(self.settings),
+                                                    self.now)
+        self.assertEqual((kept, excluded), ([], [dict(route=self.gpt_route["route"], reason="quota_exhausted")]))
+
+    def test_a_full_hint_creates_no_pause(self):
+        self.chatgpt()
+        limit = importlib.import_module("runtime.chatgpt_limit")
+        self.assertEqual(self.read(self.now, self.meters(self.now, weekly=(100, 7200), five=(100, 3600))), "stored")
+        self.assertEqual(self.hints(self.now)["7d"]["used_percent"], 100)
+        self.assertFalse((self.settings.parent / limit.FILE).exists())
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.gpt_route, self.now))
+        kept, excluded = self.observations.eligible([self.gpt_route], self.observations.LocalSource(self.settings),
+                                                    self.now)
+        self.assertEqual(([item["route"] for item in kept], excluded), ([self.gpt_route["route"]], []))
+
+    def test_refresh_refuses_relative_or_unsafe_state_without_a_read(self):
+        self.chatgpt()
+        link = self.root / "link"
+        link.symlink_to(self.settings.parent)
+        with mock.patch.object(self.openc.codex_reset, "read_windows",
+                               side_effect=AssertionError("no read")) as reader:
+            for path in (Path("state/router.json"), "state/router.json", link / "router.json", None):
+                with self.subTest(path=path):
+                    self.assertEqual(self.openc.refresh_chatgpt_usage(path, environ=self.environ), "failed")
+            self.openc._store(self.settings).chmod(0o644)
+            self.assertEqual(self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ), "failed")
+            self.assertFalse(self.due(self.now))
+        reader.assert_not_called()
+
+    def selection(self, at, *, models=None):
+        """One ordinary pick at `at` through the real local source; the cached accounts are never reacquired."""
+        selector_tests = importlib.import_module("tests.runtime.test_selector")
+        selector = importlib.import_module("runtime.selector")
+
+        class Local(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+        models = models or [selector_tests.model("claude-agent", "claude-sonnet-5-5"),
+                            selector_tests.model("openai", "gpt-6-2-sol")]
+        request = dict(v=2, work_kind="review", task=dict(selector_tests.TASK), models=models)
+        with mock.patch("time.time", return_value=at), \
+                mock.patch.object(self.openc.codex_reset, "read_windows", side_effect=AssertionError("no read")), \
+                mock.patch.object(self.openc.codex_reset, "_exchange", side_effect=AssertionError("no exchange")):
+            answer = selector.select(request, state_dir=self.settings.parent, source=Local(self.settings),
+                                     fetch=selector_tests.Fetch(selector_tests.balance_body(
+                                         extra=[("openai/gpt-6-2-terra", 60, 3, 20, 78)])), now=at)
+        self.assertEqual(answer["state"], "selected", answer)
+        for field in ("admission", "reservation", "spend_permit"):
+            self.assertIs(answer[field], False)
+        self.assertNotIn("used_percent", json.dumps(answer))
+        return answer
+
+    def accounts(self, at):
+        """Proved Claude and ChatGPT accounts at `at`; Claude's reading scores about 4.2, so it is a known baseline."""
+        self.data["initialize"]["models"] = [dict(value="claude-sonnet-5-5", resolvedModel="claude-sonnet-5-5",
+                                                  supportsEffort=False)]
+        self.data["usage"]["rate_limits"].update(five_hour=dict(utilization=20, resets_at=iso(at + 3600)),
+                                                 seven_day=dict(utilization=40, resets_at=iso(at + 86400)))
+        self.write(self.data)
+        with mock.patch("time.time", return_value=at):
+            self.assertEqual(self.native.refresh(self.settings, command=self.command, environ=self.environ,
+                                                 need=(), force=True)["state"], "stored")
+            self.assertEqual(ReaderTest.opencode(self, force=True)["state"], "stored")
+        self.assertEqual(self.chatgpt(force=True, at=at)["state"], "stored")
+
+    def test_selection_follows_the_bound_hint_and_asks_for_a_read_only_when_one_is_due(self):
+        claude, gpt = "opencode-claude-subscription:claude-sonnet-5-5", "opencode-chatgpt-subscription:gpt-6-2-sol"
+        self.accounts(self.now)
+        model = importlib.import_module("tests.runtime.test_selector").model
+        aliases = self.selection(self.now, models=[model("openai", "gpt-6-2-sol"), model("openai", "gpt-6-2-terra")])
+        self.assertNotIn("usage_refresh", aliases)  # one login's aliases only: nothing to compare, so no read
+        first = self.selection(self.now)  # no ChatGPT hint: its slot is unknown, and a read is due
+        self.assertEqual((first["route"]["route"], first.get("usage_refresh")), (claude, True))
+        self.assertEqual(self.read(self.now, self.meters(self.now)), "stored")  # weekly 90% with two hours left: 8.4
+        hinted = self.selection(self.now)
+        self.assertEqual(hinted["route"]["route"], gpt)
+        self.assertNotIn("usage_refresh", hinted)  # fresh: no read is due
+        later = self.now + 7200  # the weekly window reset and was not reread: unknown again, never an imputed zero
+        self.accounts(later)
+        unread = self.selection(later)
+        self.assertEqual((unread["route"]["route"], unread.get("usage_refresh")), (claude, True))
+        self.assertEqual(self.read(later, self.meters(later, weekly=(0, self.WEEK), five=(0, self.FIVE))), "stored")
+        reset = self.selection(later)  # a fresh reset scores 1.0: Claude's expiring quota keeps first place
+        self.assertEqual(reset["route"]["route"], claude)
+        self.assertNotIn("usage_refresh", reset)
+        self.assertEqual(self.chatgpt("another-subject", force=True, at=later)["state"], "stored")
+        rotated = self.selection(later)  # the hint belonged to the previous login
+        self.assertEqual((rotated["route"]["route"], rotated.get("usage_refresh")), (claude, True))
 
 
 class ClaudeLimitCliTest(unittest.TestCase):

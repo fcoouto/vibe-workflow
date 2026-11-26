@@ -44,6 +44,16 @@ class LocalSource:
         except Exception:
             return {}
 
+    def usage_refresh_due(self, route, now):
+        """Whether the on-demand usage read behind this candidate's hints is due. Only ChatGPT has one; the answer
+        schedules a background read and never changes a pick."""
+        from runtime import opencode_account
+        try:
+            return opencode_account.family(route) == 'chatgpt' \
+                and opencode_account.chatgpt_usage_due(self.settings_path, now)
+        except Exception:
+            return False
+
 PAID = {'provider_blocked': 'blocked', 'provider_managed': 'enabled', 'unknown': 'unknown'}
 REFUSALS = ('quota_exhausted', 'billing_unverified')
 

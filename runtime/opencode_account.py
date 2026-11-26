@@ -20,7 +20,9 @@ store.
 
 A fact only confirms the account. Positive Go and Claude meter evidence can refuse a recommendation, not authorize
 spending. ChatGPT has a separate limit mark.
-The OpenCode ChatGPT subject and the native Codex login are never merged into one identity.
+The OpenCode ChatGPT subject and the native Codex login are never merged into one identity. Codex plan windows are
+kept beside the proved ChatGPT binding as ranking hints only, on the accepted assumption that both are one account:
+they order comparable picks and never start, extend or clear a pause.
 """
 import base64
 from contextlib import closing
@@ -38,7 +40,7 @@ import sys
 import tempfile
 import time
 
-from runtime import chatgpt_limit, claude_usage, continuity, processes as lifecycle, routing, \
+from runtime import chatgpt_limit, claude_usage, codex_reset, continuity, processes as lifecycle, routing, \
     routing_observations as observations, routing_paths, storage, subscription_billing, usage_balance
 
 PATHS = dict(claude='opencode-claude-subscription', chatgpt='opencode-chatgpt-subscription',
@@ -55,6 +57,10 @@ GO_MAX_BODY = 32 << 10
 GO_REFUSED = 3  # The private HTTPS child returns this only for an uncached 401/403.
 EXHAUSTED = 'quota_exhausted'
 BILLING_UNVERIFIED = 'billing_unverified'
+CHATGPT_LOCK = '.chatgpt-usage.lock'  # held by the one usage worker of this store; never the store's write lock
+CHATGPT_SPACING = 60  # the least time between two usage read starts
+CHATGPT_COOLDOWN = 900  # after a failed or interrupted usage read
+CHATGPT_KEY = re.compile(r'5h|7d|duration:[1-9][0-9]*')
 PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
@@ -484,11 +490,110 @@ def ranking_meters(settings_path, route, now, *, marker):
         return {}
     if name == 'claude':
         return claude_usage.ranking_meters(settings_path, route, now, native=record.get('native'))
+    if name == 'chatgpt':  # only the Codex batch stored for this binding; never a Go-shaped field
+        usage = _usage(part, record)
+        return usage_balance.batch_meters(usage.get('ranking'), now=now,
+                                          keep=lambda key: CHATGPT_KEY.fullmatch(key) is not None) if usage else {}
     quota = part.get('go_quota')
-    if record.get('go_usage') is not True or type(quota) is not dict \
+    if name != 'go' or record.get('go_usage') is not True or type(quota) is not dict \
             or quota.get('key') != record['key'] or quota.get('generation') != record['generation']:
         return {}
     return usage_balance.batch_meters(quota.get('ranking'), now=now, keep=lambda key: key in GO_RANKING)
+
+
+def _usage(part, record):
+    """The ChatGPT usage record stored for exactly this account record's key and generation, else None."""
+    usage = part.get('chatgpt_usage')
+    return usage if type(usage) is dict and usage.get('key') == record['key'] \
+        and usage.get('generation') == record['generation'] else None
+
+
+def _usage_due(usage, now):
+    """Whether one more Codex read may start for a binding whose usage record is `usage`. A failed or interrupted read
+    waits out the cooldown, from its completion when it returned. A success allows one follow-up once its 900-second
+    age or its earliest known reset is reached, never within the minimum spacing of that start. A clock behind the
+    record starts nothing."""
+    if usage is None or not routing._amount(usage.get('started')):
+        return True
+    started, finished = usage['started'], usage.get('finished')
+    if usage.get('ok') is not True:
+        return now - (finished if routing._amount(finished) and finished >= started else started) >= CHATGPT_COOLDOWN
+    reset = usage.get('reset')
+    return now - started >= CHATGPT_SPACING and (
+        now - started >= storage.FRESH_SECONDS or not routing._amount(reset) or now >= reset)
+
+
+def chatgpt_usage_due(settings_path, now):
+    """Whether an on-demand Codex usage read is due for the complete, proved and fresh ChatGPT OAuth account. A pure
+    local read: no account, no proof or an unreadable store is never due."""
+    try:
+        part = _part(observations._read(_store(settings_path)), 'chatgpt')
+        record = _complete(part, now)
+        return record is not None and _usage_due(_usage(part, record), now)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
+    """One bounded Codex window read for the proved ChatGPT OAuth binding: `stored`, `busy`, `not_due`, `unbound` or
+    `failed`, and nothing else.
+
+    One worker per store holds a dedicated nonblocking lock, never the store's write lock, so picks and account reads
+    go on. Under it the binding and the due status are checked again, and a start record that counts as failed is
+    written before the exchange: a killed worker leaves the cooldown, not a retry. The reading is published only while
+    the same key and generation are still the complete, proved account; a failed read keeps the batch already held."""
+    try:
+        if not isinstance(settings_path, Path) or not settings_path.is_absolute():
+            return 'failed'
+        store, now = _store(settings_path), int(time.time())
+        if _complete(_part(observations._read(store), 'chatgpt'), now) is None:
+            return 'unbound'  # before the lock, so an absent store is not created to say so
+        with storage._locked(store, block=False, lock=CHATGPT_LOCK) as held:
+            if held is None:
+                return 'busy'
+            bound, skip = {}, []
+
+            def start(part):
+                record = _complete(part, now)
+                usage = _usage(part, record) if record else None
+                if record is None or not _usage_due(usage, now):
+                    skip.append('unbound' if record is None else 'not_due')
+                    raise ValueError('skipped')
+                bound.update(key=record['key'], generation=record['generation'], started=now, finished=None, ok=False,
+                             reset=None, ranking=usage.get('ranking') if usage else None)
+                return dict(chatgpt_usage=dict(bound))
+            try:
+                _transition(settings_path, 'chatgpt', start)
+            except ValueError:
+                if skip:
+                    return skip[0]
+                raise
+            meters = codex_reset.read_windows(environ=environ, command=command)
+            finished = int(time.time())
+
+            def publish(part):
+                record = _complete(part, finished)
+                usage = _usage(part, record) if record else None
+                if usage is None or continuity._proved(part, bound['key']) != bound['generation'] \
+                        or usage.get('started') != bound['started'] or usage.get('ok') is not False:
+                    skip.append('unbound')  # logged out, rotated or superseded during the read: nothing is published
+                    raise ValueError('skipped')
+                change = dict(bound, finished=finished)
+                if meters:
+                    first = next(iter(meters.values()))
+                    change.update(ok=True, reset=min(meter['reset_at'] for meter in meters.values()),
+                                  ranking=usage_balance.batch_after(bound['ranking'], earliest=first['earliest'],
+                                                                    latest=first['latest'], meters=meters))
+                return dict(chatgpt_usage=change)
+            try:
+                _transition(settings_path, 'chatgpt', publish)
+            except ValueError:
+                if not skip:
+                    raise
+                return skip[0] if meters else 'failed'
+            return 'stored' if meters else 'failed'
+    except (OSError, ValueError, TypeError, LookupError, RecursionError, KeyboardInterrupt):
+        return 'failed'  # an interrupted or broken read publishes nothing; its start record keeps the cooldown
 
 
 def _quota_gate(settings_path, route, now, producer=None):

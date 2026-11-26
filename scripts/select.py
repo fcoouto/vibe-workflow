@@ -62,6 +62,19 @@ def claude_limit(state_dir, raw):
     return opencode_account.probe_claude_limit(state_dir / "router.json", reset_at=request["reset_at"])
 
 
+USAGE_STATES = ("stored", "busy", "not_due", "unbound", "failed")
+OTHER_MODES = ("check_setup", "allow_fetch", "refresh", "chatgpt_limit", "claude_limit", "council_roster",
+               "council_pick", "feedback")
+
+
+def usage_refresh(args, raw):
+    """The internal ChatGPT usage read: exactly `{}` in and no other mode beside it, only its fixed state out."""
+    if raw != b"{}" or any(getattr(args, mode) for mode in OTHER_MODES):
+        raise ValueError()
+    state = opencode_account.refresh_chatgpt_usage(Path(args.state_dir) / "router.json")
+    return dict(state=state if state in USAGE_STATES else "failed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", required=True)
@@ -73,13 +86,16 @@ def main():
     parser.add_argument("--council-roster", action="store_true")
     parser.add_argument("--council-pick", action="store_true")
     parser.add_argument("--feedback", action="store_true")
+    parser.add_argument("--usage-refresh", action="store_true")
     args = parser.parse_args()
     if args.allow_fetch and not args.check_setup:
         parser.error("--allow-fetch needs --check-setup")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
-        if args.chatgpt_limit:
+        if args.usage_refresh:  # first: a combined invocation fails here, before any other mode's work
+            answer = usage_refresh(args, sys.stdin.buffer.read(MAX_BYTES + 1))
+        elif args.chatgpt_limit:
             record = chatgpt_limit.mark(Path(args.state_dir), int(time.time()))
             answer = dict(state="marked", until=record["until"], source=record["source"])
         elif args.claude_limit:
@@ -95,8 +111,8 @@ def main():
             answer = call(json.loads(raw), state_dir=Path(args.state_dir))
         encoded = encode(answer)
     except (Exception, KeyboardInterrupt):
-        answer = dict(state="failed") if args.chatgpt_limit or args.claude_limit or args.council_roster \
-            or args.council_pick or args.feedback else \
+        answer = dict(state="failed") if args.usage_refresh or args.chatgpt_limit or args.claude_limit \
+            or args.council_roster or args.council_pick or args.feedback else \
             dict(state="setup_needed", reason="selector_unavailable") if args.check_setup \
             else result("blocked", "selector_unavailable")
         encoded = (json.dumps(answer, separators=(",", ":")) + "\n").encode()

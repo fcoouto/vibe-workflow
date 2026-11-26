@@ -293,18 +293,26 @@ def _expiry(source, item, now):
     return usage_balance.expiry_score(opencode_account.family(item), _hints(source, item, now), now=now)
 
 
+def _group(ordered, qualifies):
+    """`(baseline winner, its comparable qualifying rivals)` when at least one rival is on another subscription: the
+    only group balancing may reorder. None below level, for a near-floor winner or when one subscription is alone."""
+    if qualifies is None or not ordered or not qualifies(ordered[0]):
+        return None  # below level, or a near-floor winner: the original baseline behavior
+    base = ordered[0]
+    rivals = [item for item in ordered[1:] if qualifies(item) and usage_balance.comparable(item, base)]
+    return (base, rivals) if any(item['path'] != base['path'] for item in rivals) else None
+
+
 def _balance(ordered, pool, qualifies):
     """The baseline order, with the slots of comparable qualifying routes refilled by expiry priority when another
     subscription beats the baseline winner by the minimum gain. A changed account among the reordered routes (the
     baseline included, even past `_confirm`'s limit) restores the baseline order without them. Optional: any failure
     returns the baseline order, and `_confirm` remains the final binding check."""
-    if qualifies is None or not ordered or not qualifies(ordered[0]):
-        return ordered  # below level, or a near-floor winner: the original baseline behavior
     try:
-        base, now = ordered[0], pool['now']
-        rivals = [item for item in ordered[1:] if qualifies(item) and usage_balance.comparable(item, base)]
-        if not any(item['path'] != base['path'] for item in rivals):
+        found, now = _group(ordered, qualifies), pool['now']
+        if found is None:
             return ordered  # fewer than two subscriptions can compete: read nothing
+        base, rivals = found
         base_expiry = _expiry(pool['source'], base, now)
         if base_expiry is None:
             return ordered
@@ -352,6 +360,23 @@ def _settle(ordered, pool, qualifies):
         return chosen
     changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
     return _confirm([item for item in ordered if item['route'] not in changed], pool, 3, qualifies)
+
+
+def _usage_refresh(group, pool, qualifies):
+    """Whether a ChatGPT usage read is wanted and due for a decided group: after the routes whose account changed are
+    removed, a ChatGPT route must still be the baseline winner or one of its comparable rivals, beside another
+    subscription. Decided before any score, so an unknown ChatGPT slot can ask. Never changes the pick."""
+    try:
+        changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
+        found = _group([item for item in group if item['route'] not in changed], qualifies)
+        due = getattr(pool['source'], 'usage_refresh_due', None)
+        if found is None or not callable(due):
+            return False
+        wanted = [item for item in (found[0], *found[1]) if opencode_account.family(item) == 'chatgpt']
+        current = int(time.time()) if pool['fixed'] is None else pool['fixed']
+        return bool(wanted) and due(copy.deepcopy(wanted[0]), current) is True
+    except Exception:
+        return False
 
 
 def _refresh_flag(answer, pool):
@@ -404,19 +429,23 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
         ordered, below = routing.strongest(candidates), True
     qualifies = None if below else lambda item: item['score'] >= routing.bars(anchor)[level - 1] - routing.TOLERANCE
     reviewing = request.get('reviewing')
-    independent, chosen = False, []
+    independent, chosen, group = False, [], None  # `group`: the balanced decision group a usage read may serve
     if reviewing is not None and not below:
         lab = review_lab(reviewing, request.get('models', []), state_dir=state_dir)
         other = [item for item in ordered if lab is not None and qualifies(item)
                  and pool['labs'].get(item['route']) not in (None, lab)]
         chosen = _settle(other, pool, qualifies)
         independent = bool(chosen)
-        if not chosen:
+        if chosen:
+            group = other
+        else:
             failed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
             ordered = [item for item in ordered if item['route'] not in failed]
-    if not independent:
+    if not independent and reviewing is not None:
         # A review with no qualified independent route keeps the original baseline order, never balanced.
-        chosen = _confirm(ordered, pool, 3, qualifies) if reviewing is not None else _settle(ordered, pool, qualifies)
+        chosen = _confirm(ordered, pool, 3, qualifies)
+    elif not independent:
+        chosen, group = _settle(ordered, pool, qualifies), ordered
     if qualifies and not any(qualifies(item) for item in chosen):
         chosen = []
     reason = None if chosen else _empty_reason(pool)
@@ -427,6 +456,8 @@ def _select(request, level, constraints, *, state_dir, source, fetch, now, unmat
         answer['size_group'] = size
     if reviewing is not None:
         answer['reviewer_independent'] = independent and bool(chosen)
+    if chosen and group is not None and _usage_refresh(group, pool, qualifies):
+        answer['usage_refresh'] = True  # internal: the plugin strips it and schedules one bounded background read
     return _refresh_flag(answer, pool)
 
 

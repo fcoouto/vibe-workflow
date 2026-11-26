@@ -519,6 +519,180 @@ else:
   } finally { await rm(f.root, { recursive: true }) }
 })
 
+// A selector that answers answer.json, and holds each background child open until its release file appears.
+const usageSelect = `import json, os, signal, sys, time
+from pathlib import Path
+def hold(name):
+    signal.signal(signal.SIGTERM, lambda *args: (open(name + "-term.log", "a").write("term\\n"), sys.exit(0)))
+    record = dict(argv=sys.argv[1:], stdin=sys.stdin.read(), pid=os.getpid())
+    with open(name + ".log", "a") as log:
+        log.write(json.dumps(record) + "\\n")
+    for _ in range(600):
+        if Path(name + "-release").exists():
+            break
+        time.sleep(0.05)
+    print('{"state":"stored"}')
+if "--usage-refresh" in sys.argv:
+    hold("usage")
+elif "--refresh" in sys.argv:
+    hold("refresh")
+elif "--check-setup" in sys.argv:
+    print('{"state":"ready","reason":null,"usage_refresh":true}')
+elif "--council-pick" in sys.argv or "--council-roster" in sys.argv:
+    sys.stdin.read()
+    pick = "--council-pick" in sys.argv
+    seat = dict(provider="openai", id="gpt-x", variant="high", score=60, score_source="openrouter", creator="openai",
+                paid_overflow="blocked") if pick else dict(provider="openai", id="gpt-x", status="ok", paid_overflow="blocked")
+    print(json.dumps(dict(state="picked" if pick else "checked", reason="fewer_seats" if pick else None, seats=[seat],
+                          excluded=[], attribution="x",
+                          usage_refresh=True, admission=False, reservation=False, spend_permit=False)))
+else:
+    sys.stdin.read()
+    print(Path("answer.json").read_text())
+`
+const selectedWith = (extra) => JSON.stringify({ state: "selected", reason: null, excluded: [],
+  route: { provider: "openai", model: "gpt-x", effort: "high" }, alternatives: [], admission: false, reservation: false,
+  spend_permit: false, ...extra })
+const logged = async (root, name) => (await readFile(join(root, `${name}.log`), "utf8").catch(() => ""))
+  .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+const until = async (check, tries = 100) => {
+  for (let i = 0; i < tries; i++) { if (await check()) return true; await pause(50) }
+  return false
+}
+const gone = (pid) => until(() => { try { process.kill(pid, 0); return false } catch { return true } })
+
+test("a due usage read starts one held child: picks never wait for it or expose it, and cleanup stops it", async () => {
+  const f = await fixture(usageSelect)
+  try {
+    await writeFile(join(f.root, "answer.json"), selectedWith({ usage_refresh: true }))
+    const first = await f.execute()
+    assert.ok(await until(async () => (await logged(f.root, "usage")).length === 1), "no usage child started")
+    const second = await f.execute() // answered while the first child is still held open
+    for (const result of [first, second]) {
+      assert.equal(JSON.parse(result.content).state, "selected")
+      assert.ok(!result.content.includes("usage_refresh"))
+      for (const key of ["admission", "reservation", "spend_permit"]) assert.equal(JSON.parse(result.content)[key], false)
+    }
+    await pause(300)
+    const runs = await logged(f.root, "usage")
+    assert.equal(runs.length, 1, "a second usage child started while the first was in flight")
+    assert.deepEqual(runs[0].argv, ["--state-dir", join(f.root, "state"), "--usage-refresh"])
+    assert.equal(runs[0].stdin, "{}")
+    assert.deepEqual(await logged(f.root, "refresh"), [])
+    await f.cleanup()
+    assert.ok(await gone(runs[0].pid), "cleanup left the usage child running")
+    assert.equal(await count(join(f.root, "usage-term.log")), 1)
+  } finally { await writeFile(join(f.root, "usage-release"), ""); await rm(f.root, { recursive: true }) }
+})
+
+test("a score refresh in flight does not block the usage read, and a finished read lets a later pick start the next", async () => {
+  const f = await fixture(usageSelect)
+  try {
+    await writeFile(join(f.root, "answer.json"), selectedWith({ refresh: { wanted: ["x"] }, usage_refresh: true }))
+    const result = await f.execute()
+    assert.ok(!result.content.includes("refresh"))
+    assert.ok(await until(async () => (await logged(f.root, "usage")).length === 1 && (await logged(f.root, "refresh")).length === 1))
+    await f.execute()
+    await pause(300)
+    assert.deepEqual([(await logged(f.root, "usage")).length, (await logged(f.root, "refresh")).length], [1, 1])
+    const [{ pid }] = await logged(f.root, "usage")
+    await writeFile(join(f.root, "usage-release"), "")
+    assert.ok(await gone(pid))
+    await pause(100) // the close event has cleared the in-flight guard
+    await f.execute()
+    assert.ok(await until(async () => (await logged(f.root, "usage")).length === 2), "a later pick could not start the next read")
+    assert.equal((await logged(f.root, "refresh")).length, 1) // the score refresh is still the first one, in flight
+    assert.equal((await logged(f.root, "refresh"))[0].stdin, '{"wanted":["x"]}')
+  } finally {
+    await writeFile(join(f.root, "usage-release"), ""); await writeFile(join(f.root, "refresh-release"), "")
+    await f.cleanup?.(); await rm(f.root, { recursive: true })
+  }
+})
+
+test("only an ordinary pick's exact true starts the usage read: not other values, a council or setup call, or a cancelled pick", async () => {
+  const f = await fixture(usageSelect, listed(info()), { permission: { assert: async () => {} } })
+  try {
+    for (const value of ["true", 1, {}, [true], null, false]) {
+      await writeFile(join(f.root, "answer.json"), selectedWith({ usage_refresh: value }))
+      const result = await f.execute()
+      assert.equal(JSON.parse(result.content).state, "selected")
+      assert.ok(!result.content.includes("usage_refresh"))
+    }
+    const picked = await roster(f, { v: 1 })
+    assert.equal(picked.seats[0].status, "ok")
+    assert.ok(!JSON.stringify(picked).includes("usage_refresh"))
+    const checked = await roster(f)
+    assert.equal(checked.ready, true)
+    assert.ok(!JSON.stringify(checked).includes("usage_refresh"))
+    const invocation = { sessionID: "ses_test", messageID: "m", id: "c", agent: "build", signal: new AbortController().signal }
+    const preview = JSON.parse((await f.h.tools.get("vibe_workflow_onboard").execute({ v: 1, op: "preview" }, invocation)).content)
+    assert.equal(preview.readiness.state, "ready")
+    assert.ok(!JSON.stringify(preview).includes("usage_refresh"))
+    await writeFile(join(f.root, "answer.json"), selectedWith({ usage_refresh: true }))
+    const cancelled = new AbortController()
+    cancelled.abort()
+    assert.equal(JSON.parse((await f.execute(cancelled.signal)).content).state, "blocked")
+    await pause(400)
+    assert.deepEqual(await logged(f.root, "usage"), [])
+    await preference(f.root, false) // and nothing runs for a project that turned Smart Router off
+    assert.equal(JSON.parse((await f.execute()).content).reason, "project_disabled")
+    await pause(200)
+    assert.deepEqual(await logged(f.root, "usage"), [])
+  } finally { await writeFile(join(f.root, "usage-release"), ""); await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("a pick cancelled while its selector runs starts no usage read, and no read starts after unload", async () => {
+  const slow = usageSelect.replace(`else:
+    sys.stdin.read()
+    print(Path("answer.json").read_text())`, `else:
+    sys.stdin.read()
+    Path("select-started").touch()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(1)
+    print(Path("answer.json").read_text())`)
+  assert.notEqual(slow, usageSelect)
+  const f = await fixture(slow)
+  try {
+    await writeFile(join(f.root, "answer.json"), selectedWith({ usage_refresh: true }))
+    const controller = new AbortController()
+    const pending = f.execute(controller.signal)
+    assert.ok(await until(() => readFile(join(f.root, "select-started")).then(() => true, () => false)))
+    controller.abort() // the selector ignores SIGTERM and still prints its answer
+    assert.equal(JSON.parse((await pending).content).state, "blocked")
+    const closing = f.execute()
+    await pause(100)
+    await f.cleanup() // unload while a second pick's selector is still running
+    assert.equal(JSON.parse((await closing).content).state, "blocked")
+    await pause(400)
+    assert.deepEqual(await logged(f.root, "usage"), [])
+  } finally { await writeFile(join(f.root, "usage-release"), ""); await rm(f.root, { recursive: true }) }
+})
+
+test("a usage read that outlives its bound is stopped at 15 seconds and not retried", async () => {
+  const timer = globalThis.setTimeout
+  let stopRead
+  globalThis.setTimeout = (callback, ms, ...rest) => {
+    if (ms === 15000 && !stopRead) { stopRead = callback; return {} }
+    return timer(callback, ms, ...rest)
+  }
+  const f = await fixture(usageSelect)
+  try {
+    await writeFile(join(f.root, "answer.json"), selectedWith({ usage_refresh: true }))
+    await f.execute()
+    assert.ok(await until(async () => (await logged(f.root, "usage")).length === 1))
+    assert.equal(typeof stopRead, "function")
+    await pause(300)
+    assert.equal(await count(join(f.root, "usage-term.log")), 0)
+    stopRead()
+    assert.ok(await until(async () => (await count(join(f.root, "usage-term.log"))) === 1))
+    await pause(300)
+    assert.equal((await logged(f.root, "usage")).length, 1)
+  } finally {
+    globalThis.setTimeout = timer
+    await writeFile(join(f.root, "usage-release"), ""); await f.cleanup?.(); await rm(f.root, { recursive: true })
+  }
+})
+
 test("a first score download adds no notice", async () => {
   const f = await fixture(echo)
   try {
