@@ -24,6 +24,10 @@ def weekly_all(percent, reset):
     return dict(kind='weekly_all', scope=None, percent=percent, resets_at=reset)
 
 
+def legacy_row(percent, reset):
+    return dict(percent=percent, resets_at=reset, scope=None)
+
+
 def weekly_scoped(label, percent, reset):
     return dict(kind='weekly_scoped', scope=dict(model=dict(display_name=label)), percent=percent, resets_at=reset)
 
@@ -171,33 +175,111 @@ class ClaudeQuotaTest(unittest.TestCase):
             with self.subTest(started=started, received=received):
                 self.assertIsNone(self.evidence(usage(), started=started, received=received))
 
-    def test_weekly_all_alone_is_unknown(self):
+    def test_raw_only_weekly_all_is_seven_day(self):
         evidence = self.evidence(usage(limits=[weekly_all(100, stamp(NOW + 3600))]))
-        self.assertNotIn('7d', evidence['meters'])
-        self.assertFalse(evidence['scopes_complete'])
+        self.assertEqual(evidence['meters']['7d'], {'exhausted': True, 'reset_at': NOW + 3600})
+        self.assertNotIn('5h', evidence['meters'])
+        self.assertTrue(evidence['scopes_complete'])
 
-    def test_legacy_repeat_matches_only_the_whole_second_reset(self):
+    def test_named_weekly_reset_must_match_the_whole_second(self):
         boundary = self.evidence(usage(seven=window(50, stamp(NOW + 3600, '.999')),
                                        limits=[weekly_all(50, stamp(NOW + 3601, '.001'))]))
-        self.assertEqual(boundary['meters']['7d']['reset_at'], NOW + 3600)
-        self.assertFalse(boundary['scopes_complete'])
+        self.assertNotIn('7d', boundary['meters'])
+        self.assertTrue(boundary['scopes_complete'])
         different = self.evidence(usage(seven=window(50, stamp(NOW + 3600)),
                                         limits=[weekly_all(50, stamp(NOW + 7200))]))
-        self.assertEqual(different['meters']['7d']['reset_at'], NOW + 3600)
-        self.assertFalse(different['scopes_complete'])
-        both = self.evidence(usage(five=window(50, stamp(NOW + 3600)), seven=window(50, stamp(NOW + 3600)),
-                                   limits=[weekly_all(50, stamp(NOW + 3600))]))
-        self.assertFalse(both['scopes_complete'])
+        self.assertNotIn('7d', different['meters'])
+        self.assertTrue(different['scopes_complete'])
+        same = self.evidence(usage(seven=window(50, stamp(NOW + 3600, '.999')),
+                                   limits=[weekly_all(50, stamp(NOW + 3600, '.001'))]))
+        self.assertEqual(same['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
 
-    def test_conflicting_repeat_makes_only_its_meter_unknown(self):
-        evidence = self.evidence(usage(seven=window(50, stamp(NOW + 3600)),
+    def test_conflicting_named_weekly_makes_only_seven_day_unknown(self):
+        evidence = self.evidence(usage(five=window(20, stamp(NOW + 3600)), seven=window(50, stamp(NOW + 3600)),
                                        limits=[weekly_all(60, stamp(NOW + 3600, '.500'))]))
         self.assertNotIn('7d', evidence['meters'])
+        self.assertEqual(evidence['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
         self.assertTrue(evidence['scopes_complete'])
         malformed = self.evidence(usage(seven=window(50, stamp(NOW + 3600)),
                                         limits=[weekly_all('high', stamp(NOW + 3600))]))
         self.assertNotIn('7d', malformed['meters'])
-        self.assertFalse(malformed['scopes_complete'])
+        self.assertTrue(malformed['scopes_complete'])
+
+    def test_five_hour_is_unaffected_by_named_weekly_at_the_same_reset(self):
+        evidence = self.evidence(usage(five=window(20, stamp(NOW + 3600)), limits=[weekly_all(90, stamp(NOW + 3600))]))
+        self.assertEqual(evidence['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertEqual(evidence['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertTrue(evidence['scopes_complete'])
+
+    def test_differing_named_weekly_reset_keeps_five_hour(self):
+        evidence = self.evidence(usage(five=window(20, stamp(NOW + 1800)), seven=window(50, stamp(NOW + 3600)),
+                                       limits=[weekly_all(50, stamp(NOW + 3601))]))
+        self.assertEqual(evidence['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 1800})
+        self.assertNotIn('7d', evidence['meters'])
+        self.assertTrue(evidence['scopes_complete'])
+
+    def test_named_weekly_duplicates_must_agree(self):
+        agreeing = self.evidence(usage(limits=[weekly_all(40, stamp(NOW + 3600)),
+                                               weekly_all(40.5, stamp(NOW + 3600))]))
+        self.assertEqual(agreeing['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+        conflicting = self.evidence(usage(limits=[weekly_all(40, stamp(NOW + 3600)),
+                                                  weekly_all(70, stamp(NOW + 3600))]))
+        self.assertNotIn('7d', conflicting['meters'])
+        self.assertTrue(conflicting['scopes_complete'])
+
+    def test_untyped_legacy_row_attributes_by_reset_and_named_weekly_does_not(self):
+        legacy = self.evidence(usage(five=window(20, stamp(NOW + 3600)), limits=[legacy_row(20, stamp(NOW + 3600))]))
+        self.assertEqual(legacy['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertNotIn('7d', legacy['meters'])
+        self.assertTrue(legacy['scopes_complete'])
+        named = self.evidence(usage(five=window(20, stamp(NOW + 3600)), limits=[weekly_all(20, stamp(NOW + 3600))]))
+        self.assertEqual(named['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertEqual(named['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+
+    def test_untyped_legacy_row_that_matches_none_or_both_is_unknown(self):
+        none = self.evidence(usage(seven=window(50, stamp(NOW + 3600)), limits=[legacy_row(50, stamp(NOW + 7200))]))
+        self.assertEqual(none['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertFalse(none['scopes_complete'])
+        both = self.evidence(usage(five=window(50, stamp(NOW + 3600)), seven=window(50, stamp(NOW + 3600)),
+                                   limits=[legacy_row(50, stamp(NOW + 3600))]))
+        self.assertEqual(both['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertFalse(both['scopes_complete'])
+
+    def test_named_unknown_kind_is_not_attributed(self):
+        limit = dict(kind='monthly', scope=None, percent=90, resets_at=stamp(NOW + 3600))
+        evidence = self.evidence(usage(five=window(20, stamp(NOW + 3600)), limits=[limit]))
+        self.assertEqual(evidence['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertFalse(evidence['scopes_complete'])
+
+    def test_account_windows_do_not_depend_on_the_catalog(self):
+        self.assertTrue(self.quota.covers('7d', 'example', None))
+        self.assertTrue(self.quota.covers('5h', 'example', [dict(alias='example')]))
+        evidence = self.evidence(usage(seven=window(20, stamp(NOW + 3600))), [dict(alias='example')])
+        self.assertEqual(evidence['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+
+    def test_bare_family_alias_needs_one_resolved_id(self):
+        models = [dict(alias='example', resolved='claude-example-5-1', efforts=[]),
+                  dict(alias='example', resolved='claude-example-5-2', efforts=[])]
+        evidence = self.evidence(usage(model_scoped=[scoped('Claude Example', 40, stamp(NOW + 3600))]), models)
+        self.assertNotIn('family:example', evidence['meters'])
+        self.assertFalse(evidence['scopes_complete'])
+        self.assertFalse(self.quota.covers('family:example', 'example', models))
+
+    def test_exact_resolved_scope_rejects_a_conflicting_alias(self):
+        models = [dict(alias='example-5-2', resolved='claude-other-5-2', efforts=[]),
+                  dict(alias='alias-x', resolved='claude-example-5-2', efforts=[])]
+        limits = [weekly_scoped('Claude Example 5.2', 40, stamp(NOW + 3600))]
+        evidence = self.evidence(usage(limits=limits), models)
+        self.assertNotIn('model:example-5-2', evidence['meters'])
+        self.assertFalse(evidence['scopes_complete'])
+        self.assertFalse(self.quota.covers('model:example-5-2', 'example-5-2', models))
+
+    def test_family_is_the_first_normalized_token(self):
+        models = [dict(alias='sonnet', resolved='claude-3-5-sonnet', efforts=[])]
+        evidence = self.evidence(usage(limits=[weekly_scoped('Claude Sonnet', 40, stamp(NOW + 3600))]), models)
+        self.assertNotIn('family:sonnet', evidence['meters'])
+        self.assertFalse(evidence['scopes_complete'])
+        self.assertFalse(self.quota.covers('family:sonnet', 'claude-3-5-sonnet', models))
 
     def test_weekly_all_with_model_scope_is_unrecognized(self):
         limit = dict(kind='weekly_all', scope=dict(model=dict(display_name='Claude Example')), percent=100,

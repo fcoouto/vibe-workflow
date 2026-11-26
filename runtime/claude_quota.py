@@ -29,7 +29,7 @@ def _norm(value):
 
 
 def _family(name):
-    return next((word for word in name.split('-') if word.isalpha()), None)
+    return name.split('-')[0]
 
 
 def _catalog(models):
@@ -69,9 +69,9 @@ def _scope(label, catalog):
     if not [token for token in tokens if token.isalpha() and token != 'claude']:
         return None
     if any(token.isdigit() for token in tokens):
-        return 'model:' + name if name in {resolved for _, resolved in catalog or []} else None
+        return 'model:' + name if _resolve(name, catalog) == name else None
     hits = [resolved for alias, resolved in catalog or [] if alias == name]
-    if len(tokens) == 1 and hits and all(resolved is not None and _family(resolved) == name for resolved in hits):
+    if len(tokens) == 1 and len(set(hits)) == 1 and None not in hits and _family(hits[0]) == name:
         return 'family:' + name
     return None
 
@@ -128,7 +128,8 @@ def evidence(use, models, *, started, received):
     """`{earliest, latest, meters, scopes_complete}` from one usage answer, or None when it confirms nothing.
 
     `started` and `received` are epoch seconds. Meters are `5h`, `7d`, `family:<name>` or `model:<resolved>`, each
-    `{exhausted, reset_at}`. `scopes_complete` is False when any present scoped entry or row yields no valid meter."""
+    `{exhausted, reset_at}`. `scopes_complete` is False when a present scoped entry yields no valid meter, or a row is
+    unrecognized or cannot be attributed; account windows never affect it."""
     if not _times(started, received) or type(use) is not dict or use.get('rate_limits_available') is not True:
         return None
     rate = use.get('rate_limits')
@@ -138,41 +139,53 @@ def evidence(use, models, *, started, received):
     catalog = _catalog(models)
     incomplete = any(usage._meter_like(rate[key]) for key in set(rate) - usage.KNOWN_RATE) \
         or any(rate.get(key) is not None for key in usage.SCOPED_METERS + usage.UNKNOWN_METERS)
-    readings = {}
+    windows, broken = {}, set()
     for key, (window, _) in storage.RATE_WINDOWS.items():
         if rate.get(key) is None:
             continue
         try:
-            readings[window] = _reading(rate[key], 'utilization')
+            windows[window] = _reading(rate[key], 'utilization')
         except usage.ReadError:
-            pass
-    conflicts, listed = set(), []
+            broken.add(window)
+    named, conflicts, listed = [], set(), []
     for item in rate['limits']:
         scope = item.get('scope') if type(item) is dict else None
-        if type(item) is dict and item.get('kind') == 'weekly_all' and scope is None:
+        kind = item.get('kind') if type(item) is dict else None
+        if type(item) is dict and kind is None and scope is None:
             try:
                 percent, reset = _reading(item, 'percent')
             except usage.ReadError:
                 percent, reset = None, _stamp(item)
                 incomplete = True
-            hits = [window for window, (_, at) in readings.items() if at == reset]
+            hits = [window for window, (_, at) in windows.items() if at == reset]
             if len(hits) != 1:
                 incomplete = True
-            elif percent is None or not _agree(readings[hits[0]][0], percent):
+            elif percent is None or not _agree(windows[hits[0]][0], percent):
                 conflicts.add(hits[0])
-        elif type(item) is dict and item.get('kind') == 'weekly_scoped' and type(scope) is dict \
+        elif type(item) is dict and kind == 'weekly_all' and scope is None:
+            try:
+                named.append(_reading(item, 'percent'))
+            except usage.ReadError:
+                broken.add('7d')
+        elif type(item) is dict and kind == 'weekly_scoped' and type(scope) is dict \
                 and scope.get('model') is not None:
             model = scope['model']
             listed.append((model.get('display_name') if type(model) is dict else None, item, 'percent'))
         else:
             incomplete = True
+    seven = named + ([windows['7d']] if '7d' in windows else [])
+    if '7d' in broken or len({reset for _, reset in seven}) > 1 \
+            or any(not _agree(first, second) for first, _ in seven for second, _ in seven):
+        conflicts.add('7d')
+    if seven:
+        windows['7d'] = max(percent for percent, _ in seven), seven[0][1]
     if rate.get('model_scoped') is not None:
         if type(rate['model_scoped']) is not list:
             incomplete = True
         else:
             listed += [(item.get('display_name') if type(item) is dict else None, item, 'utilization')
                        for item in rate['model_scoped']]
-    scopes, excluded, named = {}, set(), set()
+    scopes, excluded, ids = {}, set(), set()
     for label, item, value in listed:
         meter = _scope(label, catalog)
         try:
@@ -183,13 +196,13 @@ def evidence(use, models, *, started, received):
         if meter is None or not usable:
             incomplete = True
         if meter is not None:
-            named.add(meter)
+            ids.add(meter)
             if usable:
                 scopes.setdefault(meter, []).append((percent, reset))
             else:
                 excluded.add(meter)
-    if len(named) > MAX_SCOPES:
-        incomplete, excluded = True, named
+    if len(ids) > MAX_SCOPES:
+        incomplete, excluded = True, ids
     meters = {}
     for meter, entries in scopes.items():
         percents, resets = [percent for percent, _ in entries], {reset for _, reset in entries}
@@ -199,7 +212,7 @@ def evidence(use, models, *, started, received):
             incomplete = True
             continue
         meters[meter] = dict(exhausted=max(percents) >= 100, reset_at=resets.pop())
-    for window, (percent, reset) in readings.items():
+    for window, (percent, reset) in windows.items():
         if reset is not None and window not in conflicts and _bounded(reset, received, LENGTHS[window]):
             meters[window] = dict(exhausted=percent >= 100, reset_at=reset)
     return dict(earliest=max(0, math.floor(started) - usage.CACHE_CEILING), latest=math.ceil(received),
