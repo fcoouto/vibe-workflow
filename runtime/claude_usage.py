@@ -859,9 +859,9 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
     evidence, an out-of-range hint (at start or at commit), or a different proved login. `failed`: a malformed request
     or private state, unsupported or unproved identity, refused telemetry, timeout or a transport problem. Only the
     probe lock is held during the child; account state is read, never fenced, until the short commit."""
-    from runtime import native_catalog
-    environ = os.environ if environ is None else environ
     try:
+        from runtime import native_catalog
+        environ = os.environ if environ is None else environ
         key, generation = expected if type(expected) is tuple and len(expected) == 2 else (None, None)
         if not _hex(key) or not _hex(generation) or type(reset_at) is not int:
             return dict(state='failed')

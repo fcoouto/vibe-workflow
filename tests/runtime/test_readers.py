@@ -1079,6 +1079,39 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(self.quota_state(), before)
         self.assert_probe_lock_free()
 
+    def test_interrupt_at_the_wrapper_clock_read_returns_failed_without_an_exchange(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", side_effect=KeyboardInterrupt), \
+                mock.patch.object(self.native, "exchange") as exchange:
+            answer = self.openc.probe_claude_limit(self.settings, reset_at=self.now + 3600, command=self.command,
+                                                   environ=self.environ)
+        self.assertEqual(answer, dict(state="failed"))
+        exchange.assert_not_called()
+        self.assertFalse(self.trace.exists())
+        self.assertEqual(self.quota_state(), before)
+
+    def test_interrupt_at_the_native_probes_deferred_catalog_import_returns_failed(self):
+        self.baseline()
+        self.weekly_only()
+        before, real_import = self.quota_state(), __import__
+
+        def interrupt_on_catalog(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "runtime" and "native_catalog" in (fromlist or ()):
+                raise KeyboardInterrupt
+            return real_import(name, globals, locals, fromlist, level)
+        current = self.native.account(self.settings, self.now)
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch("builtins.__import__", side_effect=interrupt_on_catalog), \
+                mock.patch.object(self.native, "exchange") as exchange:
+            answer = self.native.probe_limit(self.settings, expected=(current["key"], current["generation"]),
+                                             reset_at=self.now + 3600, command=self.command, environ=self.environ)
+        self.assertEqual(answer, dict(state="failed"))
+        exchange.assert_not_called()
+        self.assertEqual(self.quota_state(), before)
+
     # Finding 1: a current account must carry the complete native metadata to admit or commit a probe.
     def test_probe_refuses_a_partial_proved_account_before_any_exchange(self):
         self.baseline()

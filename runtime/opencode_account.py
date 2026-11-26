@@ -474,8 +474,8 @@ def probe_claude_limit(settings_path, *, reset_at, command=None, environ=None, t
 
     The OpenCode fact's native digest must match the complete native account read after it, so a race skips. The
     probe never waits for, or fences, ordinary account reads."""
-    now = int(time.time())
     try:
+        now = int(time.time())
         if type(reset_at) is not int or not isinstance(settings_path, Path):
             return dict(state='failed')
         storage.private(settings_path.parent, True)
