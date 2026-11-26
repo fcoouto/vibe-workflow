@@ -1,14 +1,14 @@
 # Title Sync: catch up idle titles and show progress during a turn
 
 **Status:** draft design for findings 6 and 8, after [#404](https://github.com/fcoouto/vibe-workflow/pull/404).
-The earlier draft was independently reviewed. The user has since clarified task lifetime.
-The disable-time rename tradeoff and design approval are pending.
+The earlier draft was independently reviewed. The user has since clarified task lifetime and disable behavior.
+Design approval is pending.
 
 ## What changes
 
 - **6 — Stale idle titles.** A successful numbered merge command in OpenCode can refresh another, idle chat's
   title. After a restart, fix `WAITING` for runs the previous server left busy. Turning Title Sync off stops
-  updates. Optional prefix cleanup would cover only tasks still tracked. See the host limitation below.
+  updates and leaves all existing titles as they are, including their prefixes.
 - **8 — Long turns.** An existing meter can advance between model steps as work reaches a file milestone. Git
   still decides progress and the regular turn-end check still reconciles the task.
 
@@ -98,19 +98,11 @@ made after the new bind as belonging to the previous task.
 
 ### Turn titles off
 
-With Title Sync off, a new workflow does not bind or overwrite a title. A project preference generation fences
-new title writes as soon as onboarding saves off. Preview, cancellation, and a failed save do not touch titles.
-
-**Decision pending:** leave titles as-is on disable, or attempt cleanup only for still-tracked tasks. The latter
-would use the existing bounded task records, not list historical sessions. The owner queues a final comparison
-of the current title to the exact last title it wrote. Only a match with a valid `U+FFFB` meter prefix qualifies;
-strip the prefix and preserve the topic. Completed, pruned, silenced, and renamed titles are not candidates.
-
-The [OpenCode session update API](https://opencode.ai/docs/api) has no expected-title or revision precondition.
-A manual rename between that final read and write can still be overwritten. If best effort is approved, order
-the cleanup behind plugin writes already sent, invalidate it on re-enable or unload, and let the destination
-owner retry once on a move within the disabled project. Preserve any live binding and do not treat a title
-stripped by the plugin as a manual rename. Never repair a mismatch with a second title write.
+With Title Sync off, a new workflow does not bind or overwrite a title. Onboarding publishes the saved off
+state to the plugin copies before reporting success. Preview, cancellation, and a failed save do not touch titles.
+No title cleanup on disable, move, or activation while off. Leave existing titles and active bindings intact.
+Do not scan sessions on disable. A write already sent to OpenCode cannot be recalled; fence queued writes
+when the off state is published. Turning Title Sync back on restores normal behavior on subsequent events.
 
 ## 8. Advance an existing meter between steps
 
@@ -150,8 +142,9 @@ files touched.
   and a running background shell that predates owner activation. Verify one bounded list and zero GitHub calls.
   Check that a same-task plan preserves a rename, a distinct spec resets it, and completion and pruning leave
   no title or silence receipt. A rename after the new bind stays with the new task.
-- **Disable:** a new workflow does not bind or change a title. If cleanup is approved, verify exact title matching
-  with active records, no writes to completed or pruned records, and enable, move, close, and in-flight write races.
+- **Disable:** save off while an evaluation is queued and while another write is in flight. Confirm that no new
+  write starts after off is published, existing titles are not stripped, and a new workflow does not bind or
+  retitle. Confirm that off and activation while off add no session listing.
 - **Progress:** two loader copies; root, descendant, and unrelated sessions; duplicate and multi-file steps;
   newly edited plan; reverted files; an untracked file; repeated hints; lost folder; and a title currently
   showing `WAITING`. Check local-read bounds and no mid-turn `gh` or first-title write. Check normal turn-end
@@ -163,8 +156,8 @@ files touched.
   separate authorization. Report untested host behavior as unverified.
 
 If a host capability is missing or fails qualification, do not ship the corresponding write path or claim
-its finding fixed. Shared routing is a gate for cross-copy merge and any disable writes. Scoped listing and
-positive activity evidence are gates for recovery.
+its finding fixed. Shared routing is a gate for cross-copy merge and fencing writes after disable. Scoped
+listing and positive activity evidence are gates for recovery.
 Worktree-removal delivery is optional: without it, retry only on owner activation or the next turn.
 The mid-turn progress path has its own proof and may ship separately. Bring any scope reduction back for approval.
 
