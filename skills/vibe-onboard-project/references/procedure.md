@@ -140,9 +140,11 @@ not a git repository, needs no move.
    for the questions, including Smart Router's `previous_enabled` from question 1.
    If a value changed (including to or from `null`), stop before saving, explain
    that settings changed, and ask the user to run onboarding again.
-   If every preview says `change: "none"` and no
-   GitHub change is pending, say **Nothing to change.**, keep the saved choices and
-   stop. A yes to question 4 counts as a change, so it is never swallowed by that stop.
+   If every preview says `change: "none"` and no GitHub change is pending, say
+   **Nothing to change.** and keep the saved choices. If Git workflow readiness
+   has reason `project_root_unavailable`, report its saved-local status from
+   step 10. Then stop.
+   A yes to question 4 counts as a change, so it is never swallowed by that stop.
    Otherwise say what will be saved, in one plain line per change and not as a
    question, for example **Saving: Smart Router On, Git workflow I merge them, cleanup on, Session titles On —
    .vibe-workflow/settings.json (created). GitHub: turn on auto-delete of merged branches for <owner/repo>.**
