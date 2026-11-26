@@ -220,6 +220,30 @@ class ReaderTest(unittest.TestCase):
         self.native._store(self.settings).chmod(0o644)
         self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
 
+    def test_quota_is_refused_when_the_account_switches_between_billing_and_quota_reads(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        current = self.native.account(self.settings, self.now)
+        changed = dict(current, generation="f" * 32)
+        quota = importlib.import_module("runtime.claude_quota")
+        evidence = dict(meters={"7d": dict(exhausted=True, reset_at=self.now + 600)}, scopes_complete=False,
+                        earliest=self.now - 60, latest=self.now)
+        other = quota.merge({}, evidence, now=self.now)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+        original = self.native.exhaustion_left
+
+        def switch(*args, **kwargs):
+            self.native._save(self.settings, identity=dict(key=changed["key"], generation=changed["generation"]),
+                              account=changed, quota=dict(key=changed["key"], generation=changed["generation"],
+                                                          record=other))
+            return original(*args, **kwargs)
+
+        with mock.patch.object(self.native, "exhaustion_left", side_effect=switch):
+            self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now, "0" * 32))
+
     def test_weekly_exhaustion_is_stored_without_publishing_a_usage_snapshot(self):
         self.weekly_only()
         with mock.patch("time.time", return_value=self.now):

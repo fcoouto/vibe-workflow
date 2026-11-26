@@ -138,37 +138,54 @@ def _key(value):
     return value in ACCOUNT or type(value) is str and re.fullmatch('(family|model):[a-z0-9-]+', value) is not None
 
 
-def _meter(value, observed):
-    fields = {'exhausted', 'reset_at', 'earliest', 'latest'} if observed else {'exhausted', 'reset_at'}
-    if type(value) is not dict or set(value) != fields or type(value['exhausted']) is not bool \
-            or not routing._amount(value['reset_at']):
-        return False
-    return not observed or routing._amount(value['earliest']) and routing._amount(value['latest']) \
-        and value['earliest'] <= value['latest']
+def _window(key):
+    return LENGTHS['5h'] if key == '5h' else LENGTHS['7d']
 
 
-def _inventory(value):
+def _plausible(earliest, latest, now):
+    """Observation times that could be real: nonnegative, ordered, none after `now`, `latest` may round up a second."""
+    return routing._amount(earliest) and routing._amount(latest) and earliest <= latest and earliest <= now \
+        and latest <= now + 1
+
+
+def _reset(key, reset, latest):
+    """A reset no earlier than the observation's `latest` (equal allowed) and within the window plus the margin."""
+    return routing._amount(reset) and latest <= reset <= latest + _window(key) + storage.CLOCK_MARGIN
+
+
+def _valid_meter(key, value, latest):
+    return _key(key) and type(value) is dict and set(value) >= {'exhausted', 'reset_at'} \
+        and type(value['exhausted']) is bool and _reset(key, value['reset_at'], latest)
+
+
+def _entry(key, value, now):
+    return type(value) is dict and set(value) == {'exhausted', 'reset_at', 'earliest', 'latest'} \
+        and _plausible(value['earliest'], value['latest'], now) and _valid_meter(key, value, value['latest'])
+
+
+def _inventory(value, now):
     return type(value) is dict and set(value) == {'scopes', 'earliest', 'latest'} \
         and type(value['scopes']) is list and all(_key(key) and key not in ACCOUNT for key in value['scopes']) \
-        and routing._amount(value['earliest']) and routing._amount(value['latest']) \
-        and value['earliest'] <= value['latest']
+        and _plausible(value['earliest'], value['latest'], now)
 
 
-def _sampled(sample):
+def _sampled(sample, now):
     return type(sample) is dict and type(sample.get('meters')) is dict \
-        and type(sample.get('scopes_complete')) is bool and routing._amount(sample.get('earliest')) \
-        and routing._amount(sample.get('latest')) and sample['earliest'] <= sample['latest'] \
-        and all(_key(key) and _meter(value, observed=False) for key, value in sample['meters'].items())
+        and type(sample.get('scopes_complete')) is bool \
+        and _plausible(sample.get('earliest'), sample.get('latest'), now) \
+        and all(_valid_meter(key, value, sample['latest']) and set(value) == {'exhausted', 'reset_at'}
+                for key, value in sample['meters'].items())
 
 
 def _kept(record, now):
-    """`(meters, inventory)` still in force at `now`: validated meters before their reset, and a live inventory."""
+    """`(meters, inventory)` still in force at `now`: plausible meters before their reset, and a live, plausible
+    inventory. A future-dated or malformed row neither excludes a route nor fences a scope."""
     value = record if type(record) is dict else {}
     raw = value.get('meters') if type(value.get('meters')) is dict else {}
     meters = {key: dict(entry) for key, entry in raw.items()
-              if _key(key) and _meter(entry, observed=True) and entry['reset_at'] > now}
+              if _key(key) and _entry(key, entry, now) and entry['reset_at'] > now}
     inventory = value.get('inventory')
-    if not _inventory(inventory) or now >= inventory['latest'] + LENGTHS['7d'] + storage.CLOCK_MARGIN:
+    if not _inventory(inventory, now) or now >= inventory['latest'] + LENGTHS['7d'] + storage.CLOCK_MARGIN:
         inventory = None
     return meters, inventory
 
@@ -193,7 +210,7 @@ def merge(previous, sample, *, now):
     only when newer. A `None` or malformed sample changes nothing."""
     meters, inventory = _kept(previous, now)
     before = dict(meters)
-    if not _sampled(sample):
+    if not _sampled(sample, now):
         return dict(meters=meters, inventory=inventory)
     earliest, latest = sample['earliest'], sample['latest']
     for key, value in sample['meters'].items():

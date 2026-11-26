@@ -410,19 +410,22 @@ def scopes(use, models):
             for _, item in sorted(found.items())]
 
 
-def exhaustion_left(settings_path, route, now):
-    """Seconds until the current account's confirmed exhaustion ends for this OpenCode Claude route, or None.
+def exhaustion_left(settings_path, route, now, native):
+    """Seconds until the account's confirmed exhaustion ends for this OpenCode Claude route, or None.
 
-    Only evidence bound to the account's current key and generation counts, with the catalog bound to that same
-    account (else no model is matched, so only account-wide windows block). The caller checks the OpenCode Claude
-    billing binding first; this reads the private state and takes no lock."""
+    `native` is the opaque native binding of the billing read that proved this route's account (`opencode_account`'s
+    record). One state read supplies the current account and its quota, so an account switch between the reads
+    refuses; only evidence bound to that account and generation counts, with the catalog bound to the same account
+    (else no model is matched, so only account-wide windows block). This takes no lock."""
     from runtime import native_catalog, opencode_account
-    if type(route) is not dict or route.get('pool') != POOL or opencode_account.family(route) != 'claude':
+    if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
+            or opencode_account.family(route) != 'claude':
         return None
-    current = account(settings_path, now)
-    if current is None:
+    state = _state(settings_path)
+    current = _current(state, now)
+    if current is None or opencode_account._native(current) != native:
         return None
-    found = _state(settings_path).get('quota')
+    found = state.get('quota')
     if type(found) is not dict or found.get('key') != current['key'] \
             or found.get('generation') != current['generation']:
         return None
@@ -463,18 +466,22 @@ def _proved(state, key=None):
     return None
 
 
-def account(settings_path, now):
-    """The current complete account record `{key, generation, observed_at, client_version, overflow, usage_at}`
-    proved by its identity, or None when absent, pending, legacy, incoherent or stale."""
-    if settings_path is None:
-        return None
-    state = _state(settings_path)
+def _current(state, now):
+    """The current account record within `state` (see `account`), so several checks can share one read."""
     found = state.get('account')
     if type(found) is not dict or 'pending' in found or _proved(state) is None \
             or not routing._amount(found.get('observed_at')) \
             or not (0 <= now - found['observed_at'] <= observations.FRESH_SECONDS):
         return None
     return found
+
+
+def account(settings_path, now):
+    """The current complete account record `{key, generation, observed_at, client_version, overflow, usage_at}`
+    proved by its identity, or None when absent, pending, legacy, incoherent or stale."""
+    if settings_path is None:
+        return None
+    return _current(_state(settings_path), now)
 
 
 def bound_id(window, key):

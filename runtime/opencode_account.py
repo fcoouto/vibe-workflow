@@ -319,9 +319,10 @@ def _quota_gate(settings_path, route, now):
     current, lasting until the reset (`claude_usage.exhaustion_left`)."""
     name = family(route)
     if name == 'claude':
-        if route.get('pool') != POOLS['claude'] or not native_current(settings_path, now):
+        found = _account(settings_path, name, now) if route.get('pool') == POOLS['claude'] else None
+        if found is None:
             return None, None
-        left = claude_usage.exhaustion_left(settings_path, route, now)
+        left = claude_usage.exhaustion_left(settings_path, route, now, found['native'])
         return (EXHAUSTED, left) if left is not None else (None, None)
     if name == 'chatgpt':
         left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None

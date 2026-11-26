@@ -486,5 +486,47 @@ class ClaudeQuotaRecordTest(unittest.TestCase):
         self.assertEqual(self.left(self.marked, self.now, model='claude-example-5-3'), self.reset - self.now)
 
 
+    def test_persisted_observation_times_must_not_be_future_dated(self):
+        future = dict(exhausted=True, reset_at=self.reset, earliest=self.now + 100, latest=self.now + 100)
+        self.assertIsNone(self.left(dict(meters={'family:example': future}, inventory=None), self.now))
+        two = dict(future, earliest=NOW, latest=NOW + 2)
+        self.assertIsNone(self.left(dict(meters={'family:example': two}, inventory=None), NOW))
+        ceil = dict(exhausted=True, reset_at=self.reset, earliest=NOW, latest=NOW + 1)
+        self.assertEqual(self.left(dict(meters={'family:example': ceil}, inventory=None), NOW + 1),
+                         self.reset - NOW - 1)
+
+    def test_persisted_reset_must_lie_within_its_window_after_the_observation(self):
+        far = dict(exhausted=True, reset_at=self.now + 999999999, earliest=NOW - 60, latest=NOW)
+        self.assertIsNone(self.left(dict(meters={'family:example': far}, inventory=None), self.now))
+        longest = NOW + 7 * 86400 + self.quota.storage.CLOCK_MARGIN
+        over = dict(exhausted=True, reset_at=longest + 1, earliest=NOW - 60, latest=NOW)
+        self.assertIsNone(self.left(dict(meters={'family:example': over}, inventory=None), self.now))
+        exact = dict(over, reset_at=longest)
+        self.assertEqual(self.left(dict(meters={'family:example': exact}, inventory=None), self.now),
+                         longest - self.now)
+        five = dict(exhausted=True, reset_at=NOW + 5 * 3600 + 61, earliest=NOW - 60, latest=NOW)
+        self.assertIsNone(self.left(dict(meters={'5h': five}, inventory=None), self.now))
+
+    def test_future_dated_inventory_is_not_a_fence(self):
+        future = dict(meters={}, inventory=dict(scopes=[], earliest=self.now - 10, latest=self.now + 2))
+        positive = self.sample(self.mark(True), NOW + 100, NOW + 150)
+        self.assertEqual(self.left(self.quota.merge(future, positive, now=self.now), self.now),
+                         self.reset - self.now)
+
+    def test_sample_times_and_resets_must_be_plausible_to_publish(self):
+        base = self.sample(self.mark(True), self.now - 10, self.now)
+        for label, sample in (
+                ('future latest', self.sample(self.mark(True), self.now - 10, self.now + 2)),
+                ('future earliest', self.sample(self.mark(True), self.now + 1, self.now + 1)),
+                ('reset beyond window', self.sample(
+                    {'family:example': dict(exhausted=True, reset_at=self.now + 7 * 86400 + 200)},
+                    self.now - 10, self.now))):
+            with self.subTest(label=label):
+                self.assertEqual(self.quota.merge({}, sample, now=self.now), dict(meters={}, inventory=None))
+        self.assertEqual(self.quota.merge({}, base, now=self.now)['meters']['family:example']['latest'], self.now)
+        ceil = self.sample({'family:example': dict(exhausted=True, reset_at=self.now + 1)}, self.now, self.now + 1)
+        self.assertEqual(self.left(self.quota.merge({}, ceil, now=self.now), self.now), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
