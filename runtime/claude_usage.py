@@ -664,9 +664,18 @@ def _quota_change(state, expected, sample, now, *, merge=True):
     found = state.get('quota')
     kept = found if type(found) is dict and found.get('key') == key and found.get('generation') == generation else {}
     record = claude_quota.merge(kept.get('record'), sample, now=now) if merge else kept.get('record')
-    ranking = kept.get('ranking') if sample is None else usage_balance.batch_after(
-        kept.get('ranking'), earliest=sample['earliest'], latest=sample['latest'], meters=sample['usage'])
+    ranking = kept.get('ranking') if sample is None else _ranked(kept.get('ranking'), sample)
     return dict(quota=dict(key=key, generation=generation, record=record, ranking=ranking))
+
+
+def _ranked(previous, sample):
+    """The ranking batch after one recognized reply. Optional: a failure here drops the batch, never the exhaustion
+    record that the same publication writes."""
+    try:
+        return usage_balance.batch_after(previous, earliest=sample['earliest'], latest=sample['latest'],
+                                         meters=sample['usage'])
+    except Exception:
+        return None
 
 
 def _fence(state, held):

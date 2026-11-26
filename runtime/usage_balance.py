@@ -9,7 +9,6 @@ mutated. Account binding, storage and selection belong to the caller.
 A provider's stored ranking batch holds the meters of its latest recognized usage reply and the interval they span.
 `batch_after` applies the one interval rule every provider shares; `batch_meters` re-checks a stored batch on read.
 """
-import copy
 import math
 import re
 
@@ -115,19 +114,21 @@ def batch_after(previous, *, earliest, latest, meters):
     batch counts as absent. Inputs are never mutated."""
     old = previous if _batch_shape(previous) else None
     if old is None or earliest > old['latest']:
-        return dict(earliest=earliest, latest=latest, meters=copy.deepcopy(meters))
+        return dict(earliest=earliest, latest=latest, meters=dict(meters))
     if latest < old['earliest']:
-        return copy.deepcopy(old)
+        return old  # retained as stored: its contents are never traversed, so a corrupt meter cannot fail here
     return dict(earliest=min(old['earliest'], earliest), latest=max(old['latest'], latest), meters={})
 
 
 def batch_meters(batch, *, now, keep):
-    """The fresh, well-formed meters of a stored batch whose key `keep` accepts; a malformed or stale meter is dropped
-    alone, and a malformed batch yields none. The result is a copy."""
+    """The fresh, well-formed meters of a stored batch whose key `keep` accepts, each with timestamps equal to the
+    batch's own interval. A malformed, stale or mismatched meter is dropped alone, and a malformed batch yields none.
+    The result is a copy."""
     if not _batch_shape(batch):
         return {}
-    return {key: copy.deepcopy(value) for key, value in batch['meters'].items()
-            if keep(key) and fresh_meter(value, now=now)}
+    return {key: dict(value) for key, value in batch['meters'].items()
+            if keep(key) and fresh_meter(value, now=now)
+            and (value['earliest'], value['latest']) == (batch['earliest'], batch['latest'])}
 
 
 def _missing_sibling(key, fresh, siblings):

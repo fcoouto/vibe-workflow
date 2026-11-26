@@ -351,7 +351,10 @@ def _go_ranking(part, key, generation, sample):
     if sample[2] is None:
         return previous
     received, hints = sample[2]
-    return usage_balance.batch_after(previous, earliest=sample[0], latest=received, meters=hints)
+    try:
+        return usage_balance.batch_after(previous, earliest=sample[0], latest=received, meters=hints)
+    except Exception:  # optional, as for Claude: the exhaustion meters of this same publication still stand
+        return None
 
 
 def _merge_go(previous, sample, now):
@@ -384,6 +387,16 @@ def _transition(settings_path, family, step):
         observations._write(path, value)
 
 
+def _complete(part, now):
+    """The family's complete, proved and fresh account record within its state `part`, else None."""
+    found = part.get('account')
+    if type(found) is not dict or 'pending' in found or continuity._proved(part) is None \
+            or not routing._amount(found.get('observed_at')) \
+            or not 0 <= now - found['observed_at'] <= observations.FRESH_SECONDS:
+        return None
+    return found
+
+
 def _account(settings_path, family, now):
     """The family's complete, proved and fresh account record, else None; Claude's native login is rechecked."""
     if settings_path is None or family not in PATHS:
@@ -393,10 +406,8 @@ def _account(settings_path, family, now):
         native = claude_usage.account(settings_path, now) if family == 'claude' else None
     except (OSError, ValueError):
         return None
-    found = part.get('account')
-    if type(found) is not dict or 'pending' in found or continuity._proved(part) is None \
-            or not routing._amount(found.get('observed_at')) \
-            or not 0 <= now - found['observed_at'] <= observations.FRESH_SECONDS:
+    found = _complete(part, now)
+    if found is None:
         return None
     if family == 'claude' and (native is None or found.get('native') != _native(native)):
         return None
@@ -440,9 +451,14 @@ def billing_fact(settings_path, route, now):
         overflow = native.get('overflow')
         crossover = 'provider_blocked' if overflow == 'disabled' else \
             'provider_managed' if overflow == 'enabled' else 'unknown'
-    return dict(producer=_producer(name, current), **subscription_billing.scope(route),
-                observed_at=current['observed_at'],
-                valid_until=current['observed_at'] + observations.FRESH_SECONDS, paid_crossover=crossover)
+    return _fact(name, current, route, crossover)
+
+
+def _fact(name, record, route, crossover):
+    """The account-bound billing fact of one account record: the shape `eligible` marks and ranking compares."""
+    return dict(producer=_producer(name, record), **subscription_billing.scope(route),
+                observed_at=record['observed_at'], valid_until=record['observed_at'] + observations.FRESH_SECONDS,
+                paid_crossover=crossover)
 
 
 def native_current(settings_path, now):
@@ -451,22 +467,26 @@ def native_current(settings_path, now):
 
 
 def ranking_meters(settings_path, route, now, *, marker):
-    """Ranking hints for `route`'s account, valid only while its current billing marker is `marker` (the candidate's
-    marker from `eligible`). Claude reads its bound batch; Go reads its key-bound batch when the provider supports
-    the usage read. Empty when anything is unproved, stale, changed or malformed; never an exhaustion input."""
+    """Ranking hints for `route`'s account, valid only while its billing marker is `marker` (the candidate's marker
+    from `eligible`). One read of the account store supplies both the marker's record and the Go hints, so a login
+    switch between reads can never pair one account's marker with another's hints. Claude's hints come from its own
+    store, bound to this record's native login. Empty when anything is unproved, stale, changed or malformed; never
+    an exhaustion input."""
     name = family(route)
-    if name is None or route.get('pool') != POOLS[name] or type(marker) is not str:
+    if settings_path is None or name is None or route.get('pool') != POOLS[name] or type(marker) is not str:
         return {}
-    if subscription_billing.marker(billing_fact(settings_path, route, now), route, now) != marker:
+    try:
+        part = _part(observations._read(_store(settings_path)), name)
+    except (OSError, ValueError):
         return {}
-    found = _account(settings_path, name, now)
-    if found is None:
+    record = _complete(part, now)
+    if record is None or subscription_billing.marker(_fact(name, record, route, 'unknown'), route, now) != marker:
         return {}
     if name == 'claude':
-        return claude_usage.ranking_meters(settings_path, route, now, native=found['native'])
-    quota = _part(observations._read(_store(settings_path)), 'go').get('go_quota')
-    if found.get('go_usage') is not True or type(quota) is not dict \
-            or quota.get('key') != found['key'] or quota.get('generation') != found['generation']:
+        return claude_usage.ranking_meters(settings_path, route, now, native=record.get('native'))
+    quota = part.get('go_quota')
+    if record.get('go_usage') is not True or type(quota) is not dict \
+            or quota.get('key') != record['key'] or quota.get('generation') != record['generation']:
         return {}
     return usage_balance.batch_meters(quota.get('ranking'), now=now, keep=lambda key: key in GO_RANKING)
 

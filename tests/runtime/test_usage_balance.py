@@ -274,6 +274,14 @@ class UsageBalanceTest(unittest.TestCase):
                                                 SCOPE: dict(meter(big, 144, 168))}), 3.75)
 
 
+def deep(depth):
+    """A value nested `depth` lists deep: JSON-readable, but beyond what deepcopy can follow."""
+    value = 0
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
 def batch(earliest, latest, *, used=30, meters=True):
     found = {'7d': dict(used_percent=used, earliest=earliest, latest=latest, reset_at=NOW + 72 * HOUR,
                         duration=168 * HOUR, discrete=True)} if meters else {}
@@ -322,6 +330,19 @@ class BatchTest(unittest.TestCase):
             with self.subTest(previous=previous):
                 replaced = usage_balance.batch_after(previous, earliest=NOW + 5, latest=NOW + 6, meters={})
                 self.assertEqual(replaced, dict(earliest=NOW + 5, latest=NOW + 6, meters={}))
+
+    def test_older_reply_retains_a_deep_stored_batch_without_traversing_it(self):
+        # Deeper than deepcopy can follow, yet JSON-readable: a corrupt meter must not fail the publication.
+        stored = dict(earliest=NOW + 100, latest=NOW + 200, meters={'5h': {'used_percent': deep(700)}})
+        self.assertIs(usage_balance.batch_after(stored, earliest=NOW - 60, latest=NOW, meters={}), stored)
+
+    def test_meter_timestamps_must_match_the_batch_interval(self):
+        fresh = dict(meter(40, 72, 168, at=NOW), earliest=NOW - 60)  # fresh-dated, spanning the usual reply interval
+        stale = dict(earliest=NOW - 1000, latest=NOW - 900, meters={'7d': fresh})
+        self.assertEqual(usage_balance.batch_meters(stale, now=NOW, keep=lambda key: True), {})
+        matching = dict(earliest=NOW - 60, latest=NOW, meters={'7d': fresh, '5h': dict(fresh, earliest=NOW - 61)})
+        self.assertEqual(sorted(usage_balance.batch_meters(matching, now=NOW, keep=lambda key: True)), ['7d'])
+        self.assertEqual(usage_balance.batch_meters(matching, now=NOW, keep=lambda key: key == '5h'), {})
 
     def test_batch_inputs_are_not_mutated(self):
         previous = batch(NOW - 60, NOW)

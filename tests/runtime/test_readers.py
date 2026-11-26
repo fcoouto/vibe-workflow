@@ -40,6 +40,14 @@ def payload(now, *, idle=False, scoped=False):
                             model_usage={}), rate_limits_available=True, rate_limits=rate, behaviors=None))
 
 
+def deep(depth):
+    """A value nested `depth` lists deep: JSON-readable, but beyond what deepcopy can follow."""
+    value = 0
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
 class ReaderTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -826,6 +834,112 @@ class ReaderTest(unittest.TestCase):
                 mock.patch.object(self.openc, "_go_request", create=True, side_effect=AssertionError("no request")):
             self.assertIn("7d", self.claude_hints(self.now))
             self.assertIn("5h", self.go_hints(self.now))
+
+    def marker_of(self, route, at):
+        subscription_billing = importlib.import_module("runtime.subscription_billing")
+        return subscription_billing.marker(self.openc.billing_fact(self.settings, route, at), route, at)
+
+    def hints_for(self, route, at, marker):
+        return self.observations.LocalSource(self.settings).ranking_meters(dict(route, account_marker=marker), at)
+
+    def switch_on_account_read(self, switch, *, number, before):
+        """Run `switch` once, around the `number`th read of the OpenCode account store: before that read when `before`,
+        otherwise right after it. Later reads, and the switch's own reads, then see the other login."""
+        real, seen = self.observations._read, []
+
+        def read(path):
+            if path.name != self.openc.STORE_FILE:
+                return real(path)
+            seen.append(path)
+            if len(seen) == number and before:
+                switch()
+            value = real(path)
+            if len(seen) == number and not before:
+                switch()
+            return value
+        return mock.patch.object(self.observations, "_read", side_effect=read)
+
+    def test_go_switch_between_the_marker_and_the_hint_read_keeps_the_marker_account_hints(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"rolling": go_meter(self.now + 3600, 20)})
+        marker = self.marker_of(self.go_route, self.now)
+        own = self.hints_for(self.go_route, self.now, marker)
+        self.assertEqual(own["5h"]["used_percent"], 20)
+
+        def switch():
+            with mock.patch("time.time", return_value=self.now):
+                self.opencode("go", usage={"rolling": go_meter(self.now + 3600, 90)}, key="NEXT-KEY-SENTINEL",
+                              force=True)
+        with self.switch_on_account_read(switch, number=1, before=False):
+            hints = self.hints_for(self.go_route, self.now, marker)
+        self.assertEqual(hints, own)  # the marker's own snapshot, never the other login's 90%
+        self.assertNotEqual(self.marker_of(self.go_route, self.now), marker)  # the switch really happened
+        self.assertEqual(self.go_hints(self.now)["5h"]["used_percent"], 90)
+
+    def test_claude_switch_between_the_marker_and_the_hint_read_pairs_no_hints(self):
+        self.claude_sample(self.now, 30)
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode()
+        marker = self.marker_of(self.route, self.now)
+        own = self.hints_for(self.route, self.now, marker)
+        self.assertEqual(own["7d"]["used_percent"], 30)
+        # The second account read, the one that could pair this marker with another login, runs after the switch.
+        with self.switch_on_account_read(self.become_second_login, number=2, before=True):
+            hints = self.hints_for(self.route, self.now, marker)
+        self.assertIn(hints, (own, {}))  # never the other login's 100% weekly meter
+
+    def test_claude_publishes_the_pause_when_ranking_processing_fails(self):
+        usage_balance = importlib.import_module("runtime.usage_balance")
+        with mock.patch.object(usage_balance, "batch_after", side_effect=RecursionError), \
+                mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.claude_sample(self.now, 100)["state"], "stored")
+            self.opencode()
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+
+    def test_go_publishes_the_pause_when_ranking_processing_fails(self):
+        usage_balance = importlib.import_module("runtime.usage_balance")
+        with mock.patch.object(usage_balance, "batch_after", side_effect=RecursionError), \
+                mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go", usage={"weekly": go_meter(self.now + 86400, 100,
+                                                                             "rate-limited")})["state"], "stored")
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+
+    def test_older_claude_reply_keeps_a_deep_corrupt_batch_and_publishes_the_pause(self):
+        self.claude_sample(self.now - 200, 30)
+        current = self.native.account(self.settings, self.now - 200)
+        record = self.quota_state()["record"]
+        corrupt = dict(earliest=self.now + 1000, latest=self.now + 1100, meters={"7d": dict(
+            used_percent=deep(700), earliest=self.now + 1000, latest=self.now + 1100, reset_at=self.now + 2 * 86400,
+            duration=604800, discrete=True)})
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record=record, ranking=corrupt))
+        self.assertEqual(self.claude_sample(self.now, 100)["state"], "stored")
+        native = self.openc._native(self.native.account(self.settings, self.now))
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now, native=native), 86400)
+
+    def test_older_go_reply_keeps_a_deep_corrupt_batch_and_publishes_the_pause(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"rolling": go_meter(self.now + 3600, 20)})
+        account = self.openc._account(self.settings, "go", self.now)
+        corrupt = dict(earliest=self.now + 1000, latest=self.now + 1100, meters={"5h": dict(
+            used_percent=deep(700), earliest=self.now + 1000, latest=self.now + 1100, reset_at=self.now + 19000,
+            duration=18000, discrete=True)})
+        self.openc._transition(self.settings, "go", lambda part: dict(go_quota=dict(
+            key=account["key"], generation=account["generation"], meters={}, ranking=corrupt)))
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go", usage={"weekly": go_meter(self.now + 86400, 100, "rate-limited")},
+                                           force=True)["state"], "stored")
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+
+    def test_stale_claude_batch_with_a_fresh_dated_meter_ranks_nothing(self):
+        self.claude_sample(self.now, 30)
+        current = self.native.account(self.settings, self.now)
+        meter = dict(used_percent=30, earliest=self.now - 60, latest=self.now, reset_at=self.now + 86400,
+                     duration=604800, discrete=True)
+        stale = dict(earliest=self.now - 1000, latest=self.now - 900, meters={"7d": meter})
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record=self.quota_state()["record"], ranking=stale))
+        self.assertEqual(self.claude_hints(self.now), {})
 
     def test_invalid_idle_and_unmodeled_limits_are_not_accepted(self):
         for meter in (dict(utilization=True, resets_at=None), dict(utilization=1, resets_at=None),
