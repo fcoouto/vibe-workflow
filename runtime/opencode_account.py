@@ -15,18 +15,22 @@ store.
   claim (its payload is decoded locally; no signature check is possible or claimed) with the credential id, so a token
   refresh keeps the generation.
 - Go: the active `opencode-go` key and the active `opencode` Console login (`accountID`, `orgID`), whose org must be
-  the `x-opencode-org-id` header the Go provider sends: that proves where Go requests are attributed. That the key
-  belongs to the workspace is user-attested. A replaced key or another Console account changes the generation.
+  the `x-opencode-org-id` header the Go provider sends. Quota comes from Go's documented usage endpoint, using that
+  key rather than the Console login. A replaced key or another Console account changes the generation.
 
-A fact only confirms the account. Go and ChatGPT quota stays unknown (provider-managed fallback, never an included
-claim); OpenCode Claude may claim from the native login's bound rows while that login is current (`native_rows`).
+A fact only confirms the account. Positive Go and Claude meter evidence can refuse a recommendation, not authorize
+spending. ChatGPT has a separate limit mark.
 The OpenCode ChatGPT subject and the native Codex login are never merged into one identity.
 """
 import base64
+from contextlib import closing
+from datetime import datetime
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import shutil
 import subprocess
@@ -43,8 +47,10 @@ FAMILIES = tuple(PATHS)
 STORE_FILE = 'opencode-account.json'
 LOCK = 'opencode-account'
 CREDENTIAL = '/api/credential'
-USAGE = '/api/experimental/usage/limits'  # the Go workspace's meters (zero-token)
-GO_METERS = ('rolling', 'weekly', 'monthly')
+GO_HOST = 'opencode.ai'
+GO_USAGE = '/inference/go/v1/usage'
+GO_WINDOWS = dict(rolling=5 * 3600, weekly=7 * 86400, monthly=31 * 86400)
+GO_MAX_BODY = 32 << 10
 EXHAUSTED = 'quota_exhausted'
 BILLING_UNVERIFIED = 'billing_unverified'
 PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
@@ -197,8 +203,7 @@ def _go_key(found):
 
 
 def _go(found, answer):
-    """Go requests carry the Console org as `x-opencode-org-id` (the usage workspace is only the Console login's, so
-    it proves nothing about them). The key's own workspace is user-attested, not provable here."""
+    """Verify the Go provider still uses the attributed Console workspace and the official Go endpoint."""
     _key, _account, org = found
     listed = answer.get('data') if type(answer) is dict else None
     entries = [item for item in listed if type(item) is dict and item.get('id') == 'opencode-go'] \
@@ -209,30 +214,91 @@ def _go(found, answer):
         raise ReadError('opencode_go_provider_unlisted')
     if attributed != org:
         raise ReadError('opencode_go_workspace_mismatch')
+    settings = entries[0].get('settings')
+    url = settings.get('baseURL') if type(settings) is dict else None
+    if not routing._text(url) or not re.fullmatch(r'https://opencode\.ai/inference/go(?:/[A-Za-z0-9_-]+)*/?', url) \
+            or any(header.lower() in ('authorization', 'api-key', 'x-api-key') for header in headers):
+        raise ReadError('opencode_go_unsupported')
 
 
-def _usage(org, command, environ, deadline):
-    """This acquisition's Go meters `{rolling, weekly, monthly: {percent, limited, reset_at}, observed_at}` for the
-    proved workspace, or None: unreadable, another workspace or any other shape is no reading and never a gate."""
-    observed_at = int(time.time())
+def _go_request(key, deadline):
+    """One bounded, fixed-host TLS GET with no proxy or redirect. Only the selected Go key is sent."""
+    left = deadline - time.monotonic()
+    if left <= 0 or os.environ.get('VCW_TEST_HOME') or not key.isascii() or any(c.isspace() for c in key):
+        return None
     try:
-        answer = _api(command, USAGE, environ, deadline)
-    except ReadError:
+        with closing(http.client.HTTPSConnection(GO_HOST, timeout=left)) as conn:
+            conn.request('GET', GO_USAGE, headers={'Authorization': 'Bearer ' + key, 'Accept': 'application/json',
+                                                  'Cache-Control': 'no-cache, no-store'})
+            with conn.getresponse() as response:
+                if time.monotonic() >= deadline:
+                    return None
+                if response.status in (401, 403):
+                    raise ReadError('opencode_go_unsupported')
+                if response.status != 200 or response.getheader('Age') not in (None, '0'):
+                    return None
+                raw = bytearray()
+                while len(raw) <= GO_MAX_BODY:
+                    chunk = response.read1(GO_MAX_BODY + 1 - len(raw))
+                    if time.monotonic() >= deadline:
+                        return None
+                    if not chunk:
+                        return json.loads(raw)
+                    raw.extend(chunk)
+    except (OSError, ValueError, RecursionError, http.client.HTTPException):
         return None
-    data = answer.get('data') if type(answer) is dict else None
-    meters = data.get('go') if type(data) is dict else None
-    workspace = data.get('workspace') if type(data) is dict else None
-    if type(workspace) is not dict or workspace.get('id') != org or type(meters) is not dict \
-            or set(meters) != set(GO_METERS):
+    return None
+
+
+def _go_valid(name, entry, now):
+    return type(entry) is dict and set(entry) == {'exhausted', 'reset_at', 'observed_at'} \
+        and type(entry['exhausted']) is bool and routing._amount(entry['reset_at']) \
+        and routing._amount(entry['observed_at']) and entry['observed_at'] <= now \
+        and 0 < entry['reset_at'] - entry['observed_at'] <= GO_WINDOWS[name] + storage.CLOCK_MARGIN
+
+
+def _go_meter(name, meter, observed_at):
+    if type(meter) is not dict:
         return None
-    found = dict(observed_at=observed_at)
-    for name in GO_METERS:
-        meter = meters[name]
-        if type(meter) is not dict or set(meter) != {'percent', 'limited', 'resetsAt'} \
-                or type(meter['percent']) is not int or not 0 <= meter['percent'] <= 100 \
-                or type(meter['limited']) is not bool or type(meter['resetsAt']) is not int or meter['resetsAt'] <= 0:
+    status, percent, reset = meter.get('status'), meter.get('percent'), meter.get('resetsAt')
+    if status not in ('ok', 'rate-limited') or type(percent) is not int or not 0 <= percent <= 100 \
+            or status == 'ok' and percent == 100 or not routing._text(reset) or len(reset) > 40:
+        return None
+    try:
+        stamp = datetime.fromisoformat(reset.replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
             return None
-        found[name] = dict(percent=meter['percent'], limited=meter['limited'], reset_at=meter['resetsAt'] // 1000)
+        entry = dict(exhausted=status == 'rate-limited', reset_at=int(stamp.timestamp()), observed_at=observed_at)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return entry if _go_valid(name, entry, observed_at) else None
+
+
+def _go_sample(key, deadline):
+    started = int(time.time())
+    answer = _go_request(key, deadline)
+    received = int(time.time())
+    usage = answer.get('usage') if type(answer) is dict else None
+    return started, {name: entry for name in GO_WINDOWS
+                     if (entry := _go_meter(name, usage.get(name), received)) is not None} \
+        if type(usage) is dict and 0 <= started <= received else {}
+
+
+def _bound_go(part, key, generation):
+    quota = part.get('go_quota')
+    if type(quota) is dict and quota.get('key') == key and quota.get('generation') == generation \
+            and type(quota.get('meters')) is dict:
+        return quota['meters']
+    return {}
+
+
+def _merge_go(previous, sample, now):
+    """Retain each known meter unless a provably later read supplies a valid replacement."""
+    started, meters = sample
+    found = {name: previous[name] for name in GO_WINDOWS if _go_valid(name, previous.get(name), now)}
+    for name, entry in meters.items():
+        if _go_valid(name, entry, now) and (name not in found or started > found[name]['observed_at']):
+            found[name] = entry
     return found
 
 
@@ -270,6 +336,8 @@ def _account(settings_path, family, now):
         return None
     if family == 'claude' and (native is None or found.get('native') != _native(native)):
         return None
+    if family == 'go':
+        return dict(found, go_quota=_bound_go(part, found['key'], found['generation']))
     return found
 
 
@@ -318,21 +386,23 @@ def native_current(settings_path, now):
 
 
 def _quota_gate(settings_path, route, now, producer=None):
-    """(`quota_exhausted`, seconds it may still last) on positive evidence only, never headroom: a provider quota-limit
-    error on this pool within PROVIDER_LIMIT_SECONDS (E2); Go, this acquisition's bound meters (one limited or at 100%
-    with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago. ChatGPT: only its limit mark (`chatgpt_limit`),
-    never a reading. Claude: confirmed exhaustion in the native login's bound quota evidence while this fact's login is
-    current, lasting until the reset (`claude_usage.exhaustion_left`). A Claude `producer` (the billing fact's) must
-    still be the current login's, else `billing_unverified`."""
+    """Refuse confirmed exhaustion until reset. A Go or Claude billing producer must still be current; ChatGPT
+    retains its separate limit mark."""
     name = family(route)
-    if name == 'claude':
-        if route.get('pool') != POOLS['claude']:
+    if name in ('claude', 'go'):
+        if route.get('pool') != POOLS[name]:
             return None, None
         found = _account(settings_path, name, now)
         if producer is not None and (found is None or _producer(name, found) != producer):
             return BILLING_UNVERIFIED, None  # the fact's login is no longer the current one: no quota for it
         if found is None:
             return None, None
+        if name == 'go':
+            meters = found['go_quota']
+            left = max((meters[name]['reset_at'] - now for name in GO_WINDOWS
+                        if _go_valid(name, meters.get(name), now) and meters[name]['exhausted']
+                        and meters[name]['reset_at'] > now), default=None)
+            return (EXHAUSTED, left) if left is not None else (None, None)
         bound, left = claude_usage._bound_exhaustion(settings_path, route, now, found['native'])
         if not bound and producer is not None:
             return BILLING_UNVERIFIED, None  # the native login changed after the fact's read: its proof is lost
@@ -340,30 +410,13 @@ def _quota_gate(settings_path, route, now, producer=None):
     if name == 'chatgpt':
         left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None
         return (EXHAUSTED, left) if left else (None, None)
-    found = _account(settings_path, name, now) if name == 'go' else None
-    usage = (found or {}).get('usage')
-    if type(usage) is not dict or route.get('pool') != POOLS['go'] or not any(
-            usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100)
-            for name in GO_METERS):
-        return None, None
-    left = observations.trust_left(found.get('observed_at'), now)
-    return (EXHAUSTED, left) if left is not None else (None, None)
+    return None, None
 
 
 def quota_problem(settings_path, route, now, producer=None):
-    """`quota_exhausted` on positive evidence, or `billing_unverified` when a Claude route's `producer` (the billing
-    fact's) is no longer the current login's; None otherwise. Without a producer the current login is used."""
+    """`quota_exhausted` on positive evidence, or `billing_unverified` when a Go or Claude billing producer is no
+    longer current. None otherwise. Without a producer the current login is used."""
     return _quota_gate(settings_path, route, now, producer)[0]
-
-
-def exhausted_stale(settings_path, route, now):
-    """E1: whether Go's stored meters still show exhaustion but were read too long ago to refuse."""
-    found = _account(settings_path, 'go', now) if family(route) == 'go' else None
-    usage = (found or {}).get('usage')
-    if type(usage) is not dict or not routing._amount(found.get('observed_at')):
-        return False
-    return now - found['observed_at'] > observations.EXHAUSTED_RECHECK_SECONDS and any(
-        usage[name]['reset_at'] > now and (usage[name]['limited'] or usage[name]['percent'] >= 100) for name in GO_METERS)
 
 
 def quota_retry_after(settings_path, route, now):
@@ -388,7 +441,7 @@ def _observe(rows, name, settings_path, command, environ, deadline, observed):
     found = _console(rows)
     observed.append(_go_key(found))
     _go(found, _api(command, PROVIDER, environ, deadline))
-    return observed[0], dict(usage=_usage(found[2], command, environ, deadline))
+    return observed[0], dict(sample=_go_sample(found[0]['value']['key'], deadline))
 
 
 def refresh(settings_path, *, families=FAMILIES, force=False, command=None, environ=None, timeout=TIMEOUT, need=()):
@@ -451,12 +504,18 @@ def _record(settings_path, name, rows, held, command, environ, deadline):
     try:
         key, extra = _observe(rows, name, settings_path, command, environ, deadline, observed)
         _transition(settings_path, name, continuity._observe(key, held))
-        record = dict(key=key, generation=held['observed'], observed_at=int(time.time()), **extra)
+        generation = held['observed']
+        sample = extra.pop('sample', None)
+        record = dict(key=key, generation=generation, observed_at=int(time.time()), **extra)
 
         def publish(part):  # the complete account, only while the state still proves its generation
-            if continuity._proved(part, key) != record['generation']:
+            if continuity._proved(part, key) != generation:
                 raise ValueError('observation_store_invalid')
-            return dict(account=record, failure=None)
+            change = dict(account=record, failure=None)
+            if name == 'go':
+                meters = _merge_go(_bound_go(part, key, generation), sample, record['observed_at'])
+                change['go_quota'] = dict(key=key, generation=generation, meters=meters)
+            return change
         _transition(settings_path, name, publish)
         return None
     except (ReadError, OSError, ValueError) as error:

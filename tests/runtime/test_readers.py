@@ -22,6 +22,10 @@ def iso(at):
     return datetime.fromtimestamp(at, timezone.utc).isoformat()
 
 
+def go_meter(at, percent, status="ok"):
+    return dict(percent=percent, status=status, resetsAt=iso(at))
+
+
 def payload(now, *, idle=False, scoped=False):
     rate = dict(five_hour=dict(utilization=0 if idle else 20, resets_at=None if idle else iso(now + 3600)),
                 seven_day=dict(utilization=30, resets_at=iso(now + 86400)),
@@ -59,6 +63,8 @@ class ReaderTest(unittest.TestCase):
         self.route = dict(route="opencode-claude-subscription:first", provider="claude-agent", model="invented",
                           effort="medium", billing_class="included_subscription",
                           pool="claude-subscription", account="claude-plan")
+        self.go_route = dict(self.route, route="opencode-go-subscription:first", provider="opencode-go",
+                             pool="opencode-go-subscription", account="opencode-go-workspace")
         self.observations = importlib.import_module("runtime.routing_observations")
         self.council = importlib.import_module("runtime.council")
 
@@ -68,21 +74,27 @@ class ReaderTest(unittest.TestCase):
     def refresh(self, **kwargs):
         return self.native.refresh(self.settings, command=self.command, environ=self.environ, **kwargs)
 
-    def opencode(self, family="claude", weekly=100):
+    def opencode(self, family="claude", weekly=100, *, usage=None, key="CREDENTIAL-SENTINEL",
+                 base_url="https://opencode.ai/inference/go/v1", force=False):
         rows = [dict(id="invented-reference", integrationID="claude-agent", active=True,
                      value=dict(type="external", methodID="claude-login"))]
         if family == "go":
             rows = [dict(id="invented-key", integrationID="opencode-go", active=True,
-                         value=dict(type="key", key="CREDENTIAL-SENTINEL")),
-                    dict(id="invented-console", integrationID="opencode", active=True,
-                         value=dict(type="oauth", metadata=dict(accountID="invented-account", orgID="invented-org")))]
-        meters = {name: dict(percent=weekly if name == "weekly" else 20, limited=False,
-                             resetsAt=(self.now + 3600) * 1000) for name in ("rolling", "weekly", "monthly")}
+                         value=dict(type="key", key=key)),
+                     dict(id="invented-console", integrationID="opencode", active=True,
+                          value=dict(type="oauth", metadata=dict(accountID="invented-account", orgID="invented-org")))]
+        if usage is None:
+            usage = {name: go_meter(self.now + 3600, 20) for name in ("rolling", "weekly", "monthly")}
+            usage["weekly"] = go_meter(self.now + 3600, weekly, "rate-limited" if weekly == 100 else "ok")
         self.write(dict(mode="opencode", answers={
             "/api/credential": dict(data=rows),
-            "/api/provider": dict(data=[dict(id="opencode-go", headers={"x-opencode-org-id": "invented-org"})]),
-            "/api/experimental/usage/limits": dict(data=dict(workspace=dict(id="invented-org"), go=meters))}))
-        return self.openc.refresh(self.settings, families=(family,), command=self.command, environ=self.environ)
+            "/api/provider": dict(data=[dict(id="opencode-go", settings=dict(baseURL=base_url),
+                                            headers={"x-opencode-org-id": "invented-org"})])}))
+        with mock.patch.object(self.openc, "_go_request", create=True, return_value=dict(usage=usage)) as request:
+            result = self.openc.refresh(self.settings, families=(family,), command=self.command,
+                                        environ=self.environ, force=force)
+        self.go_requests = [call.args[0] for call in request.call_args_list]
+        return result
 
     def test_idle_meter_keeps_overflow_without_reusing_old_rows(self):
         self.assertEqual(self.refresh()["state"], "stored")
@@ -463,16 +475,124 @@ class ReaderTest(unittest.TestCase):
                                      now=self.now)
         self.assertEqual([seat["status"] for seat in answer["seats"]], ["quota_exhausted", "ok"])
 
-    def test_go_uses_existing_bound_api_meters_without_storing_a_key(self):
-        self.assertEqual(self.opencode("go")["state"], "stored")
-        route = dict(self.route, route="opencode-go-subscription:first", provider="opencode-go",
-                     pool="opencode-go-subscription", account="opencode-go-workspace")
-        now = int(time.time())
-        self.assertEqual(self.openc.quota_problem(self.settings, route, now), "quota_exhausted")
-        self.assertEqual(self.openc.billing_fact(self.settings, route, now)["paid_crossover"], "unknown")
-        self.assertEqual(self.trace.read_text().splitlines(),
-                         ["/api/credential", "/api/provider", "/api/experimental/usage/limits"])
+    def test_go_reads_quota_once_with_the_selected_key_and_no_console_usage_call(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go")["state"], "stored")
+            self.assertEqual(self.go_requests, ["CREDENTIAL-SENTINEL"])
+            self.assertEqual(self.opencode("go")["state"], "fresh")
+            self.assertEqual(self.go_requests, [])
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+        self.assertEqual(self.openc.billing_fact(self.settings, self.go_route, self.now)["paid_crossover"], "unknown")
+        self.assertEqual(self.trace.read_text().splitlines(), ["/api/credential", "/api/provider"])
         self.assertNotIn("CREDENTIAL-SENTINEL", "".join(p.read_text() for p in self.settings.parent.glob("*.json")))
+
+    def test_go_partial_meters_pause_until_reset_not_the_old_sixty_second_cutoff(self):
+        reset = self.now + 800
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go", usage={
+                "rolling": dict(status="ok", percent=True, resetsAt=iso(reset)),
+                "weekly": go_meter(reset, 100, "rate-limited"),
+            })["state"], "stored")
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, self.now + 61), 739)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, reset - 1), "quota_exhausted")
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.go_route, reset))
+
+    def test_go_only_newer_valid_meter_evidence_clears_its_own_pause(self):
+        short, long = self.now + 500, self.now + 800
+        limited = {"rolling": go_meter(short, 100, "rate-limited"), "weekly": go_meter(long, 100, "rate-limited")}
+        recovered = {"weekly": go_meter(long, 10)}
+        for seconds, meters, remaining in (
+            (0, limited, 800),
+            (0, recovered, 800),
+            (100, {}, 700),
+            (101, {"weekly": go_meter(self.now, 10)}, 699),
+            (101, {"weekly": go_meter(long, 100, "ok")}, 699),
+            (102, recovered, 398),
+            (103, {"rolling": go_meter(short, 0)}, None),
+        ):
+            now = self.now + seconds
+            with self.subTest(seconds=seconds), mock.patch("time.time", return_value=now):
+                self.assertEqual(self.opencode("go", usage=meters, force=True)["state"], "stored")
+                self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, now), remaining)
+
+    def test_go_does_not_carry_a_pause_across_key_or_billing_fact_changes(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go")
+            first = self.openc.billing_fact(self.settings, self.go_route, self.now)
+            self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
+            self.opencode("go", usage={}, key="NEXT-KEY-SENTINEL", force=True)
+        source = self.observations.LocalSource(self.settings)
+        self.assertIsNotNone(source.billing(self.go_route, self.now))
+        self.assertIsNone(source.quota(self.go_route, self.now))
+        with mock.patch.object(source, "billing", return_value=first):
+            kept, excluded = self.observations.eligible([self.go_route], source, self.now)
+        self.assertEqual(kept, [])
+        self.assertEqual(excluded, [dict(route=self.go_route["route"], reason="billing_unverified")])
+
+    def test_go_override_never_sends_the_selected_key_to_the_usage_reader(self):
+        with mock.patch("time.time", return_value=self.now):
+            result = self.opencode("go", base_url="https://example.invalid/inference/go/v1")
+        self.assertNotEqual(result["state"], "stored")
+        self.assertEqual(self.go_requests, [])
+
+    def test_go_transport_uses_fixed_tls_destination_and_refuses_redirects_or_stale_responses(self):
+        sample = dict(usage=dict(weekly=go_meter(self.now + 600, 100, "rate-limited")))
+        with mock.patch("http.client.HTTPSConnection") as connect:
+            self.assertIsNone(self.openc._go_request("SYNTHETIC-KEY", self.openc.time.monotonic() + 5))
+            connect.assert_not_called()  # Normal test HOME must never reach the network.
+        for code, age, body, expected in (
+            (200, None, json.dumps(sample).encode(), sample),
+            (302, None, b"", None),
+            (200, "60", json.dumps(sample).encode(), None),
+            (200, None, b"x" * 32769, None),
+        ):
+            with self.subTest(code=code, age=age), mock.patch.dict(os.environ, {"VCW_TEST_HOME": ""}), \
+                    mock.patch("http.client.HTTPSConnection") as connect:
+                connection = connect.return_value
+                reply = connection.getresponse.return_value.__enter__.return_value
+                reply.status = code
+                reply.getheader.return_value = age
+                reply.read1.side_effect = [body, b""]
+                self.assertEqual(self.openc._go_request("SYNTHETIC-KEY", self.openc.time.monotonic() + 5), expected)
+                self.assertEqual(connect.call_args.args, ("opencode.ai",))
+                method, path = connection.request.call_args.args
+                self.assertEqual((method, path), ("GET", "/inference/go/v1/usage"))
+                self.assertEqual(connection.request.call_args.kwargs["headers"]["Authorization"],
+                                 "Bearer SYNTHETIC-KEY")
+                connection.request.assert_called_once()
+                connection.close.assert_called_once()
+                if code != 200 or age is not None:
+                    reply.read1.assert_not_called()
+
+    def test_go_pause_survives_a_normal_refresh_with_unavailable_usage(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.opencode("go")["state"], "stored")
+        now = self.now + self.storage.FRESH_SECONDS + 1
+        with mock.patch("time.time", return_value=now):
+            self.assertEqual(self.opencode("go", usage={})["state"], "stored")
+        self.assertEqual(self.go_requests, ["CREDENTIAL-SENTINEL"])
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, now), 3600 - (now - self.now))
+
+    def test_go_entitlement_refusal_is_not_subscription_billing_proof(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go")
+            with mock.patch.object(self.openc, "_go_request", create=True,
+                                   side_effect=self.openc.ReadError("opencode_go_unsupported")):
+                result = self.openc.refresh(self.settings, families=("go",), force=True, command=self.command,
+                                            environ=self.environ)
+        self.assertEqual(result["families"]["go"], "opencode_go_unsupported")
+        self.assertIsNone(self.openc.billing_fact(self.settings, self.go_route, self.now))
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.go_route, self.now))
+
+    def test_go_legacy_console_meters_do_not_prove_key_bound_exhaustion(self):
+        key, generation = "a" * 32, "b" * 32
+        old_meter = dict(limited=True, percent=100, reset_at=self.now + 600)
+        binding = dict(key=key, generation=generation)
+        self.openc._transition(self.settings, "go", lambda part: dict(
+            identity=binding, account=dict(binding, observed_at=self.now,
+                                           usage=dict(rolling=old_meter, weekly=old_meter, monthly=old_meter))))
+        self.assertIsNotNone(self.openc.billing_fact(self.settings, self.go_route, self.now))
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.go_route, self.now))
 
     def test_wrong_go_workspace_does_not_prove_a_connection(self):
         found = (dict(id="key", value=dict(key="secret")), "account", "org")

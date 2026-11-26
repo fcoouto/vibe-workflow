@@ -581,3 +581,24 @@ clears a pause.
 Limit of coverage: the tests use invented fixtures, fake runners and synthetic child processes, all
 in isolated homes. No live quota check, model call or end-to-end failure was run. Other OpenCode and
 Claude Code versions are unverified.
+
+## Go quota evidence
+
+On a normal Go account refresh, keep the existing Console workspace check for billing.
+Replace the Console usage lookup with one HTTPS `GET /inference/go/v1/usage` on `opencode.ai`,
+using only the selected Go key. Require an official Go provider endpoint with no alternate
+authorization header. The reader does not follow redirects, use proxies, retry, or persist the key
+or response. A 401 or 403 cannot prove an included Go route. No usage read runs while the account
+cache is current.
+
+Validate rolling, weekly and monthly meters independently. A `rate-limited` meter with a
+plausible future reset pauses the matching Go connection. An `ok` meter below 100% can clear
+that meter's pause if the request started after the previous observation arrived. Missing,
+malformed, expired or contradictory meters and failed reads do not clear a pause. Account
+changes invalidate the old binding. Legacy Console meters do not prove key-bound quota; the
+next normal refresh can collect new evidence. Go Extra Usage remains outside the quota decision:
+a pause never falls back to workspace credits.
+
+A one-off read on 26 November 2026 returned the three documented meters using the selected
+Go key, without Console OAuth or inference. The router integration is tested with synthetic
+transports; it was not installed or tested against live credentials.
