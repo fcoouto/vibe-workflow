@@ -57,7 +57,7 @@ const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
-  const progress = new WeakMap()
+  const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   const canonical = ctx.location?.project?.canonical
@@ -228,6 +228,24 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
   }
 
+  // A sent write can settle after a preference change. Only its exact visible title can acknowledge it later.
+  async function updateTitle(sessionID, entry, title, cells) {
+    const task = entry.task
+    await ctx.session.update({ sessionID, title })
+    if (sessions.get(sessionID) === entry && entry.task === task) sentTitles.set(task, { title, cells })
+  }
+
+  function reconcileTitle(entry, title) {
+    const task = entry.task, sent = sentTitles.get(task)
+    if (!sent) return
+    sentTitles.delete(task)
+    if (title !== sent.title) return
+    task.cells = Math.max(task.cells, sent.cells)
+    task.fresh = false
+    delete task.resetFrom
+    entry.last = title
+  }
+
   // A spec or plan write. A child's write binds its root; the bind runs on the root's queue so it cannot race the root's
   // own evaluation. `directory` is the folder of the session that wrote, which a relative path resolves against.
   async function route(sessionID, path, admitted) {
@@ -379,14 +397,19 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, still = () => true } = {}) {
     if (!await on()) return
     const entry = sessions.get(sessionID), task = entry?.task
-    if (!task || entry.silenced || task.fresh) return
+    if (!task || entry.silenced || (task.fresh && !sentTitles.has(task))) return
     const info = await read(sessionID)
-    if (await owns(info) !== true || !current(sessionID, admitted) || (whileRunning && !running(info.time)) || !still()) return
+    if (await owns(info) !== true || !current(sessionID, admitted) || sessions.get(sessionID) !== entry ||
+        (whileRunning && !running(info.time)) || !still()) return
     const title = info.title ?? ""
+    reconcileTitle(entry, title)
+    if (task.cells === 5) { await retire(sessionID, entry, admitted); return }
+    if (task.fresh) return
     if (!PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry, admitted); return }
     const next = compose(strip(title) || task.slug, task.cells, waiting)
-    if (next !== title) await ctx.session.update({ sessionID, title: next })
+    if (next !== title) await updateTitle(sessionID, entry, next, task.cells)
     if (!current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
+    sentTitles.delete(task)
     entry.last = next
     await save(sessionID, entry, admitted)
   }
@@ -417,9 +440,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   const nonDoc = (path) => !path.startsWith("docs/")
   const filePath = (path) => typeof path === "string" && !/[\0\\]/.test(path) &&
     path.split("/").every((part) => part && part !== "." && part !== "..")
+  const planVersion = (task) => planVersions.get(task) ?? 0
   const progressState = (task, declared = null, confirmed = new Set()) => ({
     plan: task.plan, declared, confirmed, hints: new Set(), work: false, attempted: 1, queued: false,
-    version: 0, reread: false, reload: false,
+    events: 0, reread: false, reload: false,
   })
 
   function rememberLocal(state, facts) {
@@ -445,37 +469,42 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const wanted = () => milestone(state) > Math.max(task.cells, state.attempted)
     if (state.queued || !live() || (!state.reload && !wanted())) return
     state.queued = true
+    let observed
     enqueue(sessionID, async () => {
       if (!live() || !await on() || !live()) return
+      observed = state.events
       if (state.reload) {
-        const version = state.version
+        const version = planVersion(task)
         state.reload = false
         const paths = await readPlanPaths(task.plan).catch(() => null)
         if (!live()) return
-        if (state.version === version && paths) state.declared = new Set(paths)
+        if (planVersion(task) === version && paths) state.declared = new Set(paths)
       }
       if (!wanted()) return
       state.attempted = milestone(state)
-      const version = state.version
-      const facts = await readFacts({ top: task.top, plan: state.declared ? task.plan : null, localOnly: true, run })
+      const version = planVersion(task)
+      const facts = await readFacts({ top: task.top, localOnly: true, run })
       if (!live() || !validLocal(facts)) return
       const info = await read(sessionID)
       if (await owns(info) !== true || !live()) return
       const title = info.title ?? "", prefix = title.match(PREFIX)?.[0]
       if (!title.startsWith(MARK) || !prefix) return
-      const samePlan = state.version === version && state.declared !== null
-      const cells = cellsFor({ ...facts, declared: samePlan ? facts.declared : [] })
-      if (samePlan) rememberLocal(state, facts)
+      reconcileTitle(entry, title)
+      const declared = planVersion(task) === version && state.declared ? [...state.declared] : []
+      const cells = cellsFor({ ...facts, declared })
       if (cells <= task.cells) return
       const next = compose(strip(title) || task.slug, cells, prefix.endsWith("WAITING · "))
-      if (next !== title) await ctx.session.update({ sessionID, title: next })
+      if (next !== title) await updateTitle(sessionID, entry, next, cells)
       if (!live()) return
+      sentTitles.delete(task)
       task.cells = cells
       entry.last = next
       await save(sessionID, entry, admitted)
     }, admitted).then(() => {
       state.queued = false
-      if (live() && (state.reload || wanted())) scheduleProgress(sessionID, entry, state, admitted)
+      if (observed !== undefined && state.events !== observed && live() && (state.reload || wanted())) {
+        scheduleProgress(sessionID, entry, state, admitted)
+      }
     })
   }
 
@@ -485,18 +514,24 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const top = reals.get(directory) ?? directory
     const source = admit(sessionID)
     const candidate = (entry) => {
-      const task = entry?.task, state = progress.get(task)
-      return task && !entry.silenced && !task.fresh && task.cells < 4 && task.top === top && state?.plan === task.plan
-        ? state : null
+      const task = entry?.task
+      if (!task || entry.silenced || task.cells >= 4 || task.top !== top) return null
+      const planPath = task.plan && relative(top, task.plan)
+      const edited = planPath && files.includes(planPath)
+      const state = progress.get(task)
+      if (!edited && (task.fresh || !state || state.plan !== task.plan)) return null
+      return { task, state, plan: task.plan, planPath, edited }
     }
-    const accept = (root, entry, state, admitted) => {
+    const accept = (root, entry, match, admitted) => {
+      const { task, state, plan, planPath, edited } = match
       if (!current(sessionID, source) || !current(root, admitted) || sessions.get(root) !== entry ||
-          candidate(entry) !== state) return
-      const planPath = state.plan && relative(top, state.plan)
-      if (planPath && files.includes(planPath)) {
-        state.version++
+          entry.task !== task || task.plan !== plan) return
+      if (edited) planVersions.set(task, planVersion(task) + 1)
+      if (!state || task.fresh || progress.get(task) !== state || state.plan !== plan) return
+      state.events++
+      if (edited) {
         state.declared = null
-        state.confirmed.clear()
+        state.confirmed = new Set()
         state.hints.clear()
         state.reload = !state.reread
         state.reread = true
@@ -510,15 +545,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
     const own = sessions.get(sessionID)
     if (own) {
-      const state = candidate(own)
-      if (state) accept(sessionID, own, state, source)
+      const match = candidate(own)
+      if (match) accept(sessionID, own, match, source)
       return
     }
     if (parents.get(sessionID) === null) return
     const candidates = new Map()
     for (const [root, entry] of sessions) {
-      const state = candidate(entry)
-      if (state) candidates.set(root, [entry, state, admit(root, source.revision)])
+      const match = candidate(entry)
+      if (match) candidates.set(root, [entry, match, admit(root, source.revision)])
     }
     if (candidates.size) void rootOf(sessionID).then((root) => {
       const match = candidates.get(root)
@@ -537,13 +572,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       await load(sessionID, admitted)
     }
     const entry = sessions.get(sessionID), task = entry?.task
-    if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
+    if (!task || entry.silenced || (!ended && task.fresh && !sentTitles.has(task)) || !await on()) return
     if (fromChild) {
       const now = await activity(sessionID, { ended: fromChild, withSelf: true })
       if (now.children || now.self) return
     }
-    const state = progress.get(task), version = state?.version
-    let cells = task.cells, diag = entry.diag, facts
+    const state = progress.get(task), version = planVersion(task)
+    let diag = entry.diag, facts, proof
     const updates = {}
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
@@ -558,15 +593,19 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         pr: PR_STATES.includes(facts.pr?.state) ? facts.pr.state : null, declared: facts.declared.length,
         done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
-      cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
+      proof = { ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }
     }
     const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
     const info = await read(sessionID)
     if ((fromChild && busy.self) || await owns(info) !== true || !current(sessionID, admitted) ||
         sessions.get(sessionID) !== entry || entry.task !== task) return
     const title = info.title ?? ""
+    reconcileTitle(entry, title)
+    if (!ended && task.fresh) return
+    const samePlan = planVersion(task) === version
+    const cells = proof ? Math.max(task.cells, cellsFor({ ...proof, declared: samePlan ? proof.declared : [] })) : task.cells
     const reset = task.fresh && typeof task.resetFrom === "string"
-    const renamed = reset && title !== task.resetFrom && Boolean(title) && !DEFAULT_TITLE.test(title)
+    const renamed = reset && title !== task.resetFrom
     if (renamed || (entry.last !== null && !PREFIX.test(title))) {
       if (cells === 5) await retire(sessionID, entry, admitted)
       else {
@@ -580,14 +619,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || reset ? task.slug : kept
     const next = compose(topic, cells, ended && cells < 5 && !busy.children && !hasShell(sessionID))
-    if (next !== title) await ctx.session.update({ sessionID, title: next })
+    if (next !== title) await updateTitle(sessionID, entry, next, cells)
     if (!current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
+    sentTitles.delete(task)
     if (cells === 5) { await retire(sessionID, entry, admitted); return }
     Object.assign(task, updates, { cells, fresh: false })
     entry.diag = diag
     delete task.resetFrom
     entry.last = next
-    if (facts && cells < 4 && progress.get(task) === state && state?.version === version) {
+    if (facts && cells < 4 && progress.get(task) === state && samePlan && planVersion(task) === version) {
       const nextState = state ?? progressState(task)
       rememberLocal(nextState, facts)
       progress.set(task, nextState)

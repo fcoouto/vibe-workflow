@@ -122,6 +122,14 @@ test("local-only facts read a pushed checkout, declared paths and untracked file
   assert.deepEqual(calls, [])
 })
 
+test("Git facts keep non-ASCII and newline filenames under docs", async (t) => {
+  const { top, main } = setup(t)
+  commit(top, "docs/café.md")
+  writeFileSync(join(top, "docs/first\nsecond.md"), "untracked\n")
+  const got = await readFacts({ top, fallback: main, localOnly: true })
+  assert.deepEqual(got.changed.sort(), ["docs/café.md", "docs/first\nsecond.md"])
+})
+
 const dated = { state: "MERGED", title: "Add x", createdAt: "2026-11-25T10:00:00Z" }
 const at = Date.parse(dated.createdAt)
 

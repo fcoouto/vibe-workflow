@@ -43,7 +43,7 @@ export async function defaultRun(command, args, { cwd, timeout }) {
   return stdout
 }
 
-const lines = (text) => text.split("\n").filter(Boolean)
+const paths = (text) => text.split("\0").filter(Boolean)
 
 // A short code for a failed read: never the message, which can carry paths or remote URLs.
 const codeOf = (error) => error?.killed ? "timeout"
@@ -81,16 +81,22 @@ export async function readFacts({ top, plan, remembered = null, seen = null, bou
   const failed = (step) => (error) => { facts.errors.push({ step, code: codeOf(error) }) }
   if (facts.exists) {
     // A failed read yields no branch header, so it never reads as detached.
-    const status = await git(top, "status", "--porcelain=v2", "--branch", "-uall").catch((error) => { failed("status")(error); return "" })
-    const header = (name) => status.match(new RegExp(`^# branch\\.${name} (.+)$`, "m"))?.[1] ?? null
-    const branch = header("head")
+    const status = paths(await git(top, "status", "--porcelain=v2", "--branch", "-z", "-uall")
+      .catch((error) => { failed("status")(error); return "" }))
+    const untracked = []
+    let branch = null
+    for (let i = 0; i < status.length; i++) {
+      const record = status[i]
+      if (record.startsWith("2 ")) i++ // A rename's old path is its own record, not a header or untracked path.
+      else if (record.startsWith("# branch.head ")) branch = record.slice("# branch.head ".length)
+      else if (record.startsWith("# branch.upstream ")) facts.upstream = true
+      else if (record.startsWith("? ")) untracked.push(record.slice(2))
+    }
     facts.detached = branch === "(detached)"
     facts.branch = branch === "(detached)" ? null : branch
-    facts.upstream = header("upstream") !== null
     facts.base = (await git(top, "rev-parse", "--abbrev-ref", "origin/HEAD").catch(() => "")).trim() || "origin/main"
     try {
-      const diff = lines(await git(top, "diff", "--name-only", "--merge-base", facts.base))
-      const untracked = lines(status).filter((line) => line.startsWith("? ")).map((line) => line.slice(2))
+      const diff = paths(await git(top, "diff", "--name-only", "-z", "--merge-base", facts.base))
       facts.changed = [...new Set([...diff, ...untracked])]
     } catch (error) { failed("diff")(error) }
     if (plan) facts.declared = await readPlanPaths(resolve(top, plan)).catch((error) => { failed("plan")(error); return [] })
