@@ -529,31 +529,36 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(kept, [])
         self.assertEqual(excluded, [dict(route=self.go_route["route"], reason="billing_unverified")])
 
-    def test_go_override_never_sends_the_selected_key_to_the_usage_reader(self):
+    def test_go_override_skips_quota_not_billing_and_keeps_prior_evidence(self):
         with mock.patch("time.time", return_value=self.now):
-            result = self.opencode("go", base_url="https://example.invalid/inference/go/v1")
-        self.assertNotEqual(result["state"], "stored")
-        self.assertEqual(self.go_requests, [])
+            self.assertEqual(self.opencode("go")["state"], "stored")
+            first = self.openc.billing_fact(self.settings, self.go_route, self.now)
+            self.assertEqual(self.opencode("go", base_url="https://example.invalid/inference/go/v1",
+                                           force=True)["state"], "stored")
+            self.assertEqual(self.go_requests, [])
+            self.assertEqual(self.openc.billing_fact(self.settings, self.go_route, self.now), first)
+            self.assertIsNone(self.openc.quota_problem(self.settings, self.go_route, self.now))
+            self.assertEqual(self.opencode("go", usage={}, force=True)["state"], "stored")
+            self.assertEqual(self.openc.quota_problem(self.settings, self.go_route, self.now), "quota_exhausted")
 
-    def test_go_transport_uses_fixed_tls_destination_and_refuses_redirects_or_stale_responses(self):
-        sample = dict(usage=dict(weekly=go_meter(self.now + 600, 100, "rate-limited")))
-        with mock.patch("http.client.HTTPSConnection") as connect:
-            self.assertIsNone(self.openc._go_request("SYNTHETIC-KEY", self.openc.time.monotonic() + 5))
-            connect.assert_not_called()  # Normal test HOME must never reach the network.
-        for code, age, body, expected in (
-            (200, None, json.dumps(sample).encode(), sample),
-            (302, None, b"", None),
-            (200, "60", json.dumps(sample).encode(), None),
-            (200, None, b"x" * 32769, None),
+    def test_go_transport_uses_fixed_tls_destination_and_rejects_untrusted_responses(self):
+        body = json.dumps(dict(usage=dict(weekly=go_meter(self.now + 600, 100, "rate-limited")))).encode()
+        for code, age, length, data, expected in (
+            (200, None, 0, body, body),
+            (302, None, 0, b"", None),
+            (403, "60", 0, b"", None),
+            (200, "60", 0, body, None),
+            (200, None, 1, body, None),
+            (200, None, 0, b"x" * 32769, None),
         ):
-            with self.subTest(code=code, age=age), mock.patch.dict(os.environ, {"VCW_TEST_HOME": ""}), \
-                    mock.patch("http.client.HTTPSConnection") as connect:
+            with self.subTest(code=code, age=age, length=length), mock.patch("http.client.HTTPSConnection") as connect:
                 connection = connect.return_value
                 reply = connection.getresponse.return_value.__enter__.return_value
                 reply.status = code
+                reply.length = length
                 reply.getheader.return_value = age
-                reply.read1.side_effect = [body, b""]
-                self.assertEqual(self.openc._go_request("SYNTHETIC-KEY", self.openc.time.monotonic() + 5), expected)
+                reply.read1.side_effect = [data, b""]
+                self.assertEqual(self.openc._go_http("SYNTHETIC-KEY", 5), expected)
                 self.assertEqual(connect.call_args.args, ("opencode.ai",))
                 method, path = connection.request.call_args.args
                 self.assertEqual((method, path), ("GET", "/inference/go/v1/usage"))
@@ -563,6 +568,38 @@ class ReaderTest(unittest.TestCase):
                 connection.close.assert_called_once()
                 if code != 200 or age is not None:
                     reply.read1.assert_not_called()
+
+    def test_go_request_keeps_the_key_off_argv_and_enforces_a_child_deadline(self):
+        with mock.patch.object(self.openc.subprocess, "run") as run:
+            self.assertIsNone(self.openc._go_request("SYNTHETIC-KEY", time.monotonic() + 5))
+            run.assert_not_called()  # The test HOME disables the real request.
+        with mock.patch.dict(os.environ, {"VCW_TEST_HOME": ""}), \
+                mock.patch("http.client.HTTPSConnection", side_effect=AssertionError("network must run in child")), \
+                mock.patch.object(self.openc.subprocess, "run", side_effect=subprocess.TimeoutExpired([], 5)) as run:
+            self.assertIsNone(self.openc._go_request("SYNTHETIC-KEY", time.monotonic() + 5))
+        argv, options = run.call_args.args[0], run.call_args.kwargs
+        self.assertNotIn("SYNTHETIC-KEY", " ".join(argv))
+        self.assertEqual(options["input"], b"SYNTHETIC-KEY")
+        self.assertTrue(0 < options["timeout"] <= 5)
+        run.assert_called_once()
+
+    def test_go_clock_rollback_does_not_delete_known_quota(self):
+        reset = self.now + 800
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"weekly": go_meter(reset, 100, "rate-limited")})
+        with mock.patch("time.time", return_value=self.now - 60):
+            self.opencode("go", force=True, usage={})
+        self.assertIsNone(self.openc.quota_retry_after(self.settings, self.go_route, self.now - 60))
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, self.now), 800)
+
+    def test_go_exhaustion_wins_a_same_second_tie_but_recovery_does_not(self):
+        reset = self.now + 800
+        with mock.patch("time.time", return_value=self.now):
+            self.opencode("go", usage={"weekly": go_meter(reset, 20)})
+            self.opencode("go", force=True, usage={"weekly": go_meter(reset, 100, "rate-limited")})
+            self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, self.now), 800)
+            self.opencode("go", force=True, usage={"weekly": go_meter(reset, 20)})
+            self.assertEqual(self.openc.quota_retry_after(self.settings, self.go_route, self.now), 800)
 
     def test_go_pause_survives_a_normal_refresh_with_unavailable_usage(self):
         with mock.patch("time.time", return_value=self.now):

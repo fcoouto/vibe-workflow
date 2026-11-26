@@ -586,14 +586,16 @@ Claude Code versions are unverified.
 
 On a normal Go account refresh, keep the existing Console workspace check for billing.
 Replace the Console usage lookup with one HTTPS `GET /inference/go/v1/usage` on `opencode.ai`,
-using only the selected Go key. Require an official Go provider endpoint with no alternate
-authorization header. The reader does not follow redirects, use proxies, retry, or persist the key
-or response. A 401 or 403 cannot prove an included Go route. No usage read runs while the account
-cache is current.
+using only the selected Go key. Skip quota reads and decisions for an unverified provider endpoint
+or an alternate authorization header without changing the existing billing proof. The isolated
+reader uses the refresh deadline, receives the key on stdin, and does not follow redirects, use
+proxies, retry, or persist the key or response. An uncached 401 or 403 cannot prove an included Go
+route. No usage read runs while the account cache is current.
 
 Validate rolling, weekly and monthly meters independently. A `rate-limited` meter with a
-plausible future reset pauses the matching Go connection. An `ok` meter below 100% can clear
-that meter's pause if the request started after the previous observation arrived. Missing,
+plausible future reset pauses the matching Go connection, including when it ties a healthy
+observation in the same second. An `ok` meter below 100% can clear that meter's pause only if
+the request started after the previous observation arrived. Missing,
 malformed, expired or contradictory meters and failed reads do not clear a pause. Account
 changes invalidate the old binding. Legacy Console meters do not prove key-bound quota; the
 next normal refresh can collect new evidence. Go Extra Usage remains outside the quota decision:

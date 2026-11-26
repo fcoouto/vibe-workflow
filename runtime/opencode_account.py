@@ -34,6 +34,7 @@ import re
 import selectors
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -51,6 +52,7 @@ GO_HOST = 'opencode.ai'
 GO_USAGE = '/inference/go/v1/usage'
 GO_WINDOWS = dict(rolling=5 * 3600, weekly=7 * 86400, monthly=31 * 86400)
 GO_MAX_BODY = 32 << 10
+GO_REFUSED = 3  # The private HTTPS child returns this only for an uncached 401/403.
 EXHAUSTED = 'quota_exhausted'
 BILLING_UNVERIFIED = 'billing_unverified'
 PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
@@ -203,7 +205,7 @@ def _go_key(found):
 
 
 def _go(found, answer):
-    """Verify the Go provider still uses the attributed Console workspace and the official Go endpoint."""
+    """Verify Console workspace attribution; report whether this provider supports the key-bound quota read."""
     _key, _account, org = found
     listed = answer.get('data') if type(answer) is dict else None
     entries = [item for item in listed if type(item) is dict and item.get('id') == 'opencode-go'] \
@@ -216,44 +218,72 @@ def _go(found, answer):
         raise ReadError('opencode_go_workspace_mismatch')
     settings = entries[0].get('settings')
     url = settings.get('baseURL') if type(settings) is dict else None
-    if not routing._text(url) or not re.fullmatch(r'https://opencode\.ai/inference/go(?:/[A-Za-z0-9_-]+)*/?', url) \
-            or any(header.lower() in ('authorization', 'api-key', 'x-api-key') for header in headers):
-        raise ReadError('opencode_go_unsupported')
+    return routing._text(url) and bool(re.fullmatch(r'https://opencode\.ai/inference/go(?:/[A-Za-z0-9_-]+)*/?', url)) \
+        and not any(header.lower() in ('authorization', 'api-key', 'x-api-key') for header in headers)
 
 
-def _go_request(key, deadline):
-    """One bounded, fixed-host TLS GET with no proxy or redirect. Only the selected Go key is sent."""
-    left = deadline - time.monotonic()
-    if left <= 0 or os.environ.get('VCW_TEST_HOME') or not key.isascii() or any(c.isspace() for c in key):
-        return None
+def _go_http(key, timeout):
+    """One fixed-host TLS GET; run only inside the disposable quota child."""
     try:
-        with closing(http.client.HTTPSConnection(GO_HOST, timeout=left)) as conn:
+        with closing(http.client.HTTPSConnection(GO_HOST, timeout=timeout)) as conn:
             conn.request('GET', GO_USAGE, headers={'Authorization': 'Bearer ' + key, 'Accept': 'application/json',
                                                   'Cache-Control': 'no-cache, no-store'})
             with conn.getresponse() as response:
-                if time.monotonic() >= deadline:
+                if response.getheader('Age') not in (None, '0'):
                     return None
                 if response.status in (401, 403):
                     raise ReadError('opencode_go_unsupported')
-                if response.status != 200 or response.getheader('Age') not in (None, '0'):
+                if response.status != 200:
                     return None
                 raw = bytearray()
                 while len(raw) <= GO_MAX_BODY:
                     chunk = response.read1(GO_MAX_BODY + 1 - len(raw))
-                    if time.monotonic() >= deadline:
-                        return None
                     if not chunk:
-                        return json.loads(raw)
+                        return bytes(raw) if response.length in (None, 0) else None
                     raw.extend(chunk)
-    except (OSError, ValueError, RecursionError, http.client.HTTPException):
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     return None
 
 
-def _go_valid(name, entry, now):
+def _go_child(timeout):
+    key = sys.stdin.buffer.read(routing.MAX_ID + 1).decode('ascii')
+    try:
+        body = _go_http(key, timeout)
+    except ReadError:
+        return GO_REFUSED
+    if body is not None:
+        sys.stdout.buffer.write(body)
+    return 0
+
+
+def _go_request(key, deadline):
+    """Use stdin for the key and bound the entire HTTPS exchange, including DNS, by the refresh deadline."""
+    left = deadline - time.monotonic()
+    if left <= 0 or os.environ.get('VCW_TEST_HOME') or not routing._text(key) or not key.isascii() \
+            or any(c.isspace() for c in key):
+        return None
+    boot = 'import sys; sys.path.insert(0, sys.argv[1]); from runtime.opencode_account import _go_child; ' \
+           'sys.exit(_go_child(float(sys.argv[2])))'
+    try:
+        reply = subprocess.run([sys.executable, '-I', '-B', '-c', boot, str(Path(__file__).resolve().parents[1]),
+                                str(left)], input=key.encode('ascii'), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               env=child_env(os.environ), cwd='/', timeout=left)
+        if time.monotonic() >= deadline:
+            return None
+        if reply.returncode == GO_REFUSED:
+            raise ReadError('opencode_go_unsupported')
+        if reply.returncode == 0 and 0 < len(reply.stdout) <= GO_MAX_BODY:
+            return json.loads(reply.stdout)
+    except (OSError, ValueError, RecursionError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _go_valid(name, entry):
     return type(entry) is dict and set(entry) == {'exhausted', 'reset_at', 'observed_at'} \
         and type(entry['exhausted']) is bool and routing._amount(entry['reset_at']) \
-        and routing._amount(entry['observed_at']) and entry['observed_at'] <= now \
+        and routing._amount(entry['observed_at']) \
         and 0 < entry['reset_at'] - entry['observed_at'] <= GO_WINDOWS[name] + storage.CLOCK_MARGIN
 
 
@@ -271,7 +301,7 @@ def _go_meter(name, meter, observed_at):
         entry = dict(exhausted=status == 'rate-limited', reset_at=int(stamp.timestamp()), observed_at=observed_at)
     except (ValueError, OverflowError, OSError):
         return None
-    return entry if _go_valid(name, entry, observed_at) else None
+    return entry if _go_valid(name, entry) else None
 
 
 def _go_sample(key, deadline):
@@ -293,11 +323,13 @@ def _bound_go(part, key, generation):
 
 
 def _merge_go(previous, sample, now):
-    """Retain each known meter unless a provably later read supplies a valid replacement."""
+    """Retain known meters across clock rollback; exhaustion wins a same-second tie, recovery must be newer."""
     started, meters = sample
-    found = {name: previous[name] for name in GO_WINDOWS if _go_valid(name, previous.get(name), now)}
+    found = {name: previous[name] for name in GO_WINDOWS if _go_valid(name, previous.get(name))}
     for name, entry in meters.items():
-        if _go_valid(name, entry, now) and (name not in found or started > found[name]['observed_at']):
+        old = found.get(name)
+        if entry['observed_at'] <= now and (old is None or started > old['observed_at']
+                or started == old['observed_at'] and entry['exhausted'] and not old['exhausted']):
             found[name] = entry
     return found
 
@@ -337,7 +369,8 @@ def _account(settings_path, family, now):
     if family == 'claude' and (native is None or found.get('native') != _native(native)):
         return None
     if family == 'go':
-        return dict(found, go_quota=_bound_go(part, found['key'], found['generation']))
+        return dict(found, go_quota=_bound_go(part, found['key'], found['generation'])
+                    if found.get('go_usage') is True else {})
     return found
 
 
@@ -400,8 +433,8 @@ def _quota_gate(settings_path, route, now, producer=None):
         if name == 'go':
             meters = found['go_quota']
             left = max((meters[name]['reset_at'] - now for name in GO_WINDOWS
-                        if _go_valid(name, meters.get(name), now) and meters[name]['exhausted']
-                        and meters[name]['reset_at'] > now), default=None)
+                        if _go_valid(name, meters.get(name)) and meters[name]['exhausted']
+                        and meters[name]['observed_at'] <= now < meters[name]['reset_at']), default=None)
             return (EXHAUSTED, left) if left is not None else (None, None)
         bound, left = claude_usage._bound_exhaustion(settings_path, route, now, found['native'])
         if not bound and producer is not None:
@@ -440,8 +473,9 @@ def _observe(rows, name, settings_path, command, environ, deadline, observed):
         return _chatgpt(rows), {}
     found = _console(rows)
     observed.append(_go_key(found))
-    _go(found, _api(command, PROVIDER, environ, deadline))
-    return observed[0], dict(sample=_go_sample(found[0]['value']['key'], deadline))
+    supported = _go(found, _api(command, PROVIDER, environ, deadline))
+    return observed[0], dict(go_usage=supported, sample=_go_sample(found[0]['value']['key'], deadline)
+                             if supported else None)
 
 
 def refresh(settings_path, *, families=FAMILIES, force=False, command=None, environ=None, timeout=TIMEOUT, need=()):
@@ -512,7 +546,7 @@ def _record(settings_path, name, rows, held, command, environ, deadline):
             if continuity._proved(part, key) != generation:
                 raise ValueError('observation_store_invalid')
             change = dict(account=record, failure=None)
-            if name == 'go':
+            if name == 'go' and sample is not None:
                 meters = _merge_go(_bound_go(part, key, generation), sample, record['observed_at'])
                 change['go_quota'] = dict(key=key, generation=generation, meters=meters)
             return change
