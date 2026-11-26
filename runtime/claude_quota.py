@@ -89,9 +89,14 @@ def covers(meter_id, model, models):
     return kind == 'family' and token == _family(resolved)
 
 
+def _instant(at):
+    if type(at) is int:
+        return routing._amount(at)
+    return type(at) is float and math.isfinite(at) and at >= 0
+
+
 def _times(started, received):
-    return all(type(at) in (int, float) and math.isfinite(at) and at >= 0 for at in (started, received)) \
-        and started <= received
+    return _instant(started) and _instant(received) and started <= received
 
 
 def _reading(item, value):
@@ -99,7 +104,10 @@ def _reading(item, value):
     usage = _usage()
     if type(item) is not dict:
         raise usage.ReadError('claude_usage_invalid')
-    percent = usage._percent(item.get(value))
+    raw = item.get(value)
+    if type(raw) is int and not 0 <= raw <= 100:
+        raise usage.ReadError('claude_usage_invalid')  # before the validator's float conversion
+    percent = usage._percent(raw)
     if percent == 0 and 'resets_at' in item and item['resets_at'] is None:
         return percent, None
     return percent, usage._time(item.get('resets_at'))
@@ -118,6 +126,14 @@ def _agree(first, second):
     if first >= 100 or second >= 100:
         return first == second
     return abs(first - second) <= 1
+
+
+def _settled(readings):
+    """`(percent, reset)` when every reading of one window names one reset and all percentages agree, else None."""
+    percents = [percent for percent, _ in readings]
+    if len({reset for _, reset in readings}) != 1 or None in percents or not _agree(min(percents), max(percents)):
+        return None
+    return max(percents), readings[0][1]
 
 
 def _bounded(reset, received, length):
@@ -139,15 +155,16 @@ def evidence(use, models, *, started, received):
     catalog = _catalog(models)
     incomplete = any(usage._meter_like(rate[key]) for key in set(rate) - usage.KNOWN_RATE) \
         or any(rate.get(key) is not None for key in usage.SCOPED_METERS + usage.UNKNOWN_METERS)
-    windows, broken = {}, set()
+    windows, broken, claims = {}, set(), {}
     for key, (window, _) in storage.RATE_WINDOWS.items():
         if rate.get(key) is None:
             continue
         try:
             windows[window] = _reading(rate[key], 'utilization')
+            claims[window] = [windows[window]]
         except usage.ReadError:
             broken.add(window)
-    named, conflicts, listed = [], set(), []
+    listed = []
     for item in rate['limits']:
         scope = item.get('scope') if type(item) is dict else None
         kind = item.get('kind') if type(item) is dict else None
@@ -160,11 +177,11 @@ def evidence(use, models, *, started, received):
             hits = [window for window, (_, at) in windows.items() if at == reset]
             if len(hits) != 1:
                 incomplete = True
-            elif percent is None or not _agree(windows[hits[0]][0], percent):
-                conflicts.add(hits[0])
+            else:
+                claims[hits[0]].append((percent, reset))
         elif type(item) is dict and kind == 'weekly_all' and scope is None:
             try:
-                named.append(_reading(item, 'percent'))
+                claims.setdefault('7d', []).append(_reading(item, 'percent'))
             except usage.ReadError:
                 broken.add('7d')
         elif type(item) is dict and kind == 'weekly_scoped' and type(scope) is dict \
@@ -173,13 +190,7 @@ def evidence(use, models, *, started, received):
             listed.append((model.get('display_name') if type(model) is dict else None, item, 'percent'))
         else:
             incomplete = True
-    seven = named + ([windows['7d']] if '7d' in windows else [])
-    if '7d' in broken or len({reset for _, reset in seven}) > 1 \
-            or any(not _agree(first, second) for first, _ in seven for second, _ in seven):
-        conflicts.add('7d')
-    if seven:
-        windows['7d'] = max(percent for percent, _ in seven), seven[0][1]
-    if rate.get('model_scoped') is not None:
+    if 'model_scoped' in rate:
         if type(rate['model_scoped']) is not list:
             incomplete = True
         else:
@@ -212,8 +223,9 @@ def evidence(use, models, *, started, received):
             incomplete = True
             continue
         meters[meter] = dict(exhausted=max(percents) >= 100, reset_at=resets.pop())
-    for window, (percent, reset) in windows.items():
-        if reset is not None and window not in conflicts and _bounded(reset, received, LENGTHS[window]):
-            meters[window] = dict(exhausted=percent >= 100, reset_at=reset)
+    for window, readings in claims.items():
+        settled = None if window in broken else _settled(readings)
+        if settled and settled[1] is not None and _bounded(settled[1], received, LENGTHS[window]):
+            meters[window] = dict(exhausted=settled[0] >= 100, reset_at=settled[1])
     return dict(earliest=max(0, math.floor(started) - usage.CACHE_CEILING), latest=math.ceil(received),
                 meters=meters, scopes_complete=not incomplete)

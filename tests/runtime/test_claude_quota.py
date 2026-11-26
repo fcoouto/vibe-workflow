@@ -245,6 +245,50 @@ class ClaudeQuotaTest(unittest.TestCase):
         self.assertEqual(both['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
         self.assertFalse(both['scopes_complete'])
 
+    def test_legacy_readings_must_agree_with_each_other(self):
+        conflicting = self.evidence(usage(five=window(40, stamp(NOW + 3600)),
+                                          limits=[legacy_row(39.1, stamp(NOW + 3600)),
+                                                  legacy_row(40.9, stamp(NOW + 3600))]))
+        self.assertNotIn('5h', conflicting['meters'])
+        self.assertTrue(conflicting['scopes_complete'])
+        named = self.evidence(usage(seven=window(40, stamp(NOW + 3600)),
+                                    limits=[weekly_all(39.1, stamp(NOW + 3600)), legacy_row(40.9, stamp(NOW + 3600))]))
+        self.assertNotIn('7d', named['meters'])
+        self.assertTrue(named['scopes_complete'])
+        agreeing = self.evidence(usage(five=window(40, stamp(NOW + 3600)),
+                                       limits=[legacy_row(39.5, stamp(NOW + 3600)),
+                                               legacy_row(40.5, stamp(NOW + 3600))]))
+        self.assertEqual(agreeing['meters']['5h'], {'exhausted': False, 'reset_at': NOW + 3600})
+
+    def test_explicit_null_scoped_inventory_is_incomplete(self):
+        null = usage(seven=window(20, stamp(NOW + 3600)))
+        null['rate_limits']['model_scoped'] = None
+        evidence = self.evidence(null)
+        self.assertEqual(evidence['meters']['7d'], {'exhausted': False, 'reset_at': NOW + 3600})
+        self.assertFalse(evidence['scopes_complete'])
+        absent = usage(seven=window(20, stamp(NOW + 3600)))
+        del absent['rate_limits']['model_scoped']
+        self.assertTrue(self.evidence(absent)['scopes_complete'])
+
+    def test_oversized_numbers_never_escape_the_parser(self):
+        huge = 10 ** 400
+        for started, received in ((huge, huge), (NOW, huge), (huge, huge + 1)):
+            with self.subTest(started_huge=started == huge, received_huge=received == huge):
+                self.assertIsNone(self.evidence(usage(), started=started, received=received))
+        for percent in (huge, -huge):
+            with self.subTest(positive=percent > 0):
+                seven = self.evidence(usage(seven=dict(utilization=percent, resets_at=stamp(NOW + 3600))))
+                self.assertNotIn('7d', seven['meters'])
+                named = self.evidence(usage(limits=[weekly_all(percent, stamp(NOW + 3600))]))
+                self.assertNotIn('7d', named['meters'])
+                legacy = self.evidence(usage(five=window(20, stamp(NOW + 3600)),
+                                             limits=[legacy_row(percent, stamp(NOW + 3600))]))
+                self.assertNotIn('5h', legacy['meters'])
+                self.assertFalse(legacy['scopes_complete'])
+                listed = self.evidence(usage(model_scoped=[scoped('Claude Example', percent, stamp(NOW + 3600))]))
+                self.assertNotIn('family:example', listed['meters'])
+                self.assertFalse(listed['scopes_complete'])
+
     def test_named_unknown_kind_is_not_attributed(self):
         limit = dict(kind='monthly', scope=None, percent=90, resets_at=stamp(NOW + 3600))
         evidence = self.evidence(usage(five=window(20, stamp(NOW + 3600)), limits=[limit]))
