@@ -181,6 +181,24 @@ class ClaudeQuotaTest(unittest.TestCase):
         self.assertNotIn('5h', evidence['meters'])
         self.assertTrue(evidence['scopes_complete'])
 
+    def test_named_raw_rows_cannot_widen_an_unproved_scope(self):
+        reset = stamp(NOW + 3600)
+        missing = weekly_all(100, reset)
+        del missing['scope']
+        extra = weekly_scoped('Claude Example', 100, reset)
+        extra['scope']['region'] = 'invented'
+        sibling = weekly_scoped('Claude Other', 100, reset)
+        sibling['scope']['model']['description'] = 'incidental'
+        for row in (missing, extra):
+            with self.subTest(row=row):
+                sample = self.evidence(usage(limits=[row, sibling]))
+                record = self.quota.merge({}, sample, now=NOW + 1)
+                self.assertIsNone(self.quota.remaining(record, 'example', MODELS, now=NOW + 1))
+                self.assertEqual(self.quota.remaining(record, 'other', MODELS, now=NOW + 1), 3599)
+                self.assertFalse(sample['scopes_complete'])
+        legacy = dict(percent=20, resets_at=reset)
+        self.assertTrue(self.evidence(usage(five=window(20, reset), limits=[legacy]))['scopes_complete'])
+
     def test_named_weekly_reset_must_match_the_whole_second(self):
         boundary = self.evidence(usage(seven=window(50, stamp(NOW + 3600, '.999')),
                                        limits=[weekly_all(50, stamp(NOW + 3601, '.001'))]))
@@ -429,6 +447,30 @@ class ClaudeQuotaRecordTest(unittest.TestCase):
         healthy = self.quota.merge({}, self.sample(self.mark(False), NOW + 140, NOW + 200), now=self.now)
         late = self.quota.merge(healthy, self.sample(self.mark(True), NOW + 40, NOW + 100), now=self.now)
         self.assertIsNone(self.left(late, self.now))
+
+    def test_short_recovery_reset_does_not_let_a_cached_positive_recreate_a_pause(self):
+        recovery = self.sample(self.mark(False, reset=NOW + 62), NOW + 1, NOW + 61)
+        for commit in (NOW + 61, NOW + 62):
+            with self.subTest(commit=commit):
+                healthy = self.quota.merge(self.marked, recovery, now=commit)
+                late = self.sample(self.mark(True), NOW + 50, NOW + 111)
+                merged = self.quota.merge(healthy, late, now=NOW + 111)
+                self.assertIsNone(self.left(merged, NOW + 111))
+                newer = self.sample(self.mark(True), NOW + 62, NOW + 122)
+                self.assertEqual(self.left(self.quota.merge(merged, newer, now=self.now), self.now),
+                                 self.reset - self.now)
+                self.assertFalse(self.quota.merge(healthy, None, now=NOW + 8 * 86400)['meters'])
+
+    def test_oversized_persisted_scope_evidence_is_not_applied_or_carried_forward(self):
+        entry = self.marked['meters']['family:example']
+        scopes = {'family:example': entry, **{'model:m%d' % n: entry for n in range(8)}}
+        for meters, inventory in ((scopes, None), ({'family:example': entry},
+                                   dict(scopes=list(scopes), earliest=NOW - 60, latest=NOW))):
+            with self.subTest(meters=len(meters)):
+                record = dict(meters=dict(meters, **{'7d': dict(entry, reset_at=NOW + 300)}), inventory=inventory)
+                self.assertEqual(self.left(record, self.now), 100)
+                self.assertEqual(self.quota.merge(record, None, now=self.now),
+                                 dict(meters={'7d': record['meters']['7d']}, inventory=None))
 
     def test_incomplete_samples_clear_a_mark_only_through_their_own_meter(self):
         incomplete = self.sample({}, NOW + 101, NOW + 161)

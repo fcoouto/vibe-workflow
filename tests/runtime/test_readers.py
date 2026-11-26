@@ -1,10 +1,12 @@
 """Reader extraction must preserve identity, quiet metadata and refuse-only meters."""
 from datetime import datetime, timezone
 import faulthandler
+from contextlib import contextmanager
 import importlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -626,6 +628,7 @@ class ReaderTest(unittest.TestCase):
             json.dumps(dict(version=2, accounts={})), json.dumps(dict(version=1)),
             json.dumps(dict(version=1, accounts=[])), json.dumps(dict(version=1, accounts={"bad": self.now})),
             json.dumps(dict(version=1, accounts={live: "x"})), json.dumps(dict(version=1, accounts={live: True})),
+            json.dumps(dict(version=1, accounts={live: -1})), json.dumps(dict(version=1, accounts={live: 10**80})),
             json.dumps(dict(version=1, accounts={live: self.now}, key=current)),
             json.dumps(dict(version=1, accounts={f"{number:032x}": self.now for number in range(1, 10)})),
             json.dumps(dict(version=1, key=current, started_at=self.now)), "[]",
@@ -759,7 +762,25 @@ class ReaderTest(unittest.TestCase):
             self.assertEqual(self.probe(reset_at=self.now + 3600), dict(state="skipped"))
         self.assertEqual(self.quota_state(), before)
 
+    def test_reset_expiring_at_locked_admission_never_starts_or_records_a_probe(self):
+        self.baseline()
+        self.trace.unlink(missing_ok=True)
+        clock, lock = [self.now], self.storage._locked
+
+        @contextmanager
+        def locked(*args, **kwargs):
+            with lock(*args, **kwargs) as path:
+                if kwargs.get("lock") == self.native.PROBE_LOCK:
+                    clock[0] += 1
+                yield path
+        with mock.patch("time.time", side_effect=lambda: clock[0]), mock.patch.object(self.storage, "_locked", locked):
+            self.assertEqual(self.probe(reset_at=self.now + 1), dict(state="skipped"))
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.cooldown_path().exists())
+
     def test_probe_without_a_current_binding_skips_before_any_native_read(self):
+        self.assertEqual(self.probe(), dict(state="skipped"))
+        self.assertFalse(self.settings.parent.exists())
         self.settings.parent.mkdir(mode=0o700)
         self.assertEqual(self.probe(), dict(state="skipped"))
         self.assertFalse(self.trace.exists())
@@ -851,6 +872,79 @@ class ReaderTest(unittest.TestCase):
             self.assertEqual(self.probe(), dict(state="skipped"))
         self.assertIsNone(self.native.account(self.settings, self.now))
         self.assertIsNone(self.openc._account(self.settings, "claude", self.now))
+
+    def competing_refresh(self, phase, *, rotate=False):
+        """Finish an admitted probe for B at one exact point in an ordinary reassessment of A."""
+        self.weekly_only()
+        self.baseline()
+        old = self.native.account(self.settings, self.now)
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now), 600)
+        self.data["initialize"]["account"]["email"] = "other@example.invalid"
+        self.write(self.data)
+        received, release = threading.Event(), threading.Event()
+        exchange, results = self.native.exchange, []
+
+        def probe_response(*args):
+            reply = exchange(*args)
+            received.set()
+            self.assertTrue(release.wait(10))
+            return reply
+
+        def finish_probe(*args):
+            release.set()
+            worker.join(10)
+            self.assertEqual(results, [dict(state="skipped")])
+            return proceed(*args)
+
+        with mock.patch("time.time", return_value=self.now), mock.patch.object(self.native, "exchange", probe_response):
+            worker = threading.Thread(target=lambda: results.append(self.probe()))
+            worker.start()
+            try:
+                self.assertTrue(received.wait(10))
+                self.data = payload(self.now)
+                with mock.patch.object(self.native, "exchange", exchange):
+                    if rotate:
+                        self.acquire_as("third@example.invalid", self.now)
+                        self.acquire_as("invented@example.invalid", self.now)
+                    expected = self.native.account(self.settings, self.now)
+                    self.assertEqual(old["generation"] != expected["generation"], rotate)
+                    self.write({"mode": "hang"} if phase == "transport" else self.data)
+                    hook = "parse_account" if phase == "observed" else "exchange"
+                    proceed = getattr(self.native, hook)
+                    with mock.patch.object(self.native, hook, finish_probe):
+                        refreshed = self.refresh(need=(), force=True, timeout=.2 if phase == "transport" else 8)
+            finally:
+                release.set()
+                worker.join(10)
+        return refreshed, expected, self.native.account(self.settings, self.now)
+
+    def test_probe_retires_suspended_generation_before_refresh_transport_failure(self):
+        refreshed, _, current = self.competing_refresh("transport")
+        self.assertEqual(refreshed["reason"], "claude_timeout")
+        self.assertIsNone(current)
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now))
+
+    def test_valid_refresh_after_probe_retires_suspended_generation_qualifies_fresh(self):
+        refreshed, old, current = self.competing_refresh("fenced")
+        self.assertEqual(refreshed["state"], "stored")
+        self.assertEqual(current["key"], old["key"])
+        self.assertNotEqual(current["generation"], old["generation"])
+        self.assertFalse(self.quota_state()["record"]["meters"]["7d"]["exhausted"])
+
+    def test_probe_retires_matching_pending_reobservation_before_publication(self):
+        refreshed, _, current = self.competing_refresh("observed")
+        self.assertEqual(refreshed["state"], "failed")
+        self.assertIsNone(current)
+
+    def test_unrelated_suspended_generation_survives_old_probe(self):
+        refreshed, expected, current = self.competing_refresh("transport", rotate=True)
+        self.assertEqual(refreshed["reason"], "claude_timeout")
+        self.assertEqual(current["generation"], expected["generation"])
+
+    def test_unrelated_reobserved_generation_survives_old_probe(self):
+        refreshed, expected, current = self.competing_refresh("observed", rotate=True)
+        self.assertEqual(refreshed["state"], "stored")
+        self.assertEqual(current["generation"], expected["generation"])
 
     def test_a_login_rotated_during_the_probe_is_not_invalidated(self):
         self.baseline()
@@ -1023,6 +1117,64 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(self.quota_state(), before)
         self.assert_probe_lock_free()
 
+    def test_real_signal_during_spawn_handoff_or_cleanup_reaps_the_native_child(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        harness = """
+import json, os, runpy, signal, subprocess, sys
+from runtime import claude_usage
+script, state, stage, signum, *command = sys.argv[1:]
+claude_usage.default_command = lambda environ: command
+children, spawn = [], subprocess.Popen
+def capture(*args, **kwargs):
+    child = spawn(*args, **kwargs)
+    children.append(child)
+    if stage == 'spawn':
+        os.kill(os.getpid(), int(signum))
+    return child
+subprocess.Popen = capture
+sys.argv = [script, '--state-dir', state, '--claude-limit']
+try:
+    runpy.run_path(script, run_name='__main__')
+except SystemExit:
+    pass
+child, = children
+try:
+    os.killpg(child.pid, 0)
+    gone = False
+except ProcessLookupError:
+    gone = True
+print(json.dumps([gone, child.returncode is not None]), file=sys.stderr)
+"""
+        request = json.dumps(dict(reset_at=self.now + 3600)).encode()
+        for stage, sig in (("cleanup", signal.SIGTERM), ("cleanup", signal.SIGINT), ("spawn", signal.SIGTERM)):
+            with self.subTest(stage=stage, sig=sig):
+                self.clear_cooldown()
+                self.write(dict(self.data, interrupt_on_eof=sig) if stage == "cleanup" else dict(mode="hang"))
+                done = subprocess.run([sys.executable, "-B", "-c", harness, str(SCRIPT), str(self.settings.parent),
+                                       stage, str(int(sig)), *self.command], input=request, capture_output=True,
+                                      timeout=10, cwd=SCRIPT.parents[1], env=self.environ)
+                self.assertEqual(done.stdout, b'{"state":"failed"}\n', done.stderr)
+                self.assertEqual(json.loads(done.stderr), [True, True], "group still exists or leader was not reaped")
+                self.assertEqual(self.quota_state(), before)
+                self.assert_probe_lock_free()
+
+    def test_group_shutdown_never_signals_a_reaped_leader(self):
+        for reap in ("popen", "waitid"):
+            if reap == "waitid" and not hasattr(os, "waitid"):
+                continue
+            with self.subTest(reap=reap):
+                with subprocess.Popen([sys.executable, "-I", "-c", "pass"], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, env=self.environ, start_new_session=True) as child:
+                    if reap == "popen":
+                        child.wait(timeout=5)
+                    else:
+                        os.waitpid(child.pid, 0)  # kernel has reaped the child; Popen has no returncode yet
+                    with mock.patch("os.killpg") as signal_group:
+                        self.native.lifecycle._stop(child, False)
+                    signal_group.assert_not_called()
+
     def test_cancellation_in_the_exchange_cleans_up_publishes_nothing_and_releases_the_lock(self):
         self.baseline()
         self.weekly_only()
@@ -1185,12 +1337,16 @@ class ClaudeLimitCliTest(unittest.TestCase):
             with self.subTest(raw=raw[:24]):
                 self.assertEqual(self.run_cli(raw), b'{"state":"failed"}\n')
 
-    def test_relative_symlinked_missing_or_unsafe_state_fails(self):
+    def test_only_a_genuinely_absent_state_directory_skips(self):
         request = json.dumps(dict(reset_at=int(time.time()) + 3600)).encode()
         link = self.root / "link"
         link.symlink_to(self.state)
         self.assertEqual(self.run_cli(request, state=link), b'{"state":"failed"}\n')
-        self.assertEqual(self.run_cli(request, state=self.root / "missing"), b'{"state":"failed"}\n')
+        missing = self.root / "missing"
+        self.assertEqual(self.run_cli(request, state=missing), b'{"state":"skipped"}\n')
+        self.assertFalse(missing.exists())
+        for unsafe in (link / "absent", self.state / ".." / "missing", Path("absent")):
+            self.assertEqual(self.run_cli(request, state=unsafe), b'{"state":"failed"}\n')
         self.assertEqual(self.run_cli(request, state=Path("state"), cwd=self.root), b'{"state":"failed"}\n')
         (self.state / "claude-account.json").write_text(json.dumps(dict(version=2)))
         self.assertEqual(self.run_cli(request), b'{"state":"failed"}\n')

@@ -116,6 +116,7 @@ test("the notice needs a nonempty single-line clause and fits in 512 characters"
   const fits = head + "x".repeat(512 - head.length - tail.length) + tail
   assert.equal([...fits].length, 512)
   const bad = [head + "x".repeat(513 - head.length - tail.length) + tail, head + "a\nb" + tail, head + "a\rb" + tail,
+    head + "a\u2028b" + tail, head + "a\u2029b" + tail,
     "You've hit your weekly limit · resets  Resets at 2030-01-02T10:00:00.000Z.", head.trimEnd() + tail]
   for (const message of bad) {
     const h = harness()

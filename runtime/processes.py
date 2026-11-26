@@ -40,10 +40,7 @@ def _exited(pid, seconds):
         return False
     end = time.monotonic() + seconds
     while True:
-        try:
-            if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
-                return True
-        except ChildProcessError:
+        if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
             return True
         if time.monotonic() >= end:
             return False
@@ -55,15 +52,18 @@ def _stop(process, normal):
         process.stdin.close()
     except OSError:
         pass
-    if not (_exited(process.pid, STOP_GRACE) and normal):
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(process.pid, sig)
-            except OSError:
-                pass
-            if sig == signal.SIGTERM:
-                _exited(process.pid, STOP_GRACE)
-        _exited(process.pid, 1)
+    try:
+        if process.returncode is None and not (_exited(process.pid, STOP_GRACE) and normal):
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(process.pid, sig)
+                except OSError:
+                    pass
+                if sig == signal.SIGTERM:
+                    _exited(process.pid, STOP_GRACE)
+            _exited(process.pid, 1)
+    except ChildProcessError:
+        pass  # Already reaped; its former PID is no longer ours to signal.
     process.wait(timeout=1)
     process.stdout.close()
 

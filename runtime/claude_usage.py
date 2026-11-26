@@ -36,7 +36,7 @@ On demand only (a demanded stale route, preactivation or native preparation), ne
 pure check or `--serve`. One reader at a time, a fixed reason and FAILURE_BACKOFF after a failure, no retry. Under
 the test runner's private home the installed client is never found.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 import fcntl
 import hashlib
@@ -46,7 +46,9 @@ import os
 import re
 import secrets
 import selectors
+import signal
 import subprocess
+import threading
 import time
 
 from runtime import claude_quota, processes as lifecycle, routing, routing_observations as observations, \
@@ -186,27 +188,48 @@ class _Session:
 def exchange(command, environ, timeout=TIMEOUT):
     """(initialize payload, usage payload, wall time just before `get_usage` was sent, wall time when its answer was
     read); the group is stopped after, and cleanup never moves the receipt time."""
-    try:
-        process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
-                                   start_new_session=True, close_fds=True)
-    except OSError:
-        raise ReadError('claude_unavailable') from None
-    normal, init = False, None
-    try:
-        session = _Session(process, time.monotonic() + timeout)
-        session.send('vw-init', 'initialize')
-        init = session.response('vw-init')
-        started = time.time()
-        session.send('vw-usage', 'get_usage')
-        use = session.response('vw-usage')
-        received = time.time()
-        normal = True
-    except (ReadError, OSError) as error:
-        error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
-        raise
-    finally:
-        lifecycle._stop(process, normal)
+    cancelled = reading = False
+
+    def cancel(signum, frame):
+        nonlocal cancelled
+        if not cancelled:
+            cancelled = True
+            if reading:
+                raise KeyboardInterrupt
+
+    with ExitStack() as owned:
+        # Latch cancellation through spawn and reap. Only interrupt blocking protocol I/O once cleanup is registered.
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                owned.callback(signal.signal, sig, signal.signal(sig, cancel))
+        try:
+            process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
+                                       start_new_session=True, close_fds=True)
+        except OSError:
+            raise ReadError('claude_unavailable') from None
+        # Stop the entire group before reaping its leader, even if the leader exited after a valid reply.
+        owned.callback(lifecycle._stop, process, False)
+        init = None
+        try:
+            reading = True
+            if cancelled:
+                raise KeyboardInterrupt
+            session = _Session(process, time.monotonic() + timeout)
+            owned.callback(session.selector.close)
+            session.send('vw-init', 'initialize')
+            init = session.response('vw-init')
+            started = time.time()
+            session.send('vw-usage', 'get_usage')
+            use = session.response('vw-usage')
+            received = time.time()
+        except (ReadError, OSError) as error:
+            error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
+            raise
+        finally:
+            reading = False
+    if cancelled:
+        raise KeyboardInterrupt
     return init, use, started, received
 
 
@@ -628,12 +651,14 @@ def _fence(state, held):
     interrupted or unrecorded observation never carries the generation forward."""
     generation = _proved(state)
     held.update(generation=generation, key=state['identity']['key'] if generation else None,
-                account=state.get('account'), fence=secrets.token_hex(16))
-    return dict(identity=None, account=dict(pending=True, generation=held['fence']))
+                account=state.get('account'), fence=dict(pending=True, generation=secrets.token_hex(16)))
+    if generation:
+        held['fence']['suspended'] = dict(key=held['key'], generation=generation)
+    return dict(identity=None, account=held['fence'])
 
 
 def _ours(state, held):
-    return state.get('identity') is None and state.get('account') == dict(pending=True, generation=held.get('fence'))
+    return state.get('identity') is None and state.get('account') == held['fence']
 
 
 def _settle(state, held):
@@ -832,7 +857,7 @@ def _starts(path):
         raise ReadError('observation_store_invalid')
     accounts = record['accounts']
     if type(accounts) is not dict or len(accounts) > PROBE_KEYS \
-            or not all(_hex(key) and type(at) is int for key, at in accounts.items()):
+            or not all(_hex(key) and routing._amount(at) for key, at in accounts.items()):
         raise ReadError('observation_store_invalid')
     return accounts
 
@@ -847,9 +872,14 @@ def _admit(starts, key, now):
     return {**live, key: now}
 
 
-def _ended(state, expected, now):
-    """Ends the login `expected` names only while it is still the complete, fresh, current account."""
-    return dict(account=None, identity=None) if _bound(state, expected, now) is not None else {}
+def _ended(state, key, generation):
+    """Retire only this exact generation, including its suspension or pending re-observation."""
+    pending = state.get('account')
+    suspended = state.get('identity') is None and type(pending) is dict and pending.get('pending') is True \
+        and pending.get('suspended') == dict(key=key, generation=generation)
+    if not suspended and _proved(state, key) != generation:
+        raise _Skip()
+    return dict(account=None, identity=None)
 
 
 def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None, timeout=TIMEOUT):
@@ -872,6 +902,8 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
             if path is None:
                 return dict(state='skipped')
             now = int(time.time())
+            if not _hint(reset_at, now):
+                return dict(state='skipped')
             probe = path.parent / PROBE_FILE
             starts = _starts(probe)
             if _bound(observations._read(path), (key, generation), now) is None:
@@ -883,7 +915,7 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
             init, use, started, received = exchange(command, environ, timeout)
             check_quiet(use)
             if parse_identity(init, use) != key:
-                _transition(settings_path, lambda state: _ended(state, (key, generation), int(time.time())))
+                _transition(settings_path, lambda state: _ended(state, key, generation))
                 return dict(state='skipped')
 
             def commit(state):

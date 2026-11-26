@@ -13,7 +13,7 @@ import time
 if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname(os.path.realpath(__file__)):
     del sys.path[0]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import chatgpt_limit, council, opencode_account, storage
+from runtime import chatgpt_limit, council, opencode_account
 from runtime.selector import check_setup, feedback_submit, refresh, result, select
 
 MAX_BYTES = 65536
@@ -59,9 +59,6 @@ def claude_limit(state_dir, raw):
     request = json.loads(raw)
     if type(request) is not dict or set(request) != {"reset_at"} or type(request["reset_at"]) is not int:
         raise ValueError()
-    if not state_dir.is_absolute():
-        raise ValueError()
-    storage.private(state_dir, True)
     return opencode_account.probe_claude_limit(state_dir / "router.json", reset_at=request["reset_at"])
 
 

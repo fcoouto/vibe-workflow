@@ -1,6 +1,8 @@
 """Synthetic native transports. Never discovers or calls an installed client."""
 import json
+import os
 from pathlib import Path
+import signal
 import sys
 import time
 
@@ -29,3 +31,8 @@ else:
             response=data["initialize"] if i == 0 else data["usage"]))), flush=True)
         if i == 1:
             break
+    if "interrupt_on_eof" in data:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        sys.stdin.read()  # EOF proves the parent has entered _stop and closed its control pipe.
+        os.kill(os.getppid(), data["interrupt_on_eof"])
+        time.sleep(5)  # bounded natural exit if cleanup regresses

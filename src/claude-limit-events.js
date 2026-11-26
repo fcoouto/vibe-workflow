@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path"
 
 const PROVIDER = "claude-agent"
 // The verified OpenCode 2.3.2 weekly notice. The clause is human text and is never parsed.
-const NOTICE = /^You've hit your weekly limit · resets (\S[^\r\n]*?) Resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,3})?Z\.$/
+const NOTICE = /^You've hit your weekly limit · resets (\S.*?) Resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,3})?Z\.$/
 const MAX_MESSAGE = 512
 const MAX_ID = 256
 const MAX_SEEN = 256

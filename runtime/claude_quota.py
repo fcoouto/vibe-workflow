@@ -177,14 +177,21 @@ def _sampled(sample, now):
                 for key, value in sample['meters'].items())
 
 
+def _live(key, entry, latest, now):
+    # A short healthy reset ends no ordering proof: an overlapping positive can name a later reset.
+    return now < (entry['reset_at'] if entry['exhausted'] else latest + _window(key) + storage.CLOCK_MARGIN)
+
+
 def _kept(record, now):
-    """`(meters, inventory)` still in force at `now`: plausible meters before their reset, and a live, plausible
-    inventory. A future-dated or malformed row neither excludes a route nor fences a scope."""
+    """Plausible pauses, recovery watermarks and absence inventory, within their time and size bounds."""
     value = record if type(record) is dict else {}
     raw = value.get('meters') if type(value.get('meters')) is dict else {}
-    meters = {key: dict(entry) for key, entry in raw.items()
-              if _key(key) and _entry(key, entry, now) and entry['reset_at'] > now}
     inventory = value.get('inventory')
+    scopes = inventory.get('scopes') if type(inventory) is dict else None
+    if len(raw) - sum(key in raw for key in ACCOUNT) > MAX_SCOPES or type(scopes) is list and len(scopes) > MAX_SCOPES:
+        raw, inventory = {key: raw[key] for key in ACCOUNT if key in raw}, None
+    meters = {key: dict(entry) for key, entry in raw.items()
+              if _entry(key, entry, now) and _live(key, entry, entry['latest'], now)}
     if not _inventory(inventory, now) or now >= inventory['latest'] + LENGTHS['7d'] + storage.CLOCK_MARGIN:
         inventory = None
     return meters, inventory
@@ -215,7 +222,7 @@ def merge(previous, sample, *, now):
     earliest, latest = sample['earliest'], sample['latest']
     for key, value in sample['meters'].items():
         old = meters.get(key)
-        if value['reset_at'] <= now or old is not None and earliest <= old['latest']:
+        if not _live(key, value, latest, now) or old is not None and earliest <= old['latest']:
             continue
         if inventory is not None and key not in ACCOUNT and key not in inventory['scopes'] \
                 and earliest <= inventory['latest']:
@@ -281,13 +288,13 @@ def evidence(use, models, *, started, received):
                 incomplete = True
             else:
                 claims[hits[0]].append((percent, reset))
-        elif type(item) is dict and kind == 'weekly_all' and scope is None:
+        elif type(item) is dict and kind == 'weekly_all' and 'scope' in item and scope is None:
             try:
                 claims.setdefault('7d', []).append(_reading(item, 'percent'))
             except usage.ReadError:
                 broken.add('7d')
         elif type(item) is dict and kind == 'weekly_scoped' and type(scope) is dict \
-                and scope.get('model') is not None:
+                and set(scope) == {'model'}:
             model = scope['model']
             listed.append((model.get('display_name') if type(model) is dict else None, item, 'percent'))
         else:

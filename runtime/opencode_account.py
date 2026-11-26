@@ -476,9 +476,13 @@ def probe_claude_limit(settings_path, *, reset_at, command=None, environ=None, t
     probe never waits for, or fences, ordinary account reads."""
     try:
         now = int(time.time())
-        if type(reset_at) is not int or not isinstance(settings_path, Path):
+        if type(reset_at) is not int or not isinstance(settings_path, Path) or not settings_path.is_absolute():
             return dict(state='failed')
-        storage.private(settings_path.parent, True)
+        folder = storage._resolved(settings_path).parent
+        try:
+            storage.private(folder, True)
+        except FileNotFoundError:
+            return dict(state='skipped')
         found = _account(settings_path, 'claude', now)
         observations._read(_store(settings_path))
         state = observations._read(claude_usage._store(settings_path))
