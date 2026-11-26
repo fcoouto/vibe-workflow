@@ -180,7 +180,7 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
   const sessionOf = (id) => table.get(id) ?? { location: dirs[folders[0]] }
   const copies = {}
   for (const name of folders) {
-    const calls = { get: 0, gh: 0, set: 0, update: [] }, hooks = []
+    const calls = { get: 0, gh: 0, set: 0, update: [], status: [] }, hooks = []
     let stream
     const ctx = {
       location: { directory: dirs[name], project: { id: projects[name] ?? project } },
@@ -209,13 +209,21 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
       },
       event: { subscribe: ({ signal }) => (stream = pushable(signal)) },
     }
-    const run = async (command, args) => {
+    const run = async (command, args, { cwd } = {}) => {
       if (command === "gh") {
         calls.gh++
         await facts.gate
         return JSON.stringify(facts.prs[args[args.indexOf("--head") + 1]] ?? [])
       }
-      if (args[0] === "status") return `# branch.head ${facts.branch ?? "(detached)"}\n` + (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+      if (args[0] === "status") {
+        calls.status.push(cwd)
+        if (facts.failStatus) throw Error("status")
+        return `# branch.head ${facts.branch ?? "(detached)"}\n` + (facts.upstream ? `# branch.upstream origin/${facts.branch}\n` : "")
+      }
+      if (args.includes("--git-common-dir")) {
+        if (!facts.common?.[cwd]) throw Error("not a repository")
+        return `${facts.common[cwd]}\n`
+      }
       if (args[0] === "rev-parse") return "origin/main\n"
       return facts.changed.join("\n")
     }
@@ -227,7 +235,8 @@ async function world(t, { folders = ["main", "wt"], project = "p1", projects = {
   const push = async (event) => { for (const copy of Object.values(copies)) copy.push(event); await settle() }
   const hookIn = async (copy, event) => { for (const [hookName, handler] of copy.hooks) if (hookName === "execute.after") await handler(event) }
   const hook = (event) => hookIn(Object.values(copies).find((c) => c.ctx.location.directory === sessionOf(event.sessionID).location), event)
-  return { dirs, copies, table, facts, storage, preference,
+  return { dirs, copies, table, facts, storage, preference, push,
+    step: (sessionID, directory, files) => push({ type: "session.step.ended", location: { directory }, data: { sessionID, files } }),
     session: (id, folder, more = {}) => table.set(id, { location: dirs[folder], ...more }),
     write: (path, id = "ses_1") => hook({ tool: "write", status: "completed", sessionID: id, input: { path } }),
     start: (id = "ses_1") => push({ type: "session.execution.started", data: { sessionID: id } }),
@@ -258,7 +267,7 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
     "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
-    "permission.replied", "form.replied", "form.cancelled", "shell.exited"])
+    "permission.replied", "form.replied", "form.cancelled", "shell.exited", "session.step.ended"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -517,6 +526,135 @@ test("preference publication for a different project does not cancel a pending t
   release()
   await settle()
   assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
+async function progressWorld(t, { adopt = false } = {}) {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", adopt ? "wt" : "main", { parentID: "ses_1" })
+  const top = w.dirs[adopt ? "wt" : "main"], plan = join(top, PLAN)
+  w.facts.common = { [w.dirs.main]: "same", [w.dirs.wt]: "same" }
+  mkdirSync(join(plan, ".."), { recursive: true })
+  writeFileSync(plan, "**Files:** `src/a.js`, `src/b.js`, `src/c.js`, `src/d.js`\n")
+  await w.write(join(w.dirs.main, SPEC))
+  await w.write(plan)
+  await w.end()
+  return { w, top, plan, calls: w.copies.main.calls }
+}
+
+test("root and child steps advance local milestones and keep WAITING without a PR lookup", async (t) => {
+  const { w, top, calls } = await progressWorld(t)
+  const gh = calls.gh
+  w.facts.changed = ["src/a.js", "src/b.js"]
+  await w.step("ses_1", top, w.facts.changed)
+  assert.equal(w.title(), "￻▰▰▰▱▱ WAITING · Fix login flow")
+  w.facts.changed.push("src/c.js", "src/d.js")
+  await w.step("child_1", top, ["src/c.js", "src/d.js"])
+  assert.equal(w.title(), "￻▰▰▰▰▱ WAITING · Fix login flow")
+  assert.equal(calls.gh, gh)
+})
+
+test("a child step in the adopted checkout is verified and published only by the main owner", async (t) => {
+  const { w, top, calls } = await progressWorld(t, { adopt: true })
+  const before = calls.status.length
+  w.facts.changed = ["src/a.js", "src/b.js"]
+  await w.step("child_1", top, w.facts.changed)
+  assert.deepEqual(calls.status.slice(before), [top])
+  assert.deepEqual(w.copies.wt.calls.status, [])
+  assert.deepEqual(w.copies.wt.calls.update, [])
+  assert.equal(w.title(), "￻▰▰▰▱▱ WAITING · Fix login flow")
+})
+
+test("higher hints arriving during verification are not lost", async (t) => {
+  const { w, top, calls } = await progressWorld(t)
+  const before = calls.status.length
+  let release
+  w.facts.getGate = new Promise((done) => { release = done })
+  w.facts.changed = ["src/a.js", "src/b.js"]
+  await w.step("ses_1", top, w.facts.changed)
+  w.facts.changed = ["src/a.js", "src/b.js", "src/c.js", "src/d.js"]
+  await w.step("ses_1", top, ["src/c.js", "src/d.js"])
+  release()
+  await settle()
+  assert.equal(w.title(), "￻▰▰▰▰▱ WAITING · Fix login flow")
+  assert.deepEqual(calls.status.slice(before), [top, top])
+})
+
+test("bad hints do not earn cells or retry an already-checked milestone", async (t) => {
+  const { w, top, calls } = await progressWorld(t)
+  const before = calls.status.length
+  w.session("ses_other", "main")
+  await w.step("ses_other", top, ["src/a.js", "src/b.js"])
+  await w.step("ses_1", w.dirs.wt, ["src/a.js", "src/b.js"])
+  await w.step("ses_1", join(top, "src"), ["a.js", "b.js"])
+  await w.step("ses_1", top, ["../escape.js", "/tmp/file.js", "src/../x.js", null])
+  assert.equal(calls.status.length, before)
+  await w.step("ses_1", top, ["src/a.js", "src/a.js"])
+  await w.step("ses_1", top, ["src/a.js"])
+  assert.equal(calls.status.length, before + 1)
+  assert.equal(w.title(), "￻▰▱▱▱▱ WAITING · Fix login flow")
+  w.facts.failStatus = true
+  w.facts.changed = ["src/a.js", "src/b.js"]
+  await w.step("ses_1", top, w.facts.changed)
+  assert.equal(w.title(), "￻▰▱▱▱▱ WAITING · Fix login flow")
+})
+
+test("steps do not create a first meter or reuse unverified cache after reload", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  await w.write(join(w.dirs.main, SPEC))
+  w.facts.changed = ["src/a.js"]
+  await w.step("ses_1", w.dirs.main, w.facts.changed)
+  assert.deepEqual(w.copies.main.calls.status, [])
+  assert.deepEqual(w.copies.main.calls.update, [])
+
+  const cold = await world(t)
+  cold.session("ses_1", "main")
+  seed(cold, "ses_1", "main")
+  await cold.start()
+  cold.facts.changed = ["src/a.js"]
+  await cold.step("ses_1", cold.dirs.main, cold.facts.changed)
+  assert.deepEqual(cold.copies.main.calls.status, [])
+  assert.equal(cold.title(), "￻▰▱▱▱▱ Fix login flow")
+  await cold.end()
+  assert.equal(cold.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
+test("step verification does not resurrect a renamed title or advance a removed checkout", async (t) => {
+  const named = await progressWorld(t)
+  named.w.table.get("ses_1").title = "Manual name"
+  named.w.facts.changed = ["src/a.js", "src/b.js"]
+  await named.w.step("ses_1", named.top, named.w.facts.changed)
+  assert.equal(named.w.title(), "Manual name")
+
+  const missing = await progressWorld(t, { adopt: true })
+  const before = missing.calls.status.length
+  rmSync(missing.top, { recursive: true })
+  missing.w.facts.changed = ["src/a.js", "src/b.js"]
+  await missing.w.step("child_1", missing.top, missing.w.facts.changed)
+  assert.equal(missing.calls.status.length, before)
+  assert.equal(missing.w.title(), "￻▰▱▱▱▱ WAITING · Fix login flow")
+})
+
+test("a second plan edit during verification invalidates old declarations until turn end", async (t) => {
+  const { w, top, plan, calls } = await progressWorld(t)
+  writeFileSync(plan, "**Files:** `docs/a.md`, `docs/b.md`, `docs/c.md`, `docs/d.md`\n")
+  await w.step("ses_1", top, [PLAN])
+  let release
+  w.facts.getGate = new Promise((done) => { release = done })
+  const before = calls.status.length
+  w.facts.changed = ["docs/a.md", "docs/b.md"]
+  await w.step("ses_1", top, w.facts.changed)
+  assert.equal(calls.status.length, before + 1, "the first plan edit was read")
+  writeFileSync(plan, "**Files:** `docs/e.md`, `docs/f.md`\n")
+  w.facts.changed = ["docs/e.md", "docs/f.md"]
+  await w.step("ses_1", top, [PLAN, ...w.facts.changed])
+  release()
+  await settle()
+  assert.equal(calls.status.length, before + 1)
+  assert.equal(w.title(), "￻▰▱▱▱▱ WAITING · Fix login flow")
+  await w.end()
+  assert.equal(w.title(), "￻▰▰▰▰▱ WAITING · Fix login flow")
 })
 
 test("failing reads and writes keep the cells and the next turn end repairs", async (t) => {

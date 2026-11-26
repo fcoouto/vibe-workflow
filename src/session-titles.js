@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
-import { resolve } from "node:path"
+import { relative, resolve } from "node:path"
 import { classify } from "./pr-advice.js"
-import { artifact, branchOf, commonDir, defaultRun, readFacts } from "./session-facts.js"
+import { artifact, branchOf, commonDir, defaultRun, readFacts, readPlanPaths } from "./session-facts.js"
 
 export const MARK = "\uFFFB"
 export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
@@ -47,7 +47,8 @@ const REQUESTS = {
 }
 const MAX_PENDING = 16
 const MAX_SHELLS = 64
-const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited"]
+const STEP = "session.step.ended"
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
 // OpenCode evaluates plugin modules separately per location in the same server realm.
@@ -56,6 +57,7 @@ const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
+  const progress = new WeakMap()
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   const canonical = ctx.location?.project?.canonical
@@ -411,6 +413,124 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     })
   }
 
+  const validLocal = (facts) => facts.exists && !facts.errors.some(({ step }) => step === "status" || step === "diff")
+  const nonDoc = (path) => !path.startsWith("docs/")
+  const filePath = (path) => typeof path === "string" && !/[\0\\]/.test(path) &&
+    path.split("/").every((part) => part && part !== "." && part !== "..")
+  const progressState = (task, declared = null, confirmed = new Set()) => ({
+    plan: task.plan, declared, confirmed, hints: new Set(), work: false, attempted: 1, queued: false,
+    version: 0, reread: false, reload: false,
+  })
+
+  function rememberLocal(state, facts) {
+    state.declared = facts.errors.some(({ step }) => step === "plan") ? null : new Set(facts.declared)
+    state.confirmed = new Set(validLocal(facts) ? facts.changed.filter((path) => state.declared?.has(path)) : [])
+    for (const path of state.hints) if (!state.declared?.has(path)) state.hints.delete(path)
+  }
+
+  function milestone(state) {
+    const count = state.declared?.size ?? 0
+    let done = state.confirmed.size
+    for (const path of state.hints) if (!state.confirmed.has(path)) done++
+    if (count && done === count) return 4
+    if (count && done >= Math.ceil(count / 2)) return 3
+    return state.work ? 2 : 1
+  }
+
+  // A snapshot is only a hint. Verify with the real checkout and the current plan, then preserve the actual label.
+  function scheduleProgress(sessionID, entry, state, admitted) {
+    const task = entry.task
+    const live = () => current(sessionID, admitted) && sessions.get(sessionID) === entry && entry.task === task &&
+      progress.get(task) === state && state.plan === task.plan && task.cells < 4 && !entry.silenced
+    const wanted = () => milestone(state) > Math.max(task.cells, state.attempted)
+    if (state.queued || !live() || (!state.reload && !wanted())) return
+    state.queued = true
+    enqueue(sessionID, async () => {
+      if (!live() || !await on() || !live()) return
+      if (state.reload) {
+        const version = state.version
+        state.reload = false
+        const paths = await readPlanPaths(task.plan).catch(() => null)
+        if (!live()) return
+        if (state.version === version && paths) state.declared = new Set(paths)
+      }
+      if (!wanted()) return
+      state.attempted = milestone(state)
+      const version = state.version
+      const facts = await readFacts({ top: task.top, plan: state.declared ? task.plan : null, localOnly: true, run })
+      if (!live() || !validLocal(facts)) return
+      const info = await read(sessionID)
+      if (await owns(info) !== true || !live()) return
+      const title = info.title ?? "", prefix = title.match(PREFIX)?.[0]
+      if (!title.startsWith(MARK) || !prefix) return
+      const samePlan = state.version === version && state.declared !== null
+      const cells = cellsFor({ ...facts, declared: samePlan ? facts.declared : [] })
+      if (samePlan) rememberLocal(state, facts)
+      if (cells <= task.cells) return
+      const next = compose(strip(title) || task.slug, cells, prefix.endsWith("WAITING · "))
+      if (next !== title) await ctx.session.update({ sessionID, title: next })
+      if (!live()) return
+      task.cells = cells
+      entry.last = next
+      await save(sessionID, entry, admitted)
+    }, admitted).then(() => {
+      state.queued = false
+      if (live() && (state.reload || wanted())) scheduleProgress(sessionID, entry, state, admitted)
+    })
+  }
+
+  function stepProgress(event, sessionID) {
+    const { files } = event.data, directory = event.location?.directory
+    if (!Array.isArray(files) || !files.length || typeof directory !== "string") return
+    const top = reals.get(directory) ?? directory
+    const source = admit(sessionID)
+    const candidate = (entry) => {
+      const task = entry?.task, state = progress.get(task)
+      return task && !entry.silenced && !task.fresh && task.cells < 4 && task.top === top && state?.plan === task.plan
+        ? state : null
+    }
+    const accept = (root, entry, state, admitted) => {
+      if (!current(sessionID, source) || !current(root, admitted) || sessions.get(root) !== entry ||
+          candidate(entry) !== state) return
+      const planPath = state.plan && relative(top, state.plan)
+      if (planPath && files.includes(planPath)) {
+        state.version++
+        state.declared = null
+        state.confirmed.clear()
+        state.hints.clear()
+        state.reload = !state.reread
+        state.reread = true
+      }
+      for (const path of files) {
+        if (!filePath(path) || path === planPath) continue
+        if (nonDoc(path)) state.work = true
+        if (state.declared?.has(path)) state.hints.add(path)
+      }
+      scheduleProgress(root, entry, state, admitted)
+    }
+    const own = sessions.get(sessionID)
+    if (own) {
+      const state = candidate(own)
+      if (state) accept(sessionID, own, state, source)
+      return
+    }
+    if (parents.get(sessionID) === null) return
+    const candidates = new Map()
+    for (const [root, entry] of sessions) {
+      const state = candidate(entry)
+      if (state) candidates.set(root, [entry, state, admit(root, source.revision)])
+    }
+    if (candidates.size) void rootOf(sessionID).then((root) => {
+      const match = candidates.get(root)
+      if (match) accept(root, ...match)
+    }).catch(() => {})
+  }
+
+  function resetProgress(sessionID) {
+    const task = sessions.get(sessionID)?.task, state = progress.get(task)
+    if (state) progress.set(task, progressState(task, state.declared, state.confirmed))
+  }
+
   async function evaluate(sessionID, ended, fromChild, admitted) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
@@ -422,11 +542,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       const now = await activity(sessionID, { ended: fromChild, withSelf: true })
       if (now.children || now.self) return
     }
-    let cells = task.cells, diag = entry.diag
+    const state = progress.get(task), version = state?.version
+    let cells = task.cells, diag = entry.diag, facts
     const updates = {}
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
-      const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered, seen: task.seen,
+      facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered, seen: task.seen,
         bound: task.bound, fallback: project ?? task.top, run })
       const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
       if (facts.head && facts.head === facts.branch) updates.remembered = facts.head
@@ -466,6 +587,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     entry.diag = diag
     delete task.resetFrom
     entry.last = next
+    if (facts && cells < 4 && progress.get(task) === state && state?.version === version) {
+      const nextState = state ?? progressState(task)
+      rememberLocal(nextState, facts)
+      progress.set(task, nextState)
+    }
     await save(sessionID, entry, admitted)
   }
 
@@ -501,10 +627,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           if (event?.type === "shell.exited") { shellExited(event.data?.id); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
-          if (event.type === "session.moved") forget(sessionID)
+          if (event.type === STEP) stepProgress(event, sessionID)
+          else if (event.type === "session.moved") forget(sessionID)
           else if (TURNS.includes(event.type)) {
             // A blocking request cannot outlive its session's own turn boundary; this also drops a missed reply.
             pending.delete(sessionID)
+            resetProgress(sessionID)
             enqueue(sessionID, (admitted) => evaluate(sessionID, event.type !== TURNS[0], null, admitted))
             if (event.type !== TURNS[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }

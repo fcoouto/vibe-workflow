@@ -2,6 +2,9 @@
 
 **Status:** approved on 2026-11-26 for findings 6 and 8, after [#404](https://github.com/fcoouto/vibe-workflow/pull/404).
 The earlier draft was independently reviewed. The user has since clarified task lifetime and disable behavior.
+After qualification, the user deferred unattended merge, restart, and cleanup retitles: OpenCode 2.3.2 does
+not expose the running-shell list to the plugin context. The approved delivery scope is task-scoped renames,
+disable fencing, and mid-turn progress. The idle recovery design below is retained for a later follow-up.
 
 ## What changes
 

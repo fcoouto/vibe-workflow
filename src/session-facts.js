@@ -32,6 +32,10 @@ export function declaredPaths(planText) {
   return [...found]
 }
 
+export async function readPlanPaths(plan) {
+  return declaredPaths(await readFile(plan, "utf8"))
+}
+
 export async function defaultRun(command, args, { cwd, timeout }) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
   // GIT_OPTIONAL_LOCKS=0: `git status` must never refresh the index or hold index.lock against the agent's own git commands.
@@ -68,7 +72,7 @@ export async function commonDir({ top, run = defaultRun }) {
 // `seen` (a branch seen at an earlier turn end) is used only on positive evidence that the checkout no longer shows a
 // branch: the folder is gone (ENOENT) or a successful status read shows a detached head. A PR found through it counts
 // only when it was created at or after `bound`, so a reused branch name cannot credit a PR opened before the task.
-export async function readFacts({ top, plan, remembered = null, seen = null, bound = null, fallback, run = defaultRun }) {
+export async function readFacts({ top, plan, remembered = null, seen = null, bound = null, fallback, run = defaultRun, localOnly = false }) {
   const git = (cwd, ...args) => run("git", args, { cwd, timeout: 2000 })
   const where = await stat(top).then((info) => ({ exists: info.isDirectory(), gone: false }),
     (error) => ({ exists: false, gone: error?.code === "ENOENT" }))
@@ -89,12 +93,12 @@ export async function readFacts({ top, plan, remembered = null, seen = null, bou
       const untracked = lines(status).filter((line) => line.startsWith("? ")).map((line) => line.slice(2))
       facts.changed = [...new Set([...diff, ...untracked])]
     } catch (error) { failed("diff")(error) }
-    if (plan) facts.declared = declaredPaths(await readFile(resolve(top, plan), "utf8").catch((error) => { failed("plan")(error); return "" }))
+    if (plan) facts.declared = await readPlanPaths(resolve(top, plan)).catch((error) => { failed("plan")(error); return [] })
     if (facts.branch && facts.upstream && facts.branch !== facts.base.replace(/^origin\//, "")) Object.assign(facts, { head: facts.branch, via: "branch" })
   }
   if (!facts.head && remembered) Object.assign(facts, { head: remembered, via: "remembered" })
   else if (!facts.head && seen && typeof bound === "number" && (facts.gone || facts.detached)) Object.assign(facts, { head: seen, via: "seen" })
-  if (!facts.head) return facts
+  if (localOnly || !facts.head) return facts
   try {
     const out = await run("gh", ["pr", "list", "--head", facts.head, "--state", "all", "--json", "state,title,createdAt", "--limit", "1"],
       { cwd: facts.exists ? top : fallback, timeout: 5000 })

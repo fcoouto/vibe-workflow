@@ -10,6 +10,9 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-25-title-sync-follow-up-design.md` (authority; read first).
 
+**Approved execution scope:** Tasks 1–3. The OpenCode 2.3.2 model-free lab qualified shared preference fencing
+but found no shell-list read in the plugin context. The user deferred Tasks 4–5 and their live checks.
+
 ## Global Constraints
 
 - No polling, new runtime model calls, webhooks, per-tool Git checks, or mid-turn GitHub calls for progress.
