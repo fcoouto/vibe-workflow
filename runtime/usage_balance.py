@@ -19,6 +19,7 @@ SIBLINGS = {  # longer windows a boost needs fresh and consistent; a protection-
     'go': {'5h': ('7d', 'monthly'), '7d': ('monthly',)},
 }
 FIELDS = frozenset(('used_percent', 'earliest', 'latest', 'reset_at', 'duration', 'discrete'))
+SAFE_INT = 2 ** 53  # larger integers are invalid input: the scorer never converts them to floats
 KEY = re.compile(r'5h|7d|monthly|(?:family|model):.+|duration:[1-9][0-9]*')
 HEADROOM_USED = 90  # more than 90% used leaves under 10 points, and blocks every boost on the route
 SCORE_FLOOR = 0.01  # 1% of the window length, so a score tops out at 100
@@ -28,8 +29,15 @@ SCORE_RATIO = 0.97
 TOLERANCE = routing.TOLERANCE
 
 
+def _safe_int(value):
+    """An integer that is exact as a float, so mixed arithmetic cannot overflow or round."""
+    return type(value) is int and abs(value) <= SAFE_INT
+
+
 def _number(value):
-    return type(value) in (int, float) and math.isfinite(value)
+    if type(value) is int:
+        return _safe_int(value)
+    return type(value) is float and math.isfinite(value)
 
 
 def _percent(value):
@@ -41,15 +49,15 @@ def _shaped(value):
         return False
     if not _percent(value['used_percent']) or type(value['discrete']) is not bool:
         return False
-    if any(type(value[name]) is not int for name in ('earliest', 'latest', 'reset_at')):
+    if any(not _safe_int(value[name]) for name in ('earliest', 'latest', 'reset_at')):
         return False
     duration = value['duration']
-    return duration is None or (type(duration) is int and duration > 0)
+    return duration is None or (_safe_int(duration) and duration > 0)
 
 
 def fresh_meter(value, *, now):
     """True for a well-formed reading that was received within the freshness window and has not reset yet."""
-    if not _shaped(value) or type(now) is not int:
+    if not _shaped(value) or not _safe_int(now):
         return False
     earliest, latest, reset = value['earliest'], value['latest'], value['reset_at']
     if not (earliest <= latest <= now + 1 and earliest <= now < reset and reset >= latest
@@ -131,27 +139,41 @@ def comparable(candidate, baseline):
         and candidate['score'] >= SCORE_RATIO * baseline['score'] - TOLERANCE
 
 
-def reorder(ordered, *, families, expiry):
+def _identity(subscriptions, route):
+    """A route's subscription path ID: a nonempty string. Absent, null, empty or non-string values are None."""
+    value = subscriptions.get(route) if type(route) is str else None
+    return value if type(value) is str and value else None
+
+
+def _expiry_of(expiry, route):
+    value = expiry.get(route) if type(route) is str else None
+    return value if _number(value) else None
+
+
+def reorder(ordered, *, subscriptions, expiry):
     """The baseline order, with the slots of comparable, known candidates refilled by expiry priority when a candidate
-    from another subscription beats the baseline winner by the minimum gain. Ties keep baseline order."""
+    on a different subscription path beats the baseline winner by the minimum gain. Ties keep baseline order.
+    A candidate without a valid path ID or expiry stays in its slot; a baseline without them returns the order."""
     result = list(ordered)
     if not ordered:
         return result
     base = ordered[0]
-    route = base.get('route')
-    if route not in families or route not in expiry or not _number(expiry[route]) or not comparable(base, base):
+    base_identity = _identity(subscriptions, base.get('route'))
+    base_expiry = _expiry_of(expiry, base.get('route'))
+    if base_identity is None or base_expiry is None or not comparable(base, base):
         return result
-    base_family, base_expiry = families[route], expiry[route]
-    slots = []
+    slots, lanes = [], {}
     for index, item in enumerate(ordered):
-        name = item.get('route')
-        if name in families and name in expiry and _number(expiry[name]) and comparable(item, base):
+        route = item.get('route')
+        identity, value = _identity(subscriptions, route), _expiry_of(expiry, route)
+        if identity is not None and value is not None and comparable(item, base):
             slots.append(index)
-    qualifies = any(families[ordered[index]['route']] != base_family
-                    and expiry[ordered[index]['route']] >= base_expiry + MIN_GAIN - TOLERANCE for index in slots)
+            lanes[index] = (identity, value)
+    qualifies = any(lanes[index][0] != base_identity and lanes[index][1] >= base_expiry + MIN_GAIN - TOLERANCE
+                    for index in slots)
     if not qualifies:
         return result
-    ranked = sorted(slots, key=lambda index: -expiry[ordered[index]['route']])
+    ranked = sorted(slots, key=lambda index: -lanes[index][1])
     for position, index in zip(slots, ranked):
         result[position] = ordered[index]
     return result

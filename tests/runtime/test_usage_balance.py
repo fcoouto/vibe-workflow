@@ -33,33 +33,34 @@ TIMING = meter(50, 5 / 60, 5, age_offset=60)
 AGED = meter(40, 72, 168, age_offset=60)
 CLOSING = meter(10, 0.5 / 60, 5)
 
-ROUTES = {
-    'a': dict(family='claude', price=1.0, score=1.0, expiry=1.0),
-    'b': dict(family='chatgpt', price=1.0, score=1.0, expiry=1.4),
-    'c': dict(family='go', price=1.0, score=1.0, expiry=2.0),
-    'c-alias': dict(family='go', price=1.0, score=1.0, expiry=2.0),
-    'small_gain': dict(family='chatgpt', price=1.0, score=1.0, expiry=1.2),
-    'outside_bounds': dict(family='chatgpt', price=1.501, score=1.0, expiry=3.0),
-    'unknown': dict(family='chatgpt', price=1.0, score=1.0, expiry=None),
+ROUTES = {  # subscription is the exact route path ID; only c and c-alias share one
+    'a': dict(subscription='claude-1', price=1.0, score=1.0, expiry=1.0),
+    'b': dict(subscription='chatgpt-1', price=1.0, score=1.0, expiry=1.4),
+    'c': dict(subscription='go-1', price=1.0, score=1.0, expiry=2.0),
+    'c-alias': dict(subscription='go-1', price=1.0, score=1.0, expiry=2.0),
+    'small_gain': dict(subscription='chatgpt-1', price=1.0, score=1.0, expiry=1.2),
+    'outside_bounds': dict(subscription='chatgpt-1', price=1.501, score=1.0, expiry=3.0),
+    'unknown': dict(subscription='chatgpt-1', price=1.0, score=1.0, expiry=None),
 }
 
 
 def reorder_names(names, table=ROUTES):
     ordered = [dict(route=name, price=table[name]['price'], score=table[name]['score']) for name in names]
-    families = {name: table[name]['family'] for name in names}
+    subscriptions = {name: table[name]['subscription'] for name in names}
     expiry = {name: table[name]['expiry'] for name in names}
-    return [item['route'] for item in usage_balance.reorder(ordered, families=families, expiry=expiry)]
+    return [item['route'] for item in usage_balance.reorder(ordered, subscriptions=subscriptions, expiry=expiry)]
 
 
-def rank_two(*, b_expiry, price_ratio=1.0, score_ratio=1.0, b_family='chatgpt'):
+def rank_two(*, b_expiry, price_ratio=1.0, score_ratio=1.0, b_subscription='chatgpt-1'):
     ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=price_ratio, score=score_ratio)]
-    families = dict(a='claude', b=b_family)
+    subscriptions = dict(a='claude-1', b=b_subscription)
     expiry = dict(a=1.0, b=b_expiry)
-    return [item['route'] for item in usage_balance.reorder(ordered, families=families, expiry=expiry)]
+    return [item['route'] for item in usage_balance.reorder(ordered, subscriptions=subscriptions, expiry=expiry)]
 
 
 def rank_two_same_subscription(*, b_expiry):
-    return rank_two(b_expiry=b_expiry, b_family='claude')
+    return rank_two(b_expiry=b_expiry, b_subscription='claude-1')
+
 
 
 class UsageBalanceTest(unittest.TestCase):
@@ -175,25 +176,102 @@ class UsageBalanceTest(unittest.TestCase):
 
     def test_reorder_nonparticipants_keep_position(self):
         ordered = [dict(route=name, price=1.0, score=1.0) for name in ('a', 'b', 'c', 'd')]
-        families = dict(a='claude', c='chatgpt', d='chatgpt')  # b has no family mapping
+        subscriptions = dict(a='p-a', c='p-c', d='p-d')  # b has no subscription mapping
         expiry = dict(a=1.0, b=3.0, d=2.0)  # c has no expiry mapping
-        result = usage_balance.reorder(ordered, families=families, expiry=expiry)
+        result = usage_balance.reorder(ordered, subscriptions=subscriptions, expiry=expiry)
         self.assertEqual([item['route'] for item in result], ['d', 'b', 'c', 'a'])
 
     def test_reorder_without_baseline_usable_score_keeps_order(self):
         ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
-        result = usage_balance.reorder(ordered, families=dict(a='claude', b='chatgpt'), expiry=dict(b=2.0))
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='p-a', b='p-b'), expiry=dict(b=2.0))
         self.assertEqual([item['route'] for item in result], ['a', 'b'])
 
     def test_reorder_does_not_mutate_inputs(self):
         ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
-        families = dict(a='claude', b='chatgpt')
+        subscriptions = dict(a='p-a', b='p-b')
         expiry = dict(a=1.0, b=2.0)
-        before = copy.deepcopy((ordered, families, expiry))
-        result = usage_balance.reorder(ordered, families=families, expiry=expiry)
+        before = copy.deepcopy((ordered, subscriptions, expiry))
+        result = usage_balance.reorder(ordered, subscriptions=subscriptions, expiry=expiry)
         self.assertEqual([item['route'] for item in result], ['b', 'a'])
         self.assertIsNot(result, ordered)
-        self.assertEqual((ordered, families, expiry), before)
+        self.assertEqual((ordered, subscriptions, expiry), before)
+
+    def test_distinct_paths_in_one_family_can_reorder(self):
+        ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b='claude-2'),
+                                       expiry=dict(a=1.0, b=2.0))
+        self.assertEqual([item['route'] for item in result], ['b', 'a'])
+
+    def test_same_path_never_triggers(self):
+        ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b='claude-1'),
+                                       expiry=dict(a=1.0, b=2.0))
+        self.assertEqual([item['route'] for item in result], ['a', 'b'])
+
+    def test_null_or_invalid_identity_is_neutral(self):
+        for bad in (None, '', 5, ['x'], False):
+            with self.subTest(identity=bad):
+                ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
+                # A null candidate neither triggers nor reorders.
+                result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b=bad),
+                                               expiry=dict(a=1.0, b=2.0))
+                self.assertEqual([item['route'] for item in result], ['a', 'b'])
+                # A null baseline keeps the baseline order, even with a valid candidate after it.
+                result = usage_balance.reorder(ordered, subscriptions=dict(a=bad, b='chatgpt-1'),
+                                               expiry=dict(a=1.0, b=2.0))
+                self.assertEqual([item['route'] for item in result], ['a', 'b'])
+
+    def test_null_candidate_stays_in_its_slot_and_does_not_trigger(self):
+        ordered = [dict(route='a', price=1.0, score=1.0), dict(route='n', price=1.0, score=1.0),
+                   dict(route='c', price=1.0, score=1.0)]
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', n=None, c='chatgpt-1'),
+                                       expiry=dict(a=1.0, n=2.0, c=1.4))
+        self.assertEqual([item['route'] for item in result], ['c', 'n', 'a'])
+        alone = [dict(route='a', price=1.0, score=1.0), dict(route='n', price=1.0, score=1.0)]
+        result = usage_balance.reorder(alone, subscriptions=dict(a='claude-1', n=None), expiry=dict(a=1.0, n=2.0))
+        self.assertEqual([item['route'] for item in result], ['a', 'n'])
+
+    def test_missing_candidate_identity_stays_in_its_slot(self):
+        ordered = [dict(route='a', price=1.0, score=1.0), dict(route='m', price=1.0, score=1.0),
+                   dict(route='c', price=1.0, score=1.0)]
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', c='chatgpt-1'),
+                                       expiry=dict(a=1.0, m=5.0, c=1.4))
+        self.assertEqual([item['route'] for item in result], ['c', 'm', 'a'])
+
+    def test_oversized_integers_are_invalid_not_crashes(self):
+        big = 10 ** 400
+        cases = [
+            (dict(price=big, score=1.0), dict(price=1.0, score=1.0), dict(b=2.0)),   # candidate price
+            (dict(price=1.0, score=big), dict(price=1.0, score=1.0), dict(b=2.0)),   # candidate score
+        ]
+        for candidate, base_fields, expiry in cases:
+            with self.subTest(candidate=candidate):
+                ordered = [dict(route='a', **base_fields), dict(route='b', **candidate)]
+                result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b='chatgpt-1'),
+                                               expiry=dict(a=1.0, **expiry))
+                self.assertEqual([item['route'] for item in result], ['a', 'b'])
+        ordered = [dict(route='a', price=big, score=1.0), dict(route='b', price=1.0, score=1.0)]
+        result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b='chatgpt-1'),
+                                       expiry=dict(a=1.0, b=2.0))
+        self.assertEqual([item['route'] for item in result], ['a', 'b'])  # baseline price
+        ordered = [dict(route='a', price=1.0, score=1.0), dict(route='b', price=1.0, score=1.0)]
+        for expiry in (dict(a=1.0, b=big), dict(a=big, b=2.0)):
+            with self.subTest(expiry=expiry):
+                result = usage_balance.reorder(ordered, subscriptions=dict(a='claude-1', b='chatgpt-1'),
+                                               expiry=expiry)
+                self.assertEqual([item['route'] for item in result], ['a', 'b'])
+        self.assertFalse(usage_balance.comparable(dict(price=big, score=1.0), dict(price=1.0, score=1.0)))
+
+    def test_oversized_meter_values_are_ignored(self):
+        big = 10 ** 400
+        self.assertIsNone(score('chatgpt', {'7d': meter(big, 168, 168)}))  # oversized percentage
+        self.assertIsNone(score('chatgpt', {'7d': dict(WEEKLY, reset_at=big)}))  # oversized time
+        self.assertIsNone(score('chatgpt', {'7d': WEEKLY}, now=big))  # oversized clock
+        # An oversized scoped duration is invalid alone: it neither vetoes nor divides by zero.
+        self.assertAlmostEqual(score('claude', {'7d': WEEKLY, '5h': SHORT,
+                                                SCOPE: dict(meter(50, 240, None), duration=big)}), 3.75)
+        self.assertAlmostEqual(score('claude', {'7d': WEEKLY, '5h': SHORT,
+                                                SCOPE: dict(meter(big, 144, 168))}), 3.75)
 
 
 if __name__ == '__main__':
