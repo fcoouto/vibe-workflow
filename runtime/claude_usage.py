@@ -410,35 +410,41 @@ def scopes(use, models):
             for _, item in sorted(found.items())]
 
 
+def _bound_exhaustion(settings_path, route, now, native):
+    """`(binding_current, remaining)` from one state read: whether `native` is still the current account's binding,
+    and the seconds until its bound quota's reset (None when that account has no usable quota row). This takes no
+    lock; it is the gate's private read, and `exhaustion_left` is its public number-or-None form."""
+    from runtime import native_catalog, opencode_account
+    if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
+            or opencode_account.family(route) != 'claude':
+        return False, None
+    state = _state(settings_path)
+    current = _current(state, now)
+    if current is None or opencode_account._native(current) != native:
+        return False, None
+    found = state.get('quota')
+    if type(found) is not dict or found.get('key') != current['key'] \
+            or found.get('generation') != current['generation']:
+        return True, None
+    snapshot = native_catalog.stored(settings_path, CLIENT)
+    bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
+    alias = route.get('model') if type(route.get('model')) is str else ''
+    return True, claude_quota.remaining(found.get('record'), alias, snapshot['models'] if bound else [], now=now)
+
+
 def exhaustion_left(settings_path, route, now, *, native=None):
     """Seconds until the account's confirmed exhaustion ends for this OpenCode Claude route, or None.
 
     `native` is the opaque native binding of the billing read that proved this route's account (`opencode_account`'s
-    record). Omitted, it is the current OpenCode Claude account's own binding, or None without one. One state read
-    supplies the current account and its quota, so an account switch between the reads refuses; only evidence bound
-    to that account and generation counts, with the catalog bound to the same account (else no model is matched, so
-    only account-wide windows block). This takes no lock."""
-    from runtime import native_catalog, opencode_account
-    if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
-            or opencode_account.family(route) != 'claude':
-        return None
+    record). Omitted, it is the current OpenCode Claude account's own binding, or None without one. A binding that no
+    longer matches the account gives None: no quota is applied. This takes no lock."""
+    from runtime import opencode_account
     if native is None:
         found = opencode_account._account(settings_path, 'claude', now)
         native = found['native'] if found is not None else None
-        if native is None:
-            return None
-    state = _state(settings_path)
-    current = _current(state, now)
-    if current is None or opencode_account._native(current) != native:
+    if native is None:
         return None
-    found = state.get('quota')
-    if type(found) is not dict or found.get('key') != current['key'] \
-            or found.get('generation') != current['generation']:
-        return None
-    snapshot = native_catalog.stored(settings_path, CLIENT)
-    bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
-    alias = route.get('model') if type(route.get('model')) is str else ''
-    return claude_quota.remaining(found.get('record'), alias, snapshot['models'] if bound else [], now=now)
+    return _bound_exhaustion(settings_path, route, now, native)[1]
 
 
 # -- the private store -------------------------------------------------------------------------------------------

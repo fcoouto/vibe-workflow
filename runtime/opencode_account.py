@@ -333,7 +333,9 @@ def _quota_gate(settings_path, route, now, producer=None):
             return BILLING_UNVERIFIED, None  # the fact's login is no longer the current one: no quota for it
         if found is None:
             return None, None
-        left = claude_usage.exhaustion_left(settings_path, route, now, native=found['native'])
+        bound, left = claude_usage._bound_exhaustion(settings_path, route, now, found['native'])
+        if not bound and producer is not None:
+            return BILLING_UNVERIFIED, None  # the native login changed after the fact's read: its proof is lost
         return (EXHAUSTED, left) if left is not None else (None, None)
     if name == 'chatgpt':
         left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None

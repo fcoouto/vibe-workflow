@@ -232,7 +232,7 @@ class ReaderTest(unittest.TestCase):
                         earliest=self.now - 60, latest=self.now)
         other = quota.merge({}, evidence, now=self.now)
         self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
-        original = self.native.exhaustion_left
+        original = self.native._bound_exhaustion
 
         def switch(*args, **kwargs):
             self.native._save(self.settings, identity=dict(key=changed["key"], generation=changed["generation"]),
@@ -240,7 +240,7 @@ class ReaderTest(unittest.TestCase):
                                                           record=other))
             return original(*args, **kwargs)
 
-        with mock.patch.object(self.native, "exhaustion_left", side_effect=switch):
+        with mock.patch.object(self.native, "_bound_exhaustion", side_effect=switch):
             self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
         self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now, native="0" * 32))
 
@@ -304,6 +304,97 @@ class ReaderTest(unittest.TestCase):
         answer = self.council.roster(dict(v=1, models=models), state_dir=self.settings.parent,
                                      source=self.crossing_source([self.become_second_login]), now=self.now)
         self.assertEqual([seat["status"] for seat in answer["seats"]], ["billing_unverified"])
+
+    def switch_native_login(self):
+        """Switch only the native login to another account whose weekly limit is exhausted; OpenCode keeps its fact."""
+        self.data["initialize"]["account"]["email"] = "other@example.invalid"
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=(), force=True)["state"], "stored")
+
+    def gate_source(self, pending):
+        """The production LocalSource; `pending` runs right after the quota gate's own account read."""
+        opencode_account = importlib.import_module("runtime.opencode_account")
+
+        class Gate(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+
+            def quota_for_billing(self, route, now, fact):
+                original = opencode_account._account
+
+                def after_read(*args, **kwargs):
+                    found = original(*args, **kwargs)
+                    if pending:
+                        pending.pop()()
+                    return found
+                with mock.patch.object(opencode_account, "_account", side_effect=after_read):
+                    return super().quota_for_billing(route, now, fact)
+        return Gate(self.settings)
+
+    def test_native_switch_after_the_gate_read_is_billing_unverified(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        pending = [self.switch_native_login]
+        kept, excluded = self.observations.eligible([self.route], self.gate_source(pending), self.now)
+        self.assertEqual(pending, [])
+        self.assertEqual((kept, excluded), ([], [dict(route=self.route["route"], reason="billing_unverified")]))
+
+    def test_roster_reports_a_native_switch_after_the_gate_read_as_billing_unverified(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        models = [dict(provider="claude-agent", id="invented", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        answer = self.council.roster(dict(v=1, models=models), state_dir=self.settings.parent,
+                                     source=self.gate_source([self.switch_native_login]), now=self.now)
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["billing_unverified"])
+
+    def test_stable_proved_account_without_quota_stays_eligible(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        source = self.observations.LocalSource(self.settings)
+        kept, excluded = self.observations.eligible([self.route], source, self.now)
+        self.assertEqual(excluded, [])
+        self.assertEqual([item["route"] for item in kept], [self.route["route"]])
+        answer = self.council.roster(dict(v=1, models=[dict(provider="claude-agent", id="invented", model=None,
+                                                            family=None, variants=["high"], context=None,
+                                                            released=5)]),
+                                     state_dir=self.settings.parent, source=self.gate_source([]), now=self.now)
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["ok"])
+
+    def test_bound_exhaustion_reports_binding_and_remaining_separately(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        native = self.openc._account(self.settings, "claude", self.now)["native"]
+        self.assertEqual(self.native._bound_exhaustion(self.settings, self.route, self.now, native),
+                         (True, 600))
+        self.assertEqual(self.native._bound_exhaustion(self.settings, self.route, self.now, "0" * 32),
+                         (False, None))
+        current = self.native.account(self.settings, self.now)
+        quota = importlib.import_module("runtime.claude_quota")
+        bad = quota.merge({}, dict(meters={"7d": dict(exhausted=True, reset_at=self.now + 600)},
+                                   scopes_complete=False, earliest=self.now - 60, latest=self.now), now=self.now)
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record=dict(bad, meters="malformed")))
+        self.assertEqual(self.native._bound_exhaustion(self.settings, self.route, self.now, native), (True, None))
+
+    def test_unusable_quota_row_on_a_matching_account_is_not_billing_unverified(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=(), force=True)
+            self.opencode()
+        current = self.native.account(self.settings, self.now)
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record="malformed"))
+        kept, excluded = self.observations.eligible([self.route], self.observations.LocalSource(self.settings),
+                                                    self.now)
+        self.assertEqual(excluded, [])
+        self.assertEqual(len(kept), 1)
 
     def test_weekly_exhaustion_is_stored_without_publishing_a_usage_snapshot(self):
         self.weekly_only()
