@@ -288,9 +288,20 @@ def _scope(item):
     return tuple(sorted(subscription_billing.scope(item).items()))
 
 
+def _clock(pool):
+    """The time of this step of the decision; a fixed clock stays fixed."""
+    return int(time.time()) if pool['fixed'] is None else pool['fixed']
+
+
 def _expiry(source, item, now):
-    """The route's expiry priority from its own hints, or None when it has no usable one."""
-    return usage_balance.expiry_score(opencode_account.family(item), _hints(source, item, now), now=now)
+    """`(expiry priority, end)` from the route's own hints at `now`. The priority is None when it has no usable one;
+    `end` is the first second at which one of the fresh readings behind it has reset or aged out."""
+    hints = _hints(source, item, now)
+    score = usage_balance.expiry_score(opencode_account.family(item), hints, now=now)
+    if score is None:
+        return None, None
+    return score, min(min(value['reset_at'], value['earliest'] + routing_observations.FRESH_SECONDS)
+                      for value in hints.values() if usage_balance.fresh_meter(value, now=now))
 
 
 def _group(ordered, qualifies):
@@ -305,22 +316,24 @@ def _group(ordered, qualifies):
 
 def _balance(ordered, pool, qualifies):
     """The baseline order, with the slots of comparable qualifying routes refilled by expiry priority when another
-    subscription beats the baseline winner by the minimum gain. A changed account among the reordered routes (the
-    baseline included, even past `_confirm`'s limit) restores the baseline order without them. Optional: any failure
-    returns the baseline order, and `_confirm` remains the final binding check."""
+    subscription beats the baseline winner by the minimum gain. Hints are read and scored at the clock of this
+    decision, after any score fetch. A changed account among the reordered routes (the baseline included, even past
+    `_confirm`'s limit) restores the baseline order without them. Optional: any failure returns the baseline order,
+    and `_confirm` remains the final binding check."""
     try:
-        found, now = _group(ordered, qualifies), pool['now']
+        found, now = _group(ordered, qualifies), _clock(pool)
         if found is None:
             return ordered  # fewer than two subscriptions can compete: read nothing
         base, rivals = found
-        base_expiry = _expiry(pool['source'], base, now)
+        base_expiry, end = _expiry(pool['source'], base, now)
         if base_expiry is None:
             return ordered
-        expiry = {base['route']: base_expiry}
+        expiry, ends = {base['route']: base_expiry}, [end]
         for item in rivals:
-            score = _expiry(pool['source'], item, now)
+            score, end = _expiry(pool['source'], item, now)
             if score is not None:
                 expiry[item['route']] = score
+                ends.append(end)
         group = [base] + [item for item in rivals if item['route'] in expiry]
         balanced = usage_balance.reorder(ordered, subscriptions={item['route']: item['path'] for item in group},
                                          expiry=expiry)
@@ -338,6 +351,7 @@ def _balance(ordered, pool, qualifies):
                    if _scope(item) in scopes and returned[_scope(item)] != item['account_marker']]
         if not changed:
             pool['reordered'] = frozenset(item['route'] for item in group)  # the participants `_settle` guards
+            pool['expires'] = min(ends)  # and the first second their readings no longer support the reorder
             return balanced
         pool['excluded'].extend(dict(route=route, reason='account_changed') for route in changed)
         return [item for item in ordered if item['route'] not in changed]
@@ -347,16 +361,18 @@ def _balance(ordered, pool, qualifies):
 
 def _settle(ordered, pool, qualifies):
     """`_balance`, then the final `_confirm`. A participant of a reorder that changes only at that final check discards
-    the reorder: the surviving routes are confirmed once more, in their original group order, with no new reads beyond
-    that confirmation and no restored exclusions."""
-    pool['reordered'] = None
+    the reorder, and so does a supporting reading that resets or ages out before the check ends: the surviving routes
+    are confirmed once more, in their original group order, with no new reads beyond that confirmation and no restored
+    exclusions."""
+    pool['reordered'], pool['expires'] = None, None
     balanced = _balance(ordered, pool, qualifies)
     participants = pool['reordered']
     if not participants:
         return _confirm(balanced, pool, 3, qualifies)
     mark = len(pool['excluded'])
     chosen = _confirm(balanced, pool, 3, qualifies)
-    if not {entry['route'] for entry in pool['excluded'][mark:] if entry['reason'] == 'account_changed'} & participants:
+    drifted = {entry['route'] for entry in pool['excluded'][mark:] if entry['reason'] == 'account_changed'}
+    if not drifted & participants and _clock(pool) < pool['expires']:
         return chosen
     changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
     return _confirm([item for item in ordered if item['route'] not in changed], pool, 3, qualifies)

@@ -1885,10 +1885,14 @@ class ChatgptUsageTest(unittest.TestCase):
             found["5h"] = codex_meter(at, *five, self.FIVE, received=received)
         return found
 
-    def read(self, at, meters=None, *, finished=None):
-        """One refresh at `at` whose Codex read returns `meters` (default: weekly and 5-hour) at `finished`."""
-        clock = [at, at if finished is None else finished]
-        answer = self.meters(at, received=finished) if meters is None else meters
+    def read(self, at, meters=None, *, finished=None, locked=None, published=None):
+        """One refresh called at `at` whose Codex read returns `meters` (default: weekly and 5-hour) at `finished`.
+        The worker reads the clock four times: when called, when it holds the account lock to start (`locked`), when
+        the exchange returns (`finished`), and when it holds the lock again to publish (`published`)."""
+        locked = at if locked is None else locked
+        finished = locked if finished is None else finished
+        clock = [at, locked, finished, finished if published is None else published]
+        answer = self.meters(locked, received=finished) if meters is None else meters
         with mock.patch("time.time", side_effect=lambda: clock.pop(0) if len(clock) > 1 else clock[0]), \
                 mock.patch.object(self.openc.codex_reset, "read_windows", return_value=answer) as reader:
             state = self.openc.refresh_chatgpt_usage(self.settings, environ=self.environ)
@@ -2020,6 +2024,161 @@ class ChatgptUsageTest(unittest.TestCase):
         self.chatgpt(force=True, at=again)  # the account stays current through the checks below
         for later, expected in ((60, False), (899, False), (900, True)):  # no reset reached: only the 900-second age
             self.assertIs(self.due(again + later), expected, later)
+
+    def test_a_wait_for_the_account_lock_cannot_shorten_the_spacing_of_the_next_read(self):
+        self.chatgpt()
+        start = self.now + 8  # called at `now`, but the account lock was only held eight seconds later
+        self.assertEqual(self.read(self.now, self.meters(start, five=(40, 30)), locked=start), "stored")
+        self.assertEqual(self.usage()["started"], start)
+        for at, expected in ((self.now + 60, False), (start + 59, False), (start + 60, True)):
+            self.assertIs(self.due(at), expected, at - self.now)
+        self.assertEqual(self.read(start + 59), "not_due")
+        self.assertEqual(self.reads, 1)
+
+    def test_spacing_runs_from_the_exchange_start_the_meters_carry(self):
+        self.chatgpt()
+        exchange = self.now + 3  # the read stamps its own start, three seconds after the start record
+        self.assertEqual(self.read(self.now, self.meters(exchange, five=(40, 30), received=exchange + 1),
+                                   finished=exchange + 1), "stored")
+        self.assertEqual((self.usage()["started"], self.usage()["finished"]), (exchange, exchange + 1))
+        self.assertEqual(self.usage()["ranking"]["earliest"], exchange)
+        for at, expected in ((self.now + 60, False), (exchange + 59, False), (exchange + 60, True)):
+            self.assertIs(self.due(at), expected, at - self.now)
+
+    def test_a_binding_that_expires_while_waiting_to_start_reads_nothing(self):
+        self.chatgpt()
+        last = self.now + self.storage.FRESH_SECONDS  # the account record's last current second
+        self.assertEqual(self.read(last, locked=last + 1), "unbound")
+        self.assertEqual(self.reads, 0)
+        self.assertIsNone(self.usage())  # not even a start record
+        self.assertEqual(self.read(last, locked=last), "stored")  # held in time, the same call reads
+        self.assertEqual(self.reads, 1)
+
+    def test_a_binding_that_expires_while_waiting_to_publish_stores_no_reading(self):
+        self.chatgpt()
+        last = self.now + self.storage.FRESH_SECONDS
+        self.assertEqual(self.read(last - 5, finished=last - 1, published=last + 1), "unbound")
+        self.assertEqual(self.reads, 1)
+        usage = self.usage()
+        self.assertEqual((usage["ok"], usage["finished"], usage["ranking"]), (False, None, None))
+        self.chatgpt(force=True, at=last + 1)
+        self.assertEqual(self.hints(last + 1), {})
+        self.assertFalse(self.due(last - 5 + 899))  # the interrupted start record keeps the durable cooldown
+        self.chatgpt(force=True, at=last - 5 + 900)
+        self.assertTrue(self.due(last - 5 + 900))
+
+    def test_a_failure_cools_down_from_the_exchange_completion_not_from_a_late_publication(self):
+        self.chatgpt()
+        start, completed, published = self.now, self.now + 4, self.now + 12
+        self.assertEqual(self.read(start, {}, finished=completed, published=published), "failed")
+        self.assertEqual((self.usage()["ok"], self.usage()["started"], self.usage()["finished"]),
+                         (False, start, completed))
+        self.chatgpt(force=True, at=completed + 899)
+        self.assertFalse(self.due(completed + 899))
+        self.assertTrue(self.due(completed + 900))
+
+    def racing_store(self, action, *, before):
+        """Patch `os.open` so `action` runs once, around the first read-only open of the account store."""
+        real, seen, target = os.open, [], str(self.openc._store(self.settings))
+
+        def opened(path, flags, *args, **kwargs):
+            racing = str(path) == target and flags & os.O_ACCMODE == os.O_RDONLY and not seen
+            if racing:
+                seen.append(path)
+            if racing and before:
+                action()
+            fd = real(path, flags, *args, **kwargs)
+            if racing and not before:
+                action()
+            return fd
+        return mock.patch.object(self.storage.os, "open", side_effect=opened), seen
+
+    def publish_usage(self):
+        """The worker's publication: the shared account file is replaced while the ChatGPT account itself is unchanged."""
+        self.openc._transition(self.settings, "chatgpt", lambda part: dict(chatgpt_usage=dict(
+            part.get("chatgpt_usage") or {}, touched=True)))
+
+    def test_a_publication_during_a_billing_read_leaves_the_unchanged_account_verified(self):
+        self.chatgpt()
+        route, source = self.gpt_route, self.observations.LocalSource(self.settings)
+        marker = self.marker(self.now)
+        for before in (True, False):
+            with self.subTest(before=before):
+                patched, seen = self.racing_store(self.publish_usage, before=before)
+                with patched:
+                    fact = self.openc.billing_fact(self.settings, route, self.now)
+                self.assertEqual(len(seen), 1)
+                self.assertIsNotNone(fact)
+                billing = importlib.import_module("runtime.subscription_billing")
+                self.assertEqual(billing.marker(fact, route, self.now), marker)  # never `account_changed`
+                patched, seen = self.racing_store(self.publish_usage, before=before)
+                with patched:
+                    kept, excluded = self.observations.eligible([route], source, self.now)
+                self.assertEqual(len(seen), 1)
+                self.assertEqual(([item["account_marker"] for item in kept], excluded), ([marker], []))
+                patched, seen = self.racing_store(self.publish_usage, before=before)
+                with patched:
+                    self.assertTrue(self.due(self.now))
+                    self.assertEqual(self.hints(self.now, marker=marker), {})
+
+    def test_a_publication_during_acquisition_starts_no_provider_read(self):
+        self.chatgpt()
+        for before in (True, False):
+            with self.subTest(before=before):
+                patched, seen = self.racing_store(self.publish_usage, before=before)
+                with patched, mock.patch("time.time", return_value=self.now), \
+                        mock.patch.object(self.openc, "_call", side_effect=AssertionError("no account exchange")):
+                    result = self.openc.refresh(self.settings, families=("chatgpt",), command=self.command,
+                                                environ=self.environ)
+                self.assertEqual(len(seen), 1)
+                self.assertEqual(result, dict(state="fresh", reason=None, families={}))
+
+    def test_a_killed_worker_cannot_leave_a_codex_child_that_ignores_end_of_input(self):
+        reached, pidfile = self.root / "reached.fifo", self.root / "codex.pid"
+        os.mkfifo(reached)
+        codex = self.root / "codex"
+        codex.write_text("#!%s\n" % sys.executable + "\n".join((
+            "import os, signal, sys, time",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "signal.signal(signal.SIGHUP, signal.SIG_IGN)",
+            "open(%r, 'w').write(str(os.getpid()))" % str(pidfile),
+            "sys.stdin.readline()",
+            "open(%r, 'w').write('1')" % str(reached),
+            "time.sleep(20)")) + "\n")  # never answers, and ignores end of input and SIGTERM
+        codex.chmod(0o700)
+        harness = "\n".join((
+            "import sys",
+            "from runtime import codex_reset",
+            "environ = dict(PATH='/usr/bin:/bin', HOME=sys.argv[1])",
+            "print(codex_reset.read_windows(timeout=1.0, environ=environ, command=[sys.argv[2]]))"))
+        root = Path(__file__).resolve().parents[2]
+        worker = subprocess.Popen([sys.executable, "-B", "-c", harness, str(self.root), str(codex)], cwd=root,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  env=dict(os.environ, PYTHONPATH=str(root)))
+        self.addCleanup(worker.stdout.close)
+
+        def reap():  # a child this test left behind must not outlive it
+            if pidfile.exists():
+                try:
+                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
+        self.addCleanup(reap)
+        try:
+            self.assertTrue(reached_barrier(reached, lambda: worker.poll() is None))
+        finally:
+            killed = time.monotonic()
+            worker.kill()  # only the worker: nothing signals the Codex child or its group
+            worker.wait(10)
+        child = int(pidfile.read_text())
+        gone = False
+        while not gone and time.monotonic() - killed < 4:  # the one-second read bound, plus its grace and margin
+            try:
+                os.kill(child, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                gone = True
+        self.assertTrue(gone, "the Codex child outlived its killed worker")
 
     def test_a_partial_valid_result_is_a_success_and_does_not_trigger_each_pick(self):
         self.chatgpt()

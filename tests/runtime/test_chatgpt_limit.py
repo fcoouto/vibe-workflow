@@ -301,6 +301,42 @@ class CodexWindowsTest(unittest.TestCase):
                                                   command=fake_codex(self.dir, 'time.sleep(60)\n')), {})
         self.assertLess(time.monotonic() - start, 1.5)
 
+    def test_a_child_that_ignores_end_of_input_and_sigterm_is_gone_when_the_read_returns(self):
+        pidfile = self.dir / 'pid'
+        body = 'import os, signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n' \
+               'open(%r, "w").write(str(os.getpid()))\nread()\ntime.sleep(20)\n' % str(pidfile)
+        start = time.monotonic()
+        self.assertEqual(codex_reset.read_windows(environ=self.env, timeout=0.5, command=fake_codex(self.dir, body)), {})
+        self.assertLess(time.monotonic() - start, 3)
+        gone = False
+        for _ in range(40):  # an orphan is reaped by init a moment after its group is killed
+            try:
+                os.kill(int(pidfile.read_text()), 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                gone = True
+                break
+        self.assertTrue(gone)
+
+    def test_the_guard_adds_one_transient_parent_and_changes_nothing_the_child_sees(self):
+        seen = self.dir / 'seen.json'
+        body = 'import os\nopen(%r, "w").write(json.dumps(dict(env=sorted(os.environ), cwd=os.getcwd(), ' \
+               'argv=sys.argv[1:], parent=os.getppid(), group=os.getpgrp(), pid=os.getpid())))\n' % str(seen)
+        result = dict(rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200))))
+        command = fake_codex(self.dir, body + RESULT % (str(self.methods), json.dumps(result))) + ['app-server']
+        with mock.patch('time.time', return_value=NOW):
+            hints = codex_reset.read_windows(environ=dict(self.env, SECRET='PRIVATE-SENTINEL'), command=command)
+        self.assertEqual(hints['7d']['used_percent'], 90)
+        child = json.loads(seen.read_text())
+        self.assertEqual((child['cwd'], child['argv']), ('/', ['app-server']))
+        self.assertNotIn('SECRET', child['env'])
+        self.assertLessEqual(set(child['env']) - {'__CF_USER_TEXT_ENCODING', 'LC_CTYPE'}, set(codex_reset.ENV_ALLOWLIST))
+        self.assertNotIn(child['parent'], (os.getpid(), child['pid']))  # the guard, not this process
+        self.assertEqual(child['group'], child['parent'])  # in the guard's own group, which is what it kills
+        for pid in (child['pid'], child['parent']):
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)  # neither outlives the read
+
     def test_the_reset_reader_keeps_its_slot_contract_beside_the_window_reader(self):
         result = self.by_id(self.window(90, WEEK, 7200))
         result['rateLimits'] = dict(primary=self.window(40, FIVE, 100), secondary=self.window(90, FIVE, 200))

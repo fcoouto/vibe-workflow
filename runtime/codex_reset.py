@@ -9,6 +9,7 @@ import math
 import os
 import selectors
 import subprocess
+import sys
 import time
 
 from runtime import processes as lifecycle, storage
@@ -17,6 +18,13 @@ TIMEOUT = 5.0
 BUCKET = 'codex'  # the documented plan-wide limit ID; other buckets and slot names never name a scope
 BOOST_MINUTES = {300: '5h', 10_080: '7d'}  # the verified shapes; any other length only protects headroom
 MAX_MINUTES = 366 * 1440
+# The ranking read's guard: a short-lived parent of Codex, leader of its own process group. Its alarm kills that group
+# when the read's bound passes, whether or not the worker that started it is still alive. It never touches the pipes.
+GUARD = '''import os, signal, subprocess, sys
+signal.signal(signal.SIGALRM, lambda *args: os.killpg(0, signal.SIGKILL))
+signal.setitimer(signal.ITIMER_REAL, float(sys.argv[1]))
+sys.exit(subprocess.call(sys.argv[2:]))
+'''
 MAX_LINE = 256 << 10
 MAX_MESSAGES = 64
 ENV_ALLOWLIST = ('PATH', 'HOME', 'CODEX_HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR')
@@ -159,14 +167,16 @@ def read_windows(*, timeout=TIMEOUT, environ=None, command=None):
 
     `earliest` is stamped just before the bounded exchange and `latest` when it returns: the interval bounds this
     exchange, not the age of the provider's accounting. Only a 5-hour or weekly window has a verified discrete reset.
-    It refuses under `VCW_TEST_HOME`, as `read_reset` does."""
+    It refuses under `VCW_TEST_HOME`, as `read_reset` does. Codex runs under `GUARD`, so a worker killed mid-exchange
+    cannot leave it running past the bound, even when it ignores the end of its input."""
     environ = os.environ if environ is None else environ
     try:
         if environ.get('VCW_TEST_HOME'):
             return {}
         command, env = command or _command(environ), _env(environ)
+        guarded = [sys.executable, '-I', '-B', '-S', '-c', GUARD, repr(timeout + lifecycle.STOP_GRACE), *command]
         started = math.floor(time.time())
-        result = _exchange(command, env, timeout)
+        result = _exchange(guarded, env, timeout)
         return _windows(result, started, math.ceil(time.time()))
     except (lifecycle.ReadError, OSError, ValueError, RecursionError, subprocess.SubprocessError):
         return {}

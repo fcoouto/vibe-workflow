@@ -1183,6 +1183,85 @@ class ReviewBalanceTest(unittest.TestCase):
         self.assertNotIn("usage_refresh", alone)  # the same-lab Go route is outside the independent group
 
 
+class Ticking(Hinted):
+    """A hinted source on a moving clock: the `jump_at`th billing read takes `jump` seconds. The account never changes."""
+    def __init__(self, hints, clock, *, jump_at=None, jump=0):
+        super().__init__(hints)
+        self.clock, self.jump_at, self.jump = clock, jump_at, jump
+
+    def billing(self, route, now):
+        if len(self.billed) + 1 == self.jump_at:
+            self.clock[0] += self.jump
+        return super().billing(route, now)
+
+
+class MovingClockTest(unittest.TestCase):
+    """Ranking uses the clock of the decision, and a promotion does not outlive the readings that support it."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.models = [model("claude-agent", "claude-sonnet-5-5"), model("openai", "gpt-6-2-sol")]
+        self.clock = [NOW]
+
+    def hints(self, chatgpt):
+        return {CLAUDE_ROUTE: {"7d": fresh(40, 72 * 3600, 604800)}, CHATGPT_ROUTE: {"7d": chatgpt}}
+
+    def select(self, source, fetch):
+        request = dict(v=2, work_kind="review", task=dict(TASK), models=self.models)
+        state = Path(tempfile.mkdtemp(dir=self.root))
+        with mock.patch("time.time", side_effect=lambda: self.clock[0]):
+            result = select(request, state_dir=state, source=source, fetch=fetch)  # no fixed clock: the real path
+        self.assertEqual([entry for entry in result["excluded"] if entry["reason"] == "account_changed"], [])
+        for field in ("admission", "reservation", "spend_permit"):
+            self.assertIs(result[field], False)
+        return result
+
+    def test_a_window_that_resets_during_the_score_fetch_no_longer_promotes(self):
+        closing = dict(fresh(90, 2, 604800), earliest=NOW - 10, latest=NOW - 10)  # resets two seconds from now
+        clock = self.clock
+
+        class Slow(Fetch):
+            def __call__(self, timeout):
+                clock[0] += 5  # the first score download takes five seconds: the window has reset when it returns
+                return super().__call__(timeout)
+        result = self.select(Ticking(self.hints(closing), clock), Slow(balance_body()))
+        self.assertEqual((result["state"], result["route"]["route"]), ("selected", CLAUDE_ROUTE))
+        self.assertEqual([item["route"] for item in result["alternatives"]], [CHATGPT_ROUTE])
+        self.clock[0] = NOW  # the same reading promotes while it is still fresh at the decision
+        quick = self.select(Ticking(self.hints(closing), clock), Fetch(balance_body()))
+        self.assertEqual(quick["route"]["route"], CHATGPT_ROUTE)
+
+    def test_a_supporting_reading_that_expires_during_confirmation_discards_the_promotion(self):
+        # Billing reads: two for eligibility, two for the scope recheck, then confirmation. The fifth takes ten seconds.
+        resetting = dict(fresh(90, 5, 604800), earliest=NOW - 10, latest=NOW - 10)  # resets at NOW + 5
+        aging = dict(fresh(90, 7200, 604800), earliest=NOW - 895, latest=NOW - 895)  # 900 seconds old at NOW + 5
+        for label, chatgpt in (("reset", resetting), ("age", aging)):
+            with self.subTest(label=label):
+                self.clock[0] = NOW
+                steady = self.select(Ticking(self.hints(chatgpt), self.clock), Fetch(balance_body()))
+                self.assertEqual(steady["route"]["route"], CHATGPT_ROUTE)  # still fresh throughout: promoted
+                self.clock[0] = NOW
+                source = Ticking(self.hints(chatgpt), self.clock, jump_at=5, jump=10)
+                result = self.select(source, Fetch(balance_body()))
+                self.assertEqual((result["state"], result["route"]["route"]), ("selected", CLAUDE_ROUTE))
+                self.assertEqual([item["route"] for item in result["alternatives"]], [CHATGPT_ROUTE])
+                self.assertEqual(len(source.billed), 8)  # one more local confirmation of the two routes, no more
+        self.clock[0] = NOW  # the baseline's own reading counts as well: Claude's ages out, the promotion goes
+        hints = {CLAUDE_ROUTE: {"7d": dict(fresh(40, 72 * 3600, 604800), earliest=NOW - 895, latest=NOW - 895)},
+                 CHATGPT_ROUTE: {"7d": fresh(90, 7200, 604800)}}
+        result = self.select(Ticking(hints, self.clock, jump_at=5, jump=10), Fetch(balance_body()))
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
+    def test_a_fixed_clock_keeps_fixtures_deterministic(self):
+        closing = dict(fresh(90, 2, 604800), earliest=NOW - 10, latest=NOW - 10)
+        request = dict(v=2, work_kind="review", task=dict(TASK), models=self.models)
+        source = Ticking(self.hints(closing), self.clock, jump_at=5, jump=10)
+        with mock.patch("time.time", side_effect=lambda: self.clock[0]):
+            result = select(request, state_dir=self.root, source=source, fetch=Fetch(balance_body()), now=NOW)
+        self.assertEqual(result["route"]["route"], CHATGPT_ROUTE)
+
+
 class UsageRefreshTest(unittest.TestCase):
     """`usage_refresh` marks a due ChatGPT read only for the group that could actually be balanced."""
     def setUp(self):

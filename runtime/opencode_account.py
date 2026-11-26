@@ -541,12 +541,15 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
     One worker per store holds a dedicated nonblocking lock, never the store's write lock, so picks and account reads
     go on. Under it the binding and the due status are checked again, and a start record that counts as failed is
     written before the exchange: a killed worker leaves the cooldown, not a retry. The reading is published only while
-    the same key and generation are still the complete, proved account; a failed read keeps the batch already held."""
+    the same key and generation are still the complete, proved account; a failed read keeps the batch already held.
+    Both checks read the clock while holding the account lock, so a wait for it can neither shorten the spacing nor
+    carry a binding past its freshness. A success is spaced from the exchange start its meters carry; a failure cools
+    down from the exchange's completion."""
     try:
         if not isinstance(settings_path, Path) or not settings_path.is_absolute():
             return 'failed'
-        store, now = _store(settings_path), int(time.time())
-        if _complete(_part(observations._read(store), 'chatgpt'), now) is None:
+        store = _store(settings_path)
+        if _complete(_part(observations._read(store), 'chatgpt'), int(time.time())) is None:
             return 'unbound'  # before the lock, so an absent store is not created to say so
         with storage._locked(store, block=False, lock=CHATGPT_LOCK) as held:
             if held is None:
@@ -554,6 +557,7 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
             bound, skip = {}, []
 
             def start(part):
+                now = int(time.time())  # read while the account lock is held
                 record = _complete(part, now)
                 usage = _usage(part, record) if record else None
                 if record is None or not _usage_due(usage, now):
@@ -569,10 +573,10 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
                     return skip[0]
                 raise
             meters = codex_reset.read_windows(environ=environ, command=command)
-            finished = int(time.time())
+            finished = int(time.time())  # the exchange's completion: what a failure cools down from
 
             def publish(part):
-                record = _complete(part, finished)
+                record = _complete(part, int(time.time()))  # read while the account lock is held
                 usage = _usage(part, record) if record else None
                 if usage is None or continuity._proved(part, bound['key']) != bound['generation'] \
                         or usage.get('started') != bound['started'] or usage.get('ok') is not False:
@@ -581,7 +585,8 @@ def refresh_chatgpt_usage(settings_path, *, environ=None, command=None):
                 change = dict(bound, finished=finished)
                 if meters:
                     first = next(iter(meters.values()))
-                    change.update(ok=True, reset=min(meter['reset_at'] for meter in meters.values()),
+                    change.update(ok=True, started=max(bound['started'], first['earliest']),
+                                  reset=min(meter['reset_at'] for meter in meters.values()),
                                   ranking=usage_balance.batch_after(bound['ranking'], earliest=first['earliest'],
                                                                     latest=first['latest'], meters=meters))
                 return dict(chatgpt_usage=change)
