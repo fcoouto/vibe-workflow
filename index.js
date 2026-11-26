@@ -553,7 +553,13 @@ export default {
       const result = await project.apply(...args)
       if (result.enabled === false) forgetOff()
       return result
-    } }, git_workflow: gitWorkflow, session_titles: sessionTitles }, (signal, allowFetch) =>
+    } }, git_workflow: gitWorkflow, session_titles: { ...sessionTitles,
+      async apply(...args) {
+        const result = await sessionTitles.apply(...args)
+        if (result.state === "saved") titles.preferenceSaved(result.enabled)
+        return result
+      },
+    } }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
     () => advice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
     () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" })

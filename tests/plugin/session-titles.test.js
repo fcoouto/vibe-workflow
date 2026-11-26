@@ -454,6 +454,71 @@ test("settings off, not onboarded or invalid do no work", async (t) => {
   assert.deepEqual([h.calls.get.length, h.calls.run, h.calls.update], [1, [], []])
 })
 
+test("another copy's disable fences an admitted evaluation, even after off-on", async (t) => {
+  for (const reenable of [false, true]) {
+    const w = await world(t)
+    w.session("ses_1", "main")
+    seed(w, "ses_1", "main")
+    const before = w.title()
+    const stored = structuredClone(w.record())
+    w.facts.changed = ["src/app.js"]
+    let release
+    w.facts.gate = new Promise((done) => { release = done })
+    await w.end()
+    assert.equal(w.copies.main.calls.gh, 1)
+    w.preference.state = "off"
+    w.copies.wt.registered.preferenceSaved?.(false)
+    if (reenable) {
+      w.preference.state = "on"
+      w.copies.wt.registered.preferenceSaved?.(true)
+    }
+    release()
+    await settle()
+    assert.equal(w.title(), before)
+    assert.deepEqual(w.record(), stored)
+    assert.equal(w.storage.calls.scan, 0)
+    if (reenable) {
+      await w.end()
+      assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+    } else {
+      await w.write(`${w.dirs.main}/${OTHER}`)
+      assert.deepEqual(w.record(), stored)
+    }
+  }
+})
+
+test("disable does not recall a sent title but prevents its later storage write", async (t) => {
+  const w = await world(t)
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  const stored = structuredClone(w.record())
+  w.facts.changed = ["src/app.js"]
+  let release
+  w.facts.updateGate = new Promise((done) => { release = done })
+  await w.end()
+  assert.equal(w.copies.main.calls.update.length, 1)
+  w.preference.state = "off"
+  w.copies.wt.registered.preferenceSaved?.(false)
+  release()
+  await settle()
+  assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+  assert.deepEqual(w.record(), stored)
+})
+
+test("preference publication for a different project does not cancel a pending title", async (t) => {
+  const w = await world(t, { projects: { wt: "other" } })
+  w.session("ses_1", "main")
+  seed(w, "ses_1", "main")
+  w.facts.changed = ["src/app.js"]
+  let release
+  w.facts.gate = new Promise((done) => { release = done })
+  await w.end()
+  w.copies.wt.registered.preferenceSaved?.(false)
+  release()
+  await settle()
+  assert.equal(w.title(), "￻▰▰▱▱▱ WAITING · Fix login flow")
+})
+
 test("failing reads and writes keep the cells and the next turn end repairs", async (t) => {
   const h = await host(t)
   await h.write(SPEC)
