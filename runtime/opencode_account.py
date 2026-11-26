@@ -385,11 +385,24 @@ def _part(state, family):
     return value if type(value) is dict else {}
 
 
+def _storable_usage(usage):
+    usage = usage_balance.storable_ranking(usage)
+    if storage.storable(usage):
+        return usage
+    if type(usage) is not dict or not all(continuity._hex(usage.get(key)) for key in ('key', 'generation')) \
+            or not routing._amount(usage.get('started')):
+        return None
+    # A damaged reading proves no reset, but cannot erase the failed/interrupted-read cooldown.
+    started, finished = usage['started'], usage.get('finished')
+    return dict(key=usage['key'], generation=usage['generation'], started=started,
+                finished=finished if routing._amount(finished) and finished >= started else None,
+                ok=False, reset=None, ranking=None)
+
+
 def _storable(value):
     """The store as the strict write can store it. The file is shared, so one hint that cannot be written back would
-    block every family's account and pause updates. Only optional ranking state goes: an unstorable batch becomes
-    unknown, and a ChatGPT usage record that still cannot be stored goes whole, which leaves its read due. Accounts,
-    identities and pause meters are never altered; if they cannot be stored, the strict write still refuses."""
+    block every family's account and pause updates. Drop unstorable ranking evidence, but keep valid ChatGPT
+    attempt timing. Accounts, identities and pause meters are never altered; the strict write still checks them."""
     if storage.storable(value):
         return value
     kept = dict(value)
@@ -399,8 +412,7 @@ def _storable(value):
             if 'go_quota' in part:
                 part['go_quota'] = usage_balance.storable_ranking(part['go_quota'])
             if 'chatgpt_usage' in part:
-                usage = usage_balance.storable_ranking(part['chatgpt_usage'])
-                part['chatgpt_usage'] = usage if storage.storable(usage) else None
+                part['chatgpt_usage'] = _storable_usage(part['chatgpt_usage'])
     return kept
 
 

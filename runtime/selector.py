@@ -250,17 +250,30 @@ def _reported(unmatched):
     return dict(unmatched=unmatched) if unmatched else {}
 
 
-def _confirm(ordered, pool, limit, qualifies=None):
+def _confirm(ordered, pool, limit, qualifies=None, *, binding_wide=False):
     """Recheck each account in order; a route whose account changed since eligibility is dropped.
-    With `qualifies`, keep checking past the limit until a qualifying route passes, and keep it among the picks."""
-    chosen, found = [], False
+    With `qualifies`, keep checking past the limit until a qualifying route passes, and keep it among the picks.
+    A balanced decision also drops other aliases of any binding it observes changing during a confirmation pass."""
+    chosen, found, lost = [], False, set()
     for item in ordered:
         if len(chosen) >= limit and (qualifies is None or found):
             break
+        binding = _binding(item) if binding_wide else None
+        if binding in lost:
+            pool['excluded'].append(dict(route=item['route'], reason='account_changed'))
+            continue
         current = int(time.time()) if pool['fixed'] is None else pool['fixed']
         fact = subscription_billing.fact(pool['source'], item, current)
         if subscription_billing.marker(fact, item, current) != item['account_marker']:
             pool['excluded'].append(dict(route=item['route'], reason='account_changed'))
+            if binding_wide:
+                lost.add(binding)
+                stale = [candidate for candidate in chosen if _binding(candidate) == binding]
+                if stale:
+                    pool['excluded'].extend(dict(route=candidate['route'], reason='account_changed')
+                                            for candidate in stale)
+                    chosen = [candidate for candidate in chosen if candidate not in stale]
+                    found = bool(qualifies and any(qualifies(candidate) for candidate in chosen))
         elif len(chosen) < limit:
             chosen.append(item)
             found = found or bool(qualifies and qualifies(item))
@@ -376,7 +389,7 @@ def _settle(ordered, pool, qualifies):
     if not participants:
         return _confirm(balanced, pool, 3, qualifies)
     mark = len(pool['excluded'])
-    chosen = _confirm(balanced, pool, 3, qualifies)
+    chosen = _confirm(balanced, pool, 3, qualifies, binding_wide=True)
     drifted = {entry['route'] for entry in pool['excluded'][mark:] if entry['reason'] == 'account_changed'}
     lost = {_binding(item) for item in ordered if item['route'] in drifted}
     stale = [item['route'] for item in ordered if _binding(item) in lost]
@@ -384,7 +397,8 @@ def _settle(ordered, pool, qualifies):
         return chosen
     changed = {entry['route'] for entry in pool['excluded'] if entry['reason'] == 'account_changed'}
     pool['excluded'].extend(dict(route=route, reason='account_changed') for route in stale if route not in changed)
-    return _confirm([item for item in ordered if item['route'] not in changed.union(stale)], pool, 3, qualifies)
+    survivors = [item for item in ordered if item['route'] not in changed.union(stale)]
+    return _confirm(survivors, pool, 3, qualifies, binding_wide=True)
 
 
 def _usage_refresh(group, pool, qualifies):

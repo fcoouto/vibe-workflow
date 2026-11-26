@@ -2508,9 +2508,27 @@ class ChatgptUsageTest(unittest.TestCase):
         self.assertEqual(go(force=True), "stored")
         after = strict(store)["chatgpt"]
         self.assertEqual((after["account"], after["identity"]), (before["account"], before["identity"]))
-        self.assertIsNone(after["chatgpt_usage"])  # a usage record that still cannot be stored goes whole
         self.assertIsNotNone(self.openc.billing_fact(self.settings, self.gpt_route, self.now))
         self.assertEqual(self.hints(self.now), {})
+        self.assertFalse(self.due(self.now))  # corrupt reset does not erase the attempt's timing
+
+    def test_an_unrelated_account_write_preserves_a_failed_read_cooldown_when_its_reset_is_corrupt(self):
+        self.chatgpt()
+        finished = self.now + 2
+        self.assertEqual(self.read(self.now, {}, finished=finished), "failed")
+        store = self.openc._store(self.settings)
+        unstorable(store, lambda value, token: value["chatgpt"]["chatgpt_usage"].update(reset=token))
+
+        at = finished + 1
+        self.assertFalse(self.due(at))
+        with mock.patch("time.time", return_value=at):
+            self.assertEqual(ReaderTest.opencode(self, "go", usage={})["state"], "stored")
+        self.assertEqual(self.read(at), "not_due")
+        self.assertEqual(self.reads, 1)  # only the original failed read entered Codex
+        self.assertEqual(self.hints(at), {})
+        self.assertEqual(self.chatgpt(force=True, at=self.now + 400)["state"], "stored")
+        self.assertFalse(self.due(finished + 899))
+        self.assertTrue(self.due(finished + 900))
 
     def test_an_unstorable_chatgpt_hint_does_not_stop_its_own_next_read(self):
         self.chatgpt()

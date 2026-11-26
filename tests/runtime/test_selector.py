@@ -1048,9 +1048,9 @@ class BalanceTest(unittest.TestCase):
         real = {name: getattr(selector, name) for name in ("_balance", "_confirm")}
 
         def measured(name):
-            def run(*args):
+            def run(*args, **kwargs):
                 before = len(source.billed)
-                value = real[name](*args)
+                value = real[name](*args, **kwargs)
                 phases[name] = phases.get(name, 0) + len(source.billed) - before
                 return value
             return run
@@ -1317,6 +1317,22 @@ class MovingClockTest(unittest.TestCase):
                  CHATGPT_ROUTE: {"7d": fresh(90, 7200, 604800)}}
         result = self.select(Ticking(hints, self.clock, jump_at=5, jump=10), Fetch(balance_body()))
         self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
+    def test_an_alias_that_rotates_during_fallback_invalidates_the_previously_confirmed_alias(self):
+        models = self.models + [model("claude-agent", "claude-sonnet-5-6")]
+        closing = fresh(90, 5, 604800)
+        source = Ticking(self.hints(closing), self.clock, jump_at=6, jump=10)
+        # Two Claude eligibility reads, one scope read, and two reordered confirmations. Fallback confirms the
+        # cheaper alias on read six, then read seven proves the old binding gone.
+        source.rotate["opencode-claude-subscription"] = 6
+        raw = balance_body(extra=[("anthropic/claude-sonnet-5-6", 45, 3, 17, 76)])
+        request = dict(v=2, work_kind="review", task=dict(TASK), models=models)
+        with mock.patch("time.time", side_effect=lambda: self.clock[0]):
+            result = select(request, state_dir=self.root, source=source, fetch=Fetch(raw))
+        self.assertEqual(source.billed[-3:], [CLAUDE_ROUTE, SONNET_56, CHATGPT_ROUTE])
+        self.assertEqual((result["route"]["route"], result["alternatives"]), (CHATGPT_ROUTE, []))
+        self.assertCountEqual([entry["route"] for entry in result["excluded"] if entry["reason"] == "account_changed"],
+                              [CLAUDE_ROUTE, SONNET_56])
 
     def test_a_clock_that_steps_back_during_confirmation_discards_the_promotion(self):
         # The readings were ranked at NOW. The fifth billing read, in the final confirmation, finds the clock ten

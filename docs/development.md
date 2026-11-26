@@ -637,16 +637,18 @@ parser's reset horizon again when it is read. For the month, which has no stored
 60-second clock margin: a month that resets later is unknown, so it unlocks no boost.
 
 Stored state. A number such as `1e400` in a stored file decodes as infinity, which the strict write refuses. Before an
-account write, a ranking batch that cannot be written back is dropped whole, and a ChatGPT usage record that still
-cannot be stored is dropped whole, which leaves its read due. Nothing is repaired into a reading. Accounts, identities
-and confirmed pauses are never altered: if one of them cannot be stored, the write still fails.
+account write, a ranking batch that cannot be written back is dropped. If a ChatGPT usage record still cannot be
+stored, keep valid binding and attempt times as a failed read so repair cannot erase its cooldown. Nothing is
+repaired into a reading. Accounts, identities and confirmed pauses are never altered: if one of them cannot be
+stored, the write still fails.
 
 Timing. Each meter's `earliest` is the whole second before the exchange and `latest` the whole second after it
 returns. That interval bounds the exchange, not the age of the provider's accounting, which is unknown. A notification
 never renews a hint. A promotion stands only if the clock at the end of final confirmation is not behind the clock the
 readings were ranked at, and is before the first reset or age-out of a reading that supports it; otherwise the
-baseline order is confirmed. A route whose account changed at that check ends its binding (the scope and the marker it
-was given) for every alias that carries it, including one confirmed a moment earlier. A newer marker stays.
+baseline order is confirmed. In either confirmation pass, a route whose account changed ends its binding (the scope
+and the marker it was given) for every alias that carries it, including one confirmed a moment earlier. A newer marker
+stays.
 
 Demand and bounds. An ordinary pick marks its internal reply with `usage_refresh: true` only when a ChatGPT route is
 the baseline winner or one of its comparable, qualifying rivals, another subscription is in that same group, and a
