@@ -295,13 +295,10 @@ def _clock(pool):
 
 def _expiry(source, item, now):
     """`(expiry priority, end)` from the route's own hints at `now`. The priority is None when it has no usable one;
-    `end` is the first second at which one of the fresh readings behind it has reset or aged out."""
+    `end` is the first second at which one of the readings the scorer used has reset or aged out."""
     hints = _hints(source, item, now)
     score = usage_balance.expiry_score(opencode_account.family(item), hints, now=now)
-    if score is None:
-        return None, None
-    return score, min(min(value['reset_at'], value['earliest'] + routing_observations.FRESH_SECONDS)
-                      for value in hints.values() if usage_balance.fresh_meter(value, now=now))
+    return (None, None) if score is None else (score, usage_balance.expires_at(hints, now=now))
 
 
 def _group(ordered, qualifies):

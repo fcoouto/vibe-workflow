@@ -1253,6 +1253,29 @@ class MovingClockTest(unittest.TestCase):
         result = self.select(Ticking(hints, self.clock, jump_at=5, jump=10), Fetch(balance_body()))
         self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
 
+    def test_a_reading_the_scorer_ignores_cannot_cancel_a_valid_promotion(self):
+        # ChatGPT's weekly reading stays valid throughout. Beside it sits a well-formed `5h` row that claims a
+        # 60-second window: the scorer ignores it, so its reset during the slow confirmation ends nothing.
+        weekly = fresh(90, 7200, 604800)
+        bogus = dict(used_percent=10, earliest=NOW, latest=NOW, reset_at=NOW + 2, duration=60, discrete=True)
+        self.assertTrue(usage_balance.fresh_meter(bogus, now=NOW))
+        self.assertAlmostEqual(usage_balance.expiry_score("chatgpt", {"7d": weekly, "5h": bogus}, now=NOW), 8.4)
+        for label, extra in (("wrong length", {"5h": bogus}), ("unknown key", {"other": bogus})):
+            with self.subTest(label=label):
+                self.clock[0] = NOW
+                hints = {CLAUDE_ROUTE: {"7d": fresh(40, 72 * 3600, 604800)},
+                         CHATGPT_ROUTE: dict({"7d": weekly}, **extra)}
+                source = Ticking(hints, self.clock, jump_at=5, jump=10)  # confirmation ends at NOW + 10
+                result = self.select(source, Fetch(balance_body()))
+                self.assertEqual((result["state"], result["route"]["route"]), ("selected", CHATGPT_ROUTE))
+                self.assertEqual([item["route"] for item in result["alternatives"]], [CLAUDE_ROUTE])
+                self.assertEqual(len(source.billed), 6)  # no second confirmation
+        self.clock[0] = NOW  # the same row under a key the scorer does use still ends the promotion
+        hints = {CLAUDE_ROUTE: {"7d": fresh(40, 72 * 3600, 604800)},
+                 CHATGPT_ROUTE: {"7d": weekly, "duration:60": bogus}}
+        result = self.select(Ticking(hints, self.clock, jump_at=5, jump=10), Fetch(balance_body()))
+        self.assertEqual(result["route"]["route"], CLAUDE_ROUTE)
+
     def test_a_fixed_clock_keeps_fixtures_deterministic(self):
         closing = dict(fresh(90, 2, 604800), earliest=NOW - 10, latest=NOW - 10)
         request = dict(v=2, work_kind="review", task=dict(TASK), models=self.models)

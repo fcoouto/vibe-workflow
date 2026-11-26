@@ -20,7 +20,10 @@ BOOST_MINUTES = {300: '5h', 10_080: '7d'}  # the verified shapes; any other leng
 MAX_MINUTES = 366 * 1440
 # The ranking read's guard: a short-lived parent of Codex, leader of its own process group. Its alarm kills that group
 # when the read's bound passes, whether or not the worker that started it is still alive. It never touches the pipes.
+# It outlives the worker's group SIGTERM, so a worker that dies before its SIGKILL leaves the deadline armed. The
+# handler is caught, not ignored: Codex starts with the default SIGTERM action, as without a guard.
 GUARD = '''import os, signal, subprocess, sys
+signal.signal(signal.SIGTERM, lambda *args: None)
 signal.signal(signal.SIGALRM, lambda *args: os.killpg(0, signal.SIGKILL))
 signal.setitimer(signal.ITIMER_REAL, float(sys.argv[1]))
 sys.exit(subprocess.call(sys.argv[2:]))

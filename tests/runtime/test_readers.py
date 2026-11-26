@@ -2133,52 +2133,81 @@ class ChatgptUsageTest(unittest.TestCase):
                 self.assertEqual(len(seen), 1)
                 self.assertEqual(result, dict(state="fresh", reason=None, families={}))
 
-    def test_a_killed_worker_cannot_leave_a_codex_child_that_ignores_end_of_input(self):
-        reached, pidfile = self.root / "reached.fifo", self.root / "codex.pid"
+    def stubborn_worker(self, timeout):
+        """An isolated worker process reading through a synthetic Codex child that never answers and ignores the end
+        of its input, SIGTERM and SIGHUP. Returns `(worker, facts, armed)` once the child is in the exchange: `facts`
+        holds the child's pid and process group, and clearing `armed` disarms the leftover cleanup."""
+        reached, facts = self.root / "reached.fifo", self.root / "codex.json"
         os.mkfifo(reached)
         codex = self.root / "codex"
         codex.write_text("#!%s\n" % sys.executable + "\n".join((
-            "import os, signal, sys, time",
+            "import json, os, signal, sys, time",
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
             "signal.signal(signal.SIGHUP, signal.SIG_IGN)",
-            "open(%r, 'w').write(str(os.getpid()))" % str(pidfile),
+            "open(%r, 'w').write(json.dumps(dict(pid=os.getpid(), group=os.getpgrp())))" % str(facts),
             "sys.stdin.readline()",
             "open(%r, 'w').write('1')" % str(reached),
-            "time.sleep(20)")) + "\n")  # never answers, and ignores end of input and SIGTERM
+            "time.sleep(20)")) + "\n")
         codex.chmod(0o700)
         harness = "\n".join((
             "import sys",
             "from runtime import codex_reset",
             "environ = dict(PATH='/usr/bin:/bin', HOME=sys.argv[1])",
-            "print(codex_reset.read_windows(timeout=1.0, environ=environ, command=[sys.argv[2]]))"))
+            "print(codex_reset.read_windows(timeout=float(sys.argv[3]), environ=environ, command=[sys.argv[2]]))"))
         root = Path(__file__).resolve().parents[2]
-        worker = subprocess.Popen([sys.executable, "-B", "-c", harness, str(self.root), str(codex)], cwd=root,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        worker = subprocess.Popen([sys.executable, "-B", "-c", harness, str(self.root), str(codex), str(timeout)],
+                                  cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   env=dict(os.environ, PYTHONPATH=str(root)))
         self.addCleanup(worker.stdout.close)
+        armed = [True]
 
-        def reap():  # a child this test left behind must not outlive it
-            if pidfile.exists():
+        def reap():  # one bounded signal to a child this test left behind; disarmed once it was seen gone
+            if armed and facts.exists():
                 try:
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
-                except (OSError, ValueError):
+                    os.kill(json.loads(facts.read_text())["pid"], signal.SIGKILL)
+                except (OSError, ValueError, KeyError):
                     pass
         self.addCleanup(reap)
-        try:
-            self.assertTrue(reached_barrier(reached, lambda: worker.poll() is None))
-        finally:
-            killed = time.monotonic()
-            worker.kill()  # only the worker: nothing signals the Codex child or its group
+
+        def stop_worker():
+            if worker.poll() is None:
+                worker.kill()
             worker.wait(10)
-        child = int(pidfile.read_text())
-        gone = False
-        while not gone and time.monotonic() - killed < 4:  # the one-second read bound, plus its grace and margin
+        self.addCleanup(stop_worker)
+        self.assertTrue(reached_barrier(reached, lambda: worker.poll() is None))
+        return worker, json.loads(facts.read_text()), armed
+
+    def gone_within(self, pid, seconds, armed):
+        """Whether `pid` disappears within `seconds`; seen gone, the leftover cleanup is disarmed."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
             try:
-                os.kill(child, 0)
+                os.kill(pid, 0)
                 time.sleep(0.05)
             except ProcessLookupError:
-                gone = True
-        self.assertTrue(gone, "the Codex child outlived its killed worker")
+                armed.clear()
+                return True
+        return False
+
+    def test_a_killed_worker_cannot_leave_a_codex_child_that_ignores_end_of_input(self):
+        worker, child, armed = self.stubborn_worker(1.0)
+        worker.kill()  # only the worker: nothing signals the Codex child or its group
+        worker.wait(10)
+        # The one-second read bound, plus its grace and margin.
+        self.assertTrue(self.gone_within(child["pid"], 4, armed), "the Codex child outlived its killed worker")
+
+    def test_a_worker_killed_between_its_group_sigterm_and_sigkill_leaves_the_deadline_armed(self):
+        # The worker's own shutdown sends SIGTERM to the guard's group, waits, then sends SIGKILL. Here the worker
+        # dies in between: the group got SIGTERM, which the child ignores, and no SIGKILL ever follows.
+        worker, child, armed = self.stubborn_worker(2.0)
+        started = time.monotonic()
+        self.assertNotIn(child["group"], (child["pid"], os.getpgrp(), worker.pid))  # the guard's own group
+        os.killpg(child["group"], signal.SIGTERM)
+        worker.kill()
+        worker.wait(10)
+        self.assertTrue(self.gone_within(child["pid"], 6, armed),
+                        "SIGTERM to the group ended the deadline: the Codex child outlived its killed worker")
+        self.assertGreater(time.monotonic() - started, 1.0)  # ended by the deadline, not by the ignored SIGTERM
 
     def test_a_partial_valid_result_is_a_success_and_does_not_trigger_each_pick(self):
         self.chatgpt()

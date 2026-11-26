@@ -100,6 +100,20 @@ def _valid(key, value, now):
     return fresh_meter(value, now=now) and (key not in LENGTHS or value['duration'] in (None, LENGTHS[key]))
 
 
+def _scored(meters, now):
+    """The readings the scorer uses, and no others: a recognized key with a valid, fresh reading."""
+    if type(meters) is not dict:
+        return {}
+    return {key: value for key, value in meters.items() if _recognized(key) and _valid(key, value, now)}
+
+
+def expires_at(meters, *, now):
+    """The first second at which one of the readings `expiry_score` uses at `now` has reset or aged out; None when it
+    uses none. A reading the scorer ignores never sets it."""
+    return min((min(value['reset_at'], value['earliest'] + storage.FRESH_SECONDS)
+                for value in _scored(meters, now).values()), default=None)
+
+
 def _batch_shape(value):
     return type(value) is dict and set(value) == {'earliest', 'latest', 'meters'} and type(value['meters']) is dict \
         and _safe_int(value['earliest']) and _safe_int(value['latest']) and 0 <= value['earliest'] <= value['latest']
@@ -147,9 +161,9 @@ def expiry_score(family, meters, *, now):
     """The route's expiry priority: 1.0 when nothing earns a boost, the largest unsuppressed boost otherwise, None
     when no valid, fresh, verified 5-hour or weekly window exists. An unknown or invalid meter is ignored alone."""
     siblings = SIBLINGS.get(family)
-    if siblings is None or type(meters) is not dict:
+    if siblings is None:
         return None
-    fresh = {key: value for key, value in meters.items() if _recognized(key) and _valid(key, value, now)}
+    fresh = _scored(meters, now)
     boosts = [key for key in BOOST_WINDOWS if key in fresh and _verified(fresh[key])]
     if not boosts:
         return None

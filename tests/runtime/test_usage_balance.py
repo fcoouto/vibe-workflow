@@ -371,5 +371,37 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(stored['meters']['7d']['used_percent'], 40)
 
 
+class SupportTest(unittest.TestCase):
+    """`expires_at` counts exactly the readings the scorer uses: a reading the scorer ignores cannot end a score."""
+    def test_the_end_of_support_is_the_first_reset_or_age_out_of_a_scored_reading(self):
+        weekly, short = meter(90, 2, 168), meter(40, 1, 5)
+        self.assertEqual(usage_balance.expires_at({'7d': weekly}, now=NOW), NOW + 900)  # ages out before it resets
+        self.assertEqual(usage_balance.expires_at({'7d': weekly, '5h': meter(40, 0.1, 5)}, now=NOW), NOW + 360)
+        aged = meter(90, 2, 168, age_offset=600)
+        self.assertEqual(usage_balance.expires_at({'7d': aged, '5h': short}, now=NOW), NOW + 300)
+        scoped = meter(50, 0.05, 168)  # a protecting meter is scored for headroom, so its reset counts
+        self.assertEqual(usage_balance.expires_at({'7d': weekly, SCOPE: scoped}, now=NOW), NOW + 180)
+
+    def test_a_reading_the_scorer_ignores_never_sets_the_end(self):
+        weekly = meter(90, 2, 168)
+        bogus = dict(used_percent=10, earliest=NOW, latest=NOW, reset_at=NOW + 2, duration=60, discrete=True)
+        self.assertTrue(usage_balance.fresh_meter(bogus, now=NOW))  # well formed and fresh, but no 5-hour window
+        for label, extra in (('wrong length', {'5h': bogus}), ('unknown key', {'bogus': bogus}),
+                             ('malformed', {'5h': dict(bogus, used_percent='x')}),
+                             ('expired', {'5h': dict(meter(40, 1, 5), reset_at=NOW)}),
+                             ('stale', {'5h': meter(40, 1, 5, age_offset=900)})):
+            with self.subTest(label=label):
+                meters = dict({'7d': weekly}, **extra)
+                self.assertAlmostEqual(score('chatgpt', meters), 8.4)
+                self.assertEqual(usage_balance.expires_at(meters, now=NOW), NOW + 900)
+        self.assertEqual(usage_balance.expires_at({'duration:60': bogus, '7d': weekly}, now=NOW), NOW + 2)  # scored
+
+    def test_no_scored_reading_has_no_end(self):
+        for meters in ({}, None, [], {'5h': dict(meter(40, 1, 5), duration=60)}, {'bogus': WEEKLY}):
+            with self.subTest(meters=meters):
+                self.assertIsNone(usage_balance.expires_at(meters, now=NOW))
+                self.assertIsNone(score('chatgpt', meters))
+
+
 if __name__ == '__main__':
     unittest.main()

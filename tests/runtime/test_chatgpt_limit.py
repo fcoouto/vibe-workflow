@@ -320,8 +320,10 @@ class CodexWindowsTest(unittest.TestCase):
 
     def test_the_guard_adds_one_transient_parent_and_changes_nothing_the_child_sees(self):
         seen = self.dir / 'seen.json'
-        body = 'import os\nopen(%r, "w").write(json.dumps(dict(env=sorted(os.environ), cwd=os.getcwd(), ' \
-               'argv=sys.argv[1:], parent=os.getppid(), group=os.getpgrp(), pid=os.getpid())))\n' % str(seen)
+        body = 'import os, signal\nopen(%r, "w").write(json.dumps(dict(env=sorted(os.environ), cwd=os.getcwd(), ' \
+               'argv=sys.argv[1:], parent=os.getppid(), group=os.getpgrp(), pid=os.getpid(), ' \
+               'term=signal.getsignal(signal.SIGTERM) == signal.SIG_DFL, ' \
+               'alarm=signal.getsignal(signal.SIGALRM) == signal.SIG_DFL)))\n' % str(seen)
         result = dict(rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200))))
         command = fake_codex(self.dir, body + RESULT % (str(self.methods), json.dumps(result))) + ['app-server']
         with mock.patch('time.time', return_value=NOW):
@@ -329,6 +331,7 @@ class CodexWindowsTest(unittest.TestCase):
         self.assertEqual(hints['7d']['used_percent'], 90)
         child = json.loads(seen.read_text())
         self.assertEqual((child['cwd'], child['argv']), ('/', ['app-server']))
+        self.assertEqual((child['term'], child['alarm']), (True, True))  # Codex keeps its default signal handling
         self.assertNotIn('SECRET', child['env'])
         self.assertLessEqual(set(child['env']) - {'__CF_USER_TEXT_ENCODING', 'LC_CTYPE'}, set(codex_reset.ENV_ALLOWLIST))
         self.assertNotIn(child['parent'], (os.getpid(), child['pid']))  # the guard, not this process
