@@ -482,10 +482,10 @@ def probe_claude_limit(settings_path, *, reset_at, command=None, environ=None, t
         found = _account(settings_path, 'claude', now)
         observations._read(_store(settings_path))
         state = observations._read(claude_usage._store(settings_path))
-    except (OSError, ValueError):
+        current = claude_usage._current(state, now)
+        if found is None or current is None or _native(current) != found['native']:
+            return dict(state='skipped')
+        return claude_usage.probe_limit(settings_path, expected=(current['key'], current['generation']),
+                                        reset_at=reset_at, command=command, environ=environ, timeout=timeout)
+    except (OSError, ValueError, KeyboardInterrupt):  # a cancelled read or probe publishes nothing
         return dict(state='failed')
-    current = claude_usage._current(state, now)
-    if found is None or current is None or _native(current) != found['native']:
-        return dict(state='skipped')
-    return claude_usage.probe_limit(settings_path, expected=(current['key'], current['generation']),
-                                    reset_at=reset_at, command=command, environ=environ, timeout=timeout)

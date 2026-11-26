@@ -798,17 +798,39 @@ def _hint(reset_at, now):
     return type(reset_at) is int and now < reset_at <= now + claude_quota.LENGTHS['7d'] + storage.CLOCK_MARGIN
 
 
+OVERFLOW = ('enabled', 'disabled', 'unknown')  # the states `_overflow` stores
+
+
+def _complete(current):
+    """Whether a current account record has the metadata `_record` stores: a supported overflow state, the client
+    version, the usage time (None or a time) and the scoped list (None when unreadable)."""
+    return all(field in current for field in ('client_version', 'overflow', 'usage_at', 'scoped')) \
+        and current['overflow'] in OVERFLOW and routing._text(current['client_version']) \
+        and (current['usage_at'] is None or routing._amount(current['usage_at'])) \
+        and (current['scoped'] is None or type(current['scoped']) is list)
+
+
 def _bound(state, expected, now):
-    """The complete, fresh current account record when it is the login `expected` names, else None."""
+    """The complete, fresh current account record when it is the login `expected` names, else None. A proved login
+    whose stored metadata is partial is malformed private state: it raises rather than admitting or publishing."""
     current = _current(state, now)
-    return current if current is not None and (current['key'], current['generation']) == expected else None
+    if current is None or (current['key'], current['generation']) != expected:
+        return None
+    if not _complete(current):
+        raise ReadError('observation_store_invalid')
+    return current
 
 
-def _starts(record):
-    """The probe starts `{key: started_at}` of a valid cooldown file. Any other shape is an error, never repaired."""
-    if not record:
+def _starts(path):
+    """The probe starts `{key: started_at}` of the cooldown file: none when the file is absent. Its content must be
+    the probe's own object, and a JSON null, or any other shape, is an error, never repaired or taken as absent."""
+    if not os.path.lexists(path):
         return {}
-    accounts = record.get('accounts') if set(record) == {'version', 'accounts'} else None
+    record = storage.read_json(path)
+    if type(record) is not dict or set(record) != {'version', 'accounts'} or type(record['version']) is not int \
+            or record['version'] != 1:
+        raise ReadError('observation_store_invalid')
+    accounts = record['accounts']
     if type(accounts) is not dict or len(accounts) > PROBE_KEYS \
             or not all(_hex(key) and type(at) is int for key, at in accounts.items()):
         raise ReadError('observation_store_invalid')
@@ -851,7 +873,7 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
                 return dict(state='skipped')
             now = int(time.time())
             probe = path.parent / PROBE_FILE
-            starts = _starts(observations._read(probe))
+            starts = _starts(probe)
             if _bound(observations._read(path), (key, generation), now) is None:
                 return dict(state='skipped')
             admitted = _admit(starts, key, now)
@@ -880,5 +902,5 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
             return dict(state='stored')
     except _Skip:
         return dict(state='skipped')
-    except (ReadError, OSError, ValueError):
+    except (ReadError, OSError, ValueError, KeyboardInterrupt):  # a cancelled exchange has already cleaned up its child
         return dict(state='failed')

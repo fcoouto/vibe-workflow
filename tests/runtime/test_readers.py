@@ -953,14 +953,21 @@ class ReaderTest(unittest.TestCase):
         os.mkfifo(release)
         self.write(dict(self.data, mode="barrier", reached=str(reached), release=str(release)))
         self.trace.unlink(missing_ok=True)
-
-        class Local(self.observations.LocalSource):
-            def acquire_billing(self, routes, now):
-                return None
+        lifecycle = importlib.import_module("runtime.processes")
+        native_refresh = self.native.refresh
         request = dict(v=2, work_kind="review", task=dict(files="1-2", spec="exact", risk="reversible"),
                        models=[selector_tests.model("claude-agent", "claude-opus-5-5")])
+        forbidden = []
+
+        def forbid(name):
+            def launch(*args, **kwargs):
+                forbidden.append(name)
+                raise AssertionError("unexpected " + name + " launch")
+            return launch
         results, reached_seen = [], False
-        with mock.patch("time.time", return_value=self.now):
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.openc, "_call", side_effect=forbid("opencode")), \
+                mock.patch.object(self.native, "refresh", side_effect=forbid("native refresh")):
             worker = threading.Thread(target=lambda: results.append(self.probe()))
             worker.start()
             try:
@@ -968,9 +975,16 @@ class ReaderTest(unittest.TestCase):
                     reached_seen = signal.read() == "1"
                 self.assertTrue(reached_seen)
                 self.assertIsNotNone(self.openc.billing_fact(self.settings, self.route, self.now))
+                with self.native._lock(self.settings, 0) as held:  # the ordinary native lock is free, zero wait
+                    self.assertTrue(held)
+                with lifecycle._pool_lock(self.settings, self.native.POOL, 0) as held:
+                    self.assertTrue(held)
+                self.assertEqual(native_refresh(self.settings, need=(), command=self.command, environ=self.environ),
+                                 dict(state="fresh"))
                 self.assertEqual(self.probe(), dict(state="skipped"))
-                answer = selector.select(request, state_dir=self.settings.parent, source=Local(self.settings),
-                                         fetch=fetch, now=self.now)
+                source = self.observations.LocalSource(self.settings)
+                answer = selector.select(request, state_dir=self.settings.parent, source=source, fetch=fetch,
+                                         now=self.now)
                 self.assertEqual(answer["state"], "selected", answer)
                 self.assertEqual(answer["route"]["provider"], "claude-agent")
                 self.assertTrue(worker.is_alive())
@@ -979,6 +993,7 @@ class ReaderTest(unittest.TestCase):
                     with open(release, "w"):
                         pass
                 worker.join(10)
+        self.assertEqual(forbidden, [])
         self.assertEqual(results, [dict(state="stored")])
         self.assertEqual(self.probe_requests(), ["initialize", "get_usage"])
 
@@ -993,18 +1008,124 @@ class ReaderTest(unittest.TestCase):
                              dict(state="failed"))
         self.assertEqual(self.quota_state(), before)
 
+    def assert_probe_lock_free(self):
+        with self.storage._locked(self.native._store(self.settings), block=False,
+                                  lock=".claude-limit-probe.lock") as path:
+            self.assertIsNotNone(path)
+
     def test_probe_interruption_publishes_nothing_and_releases_its_lock(self):
         self.baseline()
         self.weekly_only()
         before = self.quota_state()
         with mock.patch("time.time", return_value=self.now), \
                 mock.patch.object(self.native, "exchange", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                self.probe()
+            self.assertEqual(self.probe(), dict(state="failed"))
         self.assertEqual(self.quota_state(), before)
-        with self.storage._locked(self.native._store(self.settings), block=False,
-                                  lock=".claude-limit-probe.lock") as path:
-            self.assertIsNotNone(path)
+        self.assert_probe_lock_free()
+
+    def test_cancellation_in_the_exchange_cleans_up_publishes_nothing_and_releases_the_lock(self):
+        self.baseline()
+        self.weekly_only()
+        before, stop = self.quota_state(), self.native.lifecycle._stop
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native._Session, "response", side_effect=KeyboardInterrupt), \
+                mock.patch.object(self.native.lifecycle, "_stop", side_effect=stop) as stopped:
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(stopped.call_count, 1)
+        self.assertEqual(self.quota_state(), before)
+        self.assert_probe_lock_free()
+
+    def test_native_probe_returns_failed_when_cancelled_without_publishing(self):
+        self.baseline()
+        self.weekly_only()
+        before, stop = self.quota_state(), self.native.lifecycle._stop
+        current = self.native.account(self.settings, self.now)
+        expected = (current["key"], current["generation"])
+        cases = (
+            (mock.patch.object(self.native, "exchange", side_effect=KeyboardInterrupt), None),
+            (mock.patch.object(self.native._Session, "response", side_effect=KeyboardInterrupt),
+             mock.patch.object(self.native.lifecycle, "_stop", side_effect=stop)),
+        )
+        for patch, stopping in cases:
+            with self.subTest(patch=patch.attribute):
+                self.clear_cooldown()
+                with mock.patch("time.time", return_value=self.now), patch:
+                    if stopping is None:
+                        answer = self.native.probe_limit(self.settings, expected=expected, reset_at=self.now + 3600,
+                                                         command=self.command, environ=self.environ)
+                    else:
+                        with stopping as stopped:
+                            answer = self.native.probe_limit(self.settings, expected=expected,
+                                                             reset_at=self.now + 3600, command=self.command,
+                                                             environ=self.environ)
+                        self.assertEqual(stopped.call_count, 1)
+                self.assertEqual(answer, dict(state="failed"))
+                self.assertEqual(self.quota_state(), before)
+                self.assert_probe_lock_free()
+
+    def test_cancellation_at_the_wrapper_boundary_returns_failed_without_a_native_read(self):
+        self.baseline()
+        self.weekly_only()
+        before = self.quota_state()
+        self.trace.unlink(missing_ok=True)
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.openc, "_account", side_effect=KeyboardInterrupt):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertFalse(self.trace.exists())
+        self.assertEqual(self.quota_state(), before)
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=KeyboardInterrupt):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(self.quota_state(), before)
+        self.assert_probe_lock_free()
+
+    # Finding 1: a current account must carry the complete native metadata to admit or commit a probe.
+    def test_probe_refuses_a_partial_proved_account_before_any_exchange(self):
+        self.baseline()
+        self.weekly_only()
+        current, before = self.native.account(self.settings, self.now), self.quota_state()
+        for case in ("overflow", "client_version", "usage_at", "scoped", "overflow-value"):
+            with self.subTest(case=case):
+                partial = dict(current, overflow="maybe") if case == "overflow-value" else dict(current)
+                if case != "overflow-value":
+                    del partial[case]
+                self.native._save(self.settings, account=partial)
+                self.clear_cooldown()
+                self.trace.unlink(missing_ok=True)
+                with mock.patch("time.time", return_value=self.now):
+                    self.assertEqual(self.probe(), dict(state="failed"))
+                self.assertFalse(self.trace.exists())
+                self.assertEqual(self.quota_state(), before)
+                self.native._save(self.settings, account=current)
+
+    def test_probe_refuses_an_account_that_turns_partial_during_its_exchange(self):
+        self.baseline()
+        self.weekly_only()
+        before, real = self.quota_state(), self.native.exchange
+
+        def strip_overflow(*args, **kwargs):
+            result = real(*args, **kwargs)
+            partial = dict(self.native.account(self.settings, self.now))
+            del partial["overflow"]
+            self.native._save(self.settings, account=partial)
+            return result
+        with mock.patch("time.time", return_value=self.now), \
+                mock.patch.object(self.native, "exchange", side_effect=strip_overflow):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(self.quota_state(), before)
+
+    # Finding 2: a present cooldown file must hold the probe's own JSON object; a JSON null is malformed, not absent.
+    def test_a_null_cooldown_file_is_malformed_not_absent(self):
+        self.baseline()
+        self.weekly_only()
+        self.write_raw_cooldown("null")
+        self.trace.unlink(missing_ok=True)
+        before = self.quota_state()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.probe(), dict(state="failed"))
+        self.assertEqual(self.cooldown_path().read_text(), "null")
+        self.assertFalse(self.trace.exists())
+        self.assertEqual(self.quota_state(), before)
 
 
 class ClaudeLimitCliTest(unittest.TestCase):
