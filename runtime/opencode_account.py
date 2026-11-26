@@ -314,23 +314,15 @@ def native_current(settings_path, now):
 def _quota_gate(settings_path, route, now):
     """(`quota_exhausted`, seconds it may still last) on positive evidence only, never headroom: a provider quota-limit
     error on this pool within PROVIDER_LIMIT_SECONDS (E2); Go, this acquisition's bound meters (one limited or at 100%
-    with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago; Claude, the native login's model-scoped limits
-    while it is this fact's login. ChatGPT: only its limit mark (`chatgpt_limit`), never a reading.
-    Current-generation account-wide Claude windows also refuse while positively fresh and exhausted."""
+    with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago. ChatGPT: only its limit mark (`chatgpt_limit`),
+    never a reading. Claude: confirmed exhaustion in the native login's bound quota evidence while this fact's login is
+    current, lasting until the reset (`claude_usage.exhaustion_left`)."""
     name = family(route)
     if name == 'claude':
-        native = native_current(settings_path, now)
-        if native and route.get('pool') == POOLS['claude']:
-            left = [observations.trust_left(row.get('observed_at'), now)
-                    for row in claude_usage.usable_windows(settings_path, now)
-                    if all(routing._amount(row.get(key)) for key in ('used', 'limit', 'reset_at'))
-                    and row['limit'] == observations.WINDOW_UNITS and row['used'] >= row['limit']
-                    and row['reset_at'] > now and row.get('unit') == observations.WINDOW_UNIT]
-            left = [seconds for seconds in left if seconds is not None]
-            if left:
-                return EXHAUSTED, max(left)
-        return (claude_usage.quota_problem(settings_path, route, now, native=True),
-                claude_usage.quota_retry_after(settings_path, route, now, native=True)) if native else (None, None)
+        if route.get('pool') != POOLS['claude'] or not native_current(settings_path, now):
+            return None, None
+        left = claude_usage.exhaustion_left(settings_path, route, now)
+        return (EXHAUSTED, left) if left is not None else (None, None)
     if name == 'chatgpt':
         left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None
         return (EXHAUSTED, left) if left else (None, None)

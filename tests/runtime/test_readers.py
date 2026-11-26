@@ -10,8 +10,11 @@ import unittest
 from unittest import mock
 
 
+def iso(at):
+    return datetime.fromtimestamp(at, timezone.utc).isoformat()
+
+
 def payload(now, *, idle=False, scoped=False):
-    iso = lambda at: datetime.fromtimestamp(at, timezone.utc).isoformat()
     rate = dict(five_hour=dict(utilization=0 if idle else 20, resets_at=None if idle else iso(now + 3600)),
                 seven_day=dict(utilization=30, resets_at=iso(now + 86400)),
                 extra_usage=dict(is_enabled=False), limits=[], model_scoped=[])
@@ -48,6 +51,8 @@ class ReaderTest(unittest.TestCase):
         self.route = dict(route="opencode-claude-subscription:first", provider="claude-agent", model="invented",
                           effort="medium", billing_class="included_subscription",
                           pool="claude-subscription", account="claude-plan")
+        self.observations = importlib.import_module("runtime.routing_observations")
+        self.council = importlib.import_module("runtime.council")
 
     def write(self, data):
         self.fixture.write_text(json.dumps(dict(data, trace=str(self.trace))))
@@ -55,7 +60,7 @@ class ReaderTest(unittest.TestCase):
     def refresh(self, **kwargs):
         return self.native.refresh(self.settings, command=self.command, environ=self.environ, **kwargs)
 
-    def opencode(self, family="claude"):
+    def opencode(self, family="claude", weekly=100):
         rows = [dict(id="invented-reference", integrationID="claude-agent", active=True,
                      value=dict(type="external", methodID="claude-login"))]
         if family == "go":
@@ -63,7 +68,7 @@ class ReaderTest(unittest.TestCase):
                          value=dict(type="key", key="CREDENTIAL-SENTINEL")),
                     dict(id="invented-console", integrationID="opencode", active=True,
                          value=dict(type="oauth", metadata=dict(accountID="invented-account", orgID="invented-org")))]
-        meters = {name: dict(percent=100 if name == "weekly" else 20, limited=False,
+        meters = {name: dict(percent=weekly if name == "weekly" else 20, limited=False,
                              resetsAt=(self.now + 3600) * 1000) for name in ("rolling", "weekly", "monthly")}
         self.write(dict(mode="opencode", answers={
             "/api/credential": dict(data=rows),
@@ -104,34 +109,175 @@ class ReaderTest(unittest.TestCase):
             self.assertIsNone(self.openc.billing_fact(self.settings, self.route, int(time.time())))
 
     def test_scoped_exhaustion_is_fresh_account_bound_and_refuse_only(self):
-        self.write(payload(self.now, scoped=True))
-        self.assertEqual(self.refresh(need=())["state"], "stored")
-        self.assertEqual(self.opencode()["state"], "stored")
-        now = int(time.time())
-        self.assertEqual(self.openc.quota_problem(self.settings, self.route, now), "quota_exhausted")
-        self.assertIsNone(self.openc.quota_problem(self.settings, dict(self.route, model="another-family"), now))
-        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, now + 61))
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Invented", utilization=100, resets_at=iso(self.now + 600))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+        self.assertIsNone(self.openc.quota_problem(self.settings, dict(self.route, model="another-family"), self.now))
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now + 61), "quota_exhausted")
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now + 600))
 
-    def test_account_wide_exhaustion_excludes_only_current_fresh_bound_windows(self):
-        self.data["usage"]["rate_limits"]["five_hour"]["utilization"] = 100
+    def test_account_wide_exhaustion_is_bound_to_the_current_login(self):
+        self.data["usage"]["rate_limits"]["five_hour"] = dict(utilization=100, resets_at=iso(self.now + 600))
         self.write(self.data)
         with mock.patch("time.time", return_value=self.now):
             self.assertEqual(self.refresh(need=())["state"], "stored")
             self.assertEqual(self.opencode()["state"], "stored")
         current = self.native.account(self.settings, self.now)
         now = current["observed_at"]
-        rows = self.native.usable_windows(self.settings, now)
-        self.assertEqual(now - rows[0]["observed_at"], 60)
         self.assertEqual(self.openc.quota_problem(self.settings, self.route, now), "quota_exhausted")
-        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, now + 1))
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.route, now), self.now + 600 - now)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, now + 61), "quota_exhausted")
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now + 600))
         self.assertIsNone(self.openc.quota_problem(self.settings, dict(self.route, pool="other"), now))
         self.native._save(self.settings, account=dict(current, usage_at=None))
-        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, now))
-        self.native._save(self.settings, account=current)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, now), "quota_exhausted")
         changed = dict(current, generation="f" * 32)
         self.native._save(self.settings, identity=dict(key=changed["key"], generation=changed["generation"]),
                           account=changed)
         self.assertIsNone(self.openc.quota_problem(self.settings, self.route, now))
+
+    def weekly_only(self, percent=100):
+        """Claude Code 2.1.323 shape: no five-hour meter, a confirmed unscoped weekly limit reset in 600 s."""
+        reset = iso(self.now + 600)
+        rate = self.data["usage"]["rate_limits"]
+        rate["five_hour"] = None
+        rate["seven_day"] = dict(utilization=percent, resets_at=reset)
+        rate["limits"] = [dict(kind="weekly_all", scope=None, percent=percent, resets_at=reset)]
+        self.write(self.data)
+
+    def test_weekly_only_exhaustion_is_bound_and_expires_at_reset(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=()), dict(state="stored", windows=[], reason="claude_window_missing"))
+            self.assertEqual(self.opencode()["state"], "stored")
+        account = self.native.account(self.settings, self.now)
+        self.assertIsNone(account["usage_at"])
+        self.assertEqual(self.native.usable_windows(self.settings, self.now), [])
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now + 61), "quota_exhausted")
+        self.assertEqual(self.openc.quota_retry_after(self.settings, self.route, self.now + 61), 600 - 61)
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now + 600))
+
+    def test_scoped_evidence_needs_the_catalog_bound_to_the_account(self):
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Invented", utilization=100, resets_at=iso(self.now + 600))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        native_catalog = importlib.import_module("runtime.native_catalog")
+        with mock.patch.object(native_catalog, "stored", return_value=None):
+            self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+
+    def test_catalog_from_another_generation_blocks_only_account_wide_marks(self):
+        self.data["usage"]["rate_limits"]["model_scoped"] = [
+            dict(display_name="Invented", utilization=100, resets_at=iso(self.now + 600))]
+        self.write(self.data)
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        native_catalog = importlib.import_module("runtime.native_catalog")
+        stored = native_catalog.stored(self.settings, "claude-code")
+        other = dict(stored, binding=dict(stored["binding"], connection="account:" + "0" * 32 + ":" + "1" * 32))
+        direct = dict(self.route, model="invented-current")
+        with mock.patch.object(native_catalog, "stored", return_value=other):
+            self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+        self.assertEqual(self.openc.quota_problem(self.settings, direct, self.now), "quota_exhausted")
+        with mock.patch.object(native_catalog, "stored", return_value=None):
+            self.assertIsNone(self.openc.quota_problem(self.settings, direct, self.now))
+
+    def test_missing_quota_record_does_not_gate(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        path = self.native._store(self.settings)
+        value = json.loads(path.read_text())
+        self.assertIn("quota", value)
+        del value["quota"]
+        path.write_text(json.dumps(value))
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+
+    def test_malformed_or_unsafe_quota_records_are_ignored(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        current = self.native.account(self.settings, self.now)
+        self.native._save(self.settings, quota=dict(key=current["key"], generation=current["generation"],
+                                                    record=dict(meters="bad", inventory=None)))
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+        self.native._save(self.settings, quota="bad")
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=(), force=True)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+        self.native._store(self.settings).chmod(0o644)
+        self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
+
+    def test_weekly_exhaustion_is_stored_without_publishing_a_usage_snapshot(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["windows"], [])
+        self.assertFalse(self.native.usable(self.settings, self.now))
+        self.assertIsNone(self.native.account(self.settings, self.now)["usage_at"])
+        self.assertIsNotNone(self.native.account(self.settings, self.now))
+
+    def test_huge_integer_in_one_meter_keeps_valid_weekly_evidence(self):
+        rate = self.data["usage"]["rate_limits"]
+        rate["five_hour"] = dict(utilization=10 ** 400, resets_at=iso(self.now + 3600))
+        rate["seven_day"] = dict(utilization=100, resets_at=iso(self.now + 600))
+        rate["limits"] = [dict(kind="weekly_all", scope=None, percent=100, resets_at=iso(self.now + 600))]
+        self.write(self.data)
+        with self.assertRaisesRegex(self.native.ReadError, "claude_usage_invalid"):
+            self.native.parse_usage(self.data["usage"], self.now, self.now)
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["reason"], "claude_usage_invalid")
+            self.assertEqual(self.opencode()["state"], "stored")
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+
+    def test_received_is_the_usage_answer_not_child_cleanup(self):
+        clock = [float(self.now)]
+        stop = self.native.lifecycle._stop
+
+        def cleanup(process, normal):
+            clock[0] += 5
+            stop(process, normal)
+
+        with mock.patch("time.time", side_effect=lambda: clock[0]), \
+                mock.patch.object(self.native.lifecycle, "_stop", side_effect=cleanup):
+            _init, _use, started, received = self.native.exchange(self.command, self.environ)
+        self.assertEqual((started, received, clock[0]), (float(self.now), float(self.now), float(self.now + 5)))
+
+    def test_eligibility_and_roster_follow_the_bound_claude_evidence(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+            self.opencode("go", weekly=20)
+        go = dict(self.route, route="opencode-go-subscription:first", provider="opencode-go", model="glm",
+                  pool="opencode-go-subscription", account="opencode-go-workspace")
+
+        class Local(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+
+        source = Local(self.settings)
+        kept, excluded = self.observations.eligible([self.route, go], source, self.now)
+        self.assertEqual([item["route"] for item in kept], [go["route"]])
+        self.assertEqual(excluded, [dict(route=self.route["route"], reason="quota_exhausted")])
+        models = [dict(provider="claude-agent", id="invented", model=None, family=None, variants=["high"],
+                       context=None, released=5),
+                  dict(provider="opencode-go", id="glm", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        answer = self.council.roster(dict(v=1, models=models), state_dir=self.settings.parent, source=source,
+                                     now=self.now)
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["quota_exhausted", "ok"])
 
     def test_go_uses_existing_bound_api_meters_without_storing_a_key(self):
         self.assertEqual(self.opencode("go")["state"], "stored")

@@ -11,6 +11,7 @@ import re
 from runtime import routing, storage
 
 MAX_SCOPES = 8  # recognized scope IDs beyond this: the inventory cannot be complete
+ACCOUNT = ('5h', '7d')
 LENGTHS = {window: length for window, length in storage.RATE_WINDOWS.values()}
 
 
@@ -104,10 +105,7 @@ def _reading(item, value):
     usage = _usage()
     if type(item) is not dict:
         raise usage.ReadError('claude_usage_invalid')
-    raw = item.get(value)
-    if type(raw) is int and not 0 <= raw <= 100:
-        raise usage.ReadError('claude_usage_invalid')  # before the validator's float conversion
-    percent = usage._percent(raw)
+    percent = usage._percent(item.get(value))
     if percent == 0 and 'resets_at' in item and item['resets_at'] is None:
         return percent, None
     return percent, usage._time(item.get('resets_at'))
@@ -134,6 +132,93 @@ def _settled(readings):
     if len({reset for _, reset in readings}) != 1 or None in percents or not _agree(min(percents), max(percents)):
         return None
     return max(percents), readings[0][1]
+
+
+def _key(value):
+    return value in ACCOUNT or type(value) is str and re.fullmatch('(family|model):[a-z0-9-]+', value) is not None
+
+
+def _meter(value, observed):
+    fields = {'exhausted', 'reset_at', 'earliest', 'latest'} if observed else {'exhausted', 'reset_at'}
+    if type(value) is not dict or set(value) != fields or type(value['exhausted']) is not bool \
+            or not routing._amount(value['reset_at']):
+        return False
+    return not observed or routing._amount(value['earliest']) and routing._amount(value['latest']) \
+        and value['earliest'] <= value['latest']
+
+
+def _inventory(value):
+    return type(value) is dict and set(value) == {'scopes', 'earliest', 'latest'} \
+        and type(value['scopes']) is list and all(_key(key) and key not in ACCOUNT for key in value['scopes']) \
+        and routing._amount(value['earliest']) and routing._amount(value['latest']) \
+        and value['earliest'] <= value['latest']
+
+
+def _sampled(sample):
+    return type(sample) is dict and type(sample.get('meters')) is dict \
+        and type(sample.get('scopes_complete')) is bool and routing._amount(sample.get('earliest')) \
+        and routing._amount(sample.get('latest')) and sample['earliest'] <= sample['latest'] \
+        and all(_key(key) and _meter(value, observed=False) for key, value in sample['meters'].items())
+
+
+def _kept(record, now):
+    """`(meters, inventory)` still in force at `now`: validated meters before their reset, and a live inventory."""
+    value = record if type(record) is dict else {}
+    raw = value.get('meters') if type(value.get('meters')) is dict else {}
+    meters = {key: dict(entry) for key, entry in raw.items()
+              if _key(key) and _meter(entry, observed=True) and entry['reset_at'] > now}
+    inventory = value.get('inventory')
+    if not _inventory(inventory) or now >= inventory['latest'] + LENGTHS['7d'] + storage.CLOCK_MARGIN:
+        inventory = None
+    return meters, inventory
+
+
+def _capped(meters, before):
+    """Two account-wide and eight scoped keys: positives already held, new positives, then recent healthy entries."""
+    def rank(key):
+        entry = meters[key]
+        if not entry['exhausted']:
+            return 2, -entry['latest'], key
+        return (0 if before.get(key, {}).get('exhausted') else 1), -entry['latest'], key
+    ranked = sorted(meters, key=rank)
+    keep = [key for key in ranked if key in ACCOUNT][:len(ACCOUNT)] + \
+        [key for key in ranked if key not in ACCOUNT][:MAX_SCOPES]
+    return {key: meters[key] for key in keep}
+
+
+def merge(previous, sample, *, now):
+    """The record after one sample: validated unexpired meters and a live absence inventory. A sample changes an
+    entry only where its observation is provably newer (`earliest` after the entry's `latest`), and it may override
+    an absence fence only where it is newer than the inventory. A complete inventory clears a scoped mark it omits
+    only when newer. A `None` or malformed sample changes nothing."""
+    meters, inventory = _kept(previous, now)
+    before = dict(meters)
+    if not _sampled(sample):
+        return dict(meters=meters, inventory=inventory)
+    earliest, latest = sample['earliest'], sample['latest']
+    for key, value in sample['meters'].items():
+        old = meters.get(key)
+        if value['reset_at'] <= now or old is not None and earliest <= old['latest']:
+            continue
+        if inventory is not None and key not in ACCOUNT and key not in inventory['scopes'] \
+                and earliest <= inventory['latest']:
+            continue
+        meters[key] = dict(value, earliest=earliest, latest=latest)
+    if sample['scopes_complete'] and (inventory is None or earliest > inventory['latest']):
+        scopes = sorted(key for key in sample['meters'] if key not in ACCOUNT)
+        for key in [key for key in meters if key not in ACCOUNT and key not in scopes]:
+            if earliest > meters[key]['latest']:
+                del meters[key]
+        inventory = dict(scopes=scopes, earliest=earliest, latest=latest)
+    return dict(meters=_capped(meters, before), inventory=inventory)
+
+
+def remaining(record, model, models, *, now):
+    """Seconds until the latest reset of a confirmed exhausted meter that covers `model`, or None."""
+    meters, _ = _kept(record, now)
+    left = [entry['reset_at'] - now for key, entry in meters.items()
+            if entry['exhausted'] and covers(key, model, models)]
+    return max(left) if left else None
 
 
 def _bounded(reset, received, length):
@@ -216,13 +301,13 @@ def evidence(use, models, *, started, received):
         incomplete, excluded = True, ids
     meters = {}
     for meter, entries in scopes.items():
-        percents, resets = [percent for percent, _ in entries], {reset for _, reset in entries}
         if meter in excluded:
             continue
-        if len(resets) != 1 or not all(_agree(first, second) for first in percents for second in percents):
+        settled = _settled(entries)
+        if settled is None:
             incomplete = True
             continue
-        meters[meter] = dict(exhausted=max(percents) >= 100, reset_at=resets.pop())
+        meters[meter] = dict(exhausted=settled[0] >= 100, reset_at=settled[1])
     for window, readings in claims.items():
         settled = None if window in broken else _settled(readings)
         if settled and settled[1] is not None and _bounded(settled[1], received, LENGTHS[window]):

@@ -49,7 +49,8 @@ import selectors
 import subprocess
 import time
 
-from runtime import processes as lifecycle, routing, routing_observations as observations, routing_paths, storage
+from runtime import claude_quota, processes as lifecycle, routing, routing_observations as observations, \
+    routing_paths, storage
 
 PATH = 'claude-native-subscription'
 POOL = 'claude-subscription'
@@ -183,7 +184,8 @@ class _Session:
 
 
 def exchange(command, environ, timeout=TIMEOUT):
-    """(initialize payload, usage payload, wall time just before `get_usage` was sent); the group is stopped after."""
+    """(initialize payload, usage payload, wall time just before `get_usage` was sent, wall time when its answer was
+    read); the group is stopped after, and cleanup never moves the receipt time."""
     try:
         process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, env=child_env(environ), cwd='/',
@@ -198,13 +200,14 @@ def exchange(command, environ, timeout=TIMEOUT):
         started = time.time()
         session.send('vw-usage', 'get_usage')
         use = session.response('vw-usage')
+        received = time.time()
         normal = True
     except (ReadError, OSError) as error:
         error.initialized = init is not None  # account material arrived (kept only in memory): not transport only
         raise
     finally:
         lifecycle._stop(process, normal)
-    return init, use, started
+    return init, use, started, received
 
 
 # -- parsing -----------------------------------------------------------------------------------------------------
@@ -269,6 +272,8 @@ def _time(value):
 
 
 def _percent(value):
+    if type(value) is int and not 0 <= value <= 100:
+        raise ReadError('claude_usage_invalid')  # before the float conversion below, which a huge integer overflows
     if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
         raise ReadError('claude_usage_invalid')
     return value
@@ -405,51 +410,26 @@ def scopes(use, models):
             for _, item in sorted(found.items())]
 
 
-def scope_state(settings_path, route, now):
-    """How the current account's model-scoped limits bear on `route` (user decision 2026-11-16: scope by model):
-    None when none names its model (the account-wide windows hold), 'exhausted' when one names it at 100% with its
-    reset ahead, else 'scoped' (one names it, or one names no catalog model: quota unknown for every Claude route)."""
-    from runtime import native_catalog
-    scoped = (account(settings_path, now) or {}).get('scoped') or []
-    if not scoped:
+def exhaustion_left(settings_path, route, now):
+    """Seconds until the current account's confirmed exhaustion ends for this OpenCode Claude route, or None.
+
+    Only evidence bound to the account's current key and generation counts, with the catalog bound to that same
+    account (else no model is matched, so only account-wide windows block). The caller checks the OpenCode Claude
+    billing binding first; this reads the private state and takes no lock."""
+    from runtime import native_catalog, opencode_account
+    if type(route) is not dict or route.get('pool') != POOL or opencode_account.family(route) != 'claude':
         return None
+    current = account(settings_path, now)
+    if current is None:
+        return None
+    found = _state(settings_path).get('quota')
+    if type(found) is not dict or found.get('key') != current['key'] \
+            or found.get('generation') != current['generation']:
+        return None
+    snapshot = native_catalog.stored(settings_path, CLIENT)
+    bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
     alias = route.get('model') if type(route.get('model')) is str else ''
-    entry = next((item for item in (native_catalog.stored(settings_path, CLIENT) or {}).get('models') or []
-                  if type(item) is dict and item.get('alias') == alias), {})
-    words, state = _tokens(alias) | _tokens(entry.get('resolved')), None
-    for item in scoped:
-        if item['matched'] and not _family(item['name']) <= words:
-            continue  # another model's limit
-        if item['matched'] and item['utilization'] >= 100 and item['reset'] > now:
-            return 'exhausted'
-        state = 'scoped'
-    return state
-
-
-def _quota_gate(settings_path, route, now, native):
-    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
-        return None, None
-    left = observations.trust_left((account(settings_path, now) or {}).get('observed_at'), now)  # the scoped read
-    return ('quota_exhausted', left) if left is not None else (None, None)
-
-
-def quota_problem(settings_path, route, now, native=False):
-    """`quota_exhausted` for a route a model-scoped limit names at 100% with its reset ahead, read at most
-    EXHAUSTED_RECHECK_SECONDS ago (a provider may reset early); the OpenCode Claude producer passes `native=True` for
-    its route on this same login. Never headroom, never a claim."""
-    return _quota_gate(settings_path, route, now, native)[0]
-
-
-def quota_retry_after(settings_path, route, now, native=False):
-    return _quota_gate(settings_path, route, now, native)[1]
-
-
-def exhausted_stale(settings_path, route, now, native=False):
-    """E1: whether a model-scoped limit still names `route` at 100% but was read too long ago to refuse."""
-    if not (native or applies(route)) or route.get('pool') != POOL or scope_state(settings_path, route, now) != 'exhausted':
-        return False
-    at = (account(settings_path, now) or {}).get('observed_at')
-    return routing._amount(at) and now - at > observations.EXHAUSTED_RECHECK_SECONDS
+    return claude_quota.remaining(found.get('record'), alias, snapshot['models'] if bound else [], now=now)
 
 
 # -- the private store -------------------------------------------------------------------------------------------
@@ -553,14 +533,15 @@ def _connection(key, generation):
     return 'account:%s:%s' % (key, generation)
 
 
+def _binding_of(current):
+    return dict(client_version=current['client_version'],
+                connection=_connection(current['key'], current['generation']), controls=CONTROLS)
+
+
 def binding(settings_path):
     """The native catalog binding of the current account read (its key and generation), or None."""
     current = account(settings_path, int(time.time()))
-    if current is None:
-        return None
-    return dict(client_version=current['client_version'], connection=_connection(current['key'],
-                                                                                 current['generation']),
-                controls=CONTROLS)
+    return None if current is None else _binding_of(current)
 
 
 @contextmanager
@@ -608,6 +589,18 @@ def _transition(settings_path, step):
         value = _owned(path)
         value.update(step(value))
         observations._write(path, value)
+
+
+def _quota_change(state, expected, sample, now):
+    """The change merging one exchange's quota evidence into the state, for the expected `(key, generation)` that the
+    state still proves. Evidence from another key or generation is never carried over."""
+    key, generation = expected
+    if _proved(state, key) != generation:
+        raise ValueError('observation_store_invalid')
+    found = state.get('quota')
+    bound = type(found) is dict and found.get('key') == key and found.get('generation') == generation
+    record = claude_quota.merge(found.get('record') if bound else None, sample, now=now)
+    return dict(quota=dict(key=key, generation=generation, record=record))
 
 
 def _fence(state, held):
@@ -668,13 +661,14 @@ def _fresh(settings_path, need, now):
                and stored[key]['observed_at'] > boundary for key in need)
 
 
-def _record(settings_path, init, use, started, held):
-    """Store one exchange's account, catalog and windows. The account and telemetry are checked before anything is
-    written. Then, in order: the observed identity (the generation `held` proves for this key under this attempt's
-    untouched fence, else a fresh random one) with a pending account, before the catalog is checked; the catalog
-    bound to it; the complete account; and only after every row is stored, the confirmed exchange. A usage problem
-    still records the account and catalog, with no confirmed exchange, so no earlier row stays usable. Rows are bound
-    to the key and generation, so another account's or generation's rows never match; nothing earlier is re-dated."""
+def _record(settings_path, init, use, started, received, held):
+    """Store one exchange's account, catalog, quota evidence and windows. The account and telemetry are checked before
+    anything is written. Then, in order: the observed identity (the generation `held` proves for this key under this
+    attempt's untouched fence, else a fresh random one) with a pending account, before the catalog is checked; the
+    catalog bound to it; the complete account with the quota evidence merged, even when the usage snapshot is refused;
+    and only after every row is stored, the confirmed exchange. A usage problem still records the account and catalog,
+    with no confirmed exchange, so no earlier row stays usable. Rows are bound to the key and generation, so another
+    account's or generation's rows never match; nothing earlier is re-dated."""
     from runtime import native_catalog
     key = parse_identity(init, use)
     check_quiet(use)
@@ -682,6 +676,7 @@ def _record(settings_path, init, use, started, held):
     generation = held['observed']
     key, version, models = parse_account(init, use)
     now = int(time.time())
+    sample = claude_quota.evidence(use, models, started=started, received=received)
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
         scoped = scopes(use, models)
@@ -692,7 +687,9 @@ def _record(settings_path, init, use, started, held):
                    usage_at=None, scoped=scoped)
     native_catalog.store_snapshot(settings_path, CLIENT, dict(binding=dict(
         client_version=version, connection=_connection(key, generation), controls=CONTROLS), models=models))
-    _transition(settings_path, _expect(key, generation, dict(account=current)))
+    def publish(state):
+        return dict(account=current, **_quota_change(state, (key, generation), sample, now))
+    _transition(settings_path, publish)
     if problem is not None:
         raise problem
     token = row_account(current)
@@ -731,12 +728,12 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             _transition(settings_path, lambda state: _fence(state, held))  # unstored: no exchange starts
             try:
                 try:
-                    init, use, started = exchange(command or default_command(environ), environ, timeout)
+                    init, use, started, received = exchange(command or default_command(environ), environ, timeout)
                 except (ReadError, OSError) as error:
                     if not getattr(error, 'initialized', False):  # transport only, before any account material
                         _transition(settings_path, lambda state: _settle(state, held))
                     raise  # after initialization the fence stays: unprovable, rotated on the next success
-                windows = _record(settings_path, init, use, started, held)
+                windows = _record(settings_path, init, use, started, received, held)
                 if not windows:
                     raise ReadError('claude_usage_unconfirmed')
                 if not set(need) <= {item['id'] for item in windows}:

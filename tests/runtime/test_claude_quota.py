@@ -383,5 +383,108 @@ class ClaudeQuotaTest(unittest.TestCase):
         self.assertFalse(self.evidence(listed, malformed)['scopes_complete'])
 
 
+INVENTED = dict(alias='invented', resolved='claude-example-5-3', efforts=[])
+
+
+class ClaudeQuotaRecordTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            self.quota = importlib.import_module('runtime.claude_quota')
+        except ImportError:
+            self.fail('claude_quota record is missing')
+        self.models = [INVENTED]
+        self.reset = NOW + 3600
+        self.now = NOW + 200
+        self.marked = self.quota.merge({}, self.sample(self.mark(True), NOW - 60, NOW), now=NOW)
+
+    def sample(self, meters, earliest, latest, complete=False):
+        return dict(meters=meters, earliest=earliest, latest=latest, scopes_complete=complete)
+
+    def mark(self, exhausted, key='family:example', reset=None):
+        return {key: dict(exhausted=exhausted, reset_at=self.reset if reset is None else reset)}
+
+    def left(self, record, now, model='invented', models=None):
+        return self.quota.remaining(record, model, self.models if models is None else models, now=now)
+
+    def test_mark_expires_at_reset(self):
+        self.assertEqual(self.left(self.marked, self.reset - 1), 1)
+        self.assertIsNone(self.left(self.marked, self.reset))
+
+    def test_overlapping_healthy_interval_does_not_replace_a_mark(self):
+        healthy = self.sample(self.mark(False), NOW - 30, NOW + 30)
+        self.assertEqual(self.quota.merge(self.marked, healthy, now=self.now), self.marked)
+
+    def test_recovery_and_older_or_boundary_positives_do_not_recreate_a_pause(self):
+        cleared = self.quota.merge(self.marked, self.sample(self.mark(False), NOW + 1, NOW + 61), now=self.now)
+        self.assertIsNone(self.left(cleared, self.now))
+        delayed = self.sample(self.mark(True), NOW + 50, NOW + 111)
+        self.assertEqual(self.quota.merge(cleared, delayed, now=self.now), cleared)
+        boundary = self.sample(self.mark(True), NOW + 61, NOW + 121)
+        self.assertEqual(self.quota.merge(cleared, boundary, now=self.now), cleared)
+        newer = self.sample(self.mark(True), NOW + 62, NOW + 122)
+        restored = self.quota.merge(cleared, newer, now=self.now)
+        self.assertEqual(self.left(restored, self.now), self.reset - self.now)
+
+    def test_healthy_meter_committed_first_blocks_an_older_positive(self):
+        healthy = self.quota.merge({}, self.sample(self.mark(False), NOW + 140, NOW + 200), now=self.now)
+        late = self.quota.merge(healthy, self.sample(self.mark(True), NOW + 40, NOW + 100), now=self.now)
+        self.assertIsNone(self.left(late, self.now))
+
+    def test_incomplete_samples_clear_a_mark_only_through_their_own_meter(self):
+        incomplete = self.sample({}, NOW + 101, NOW + 161)
+        self.assertEqual(self.quota.merge(self.marked, incomplete, now=self.now), self.marked)
+        recovery = self.sample(self.mark(False), NOW + 101, NOW + 161)
+        self.assertIsNone(self.left(self.quota.merge(self.marked, recovery, now=self.now), self.now))
+
+    def test_complete_empty_inventory_clears_only_a_newer_omitted_mark(self):
+        absent = self.quota.merge(self.marked, self.sample({}, NOW + 101, NOW + 161, complete=True), now=self.now)
+        self.assertIsNone(self.left(absent, self.now))
+        self.assertEqual(absent['inventory'], dict(scopes=[], earliest=NOW + 101, latest=NOW + 161))
+        overlapping = self.sample(self.mark(True), NOW + 110, NOW + 170, complete=True)
+        self.assertEqual(self.quota.merge(absent, overlapping, now=self.now), absent)
+        renewed = self.quota.merge(absent, self.sample(self.mark(True), NOW + 120, NOW + 180), now=self.now)
+        self.assertEqual(renewed, absent)
+        restored = self.quota.merge(absent, self.sample(self.mark(True), NOW + 162, NOW + 222), now=NOW + 222)
+        self.assertEqual(self.left(restored, NOW + 222), self.reset - NOW - 222)
+
+    def test_empty_inventory_does_not_fence_weekly_or_listed_scopes(self):
+        absent = self.quota.merge(self.marked, self.sample({}, NOW + 101, NOW + 161, complete=True), now=self.now)
+        weekly = self.sample({'7d': dict(exhausted=True, reset_at=self.reset)}, NOW + 110, NOW + 170)
+        self.assertEqual(self.left(self.quota.merge(absent, weekly, now=self.now), self.now), self.reset - self.now)
+        listed = dict(meters={}, inventory=dict(scopes=['family:example'], earliest=NOW + 101, latest=NOW + 161))
+        positive = self.sample(self.mark(True), NOW + 110, NOW + 170)
+        self.assertEqual(self.left(self.quota.merge(listed, positive, now=self.now), self.now), self.reset - self.now)
+
+    def test_complete_sample_stores_its_scopes_as_inventory(self):
+        record = self.quota.merge({}, self.sample(self.mark(False), NOW + 1, NOW + 61, complete=True), now=self.now)
+        self.assertEqual(record['inventory'], dict(scopes=['family:example'], earliest=NOW + 1, latest=NOW + 61))
+        self.assertEqual(record['meters']['family:example'],
+                         dict(exhausted=False, reset_at=self.reset, earliest=NOW + 1, latest=NOW + 61))
+
+    def test_capacity_keeps_positives_before_recent_healthy_scopes(self):
+        healthy = {'model:m%d' % i: dict(exhausted=False, reset_at=self.reset) for i in range(8)}
+        full = self.quota.merge(self.marked, self.sample(healthy, NOW + 1, NOW + 61), now=self.now)
+        scoped = sorted(key for key in full['meters'] if key.startswith(('family:', 'model:')))
+        self.assertEqual(len(scoped), 8)
+        self.assertIn('family:example', scoped)
+        self.assertNotIn('model:m7', scoped)
+
+    def test_malformed_records_and_samples_cannot_exclude_or_clear(self):
+        bad = dict(meters={'family:example': dict(exhausted='yes', reset_at=self.reset)},
+                   inventory=dict(scopes=[], earliest=NOW, latest='x'))
+        self.assertIsNone(self.left(bad, self.now))
+        self.assertIsNone(self.left(None, self.now))
+        self.assertEqual(self.quota.merge(self.marked, None, now=self.now), self.marked)
+        bogus = self.sample({'family:example': dict(exhausted=False, reset_at=self.reset)}, NOW + 101, 'x', True)
+        self.assertEqual(self.quota.merge(self.marked, bogus, now=self.now), self.marked)
+
+    def test_account_wide_mark_needs_no_catalog_and_scoped_mark_needs_a_bound_one(self):
+        weekly = self.quota.merge({}, self.sample({'7d': dict(exhausted=True, reset_at=self.reset)}, NOW - 60, NOW),
+                                  now=NOW)
+        self.assertEqual(self.left(weekly, self.now, models=[]), self.reset - self.now)
+        self.assertIsNone(self.left(self.marked, self.now, models=[]))
+        self.assertEqual(self.left(self.marked, self.now, model='claude-example-5-3'), self.reset - self.now)
+
+
 if __name__ == '__main__':
     unittest.main()
