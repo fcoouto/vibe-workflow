@@ -11,7 +11,7 @@ import { createProjectSettings } from "../../src/project.js"
 // Spawned selectors inherit this, so a real CLI can never reach the network.
 process.env.VCW_TEST_HOME = mkdtempSync(join(tmpdir(), "vcw-test-home-"))
 
-async function fixture(t, permission = async () => {}, prepare) {
+async function fixture(t, permission = async () => {}, prepare, configure) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "vibe-onboard-")))
   t.after(() => rm(root, { recursive: true }))
   const nested = join(root, "nested")
@@ -29,6 +29,7 @@ async function fixture(t, permission = async () => {}, prepare) {
     ...(permission && { permission: { assert: async (request) => { assertCalls.push(request); await permission(request) } } }),
     session: { hook: async () => {} },
   }
+  configure?.(ctx)
   const cleanup = await (await import("../../index.js")).default.setup(ctx)
   t.after(() => cleanup?.())
   assert.ok(tool.has("vibe_workflow_onboard"), "onboarding tool is missing")
@@ -454,6 +455,43 @@ test("session_titles apply saves only its entry after edit permission", async (t
     [{ smart_router: { enabled: false } }, { session_titles: { enabled: true } }])
   assert.deepEqual(assertCalls.map(({ action, resources }) => ({ action, resources })),
     [{ action: "edit", resources: ["../.vibe-workflow/settings.json"] }])
+})
+
+test("onboarding off-on fences a title bind waiting on the host", async (t) => {
+  const hooks = [], writes = []
+  let release, entered
+  const blocked = new Promise((done) => { release = done })
+  const calling = new Promise((done) => { entered = done })
+  const { execute, write, root } = await fixture(t, undefined, undefined, (ctx) => {
+    ctx.location.project = { id: ctx.location.directory }
+    ctx.tool.hook = async (name, fn) => { if (name === "execute.after") hooks.push(fn) }
+    ctx.event = { subscribe: async function* () {} }
+    ctx.storage = { get: async () => undefined, set: async (key) => { if (key.startsWith("session-titles/")) writes.push(key) },
+      scan: async () => ({ entries: [] }) }
+    ctx.session.get = async ({ sessionID }) => {
+      entered()
+      await blocked
+      return { id: sessionID, title: "Untouched title", location: { directory: ctx.location.directory } }
+    }
+  })
+  await write({ version: 1, features: [{ session_titles: { enabled: true } }] })
+  const emit = async () => {
+    for (const hook of hooks) await hook({ tool: "write", status: "completed", sessionID: "ses_fixture",
+      input: { path: join(root, "docs/superpowers/specs/probe.md") } })
+  }
+  const pending = emit()
+  try {
+    await calling
+    for (const enabled of [false, true]) {
+      const preview = await titles(execute, { op: "preview", enabled })
+      const saved = await titles(execute, { op: "apply", enabled, expected_snapshot: preview.snapshot })
+      assert.equal(saved.state, "saved")
+    }
+  } finally { release() }
+  await pending
+  assert.deepEqual(writes, [])
+  await emit()
+  assert.deepEqual(writes, ["session-titles/ses_fixture"])
 })
 
 test("session_titles rejects git workflow booleans", async (t) => {

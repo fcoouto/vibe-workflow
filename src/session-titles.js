@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
-import { resolve } from "node:path"
+import { isAbsolute, relative, resolve } from "node:path"
 import { classify } from "./pr-advice.js"
-import { artifact, branchOf, commonDir, defaultRun, readFacts } from "./session-facts.js"
+import { artifact, branchOf, commonDir, defaultRun, readFacts, readPlanPaths } from "./session-facts.js"
 
 export const MARK = "\uFFFB"
 export const PREFIX = /^\uFFFB?[▰▱]{5} (?:WAITING · )?/
@@ -47,17 +47,23 @@ const REQUESTS = {
 }
 const MAX_PENDING = 16
 const MAX_SHELLS = 64
-const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited"]
+const STEP = "session.step.ended"
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
+// OpenCode evaluates plugin modules separately per location in the same server realm.
+const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
-  const close = () => { controller.abort(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear() }
+  const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
-  if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return { registered: false, close }
+  let preference = { revision: 0, copies: 0 }, leave = () => {}
+  const close = () => { controller.abort(); leave(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear() }
+  const unavailable = { registered: false, close, preferenceSaved: () => {} }
+  if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return unavailable
   const here = where ? await realpath(where).catch(() => where) : null
   const on = async () => !controller.signal.aborted && (await settings.inspect()).state === "on"
 
@@ -65,10 +71,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   // current folder owns it: it alone loads, writes and saves. A move makes every copy forget the session; a job whose
   // session was forgotten after it was queued (its generation changed) publishes and writes nothing.
   const generation = (sessionID) => generations.get(sessionID) ?? 0
-  const current = (sessionID, admitted) => !controller.signal.aborted && generation(sessionID) === admitted
-  const enqueue = (sessionID, job) => {
-    const admitted = generation(sessionID)
-    const next = (chains.get(sessionID) ?? Promise.resolve()).then(() => job(admitted)).catch(() => {})
+  const admit = (sessionID, revision = preference.revision) => ({ generation: generation(sessionID), revision })
+  const current = (sessionID, admitted) => !controller.signal.aborted && generation(sessionID) === admitted.generation &&
+    preference.revision === admitted.revision
+  const enqueue = (sessionID, job, admitted = admit(sessionID)) => {
+    const next = (chains.get(sessionID) ?? Promise.resolve()).then(() => {
+      if (current(sessionID, admitted)) return job(admitted)
+    }).catch(() => {})
     chains.set(sessionID, next)
     next.then(() => { if (chains.get(sessionID) === next) chains.delete(sessionID) })
     return next
@@ -144,9 +153,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!task || typeof task.top !== "string" || !Number.isInteger(task.cells) || task.cells < 1 || task.cells > 4 ||
       typeof task.slug !== "string" || typeof task.fresh !== "boolean" || ![task.spec, task.plan, task.remembered].every(text) ||
       !(task.spec || task.plan) || !(task.seen === undefined || short(task.seen)) ||
-      !(task.bound === undefined || task.bound === null || finite(task.bound))) return null
+      !(task.bound === undefined || task.bound === null || finite(task.bound)) ||
+      !(task.resetFrom === undefined || text(task.resetFrom))) return null
     const { top, spec, plan, remembered, cells, slug, fresh } = task
-    return { top, spec, plan, remembered, cells, slug, fresh, seen: task.seen ?? null, bound: task.bound ?? null }
+    return { top, spec, plan, remembered, cells, slug, fresh, seen: task.seen ?? null, bound: task.bound ?? null,
+      ...(task.resetFrom != null && { resetFrom: task.resetFrom }) }
   }
 
   // `known` is a session read the caller already made, so loading costs no second read.
@@ -155,15 +166,16 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     let mine
     try { mine = await owns(known ?? await read(sessionID)) } catch { return }
     if (mine === undefined || !current(sessionID, admitted)) return
+    let record
+    try { if (mine) record = await storage?.get(KEY + sessionID) } catch {}
+    if (!current(sessionID, admitted)) return
     checked.add(sessionID)
     if (checked.size > MAX_SESSIONS * 8) checked.delete(checked.values().next().value)
-    if (!mine) return
     try {
-      const record = await storage?.get(KEY + sessionID)
       if (!record || (typeof record.project === "string" ? record.project !== project : record.location !== where)) return
       const entry = { task: restore(record.task), last: typeof record.last === "string" ? record.last : null,
         silenced: record.silenced === true, diag: diagOf(record.diag) }
-      if ((!entry.task && !entry.silenced) || !current(sessionID, admitted)) return
+      if (!entry.task || !current(sessionID, admitted)) return
       keep(sessionID, entry)
       saved.set(sessionID, JSON.stringify(entry))
     } catch {}
@@ -173,36 +185,69 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   // finished task then shows its last meter again until the next spec write. The 128-record cap is shared by projects.
   // Every caller saves only an entry that is still this copy's memory of the session; a move or close removes it, so no
   // save starts for a forgotten session.
-  async function save(sessionID, entry) {
+  async function save(sessionID, entry, admitted) {
+    const live = () => current(sessionID, admitted) && sessions.get(sessionID) === entry
     try {
-      if (!storage) return
+      if (!storage || !live()) return
       const snapshot = JSON.stringify(entry), known = saved.has(sessionID)
       if (saved.get(sessionID) === snapshot) return
-      if (!entry.task && !entry.silenced) {
+      if (!entry.task) {
         await storage.remove(KEY + sessionID)
-        saved.delete(sessionID)
+        if (live()) saved.delete(sessionID)
         return
       }
       await storage.set(KEY + sessionID, { location: where, project, at: Date.now(), task: entry.task, last: entry.last,
         silenced: entry.silenced, diag: entry.diag ?? null })
-      if (controller.signal.aborted || sessions.get(sessionID) !== entry) return
+      if (!live()) return
       saved.set(sessionID, snapshot)
       if (known) return
       const entries = []
       let page = await storage.scan({ prefix: KEY })
       while (page) {
+        if (!live()) return
         entries.push(...(page.entries ?? []))
         page = page.next ? await storage.scan({ prefix: KEY, after: page.next }) : null
       }
       entries.sort((a, b) => (a.value?.at ?? 0) - (b.value?.at ?? 0))
-      for (const { key } of entries.slice(0, Math.max(0, entries.length - MAX_SESSIONS))) await storage.remove(key)
+      for (const { key } of entries.slice(0, Math.max(0, entries.length - MAX_SESSIONS))) {
+        if (!live()) return
+        await storage.remove(key)
+      }
     } catch {}
+  }
+
+  async function retire(sessionID, entry, admitted) {
+    entry.task = null
+    await save(sessionID, entry, admitted)
+    if (sessions.get(sessionID) === entry) {
+      sessions.delete(sessionID)
+      saved.delete(sessionID)
+      pending.delete(sessionID)
+    }
+  }
+
+  // A sent write can settle after a preference change. Only its exact visible title can acknowledge it later.
+  async function updateTitle(sessionID, entry, title, cells) {
+    const task = entry.task
+    await ctx.session.update({ sessionID, title })
+    if (sessions.get(sessionID) === entry && entry.task === task) sentTitles.set(task, { title, cells })
+  }
+
+  function reconcileTitle(entry, title) {
+    const task = entry.task, sent = sentTitles.get(task)
+    if (!sent) return
+    sentTitles.delete(task)
+    if (title !== sent.title) return
+    task.cells = Math.max(task.cells, sent.cells)
+    task.fresh = false
+    delete task.resetFrom
+    entry.last = title
   }
 
   // A spec or plan write. A child's write binds its root; the bind runs on the root's queue so it cannot race the root's
   // own evaluation. `directory` is the folder of the session that wrote, which a relative path resolves against.
   async function route(sessionID, path, admitted) {
-    if (!await on()) return
+    if (!await on() || !current(sessionID, admitted)) return
     const info = await read(sessionID)
     const directory = info?.location?.directory
     if (typeof directory !== "string") return
@@ -214,10 +259,12 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!root || root === sessionID) return
     // The root's generation before its read: a move during the read or while the bind waits on the root's queue
     // makes the bind do nothing, so stale root information can never write the old folder's record.
-    const before = generation(root)
+    const before = admit(root, admitted.revision)
     const rootInfo = await read(root)
-    if (await owns(rootInfo) !== true || generation(root) !== before) return
-    await enqueue(root, () => bind(root, path, directory, before, rootInfo))
+    if (await owns(rootInfo) !== true || !current(root, before)) return
+    await enqueue(root, () => {
+      if (current(sessionID, admitted)) return bind(root, path, directory, before, rootInfo)
+    }, before)
   }
 
   async function bind(sessionID, path, directory, admitted, known) {
@@ -233,15 +280,18 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const adopt = found.kind === "plan" && held && held.top !== top && !held.plan && found.slug === held.slug &&
       await sameRepository(held.top, top)
     if (!current(sessionID, admitted)) return
-    const entry = sessions.get(sessionID) ?? { task: null, last: null, silenced: false, diag: null }
-    const task = { top, spec: null, plan: null, remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null,
-      bound: Date.now() }
-    if (found.kind === "spec" && entry.task?.spec !== file) entry.task = { ...task, spec: file }
-    else if (found.kind === "plan" && !entry.task) entry.task = { ...task, plan: file }
-    else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
+    let entry = sessions.get(sessionID)
+    if (!held || (found.kind === "spec" && held.spec !== file)) {
+      const title = known.title ?? ""
+      const reused = held || finite(known.time?.idle) || (title.startsWith(MARK) && PREFIX.test(title))
+      const task = { top, spec: found.kind === "spec" ? file : null, plan: found.kind === "plan" ? file : null,
+        remembered: null, cells: 1, slug: found.slug, fresh: true, seen: null, bound: Date.now(),
+        ...(reused && { resetFrom: title }) }
+      entry = { task, last: null, silenced: false, diag: null }
+    } else if (found.kind === "plan" && entry.task.top === top) entry.task.plan = file
     else if (adopt && entry.task === held) entry.task = { ...held, top, plan: file, remembered: null, seen: null }
     keep(sessionID, entry)
-    await save(sessionID, entry)
+    await save(sessionID, entry, admitted)
   }
 
   async function sameRepository(a, b) {
@@ -301,20 +351,25 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     const entry = sessions.get(sessionID), task = entry?.task
     if (!current(sessionID, admitted) || !task || entry.silenced) return
     const branch = await branchOf({ top: task.top, run })
-    if (!branch || task.remembered === branch || sessions.get(sessionID) !== entry || entry.task !== task) return
+    if (!branch || task.remembered === branch || !current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
     task.remembered = branch
-    await save(sessionID, entry)
+    await save(sessionID, entry, admitted)
   }
 
   // A session below a bound root ended: the root may now be idle with nothing running, so it re-evaluates its label.
   // `created` is the end event's own time: a late delivery must not push the cutoff past a run that restarted since.
   // It is used only when it is within 5 minutes of now, so a different unit or clock can never hide the label.
   async function wakeRoot(sessionID, created) {
+    const source = admit(sessionID)
     const received = Date.now()
     const at = typeof created === "number" && Math.abs(created - received) <= 5 * 60 * 1000 ? created : received
     if (parents.get(sessionID) === null || !await on()) return
     const root = await rootOf(sessionID)
-    if (root && root !== sessionID) await enqueue(root, (admitted) => evaluate(root, true, { id: sessionID, at }, admitted))
+    if (root && root !== sessionID && current(sessionID, source)) {
+      await enqueue(root, (admitted) => {
+        if (current(sessionID, source)) return evaluate(root, true, { id: sessionID, at }, admitted)
+      }, admit(root, source.revision))
+    }
   }
 
   // Requests are tracked only for roots bound in this copy's memory, so other sessions cost nothing. A reply removes only
@@ -340,16 +395,21 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, still = () => true } = {}) {
     if (!await on()) return
     const entry = sessions.get(sessionID), task = entry?.task
-    if (!task || entry.silenced || task.fresh) return
+    if (!task || entry.silenced || (task.fresh && !sentTitles.has(task))) return
     const info = await read(sessionID)
-    if (await owns(info) !== true || !current(sessionID, admitted) || (whileRunning && !running(info.time)) || !still()) return
+    if (await owns(info) !== true || !current(sessionID, admitted) || sessions.get(sessionID) !== entry ||
+        (whileRunning && !running(info.time)) || !still()) return
     const title = info.title ?? ""
-    if (!PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
+    reconcileTitle(entry, title)
+    if (task.cells === 5) { await retire(sessionID, entry, admitted); return }
+    if (task.fresh) return
+    if (!PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry, admitted); return }
     const next = compose(strip(title) || task.slug, task.cells, waiting)
-    if (next !== title) await ctx.session.update({ sessionID, title: next })
-    if (sessions.get(sessionID) !== entry || entry.task !== task) return
+    if (next !== title) await updateTitle(sessionID, entry, next, task.cells)
+    if (!current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
+    sentTitles.delete(task)
     entry.last = next
-    await save(sessionID, entry)
+    await save(sessionID, entry, admitted)
   }
 
   // Background shells: the agent is resumed when one exits, so a session with one running is not waiting on the user.
@@ -374,47 +434,203 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     })
   }
 
+  const validLocal = (facts) => facts.exists && !facts.errors.some(({ step }) => step === "status" || step === "diff")
+  const nonDoc = (path) => !path.startsWith("docs/")
+  const filePath = (path) => typeof path === "string" && !/[\0\\]/.test(path) &&
+    path.split("/").every((part) => part && part !== "." && part !== "..")
+  const planVersion = (task) => planVersions.get(task) ?? 0
+  const progressState = (task, declared = null, confirmed = new Set()) => ({
+    plan: task.plan, declared, confirmed, hints: new Set(), work: false, attempted: 1, queued: false,
+    events: 0, reread: false, reload: false,
+  })
+
+  function rememberLocal(state, facts) {
+    state.declared = facts.errors.some(({ step }) => step === "plan") ? null : new Set(facts.declared)
+    state.confirmed = new Set(validLocal(facts) ? facts.changed.filter((path) => state.declared?.has(path)) : [])
+    for (const path of state.hints) if (!state.declared?.has(path)) state.hints.delete(path)
+  }
+
+  function milestone(state) {
+    const count = state.declared?.size ?? 0
+    let done = state.confirmed.size
+    for (const path of state.hints) if (!state.confirmed.has(path)) done++
+    if (count && done === count) return 4
+    if (count && done >= Math.ceil(count / 2)) return 3
+    return state.work ? 2 : 1
+  }
+
+  // A snapshot is only a hint. Verify with the real checkout and the current plan, then preserve the actual label.
+  function scheduleProgress(sessionID, entry, state, admitted) {
+    const task = entry.task
+    const live = () => current(sessionID, admitted) && sessions.get(sessionID) === entry && entry.task === task &&
+      progress.get(task) === state && state.plan === task.plan && task.cells < 4 && !entry.silenced
+    const wanted = () => milestone(state) > Math.max(task.cells, state.attempted)
+    if (state.queued || !live() || (!state.reload && !wanted())) return
+    state.queued = true
+    let observed
+    enqueue(sessionID, async () => {
+      if (!live() || !await on() || !live()) return
+      observed = state.events
+      if (state.reload) {
+        const version = planVersion(task)
+        state.reload = false
+        const paths = await readPlanPaths(task.plan).catch(() => null)
+        if (!live()) return
+        if (planVersion(task) === version && paths) state.declared = new Set(paths)
+      }
+      if (!wanted()) return
+      state.attempted = milestone(state)
+      const version = planVersion(task)
+      const facts = await readFacts({ top: task.top, localOnly: true, run })
+      if (!live() || !validLocal(facts)) return
+      const info = await read(sessionID)
+      if (await owns(info) !== true || !live()) return
+      const title = info.title ?? "", prefix = title.match(PREFIX)?.[0]
+      if (!title.startsWith(MARK) || !prefix) return
+      reconcileTitle(entry, title)
+      const declared = planVersion(task) === version && state.declared ? [...state.declared] : []
+      const cells = cellsFor({ ...facts, declared })
+      if (cells <= task.cells) return
+      const next = compose(strip(title) || task.slug, cells, prefix.endsWith("WAITING · "))
+      if (next !== title) await updateTitle(sessionID, entry, next, cells)
+      if (!live()) return
+      sentTitles.delete(task)
+      task.cells = cells
+      entry.last = next
+      await save(sessionID, entry, admitted)
+    }, admitted).then(() => {
+      state.queued = false
+      if (observed !== undefined && state.events !== observed && live() && (state.reload || wanted())) {
+        scheduleProgress(sessionID, entry, state, admitted)
+      }
+    })
+  }
+
+  function stepProgress(event, sessionID) {
+    const { files } = event.data, directory = event.location?.directory
+    if (!Array.isArray(files) || !files.length || typeof directory !== "string") return
+    const top = reals.get(directory) ?? directory
+    const source = admit(sessionID)
+    const candidate = (entry) => {
+      const task = entry?.task
+      if (!task || entry.silenced || task.cells >= 4 || task.top !== top) return null
+      const planPath = task.plan && relative(top, task.plan)
+      const edited = planPath && files.includes(planPath)
+      const state = progress.get(task)
+      if (!edited && (task.fresh || !state || state.plan !== task.plan)) return null
+      return { task, state, plan: task.plan, planPath, edited }
+    }
+    const accept = (root, entry, match, admitted) => {
+      const { task, state, plan, planPath, edited } = match
+      if (!current(sessionID, source) || !current(root, admitted) || sessions.get(root) !== entry ||
+          entry.task !== task || task.plan !== plan) return
+      if (edited) planVersions.set(task, planVersion(task) + 1)
+      if (!state || task.fresh || progress.get(task) !== state || state.plan !== plan) return
+      state.events++
+      if (edited) {
+        state.declared = null
+        state.confirmed = new Set()
+        state.hints.clear()
+        state.reload = !state.reread
+        state.reread = true
+      }
+      for (const path of files) {
+        if (!filePath(path) || path === planPath) continue
+        if (nonDoc(path)) state.work = true
+        if (state.declared?.has(path)) state.hints.add(path)
+      }
+      scheduleProgress(root, entry, state, admitted)
+    }
+    const own = sessions.get(sessionID)
+    if (own) {
+      const match = candidate(own)
+      if (match) accept(sessionID, own, match, source)
+      return
+    }
+    if (parents.get(sessionID) === null) return
+    const candidates = new Map()
+    for (const [root, entry] of sessions) {
+      const match = candidate(entry)
+      if (match) candidates.set(root, [entry, match, admit(root, source.revision)])
+    }
+    if (candidates.size) void rootOf(sessionID).then((root) => {
+      const match = candidates.get(root)
+      if (match) accept(root, ...match)
+    }).catch(() => {})
+  }
+
+  function resetProgress(sessionID) {
+    const task = sessions.get(sessionID)?.task, state = progress.get(task)
+    if (state) progress.set(task, progressState(task, state.declared, state.confirmed))
+  }
+
   async function evaluate(sessionID, ended, fromChild, admitted) {
     if (!sessions.has(sessionID)) {
       if (checked.has(sessionID) || !await on()) return
       await load(sessionID, admitted)
     }
     const entry = sessions.get(sessionID), task = entry?.task
-    if (!task || entry.silenced || (!ended && task.fresh) || !await on()) return
+    if (!task || entry.silenced || (!ended && task.fresh && !sentTitles.has(task)) || !await on()) return
     if (fromChild) {
       const now = await activity(sessionID, { ended: fromChild, withSelf: true })
       if (now.children || now.self) return
     }
-    let cells = task.cells
+    const state = progress.get(task), version = planVersion(task)
+    let diag = entry.diag, facts, proof
+    const updates = {}
     if (ended) {
       const { state, project = null, worktree_cleanup } = await gitWorkflow.inspect()
-      const facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered, seen: task.seen,
+      facts = await readFacts({ top: task.top, plan: task.plan, remembered: task.remembered, seen: task.seen,
         bound: task.bound, fallback: project ?? task.top, run })
       const clip = (value) => typeof value === "string" ? value.slice(0, 200) : null
-      if (facts.head && facts.head === facts.branch) task.remembered = facts.head
+      if (facts.head && facts.head === facts.branch) updates.remembered = facts.head
       // The branch seen here lets the PR be found once the checkout is removed or detached, even if it was never pushed
       // from this session; it is looked up only then, so an unpushed checkout still makes no gh call.
-      if (facts.branch && facts.branch !== facts.base.replace(/^origin\//, "")) task.seen = clip(facts.branch)
-      entry.diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
+      if (facts.branch && facts.branch !== facts.base.replace(/^origin\//, "")) updates.seen = clip(facts.branch)
+      diag = { instance, exists: facts.exists, branch: clip(facts.branch), upstream: facts.upstream, head: clip(facts.head),
         pr: PR_STATES.includes(facts.pr?.state) ? facts.pr.state : null, declared: facts.declared.length,
         done: facts.declared.filter((path) => facts.changed.includes(path)).length, errors: facts.errors }
       const pr = facts.pr && { state: facts.pr.state, title: typeof facts.pr.title === "string" ? facts.pr.title : "" }
-      cells = Math.max(cells, cellsFor({ ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }))
+      proof = { ...facts, pr, cleanupOn: state === "on" && worktree_cleanup === true, primary: task.top === project }
     }
     const busy = ended ? await activity(sessionID, { ended: fromChild, withSelf: Boolean(fromChild) }) : null
     const info = await read(sessionID)
-    if ((fromChild && busy.self) || await owns(info) !== true || !current(sessionID, admitted)) return
+    if ((fromChild && busy.self) || await owns(info) !== true || !current(sessionID, admitted) ||
+        sessions.get(sessionID) !== entry || entry.task !== task) return
     const title = info.title ?? ""
-    if (entry.last !== null && !PREFIX.test(title)) { entry.silenced = true; await save(sessionID, entry); return }
+    reconcileTitle(entry, title)
+    if (!ended && task.fresh) return
+    const samePlan = planVersion(task) === version
+    const cells = proof ? Math.max(task.cells, cellsFor({ ...proof, declared: samePlan ? proof.declared : [] })) : task.cells
+    const reset = task.fresh && typeof task.resetFrom === "string"
+    const renamed = reset && title !== task.resetFrom
+    if (renamed || (entry.last !== null && !PREFIX.test(title))) {
+      if (cells === 5) await retire(sessionID, entry, admitted)
+      else {
+        Object.assign(task, updates)
+        entry.diag = diag
+        entry.silenced = true
+        await save(sessionID, entry, admitted)
+      }
+      return
+    }
     const kept = strip(title)
-    const topic = !kept || DEFAULT_TITLE.test(kept) || (task.fresh && title === entry.last) ? task.slug : kept
+    const topic = !kept || DEFAULT_TITLE.test(kept) || reset ? task.slug : kept
     const next = compose(topic, cells, ended && cells < 5 && !busy.children && !hasShell(sessionID))
-    if (next !== title) await ctx.session.update({ sessionID, title: next })
-    if (sessions.get(sessionID) !== entry || entry.task !== task) return
-    Object.assign(task, { cells, fresh: false })
+    if (next !== title) await updateTitle(sessionID, entry, next, cells)
+    if (!current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
+    sentTitles.delete(task)
+    if (cells === 5) { await retire(sessionID, entry, admitted); return }
+    Object.assign(task, updates, { cells, fresh: false })
+    entry.diag = diag
+    delete task.resetFrom
     entry.last = next
-    if (cells === 5) entry.task = null
-    await save(sessionID, entry)
+    if (facts && cells < 4 && progress.get(task) === state && samePlan && planVersion(task) === version) {
+      const nextState = state ?? progressState(task)
+      rememberLocal(nextState, facts)
+      progress.set(task, nextState)
+    }
+    await save(sessionID, entry, admitted)
   }
 
   try {
@@ -432,6 +648,19 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         }
       } catch {}
     })
+    // Settings are saved at the checkout root, which several location copies may share.
+    let preferenceRoot
+    try { if (where) preferenceRoot = (await settings.inspect()).root } catch {}
+    if (typeof preferenceRoot === "string" && isAbsolute(preferenceRoot)) {
+      const registry = globalThis[PREFERENCES] ??= new Map()
+      if (!registry.has(preferenceRoot)) registry.set(preferenceRoot, preference)
+      preference = registry.get(preferenceRoot)
+      preference.copies++
+      leave = () => {
+        leave = () => {}
+        if (--preference.copies === 0) registry.delete(preferenceRoot)
+      }
+    }
     ;(async () => {
       try {
         for await (const event of stream) {
@@ -439,16 +668,20 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           if (event?.type === "shell.exited") { shellExited(event.data?.id); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
-          if (event.type === "session.moved") forget(sessionID)
+          if (event.type === STEP) stepProgress(event, sessionID)
+          else if (event.type === "session.moved") forget(sessionID)
           else if (TURNS.includes(event.type)) {
             // A blocking request cannot outlive its session's own turn boundary; this also drops a missed reply.
             pending.delete(sessionID)
+            resetProgress(sessionID)
             enqueue(sessionID, (admitted) => evaluate(sessionID, event.type !== TURNS[0], null, admitted))
             if (event.type !== TURNS[0] && !sessions.has(sessionID)) wakeRoot(sessionID, event.created).catch(() => {})
           }
         }
       } catch {}
     })()
-  } catch { close(); return { registered: false, close } }
-  return { registered: true, close }
+  } catch { close(); return unavailable }
+  return { registered: true, close, preferenceSaved(enabled) {
+    if (typeof enabled === "boolean" && !controller.signal.aborted) preference.revision++
+  } }
 }

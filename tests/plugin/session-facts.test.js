@@ -106,6 +106,30 @@ test("readFacts follows the checkout through detached, branch, pushed and defaul
   assert.deepEqual(calls.at(-1).args.slice(0, 4), ["pr", "list", "--head", "feat/x"])
 })
 
+test("local-only facts read a pushed checkout, declared paths and untracked files without gh", async (t) => {
+  const { top, main } = setup(t)
+  const { calls, run } = recorder()
+  git(top, "switch", "-qc", "feat/x")
+  commit(top, "src/app.js")
+  git(top, "push", "-qu", "origin", "feat/x")
+  writeFileSync(join(top, "src/new.js"), "untracked\n")
+  writeFileSync(join(top, "README.md"), "**Files:** `src/app.js`, `src/new.js`\n")
+  const facts = await readFacts({ top, fallback: main, plan: "README.md", localOnly: true, run })
+  assert.equal(facts.pr, null)
+  assert.deepEqual(facts.declared, ["src/app.js", "src/new.js"])
+  assert.ok(facts.changed.includes("src/app.js"))
+  assert.ok(facts.changed.includes("src/new.js"))
+  assert.deepEqual(calls, [])
+})
+
+test("Git facts keep non-ASCII and newline filenames under docs", async (t) => {
+  const { top, main } = setup(t)
+  commit(top, "docs/café.md")
+  writeFileSync(join(top, "docs/first\nsecond.md"), "untracked\n")
+  const got = await readFacts({ top, fallback: main, localOnly: true })
+  assert.deepEqual(got.changed.sort(), ["docs/café.md", "docs/first\nsecond.md"])
+})
+
 const dated = { state: "MERGED", title: "Add x", createdAt: "2026-11-25T10:00:00Z" }
 const at = Date.parse(dated.createdAt)
 

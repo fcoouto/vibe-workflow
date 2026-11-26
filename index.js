@@ -540,6 +540,7 @@ export default {
     // Onboarding saves at this checkout's root, seeded from main's file; the read instances above stay as they are.
     const saving = (feature) => createProjectSettings(directory, feature, { worktree: true })
     const savingRouter = saving("smart_router")
+    const savingTitles = saving("session_titles")
     const onboarded = async () => (await Promise.all([inspectRouter(), gitWorkflow.inspect(), sessionTitles.inspect()]))
       .some(({ state }) => state === "on" || state === "off")
     const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
@@ -556,7 +557,13 @@ export default {
       const result = await savingRouter.apply(...args)
       if (result.enabled === false) forgetOff()
       return result
-    } }, git_workflow: saving("git_workflow"), session_titles: saving("session_titles") }, (signal, allowFetch) =>
+    } }, git_workflow: saving("git_workflow"), session_titles: { ...savingTitles,
+      async apply(...args) {
+        const result = await savingTitles.apply(...args)
+        if (result.state === "saved") titles.preferenceSaved(result.enabled)
+        return result
+      },
+    } }, (signal, allowFetch) =>
       runRouter(null, { directory, stateDir: state, signal, operation: "check_setup", allowFetch }),
     () => advice.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "guard_unavailable" },
     () => titles.registered ? { state: "ready", reason: null } : { state: "setup_needed", reason: "events_unavailable" },
