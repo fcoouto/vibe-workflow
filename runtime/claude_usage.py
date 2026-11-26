@@ -410,17 +410,23 @@ def scopes(use, models):
             for _, item in sorted(found.items())]
 
 
-def exhaustion_left(settings_path, route, now, native):
+def exhaustion_left(settings_path, route, now, *, native=None):
     """Seconds until the account's confirmed exhaustion ends for this OpenCode Claude route, or None.
 
     `native` is the opaque native binding of the billing read that proved this route's account (`opencode_account`'s
-    record). One state read supplies the current account and its quota, so an account switch between the reads
-    refuses; only evidence bound to that account and generation counts, with the catalog bound to the same account
-    (else no model is matched, so only account-wide windows block). This takes no lock."""
+    record). Omitted, it is the current OpenCode Claude account's own binding, or None without one. One state read
+    supplies the current account and its quota, so an account switch between the reads refuses; only evidence bound
+    to that account and generation counts, with the catalog bound to the same account (else no model is matched, so
+    only account-wide windows block). This takes no lock."""
     from runtime import native_catalog, opencode_account
     if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
             or opencode_account.family(route) != 'claude':
         return None
+    if native is None:
+        found = opencode_account._account(settings_path, 'claude', now)
+        native = found['native'] if found is not None else None
+        if native is None:
+            return None
     state = _state(settings_path)
     current = _current(state, now)
     if current is None or opencode_account._native(current) != native:

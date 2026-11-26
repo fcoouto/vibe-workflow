@@ -242,7 +242,68 @@ class ReaderTest(unittest.TestCase):
 
         with mock.patch.object(self.native, "exhaustion_left", side_effect=switch):
             self.assertIsNone(self.openc.quota_problem(self.settings, self.route, self.now))
-        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now, "0" * 32))
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now, native="0" * 32))
+
+    def become_second_login(self):
+        """Switch the native login and the OpenCode fact to another account whose weekly limit is exhausted."""
+        self.data["initialize"]["account"]["email"] = "other@example.invalid"
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=(), force=True)["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+
+    def crossing_source(self, pending):
+        """The production LocalSource; only its first billing read is followed by the switch in `pending`."""
+        class Crossing(self.observations.LocalSource):
+            def acquire_billing(self, routes, now):
+                return None
+
+            def billing(self, route, now):
+                found = super().billing(route, now)
+                if pending:
+                    pending.pop()()
+                return found
+        return Crossing(self.settings)
+
+    def test_exhaustion_left_keeps_its_three_argument_form(self):
+        self.weekly_only()
+        with mock.patch("time.time", return_value=self.now):
+            self.refresh(need=())
+            self.opencode()
+        native = self.openc._account(self.settings, "claude", self.now)["native"]
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now), 600)
+        self.assertEqual(self.native.exhaustion_left(self.settings, self.route, self.now, native=native), 600)
+        self.assertIsNone(self.native.exhaustion_left(self.settings, self.route, self.now, native="0" * 32))
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now, producer="0" * 32),
+                         "billing_unverified")
+
+    def test_stable_second_login_with_exhaustion_excludes_as_quota(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.become_second_login()
+        source = self.observations.LocalSource(self.settings)
+        kept, excluded = self.observations.eligible([self.route], source, self.now)
+        self.assertEqual((kept, excluded), ([], [dict(route=self.route["route"], reason="quota_exhausted")]))
+
+    def test_crossed_login_between_billing_and_quota_is_billing_unverified(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        first = self.native.account(self.settings, self.now)["key"]
+        kept, excluded = self.observations.eligible([self.route], self.crossing_source([self.become_second_login]),
+                                                    self.now)
+        self.assertEqual((kept, excluded), ([], [dict(route=self.route["route"], reason="billing_unverified")]))
+        self.assertNotEqual(self.native.account(self.settings, self.now)["key"], first)
+        self.assertEqual(self.openc.quota_problem(self.settings, self.route, self.now), "quota_exhausted")
+
+    def test_roster_reports_a_crossed_claude_login_as_billing_unverified(self):
+        with mock.patch("time.time", return_value=self.now):
+            self.assertEqual(self.refresh(need=())["state"], "stored")
+            self.assertEqual(self.opencode()["state"], "stored")
+        models = [dict(provider="claude-agent", id="invented", model=None, family=None, variants=["high"],
+                       context=None, released=5)]
+        answer = self.council.roster(dict(v=1, models=models), state_dir=self.settings.parent,
+                                     source=self.crossing_source([self.become_second_login]), now=self.now)
+        self.assertEqual([seat["status"] for seat in answer["seats"]], ["billing_unverified"])
 
     def test_weekly_exhaustion_is_stored_without_publishing_a_usage_snapshot(self):
         self.weekly_only()

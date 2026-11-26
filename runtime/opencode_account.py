@@ -46,6 +46,7 @@ CREDENTIAL = '/api/credential'
 USAGE = '/api/experimental/usage/limits'  # the Go workspace's meters (zero-token)
 GO_METERS = ('rolling', 'weekly', 'monthly')
 EXHAUSTED = 'quota_exhausted'
+BILLING_UNVERIFIED = 'billing_unverified'
 PROVIDER = '/api/provider'  # the provider listing (2.2.6 `--standalone` answers 404 for `/api/provider/<id>`)
 TIMEOUT = 10.0
 MAX_OUTPUT = 256 << 10
@@ -285,6 +286,11 @@ def applies(route):
     return family(route) is not None
 
 
+def _producer(name, current):
+    """The billing producer of one family's account record: its key prefix and generation, never the raw key."""
+    return 'opencode-%s:%s:%s' % (name, current['key'][:16], current['generation'])
+
+
 def billing_fact(settings_path, route, now):
     """A pure bounded local read: the account-only fact while the family's read is current; quota stays unknown."""
     name = family(route)
@@ -301,8 +307,8 @@ def billing_fact(settings_path, route, now):
         overflow = native.get('overflow')
         crossover = 'provider_blocked' if overflow == 'disabled' else \
             'provider_managed' if overflow == 'enabled' else 'unknown'
-    return dict(producer='opencode-%s:%s:%s' % (name, current['key'][:16], current['generation']),
-                **subscription_billing.scope(route), observed_at=current['observed_at'],
+    return dict(producer=_producer(name, current), **subscription_billing.scope(route),
+                observed_at=current['observed_at'],
                 valid_until=current['observed_at'] + observations.FRESH_SECONDS, paid_crossover=crossover)
 
 
@@ -311,18 +317,23 @@ def native_current(settings_path, now):
     return _account(settings_path, 'claude', now) is not None
 
 
-def _quota_gate(settings_path, route, now):
+def _quota_gate(settings_path, route, now, producer=None):
     """(`quota_exhausted`, seconds it may still last) on positive evidence only, never headroom: a provider quota-limit
     error on this pool within PROVIDER_LIMIT_SECONDS (E2); Go, this acquisition's bound meters (one limited or at 100%
     with its reset ahead) read at most EXHAUSTED_RECHECK_SECONDS ago. ChatGPT: only its limit mark (`chatgpt_limit`),
     never a reading. Claude: confirmed exhaustion in the native login's bound quota evidence while this fact's login is
-    current, lasting until the reset (`claude_usage.exhaustion_left`)."""
+    current, lasting until the reset (`claude_usage.exhaustion_left`). A Claude `producer` (the billing fact's) must
+    still be the current login's, else `billing_unverified`."""
     name = family(route)
     if name == 'claude':
-        found = _account(settings_path, name, now) if route.get('pool') == POOLS['claude'] else None
+        if route.get('pool') != POOLS['claude']:
+            return None, None
+        found = _account(settings_path, name, now)
+        if producer is not None and (found is None or _producer(name, found) != producer):
+            return BILLING_UNVERIFIED, None  # the fact's login is no longer the current one: no quota for it
         if found is None:
             return None, None
-        left = claude_usage.exhaustion_left(settings_path, route, now, found['native'])
+        left = claude_usage.exhaustion_left(settings_path, route, now, native=found['native'])
         return (EXHAUSTED, left) if left is not None else (None, None)
     if name == 'chatgpt':
         left = chatgpt_limit.remaining(Path(settings_path).parent, now) if settings_path is not None else None
@@ -337,8 +348,10 @@ def _quota_gate(settings_path, route, now):
     return (EXHAUSTED, left) if left is not None else (None, None)
 
 
-def quota_problem(settings_path, route, now):
-    return _quota_gate(settings_path, route, now)[0]
+def quota_problem(settings_path, route, now, producer=None):
+    """`quota_exhausted` on positive evidence, or `billing_unverified` when a Claude route's `producer` (the billing
+    fact's) is no longer the current login's; None otherwise. Without a producer the current login is used."""
+    return _quota_gate(settings_path, route, now, producer)[0]
 
 
 def exhausted_stale(settings_path, route, now):
