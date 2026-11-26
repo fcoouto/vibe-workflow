@@ -4,6 +4,9 @@ Status: deferred, 20 November 2026. Current behavior checked against the
 implementation and its tests on 25 November 2026. The proposal is not approved
 for implementation; it still needs its own review and plan.
 
+For the current proposal, see the [26 November draft](2026-11-26-subscription-usage-balance-design.md).
+The audit and projected-pace proposal below are historical.
+
 The separate [Claude quota evidence design](2026-11-26-claude-quota-evidence-design.md)
 addresses exhausted routes first. It does not change the balancing proposal.
 

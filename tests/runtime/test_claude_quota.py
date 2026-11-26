@@ -401,6 +401,61 @@ class ClaudeQuotaTest(unittest.TestCase):
         self.assertFalse(self.evidence(listed, malformed)['scopes_complete'])
 
 
+class ClaudeRankingEvidenceTest(unittest.TestCase):
+    """The ranking hints come from the same successful parse as the exhaustion meters, with their own bounds."""
+
+    def setUp(self):
+        self.quota = importlib.import_module('runtime.claude_quota')
+
+    def parse(self, use, models=MODELS):
+        return self.quota.evidence(use, models, started=NOW + 0.25, received=NOW + 0.75, include_usage=True)
+
+    def test_old_shape_without_the_request(self):
+        plain = self.quota.evidence(usage(seven=window(40, stamp(NOW + 3600))), MODELS, started=NOW + 0.25,
+                                    received=NOW + 0.75)
+        self.assertEqual(set(plain), {'earliest', 'latest', 'meters', 'scopes_complete'})
+
+    def test_account_hints_keep_percent_discrete_duration_and_cache_bound(self):
+        evidence = self.parse(usage(five=window(20, stamp(NOW + 3600)), seven=window(40, stamp(NOW + 86400))))
+        self.assertEqual(evidence['usage']['7d'], dict(used_percent=40, earliest=NOW - 60, latest=NOW + 1,
+                                                       reset_at=NOW + 86400, duration=604800, discrete=True))
+        self.assertEqual((evidence['usage']['5h']['duration'], evidence['usage']['5h']['used_percent']),
+                         (18000, 20))
+        self.assertTrue(all(evidence['usage'][key]['discrete'] is True for key in ('5h', '7d')))
+        self.assertEqual(set(evidence['usage']['5h']), {'used_percent', 'earliest', 'latest', 'reset_at', 'duration',
+                                                       'discrete'})
+
+    def test_malformed_sibling_is_absent_and_leaves_the_valid_window(self):
+        evidence = self.parse(usage(five=dict(utilization='bad', resets_at=stamp(NOW + 3600)),
+                                    seven=window(40, stamp(NOW + 86400))))
+        self.assertEqual(evidence['usage']['7d']['used_percent'], 40)
+        self.assertNotIn('5h', evidence['usage'])
+
+    def test_idle_or_unbounded_windows_yield_no_hint(self):
+        evidence = self.parse(usage(five=dict(utilization=0, resets_at=None), seven=window(30, stamp(NOW + 86400))))
+        self.assertNotIn('5h', evidence['usage'])
+        self.assertEqual(evidence['usage']['7d']['used_percent'], 30)
+        far = self.parse(usage(seven=window(30, stamp(NOW + 7 * 86400 + 61))))
+        self.assertNotIn('7d', far['usage'])
+
+    def test_scoped_hint_is_a_weekly_scope_and_never_an_account_window(self):
+        evidence = self.parse(usage(seven=window(20, stamp(NOW + 86400)),
+                                    model_scoped=[scoped('Claude Example', 71, stamp(NOW + 86400))]))
+        self.assertEqual(evidence['usage']['family:example'], dict(used_percent=71, earliest=NOW - 60, latest=NOW + 1,
+                                                                   reset_at=NOW + 86400, duration=604800,
+                                                                   discrete=True))
+        self.assertNotIn('family:example', self.parse(usage(), MODELS)['usage'])
+        self.assertEqual(self.parse(usage(model_scoped=[scoped('Claude Missing', 71, stamp(NOW + 86400))]))['usage'],
+                         {})
+
+    def test_exhaustion_meters_are_unchanged_by_the_hints(self):
+        use = usage(five=window(20, stamp(NOW + 3600)), seven=window(100, stamp(NOW + 86400)))
+        with_hints, plain = self.parse(use), self.quota.evidence(use, MODELS, started=NOW + 0.25,
+                                                                 received=NOW + 0.75)
+        self.assertEqual(with_hints['meters'], plain['meters'])
+        self.assertEqual(self.quota.merge({}, with_hints, now=NOW + 1), self.quota.merge({}, plain, now=NOW + 1))
+
+
 INVENTED = dict(alias='invented', resolved='claude-example-5-3', efforts=[])
 
 

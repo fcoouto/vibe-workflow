@@ -249,12 +249,13 @@ def _bounded(reset, received, length):
     return received < reset <= received + length + storage.CLOCK_MARGIN
 
 
-def evidence(use, models, *, started, received):
+def evidence(use, models, *, started, received, include_usage=False):
     """`{earliest, latest, meters, scopes_complete}` from one usage answer, or None when it confirms nothing.
 
     `started` and `received` are epoch seconds. Meters are `5h`, `7d`, `family:<name>` or `model:<resolved>`, each
     `{exhausted, reset_at}`. `scopes_complete` is False when a present scoped entry yields no valid meter, or a row is
-    unrecognized or cannot be attributed; account windows never affect it."""
+    unrecognized or cannot be attributed; account windows never affect it. With `include_usage`, a `usage` element
+    adds the same readings as ranking meters `{used_percent, earliest, latest, reset_at, duration, discrete}`."""
     if not _times(started, received) or type(use) is not dict or use.get('rate_limits_available') is not True:
         return None
     rate = use.get('rate_limits')
@@ -323,7 +324,7 @@ def evidence(use, models, *, started, received):
                 excluded.add(meter)
     if len(ids) > MAX_SCOPES:
         incomplete, excluded = True, ids
-    meters = {}
+    meters, settled_by = {}, {}
     for meter, entries in scopes.items():
         if meter in excluded:
             continue
@@ -332,9 +333,16 @@ def evidence(use, models, *, started, received):
             incomplete = True
             continue
         meters[meter] = dict(exhausted=settled[0] >= 100, reset_at=settled[1])
+        settled_by[meter] = settled
     for window, readings in claims.items():
         settled = None if window in broken else _settled(readings)
         if settled and settled[1] is not None and _bounded(settled[1], received, LENGTHS[window]):
             meters[window] = dict(exhausted=settled[0] >= 100, reset_at=settled[1])
-    return dict(earliest=max(0, math.floor(started) - usage.CACHE_CEILING), latest=math.ceil(received),
-                meters=meters, scopes_complete=not incomplete)
+            settled_by[window] = settled
+    earliest, latest = max(0, math.floor(started) - usage.CACHE_CEILING), math.ceil(received)
+    result = dict(earliest=earliest, latest=latest, meters=meters, scopes_complete=not incomplete)
+    if include_usage:
+        result['usage'] = {key: dict(used_percent=percent, earliest=earliest, latest=latest, reset_at=reset,
+                                     duration=_window(key), discrete=True)
+                           for key, (percent, reset) in settled_by.items()}
+    return result

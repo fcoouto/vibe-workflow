@@ -8,6 +8,7 @@ import stat
 import uuid
 
 MAX_FILE = 1 << 20
+READ_ATTEMPTS = 3  # a writer's atomic replacement may land between the named check and the open
 FRESH_SECONDS = 900
 EXHAUSTED_RECHECK_SECONDS = 60
 CLOCK_MARGIN = 60
@@ -38,23 +39,32 @@ def _resolved(path):
 
 
 def read_json(path):
+    """The JSON of a private file, read only from the very file whose name passed every check.
+
+    A writer replaces the file atomically, so the file opened can differ from the one just checked by name, or be
+    unlinked already. Only that is tried again, a bounded number of times, each with the full checks on the name anew;
+    an extra link, a symlink, another owner or mode, or an oversized file is refused at once."""
     path = _resolved(path)
-    try:
-        private(path.parent, True)
-        info = private(path)
-    except FileNotFoundError:
-        return None
-    if info.st_size > MAX_FILE:
-        raise StorageError('observation_store_unsafe')
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, 'rb') as source:
-        actual = os.fstat(source.fileno())
-        if (actual.st_dev, actual.st_ino, actual.st_nlink) != (info.st_dev, info.st_ino, 1):
+    for _ in range(READ_ATTEMPTS):
+        try:
+            private(path.parent, True)
+            info = private(path)
+        except FileNotFoundError:
+            return None
+        if info.st_size > MAX_FILE:
             raise StorageError('observation_store_unsafe')
-        raw = source.read(MAX_FILE + 1)
-    if len(raw) > MAX_FILE:
-        raise StorageError('observation_store_unsafe')
-    return json.loads(raw)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as source:
+            actual = os.fstat(source.fileno())
+            if actual.st_nlink > 1:
+                raise StorageError('observation_store_unsafe')
+            if (actual.st_dev, actual.st_ino, actual.st_nlink) != (info.st_dev, info.st_ino, 1):
+                continue  # replaced between the check and the open: check the file now named, never trust this one
+            raw = source.read(MAX_FILE + 1)
+        if len(raw) > MAX_FILE:
+            raise StorageError('observation_store_unsafe')
+        return json.loads(raw)
+    raise StorageError('observation_store_unsafe')
 
 
 def _read(path):
@@ -84,6 +94,16 @@ def _locked(path, block=True, lock='.observations.lock'):
         yield path
     finally:
         os.close(fd)
+
+
+def storable(value):
+    """Whether `_write` can serialize `value`. A stored number such as `1e400` decodes as infinity, which strict JSON
+    never writes back; `_write` itself stays strict."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return True
 
 
 def _write(path, value):

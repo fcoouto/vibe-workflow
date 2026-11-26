@@ -52,7 +52,7 @@ import threading
 import time
 
 from runtime import claude_quota, processes as lifecycle, routing, routing_observations as observations, \
-    routing_paths, storage
+    routing_paths, storage, usage_balance
 
 PATH = 'claude-native-subscription'
 POOL = 'claude-subscription'
@@ -455,6 +455,27 @@ def _bound_exhaustion(settings_path, route, now, native):
     return True, claude_quota.remaining(found.get('record'), alias, snapshot['models'] if bound else [], now=now)
 
 
+def ranking_meters(settings_path, route, now, *, native):
+    """Claude ranking hints for `route`, bound to the login `native` (the OpenCode fact's native digest): fresh account
+    windows, and scoped meters only where the bound catalog covers the route's model. Empty unless the stored batch
+    belongs to that login and generation; a malformed meter is dropped alone."""
+    from runtime import native_catalog, opencode_account
+    if settings_path is None or type(route) is not dict or route.get('pool') != POOL \
+            or opencode_account.family(route) != 'claude':
+        return {}
+    state = _state(settings_path)
+    current, found = _current(state, now), state.get('quota')
+    if current is None or opencode_account._native(current) != native or type(found) is not dict \
+            or found.get('key') != current['key'] or found.get('generation') != current['generation']:
+        return {}
+    snapshot = native_catalog.stored(settings_path, CLIENT)
+    bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
+    alias = route.get('model') if type(route.get('model')) is str else ''
+    models = snapshot['models'] if bound else []
+    return usage_balance.batch_meters(found.get('ranking'), now=now,
+                                      keep=lambda key: claude_quota.covers(key, alias, models))
+
+
 def exhaustion_left(settings_path, route, now, *, native=None):
     """Seconds until the account's confirmed exhaustion ends for this OpenCode Claude route, or None.
 
@@ -626,23 +647,38 @@ def _owned(path):
 
 def _transition(settings_path, step):
     """One read-validate-write of the producer state under its lock: `step(state)` validates the state just read and
-    returns the change to write (ValueError aborts with nothing written)."""
+    returns the change to write (ValueError aborts with nothing written). An optional ranking batch that strict JSON
+    cannot store is dropped first, so it never blocks the account or its pause record."""
     with observations._locked(_store(settings_path)) as path:
         value = _owned(path)
         value.update(step(value))
+        if 'quota' in value:
+            value['quota'] = usage_balance.storable_ranking(value['quota'])
         observations._write(path, value)
 
 
-def _quota_change(state, expected, sample, now):
+def _quota_change(state, expected, sample, now, *, merge=True):
     """The change merging one exchange's quota evidence into the state, for the expected `(key, generation)` that the
-    state still proves. Evidence from another key or generation is never carried over."""
+    state still proves. Evidence from another key or generation is never carried over. The ranking batch follows the
+    same binding; `merge=False` (a weak probe reply) leaves the exhaustion record as it was."""
     key, generation = expected
     if _proved(state, key) != generation:
         raise ValueError('observation_store_invalid')
     found = state.get('quota')
-    bound = type(found) is dict and found.get('key') == key and found.get('generation') == generation
-    record = claude_quota.merge(found.get('record') if bound else None, sample, now=now)
-    return dict(quota=dict(key=key, generation=generation, record=record))
+    kept = found if type(found) is dict and found.get('key') == key and found.get('generation') == generation else {}
+    record = claude_quota.merge(kept.get('record'), sample, now=now) if merge else kept.get('record')
+    ranking = kept.get('ranking') if sample is None else _ranked(kept.get('ranking'), sample)
+    return dict(quota=dict(key=key, generation=generation, record=record, ranking=ranking))
+
+
+def _ranked(previous, sample):
+    """The ranking batch after one recognized reply. Optional: a failure here drops the batch, never the exhaustion
+    record that the same publication writes."""
+    try:
+        return usage_balance.batch_after(previous, earliest=sample['earliest'], latest=sample['latest'],
+                                         meters=sample['usage'])
+    except Exception:
+        return None
 
 
 def _fence(state, held):
@@ -725,7 +761,7 @@ def _record(settings_path, init, use, started, received, held):
     generation = held['observed']
     key, version, models = parse_account(init, use)
     now = int(time.time())
-    sample = claude_quota.evidence(use, models, started=started, received=received)
+    sample = claude_quota.evidence(use, models, started=started, received=received, include_usage=True)
     try:
         windows, overflow, problem = (*parse_usage(use, started, now), None)
         scoped = scopes(use, models)
@@ -926,6 +962,8 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
                 _transition(settings_path, lambda state: _ended(state, key, generation))
                 return dict(state='skipped')
 
+            outcome = {}
+
             def commit(state):
                 at = int(time.time())
                 current = _bound(state, (key, generation), at)
@@ -934,12 +972,15 @@ def probe_limit(settings_path, *, expected, reset_at, command=None, environ=None
                 snapshot = native_catalog.stored(settings_path, CLIENT)
                 bound = snapshot is not None and snapshot['binding'] == _binding_of(current)
                 sample = claude_quota.evidence(use, snapshot['models'] if bound else [], started=started,
-                                               received=received)
-                if sample is None or not sample['meters'] and not sample['scopes_complete']:
+                                               received=received, include_usage=True)
+                if sample is None:
                     raise _Skip()
-                return _quota_change(state, (key, generation), sample, at)
+                # A recognized reply with no usable quota still replaces the ranking batch, but its result is skipped.
+                usable = bool(sample['meters'] or sample['scopes_complete'])
+                outcome['state'] = 'stored' if usable else 'skipped'
+                return _quota_change(state, (key, generation), sample, at, merge=usable)
             _transition(settings_path, commit)
-            return dict(state='stored')
+            return dict(state=outcome['state'])
     except _Skip:
         return dict(state='skipped')
     except (ReadError, OSError, ValueError, KeyboardInterrupt):  # a cancelled exchange has already cleaned up its child

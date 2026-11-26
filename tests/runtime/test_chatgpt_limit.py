@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import stat
 import sys
 import tempfile
@@ -8,7 +9,9 @@ import textwrap
 import time
 import unittest
 
-from runtime import chatgpt_limit, codex_reset, opencode_account
+from unittest import mock
+
+from runtime import chatgpt_limit, codex_reset, opencode_account, usage_balance
 
 NOW = 1_800_000_000
 
@@ -32,6 +35,16 @@ read(); out({"id": 1, "result": {}})
 read(); read()
 out({"id": 2, "result": {"rateLimits": json.loads(%r)}})
 '''
+
+RESULT = '''
+methods = [read().get("method")]
+out({"id": 1, "result": {}})
+methods += [read().get("method"), read().get("method")]
+open(%r, "w").write(json.dumps(methods))
+out({"id": 2, "result": json.loads(%r)})
+'''
+METER = {"used_percent", "earliest", "latest", "reset_at", "duration", "discrete"}
+WEEK, FIVE, FORTNIGHT = 10_080, 300, 20_160
 
 
 class ChatgptLimitTest(unittest.TestCase):
@@ -152,6 +165,229 @@ class ChatgptLimitTest(unittest.TestCase):
         pid = int(pidfile.read_text())
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+class CodexWindowsTest(unittest.TestCase):
+    """`read_windows`: ranking meters of the exact `codex` bucket, keyed by duration and stamped around the exchange."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name).resolve()
+        self.env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.dir)}  # no VCW_TEST_HOME: fake runs only
+        self.methods = self.dir / 'methods.json'
+
+    def window(self, percent, minutes, left):
+        return dict(usedPercent=percent, windowDurationMins=minutes, resetsAt=NOW + left)
+
+    def bucket(self, *windows, limit='codex', **extra):
+        """A rate-limit snapshot; the first window sits in `primary`, whatever its length."""
+        slots = dict(zip(('primary', 'secondary'), windows))
+        return dict(limitId=limit, primary=slots.get('primary'), secondary=slots.get('secondary'), **extra)
+
+    def read(self, result, *, clock=(NOW, NOW), **kw):
+        """The meters of one fake exchange answering `result`; `clock` is the time before and after it."""
+        times = list(clock)
+        command = fake_codex(self.dir, RESULT % (str(self.methods), json.dumps(result)))
+        with mock.patch('time.time', side_effect=lambda: times.pop(0) if len(times) > 1 else times[0]):
+            return codex_reset.read_windows(environ=self.env, command=command, **kw)
+
+    def by_id(self, *windows, **extra):
+        return dict(rateLimits=self.bucket(limit=None), rateLimitsByLimitId=dict(codex=self.bucket(*windows, **extra)))
+
+    def test_meters_are_keyed_by_duration_not_by_slot_and_stamped_around_the_exchange(self):
+        # The weekly window sits in `primary` and the 5-hour one in `secondary`: the slot names decide nothing.
+        result = self.by_id(self.window(90, WEEK, 7200), self.window(25.5, FIVE, 3600))
+        hints = self.read(result, clock=(NOW + 0.9, NOW + 2.1))
+        self.assertEqual(sorted(hints), ['5h', '7d'])
+        self.assertEqual(hints['7d']['used_percent'], 90)
+        self.assertEqual((hints['5h']['used_percent'], hints['5h']['duration']), (25.5, 18_000))
+        self.assertEqual((hints['7d']['earliest'], hints['7d']['latest']), (NOW, NOW + 3))
+        self.assertEqual((hints['7d']['reset_at'], hints['7d']['duration']), (NOW + 7200, 604_800))
+        self.assertTrue(all(hints[key]['discrete'] is True and set(hints[key]) == METER for key in hints))
+        self.assertTrue(all(usage_balance.fresh_meter(value, now=NOW + 3) for value in hints.values()))
+        self.assertEqual(json.loads(self.methods.read_text()), ['initialize', 'initialized', 'account/rateLimits/read'])
+
+    def test_another_duration_protects_headroom_and_never_scores(self):
+        scored = {}
+        for used in (85, 98):
+            hints = self.read(self.by_id(self.window(90, WEEK, 7200), self.window(used, FORTNIGHT, 10 * 86400)))
+            extra = hints['duration:1209600']
+            self.assertEqual((extra['discrete'], extra['duration'], extra['used_percent']), (False, 1_209_600, used))
+            scored[used] = usage_balance.expiry_score('chatgpt', hints, now=NOW)
+        self.assertAlmostEqual(scored[85], 8.4)
+        self.assertEqual(scored[98], 1)
+
+    def test_only_the_exact_codex_bucket_is_read(self):
+        weekly = self.window(90, WEEK, 7200)
+        other = dict(rateLimits=self.bucket(weekly, limit='codex_other'),
+                     rateLimitsByLimitId=dict(codex_other=self.bucket(weekly, limit='codex_other')))
+        unnamed = dict(rateLimits=self.bucket(weekly, limit=None))  # slots alone never identify the plan bucket
+        mislabeled = dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='codex_other')))
+        broken = dict(rateLimits=self.bucket(weekly), rateLimitsByLimitId=dict(codex='x'))
+        # The map key alone proves no scope: the entry must state `limitId: "codex"` itself. An entry without it is
+        # still the preferred view, so the single view never stands in for it.
+        absent = dict(primary=weekly, secondary=None)
+        missing = dict(rateLimitsByLimitId=dict(codex=absent))
+        null = dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit=None)))
+        missing_beside_single = dict(rateLimits=self.bucket(weekly), rateLimitsByLimitId=dict(codex=absent))
+        null_beside_single = dict(rateLimits=self.bucket(weekly),
+                                  rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit=None)))
+        for label, result in (('other', other), ('unnamed', unnamed), ('mislabeled', mislabeled), ('broken', broken),
+                              ('missing', missing), ('null', null), ('missing beside single', missing_beside_single),
+                              ('null beside single', null_beside_single),
+                              ('empty text', dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='')))),
+                              ('other case', dict(rateLimitsByLimitId=dict(codex=self.bucket(weekly, limit='Codex')))),
+                              ('empty', {}), ('list', dict(rateLimits=[weekly]))):
+            with self.subTest(label=label):
+                self.assertEqual(self.read(result), {})
+        single = dict(rateLimits=self.bucket(weekly), rateLimitsByLimitId=dict(codex_other=self.bucket(weekly)))
+        self.assertEqual(self.read(single)['7d']['used_percent'], 90)  # the single view, when it names `codex`
+
+    def test_conflicting_views_of_one_meter_are_not_ranked_and_keep_the_sibling(self):
+        five = self.window(40, FIVE, 3600)
+        for label, rival in (('percent', self.window(20, WEEK, 7200)), ('reset', self.window(90, WEEK, 7300)),
+                             ('invalid', self.window(90, WEEK, -5))):
+            with self.subTest(label=label):
+                result = dict(rateLimits=self.bucket(rival, five),
+                              rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200), five)))
+                self.assertEqual(sorted(self.read(result)), ['5h'])
+        twice = self.by_id(self.window(90, WEEK, 7200), self.window(20, WEEK, 7200))  # one bucket, two claims
+        self.assertEqual(self.read(twice), {})
+        agreed = dict(rateLimits=self.bucket(self.window(90, WEEK, 7200), five),
+                      rateLimitsByLimitId=dict(codex=self.bucket(five, self.window(90, WEEK, 7200))))
+        self.assertEqual(sorted(self.read(agreed)), ['5h', '7d'])
+        extra = dict(rateLimits=self.bucket(self.window(90, WEEK, 7200), five),
+                     rateLimitsByLimitId=dict(codex=self.bucket(five)))
+        self.assertEqual(sorted(self.read(extra)), ['5h'])  # the preferred entry decides which meters exist
+
+    def test_a_past_reset_or_an_invalid_duration_gives_no_hint(self):
+        for label, window in (
+                ('past', self.window(50, WEEK, -1)), ('now', self.window(50, WEEK, 0)),
+                ('beyond the window', self.window(50, FIVE, 18_000 + 61)),
+                ('zero', self.window(50, 0, 3600)), ('negative', self.window(50, -300, 3600)),
+                ('bool', self.window(50, True, 30)), ('float', self.window(50, 300.0, 3600)),
+                ('text', self.window(50, '300', 3600)), ('missing', dict(usedPercent=50, resetsAt=NOW + 3600)),
+                ('huge', self.window(50, 10 ** 12, 3600)),
+                ('percent high', self.window(101, WEEK, 7200)), ('percent low', self.window(-1, WEEK, 7200)),
+                ('percent bool', self.window(True, WEEK, 7200)), ('percent text', self.window('90', WEEK, 7200)),
+                ('percent nan', self.window(float('nan'), WEEK, 7200)),
+                ('percent inf', self.window(float('inf'), WEEK, 7200)),
+                ('percent huge', self.window(10 ** 400, WEEK, 7200)),
+                ('reset huge', dict(usedPercent=50, windowDurationMins=WEEK, resetsAt=10 ** 400)),
+                ('reset float', dict(usedPercent=50, windowDurationMins=WEEK, resetsAt=NOW + 7200.5)),
+                ('reset ms', dict(usedPercent=50, windowDurationMins=WEEK, resetsAt=(NOW + 7200) * 1000))):
+            with self.subTest(label=label):
+                self.assertEqual(self.read(self.by_id(window)), {})
+        partial = self.read(self.by_id(self.window(50, WEEK, -1), self.window(40, FIVE, 3600)))
+        self.assertEqual(sorted(partial), ['5h'])  # the valid sibling stands; its weekly sibling is unknown
+        self.assertEqual(usage_balance.expiry_score('chatgpt', partial, now=NOW), 1)  # and still vetoes its boost
+
+    def test_credit_and_plan_fields_never_reach_a_meter(self):
+        result = self.by_id(self.window(90, WEEK, 7200), credits=dict(balance='PRIVATE-SENTINEL', hasCredits=True),
+                            planType='PRIVATE-SENTINEL', limitName='PRIVATE-SENTINEL')
+        hints = self.read(result)
+        self.assertEqual(set(hints['7d']), METER)
+        self.assertNotIn('PRIVATE-SENTINEL', json.dumps(hints))
+
+    def test_failures_and_the_test_home_give_no_hint(self):
+        marker = self.dir / 'spawned'
+        command = fake_codex(self.dir, 'open(%r, "w").close()\n' % str(marker))
+        self.assertEqual(codex_reset.read_windows(environ=dict(self.env, VCW_TEST_HOME=str(self.dir)),
+                                                  command=command), {})
+        self.assertFalse(marker.exists())
+        error = 'read(); out({"id": 1, "result": {}})\nread(); read()\nout({"id": 2, "error": {"code": 1}})\n'
+        self.assertEqual(codex_reset.read_windows(environ=self.env, command=fake_codex(self.dir, error)), {})
+        start = time.monotonic()
+        self.assertEqual(codex_reset.read_windows(environ=self.env, timeout=0.5,
+                                                  command=fake_codex(self.dir, 'time.sleep(60)\n')), {})
+        self.assertLess(time.monotonic() - start, 1.5)
+
+    def test_a_child_that_ignores_end_of_input_and_sigterm_is_gone_when_the_read_returns(self):
+        pidfile = self.dir / 'pid'
+        body = 'import os, signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n' \
+               'open(%r, "w").write(str(os.getpid()))\nread()\ntime.sleep(20)\n' % str(pidfile)
+        start = time.monotonic()
+        self.assertEqual(codex_reset.read_windows(environ=self.env, timeout=0.5, command=fake_codex(self.dir, body)), {})
+        self.assertLess(time.monotonic() - start, 3)
+        gone = False
+        for _ in range(40):  # an orphan is reaped by init a moment after its group is killed
+            try:
+                os.kill(int(pidfile.read_text()), 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                gone = True
+                break
+        self.assertTrue(gone)
+
+    def test_a_helper_left_in_the_group_is_gone_once_its_launcher_answered_and_exited(self):
+        # A launcher that starts a helper in its own process group, answers and exits at once. The helper ignores
+        # SIGTERM and SIGHUP and holds no pipe: only the guard, still the leader of that group, can end it.
+        facts = self.dir / 'helper.json'
+        helper = 'import json, os, signal, sys, time\n' \
+                 'signal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n' \
+                 'open(sys.argv[1] + ".new", "w").write(json.dumps(dict(pid=os.getpid(), group=os.getpgrp())))\n' \
+                 'os.replace(sys.argv[1] + ".new", sys.argv[1])\ntime.sleep(20)\n'  # a bounded natural exit
+        body = 'import os, subprocess\n' \
+               'subprocess.Popen([sys.executable, "-c", %r, %r], stdin=subprocess.DEVNULL, ' \
+               'stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n' \
+               'while not os.path.exists(%r):\n    time.sleep(0.01)\n' % (helper, str(facts), str(facts))
+        result = dict(rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200))))
+        command = fake_codex(self.dir, body + RESULT % (str(self.methods), json.dumps(result)))
+        armed = [True]
+
+        def reap():  # one bounded signal to a helper this test left behind; disarmed once it was seen gone
+            if armed and facts.exists():
+                try:
+                    os.kill(json.loads(facts.read_text())['pid'], signal.SIGKILL)
+                except (OSError, ValueError, KeyError):
+                    pass
+        self.addCleanup(reap)
+        with mock.patch('time.time', return_value=NOW):
+            hints = codex_reset.read_windows(environ=self.env, command=command)
+        self.assertEqual(hints['7d']['used_percent'], 90)  # the answer buffered before the launcher exited arrives
+        found = json.loads(facts.read_text())
+        self.assertNotIn(found['group'], (found['pid'], os.getpgrp()))  # the guard's group, not its own or ours
+        end = time.monotonic() + 2  # far inside the five-second bound of the read, whose alarm died with the guard
+        while armed and time.monotonic() < end:
+            try:
+                os.kill(found['pid'], 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                armed.clear()
+        self.assertFalse(armed, 'the helper outlived its launcher and the read')
+
+    def test_the_guard_adds_one_transient_parent_and_changes_nothing_the_child_sees(self):
+        seen = self.dir / 'seen.json'
+        body = 'import os, signal\nopen(%r, "w").write(json.dumps(dict(env=sorted(os.environ), cwd=os.getcwd(), ' \
+               'argv=sys.argv[1:], parent=os.getppid(), group=os.getpgrp(), pid=os.getpid(), ' \
+               'term=signal.getsignal(signal.SIGTERM) == signal.SIG_DFL, ' \
+               'alarm=signal.getsignal(signal.SIGALRM) == signal.SIG_DFL)))\n' % str(seen)
+        result = dict(rateLimitsByLimitId=dict(codex=self.bucket(self.window(90, WEEK, 7200))))
+        command = fake_codex(self.dir, body + RESULT % (str(self.methods), json.dumps(result))) + ['app-server']
+        with mock.patch('time.time', return_value=NOW):
+            hints = codex_reset.read_windows(environ=dict(self.env, SECRET='PRIVATE-SENTINEL'), command=command)
+        self.assertEqual(hints['7d']['used_percent'], 90)
+        child = json.loads(seen.read_text())
+        self.assertEqual((child['cwd'], child['argv']), ('/', ['app-server']))
+        self.assertEqual((child['term'], child['alarm']), (True, True))  # Codex keeps its default signal handling
+        self.assertNotIn('SECRET', child['env'])
+        self.assertLessEqual(set(child['env']) - {'__CF_USER_TEXT_ENCODING', 'LC_CTYPE'}, set(codex_reset.ENV_ALLOWLIST))
+        self.assertNotIn(child['parent'], (os.getpid(), child['pid']))  # the guard, not this process
+        self.assertEqual(child['group'], child['parent'])  # in the guard's own group, which is what it kills
+        for pid in (child['pid'], child['parent']):
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)  # neither outlives the read
+
+    def test_the_reset_reader_keeps_its_slot_contract_beside_the_window_reader(self):
+        result = self.by_id(self.window(90, WEEK, 7200))
+        result['rateLimits'] = dict(primary=self.window(40, FIVE, 100), secondary=self.window(90, FIVE, 200))
+        command = fake_codex(self.dir, RESULT % (str(self.methods), json.dumps(result)))
+        self.assertEqual(codex_reset.read_reset(now=NOW, environ=self.env, command=command), NOW + 200)
+        self.assertEqual(self.read(result)['7d']['used_percent'], 90)  # the same answer, read by its named bucket
+        del result['rateLimitsByLimitId']['codex']['limitId']  # no stated identity: no hint, the same pause reset
+        command = fake_codex(self.dir, RESULT % (str(self.methods), json.dumps(result)))
+        self.assertEqual(codex_reset.read_reset(now=NOW, environ=self.env, command=command), NOW + 200)
+        self.assertEqual(self.read(result), {})
 
 
 if __name__ == '__main__':

@@ -303,6 +303,15 @@ export default {
       runRouter({ wanted: refresh.wanted }, { directory, stateDir: state, operation: "refresh" })
         .catch(() => {}).finally(() => { refreshing = false })
     }
+    // One background ChatGPT usage read at a time, with its own guard so a score refresh in flight never delays it.
+    // Only an ordinary pick's exact `true` starts it; the pick never waits, and the read's state is not used.
+    let readingUsage = false
+    function usageLater(wanted, signal) {
+      if (wanted !== true || readingUsage || closed || signal?.aborted) return
+      readingUsage = true
+      runRouter({}, { directory, stateDir: state, operation: "usage_refresh" })
+        .catch(() => {}).finally(() => { readingUsage = false })
+    }
     // Host fields are coerced, not trusted: one odd model must not fail the whole request.
     const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 256
       && !/[\p{C}\p{Z}]/u.test(value.replaceAll(" ", ""))
@@ -324,8 +333,8 @@ export default {
     async function runRouter(request, { directory, stateDir, signal, operation, allowFetch }) {
       const setup = operation === "check_setup", council = operation === "council", pick = operation === "council_pick"
       const refresh = operation === "refresh", mark = operation === "mark", rate = operation === "feedback"
-      const claude = operation === "claude_limit"
-      const fallback = () => council || pick || rate || claude ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
+      const claude = operation === "claude_limit", usage = operation === "usage_refresh"
+      const fallback = () => council || pick || rate || claude || usage ? { state: "failed" } : setup ? { state: "setup_needed", reason: "selector_unavailable" } : blocked()
       let raw
       try { raw = setup ? "" : JSON.stringify(request) } catch { return fallback() }
       if (closed || signal?.aborted || typeof directory !== "string" || !isAbsolute(directory)
@@ -348,11 +357,12 @@ export default {
           if (council) args.push("--council-roster")
           if (pick) args.push("--council-pick")
           if (rate) args.push("--feedback")
+          if (usage) args.push("--usage-refresh")
           child = spawn("python3", args, { cwd: directory, stdio: ["pipe", "pipe", "ignore"] })
         } catch { resolve(fallback()); return }
         active.add(stop)
         signal?.addEventListener("abort", stop, { once: true })
-        timer = setTimeout(stop, refresh || claude ? 15000 : mark || rate ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
+        timer = setTimeout(stop, refresh || claude || usage ? 15000 : mark || rate ? 10000 : setup ? (allowFetch ? 10000 : 5000) : 60000)
         child.stdin.on("error", stop)
         child.stdout.on("data", (chunk) => {
           size += chunk.length
@@ -367,7 +377,7 @@ export default {
           signal?.removeEventListener("abort", stop)
           try {
             if (failed || code !== 0) throw Error()
-            if (refresh || mark || claude) return resolve(null)
+            if (refresh || mark || claude || usage) return resolve(null)
             const value = JSON.parse(Buffer.concat(chunks).toString("utf8"))
             if (setup) {
               if (value.state === "ready" && value.reason === null) return resolve({ state: "ready", reason: null })
@@ -442,10 +452,12 @@ export default {
           }
         }
         if (list.length) {
-          const { refresh, ...rest } = await runRouter({ ...own, models: list.map(({ name, ...entry }) => entry) },
+          const { refresh, usage_refresh: usageRefresh, ...rest } = await runRouter(
+            { ...own, models: list.map(({ name, ...entry }) => entry) },
             { directory, stateDir: state, signal, operation: "select" })
           answer = rest
           refreshLater(refresh)
+          usageLater(usageRefresh, signal)
         }
         let notice = null
         const identified = typeof sessionID === "string" && sessionID.length > 0 && sessionID.length <= 256

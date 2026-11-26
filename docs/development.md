@@ -615,3 +615,100 @@ a pause never falls back to workspace credits.
 A one-off read on 26 November 2026 returned the three documented meters using the selected
 Go key, without Console OAuth or inference. The router integration is tested with synthetic
 transports; it was not installed or tested against live credentials.
+
+## Subscription usage balance: what is known
+
+The design is `docs/superpowers/specs/2026-11-26-subscription-usage-balance-design.md`; this section records what
+the code does and what it does not prove. Balancing only reorders comparable, qualifying picks. It never excludes a
+route, starts or clears a pause, admits, reserves or permits spending, and the ordinary answer still reports
+`admission`, `reservation` and `spend_permit` as false.
+
+Hints. Claude and Go hints come from the reads those accounts already make. ChatGPT hints come from one bounded
+Codex `account/rateLimits/read` (`codex_reset.read_windows`, the same 5-second exchange, allowed environment and
+test-home refusal as the pause reader). It reads only the bucket whose `limitId` is exactly `codex`: its entry under
+`rateLimitsByLimitId` when present, else the single view when that view names the bucket. A window is keyed by its
+explicit `windowDurationMins`, never by the `primary` or `secondary` slot. A 300-minute or 10,080-minute window is a
+`5h` or `7d` meter that can earn a boost. Another plausible length is stored as `duration:<seconds>` with no discrete
+reset: it can block a promotion through low headroom and never scores. A reset that is not in the future, an invalid
+length or percentage, or two readings of one window that disagree drop that meter alone. No usable meter is a failed
+read; a partial answer is a success, and a 5-hour window without its weekly sibling still earns no boost. Other
+buckets, credit fields, plan labels and raw replies are not read into the store. A cached Go meter must pass the Go
+parser's reset horizon again when it is read. For the month, which has no stored length, that is 31 days plus the
+60-second clock margin: a month that resets later is unknown, so it unlocks no boost.
+
+Stored state. A number such as `1e400` in a stored file decodes as infinity, which the strict write refuses. Before an
+account write, a ranking batch that cannot be written back is dropped. If a ChatGPT usage record still cannot be
+stored, keep valid binding and attempt times as a failed read so repair cannot erase its cooldown. Nothing is
+repaired into a reading. Accounts, identities and confirmed pauses are never altered: if one of them cannot be
+stored, the write still fails.
+
+Timing. Each meter's `earliest` is the whole second before the exchange and `latest` the whole second after it
+returns. That interval bounds the exchange, not the age of the provider's accounting, which is unknown. A notification
+never renews a hint. A promotion stands only if the clock at the end of final confirmation is not behind the clock the
+readings were ranked at, and is before the first reset or age-out of a reading that supports it; otherwise the
+baseline order is confirmed. In either confirmation pass, a route whose account changed ends its binding (the scope
+and the marker it was given) for every alias that carries it, including one confirmed a moment earlier. A newer marker
+stays.
+
+Demand and bounds. An ordinary pick marks its internal reply with `usage_refresh: true` only when a ChatGPT route is
+the baseline winner or one of its comparable, qualifying rivals, another subscription is in that same group, and a
+read is due. Routes whose account changed during the pick are left out first. A below-level or near-floor winner, a
+review that fell back to its unbalanced order, aliases of one login, a council pick and a setup check ask for nothing.
+`index.js` strips the field and starts one `--usage-refresh` child with exactly `{}` on stdin, at most one at a time
+per plugin instance, apart from the score refresh guard, with a 15-second stop. The pick never waits for it and its
+state is not used. The due check is asked for one candidate and answers only while that candidate's billing marker
+still names the stored account, both read from one snapshot of the account store.
+`--usage-refresh` beside any other mode answers `{"state":"failed"}` and does neither job. The
+child answers only `stored`, `busy`, `not_due`, `unbound` or `failed`. One worker per state folder holds the
+nonblocking `.chatgpt-usage.lock`, which is not the account store's write lock, so picks and account reads go on.
+Under it the binding and the due status are checked again, and a start record that counts as failed is written before
+the exchange. A read is due when the binding has no record; 900 seconds after a failed read returned, or after an
+interrupted one started; and, after a success, once its 900-second age or its earliest known reset is reached, never
+within 60 seconds of that start. A clock behind the record starts nothing. There is no timer, poll or retry.
+
+Process lifetime. Codex runs under a short-lived guard process that leads its own process group. The guard kills that
+group when the read's bound passes (5 seconds plus a 0.3-second grace), whether or not the worker is still alive, and
+also as soon as its child exits. So neither a killed worker nor a launcher that exits early leaves a helper running in
+that group. An answer already written stays readable. A process that left the group is not covered. The pause reader
+(`read_reset`) runs without the guard, as before.
+
+Binding. A read starts only for the complete, proved and current OpenCode `openai` account record, which only browser
+OAuth (`chatgpt-token-sharing`) produces; an API key or an unproved connection starts none. The worker takes no
+candidate (its input is `{}`): it binds to the account proof it finds at its start. That proof must be one that
+ordinary billing still accepts, which is less than 900 seconds old, at the start and again at publication. The result
+is stored under that record's key and generation and published only while they are still proved. A logout or rotation
+that the account reader has recorded ends the generation, so older hints are no longer read, and a read that returns
+after it is discarded. A failed read keeps the batch already held, which still expires by age and at each meter's own
+reset.
+
+Accepted limits, not guarantees:
+
+- Identity. Codex and OpenCode are assumed to be signed in to the same ChatGPT account, as the user accepted. Nothing
+  checks it: OpenCode's token cannot read Codex limits (`docs/chatgpt-quota-spike.md`) and Codex's auth files are
+  never opened. With different accounts a pick can be misordered; it cannot be paused or authorized by a hint.
+- Proxy. A Codex plan window is not OpenCode's allowance. It cannot see an app-specific cap, so OpenCode's own limit
+  error stays the only source of a ChatGPT pause, and a hint at 100% creates none.
+- Detection. A host login change that the account reader has not observed yet is not detectable by this cache. The
+  account proof expires 15 minutes after its read, and hints stop being read with it. The change itself is detected
+  only by a later successful account read, which runs on demand (a pick that needs the account), not on a timer, so
+  detection is not bounded by 15 minutes.
+- Go resets. The discrete 5-hour, weekly and monthly resets rest on OpenCode's public documentation as the design
+  cites it (`https://opencode.ai/docs/go/#usage-limits`, `https://opencode.ai/docs/go/#usage`), not on an observed
+  reset.
+- Overlap and overflow. How often Claude and Go readings are fresh at the same time is unmeasured; with no fresh
+  comparison the baseline order stands. Paid overflow is reported as before and is not part of the comparison.
+- Calibration. The thresholds (15-minute age, 60-second spacing, 15-minute cooldown, 1.5 times the price, 97% of the
+  score, a 0.25 gain, 10 points of headroom) are approved starting values. None was tuned against live usage. The
+  price bound is inclusive and exact: prices are compared in whole steps of 0.00000025, the grid of the price proxy,
+  so a candidate at exactly 1.5 times the baseline is comparable and one step above it is not.
+
+Live qualification (26 November 2026, `a4bb5f6`): one usage-only read per provider in isolated router state. Go
+returned 5-hour, weekly and monthly meters. Codex returned a weekly meter in the `codex` bucket; both the single
+view and the map entry identified that bucket. Claude returned a weekly account meter and a weekly Fable-family
+meter. The family hint applied to all three matching routes and no others. Claude's full snapshot reported
+`claude_window_missing` because there was no 5-hour meter, but the two weekly ranking hints remained usable.
+
+A local level-2 review comparison with balancing off and on used the same live readings and cached scores. Both
+returned the same advisory picks: no qualifying route on another subscription met the price and score bounds.
+Fixtures cover cross-subscription promotion; this live pass verified baseline behavior, not a promotion or behavior
+under an installed plugin. No inference ran, no reset was observed, and other client versions remain unverified.
