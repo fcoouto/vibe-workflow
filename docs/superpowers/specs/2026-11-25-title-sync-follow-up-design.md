@@ -1,8 +1,7 @@
 # Title Sync: catch up idle titles and show progress during a turn
 
-**Status:** draft design for findings 6 and 8, after [#404](https://github.com/fcoouto/vibe-workflow/pull/404).
+**Status:** approved on 2026-11-26 for findings 6 and 8, after [#404](https://github.com/fcoouto/vibe-workflow/pull/404).
 The earlier draft was independently reviewed. The user has since clarified task lifetime and disable behavior.
-Design approval is pending.
 
 ## What changes
 
