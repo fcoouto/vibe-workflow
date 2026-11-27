@@ -16,7 +16,7 @@ instruction's only channel too, and asked for a test that tells them, after a lo
 OpenCode update, whether agents still receive the injected text, which agents can
 check and re-verify on their own.
 
-The council session `docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/`
+The council session `docs/vibe-workflow/council-sessions/2026-11-21_router-instruction-delivery/`
 chose push plus a `claude-agent` entry because "No option reaches a `claude-agent`
 session's first model call; only an upstream change can, and it would let the entry
 code be deleted." This design acts on new evidence the council did not have; it does

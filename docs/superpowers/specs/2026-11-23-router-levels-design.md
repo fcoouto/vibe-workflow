@@ -65,7 +65,7 @@ plan picks GLM-5.3 Flash (27.8) today, because the bar falls to 55% of Haiku's
 1. **Shares of the best model on the user's plans (today).** Rejected: moves with
    releases and quota, and differs per user.
 2. **A share of the catalog's top-5 median, or a fixed index value.** Proposed by the
-   council (record `docs/vibe-council/sessions/63b5a22ecf4a_router-levels/`).
+   council (record `docs/vibe-workflow/council-sessions/2026-11-23_router-levels/`).
    Superseded by the user's own rule below, which keeps the catalog anchor but ties
    it to labs rather than to the top five models.
 3. **Each lab's cheapest model, or Haiku and Luna as references.** Rejected: noisy
@@ -223,4 +223,4 @@ user's planning goes to Fable 5.2 instead of Opus; the user accepted this.
 ## Record
 
 - Advisor evidence: `docs/advisor-evaluation.md`.
-- Council: `docs/vibe-council/sessions/63b5a22ecf4a_router-levels/result.md`.
+- Council: `docs/vibe-workflow/council-sessions/2026-11-23_router-levels/result.md`.

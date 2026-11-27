@@ -274,7 +274,7 @@ shows a notice once per session when it is false. Below-level picks get no feedb
 `allowed_efforts` and `allowed_harnesses` are removed on this branch (release 0.11.0); they were advertised
 in 0.10.0, so a caller still sending them gets `invalid_request`. Pinning stays outside the router. Design:
 `docs/superpowers/specs/2026-11-24-router-steering-design.md`; council:
-`docs/vibe-council/sessions/08d7b6126f45_router-constraints/result.md`.
+`docs/vibe-workflow/council-sessions/2026-11-24_router-constraints/result.md`.
 
 ## Onboarding in a worktree: what is known
 
@@ -425,7 +425,7 @@ the bundled function is named `ClaudeInstructions.register`.
 Until the change below, the Smart Router instruction was pushed on every step for every
 provider, and `claude-agent` sessions also got the entry `vibe-workflow-smart-router`,
 read from the second step on, following a council run
-(`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`), which
+(`docs/vibe-workflow/council-sessions/2026-11-21_router-instruction-delivery/result.md`), which
 found that no channel reached a `claude-agent` session's first model call.
 
 PR #366's probes found one: the `subagent` tool's `model` parameter description, edited

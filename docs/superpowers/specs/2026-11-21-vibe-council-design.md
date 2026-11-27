@@ -5,7 +5,7 @@ Status: approved by the user (2026-11-21).
 ## Naming
 
 One name everywhere: the `vibe-council` skill, the `/vibe-council` command, the
-`vibe_council_roster` tool and the `docs/vibe-council/` record folder. In prose it is
+`vibe_council_roster` tool and the `docs/vibe-workflow/council-sessions/` record folder. In prose it is
 "the council"; users may still call it the "LLM council".
 
 ## Intent
@@ -146,7 +146,7 @@ on that host (user decision, 2026-11-21); the live council run used it.
 ### 4. Session records
 
 Each run lives in
-`<project folder>/docs/vibe-council/sessions/<hash12>_<context>/`:
+`<project folder>/docs/vibe-workflow/council-sessions/<date>_<title>/`:
 
 - `brief.md`: the exact bytes every member read.
 - `answers/<seat>.md`: each member's raw answer (round 2 answers as `<seat>-r2.md`).
@@ -154,8 +154,10 @@ Each run lives in
   the brief's full SHA-256, the vote table, tally, compounding insight, keep and defer
   lists, the questions asked and the user's decision.
 
-`<hash12>` is the first 12 hex digits of the brief's SHA-256. `<context>` is a short
-lowercase ASCII slug of the topic (at most 40 characters, `[a-z0-9-]`).
+`<date>` is the local date as `YYYY-MM-DD`. `<title>` is a short lowercase ASCII slug of
+the topic (at most 40 characters, `[a-z0-9-]`); a same-day clash adds `-2`. The folder
+is written directly, with no hash step; the brief's full SHA-256 stays in `result.md`.
+(Amended 2026-11-27: records moved from `docs/vibe-council/sessions/<hash12>_<context>/`.)
 
 The record follows the work (chosen by the user, 2026-11-21). The project folder is
 `git rev-parse --show-toplevel` of the checkout the work happens in:

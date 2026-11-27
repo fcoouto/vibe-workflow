@@ -60,7 +60,7 @@ the judgment.
 7. After the change, `scripts/live_check.py --injection` runs (pre-authorized), plus
    three `--prompt` cases with the user's OK (see Live check).
 
-Council: `docs/vibe-council/sessions/00e94efeee57_cost-quality-balance/result.md`,
+Council: `docs/vibe-workflow/council-sessions/2026-11-23_cost-quality-balance/result.md`,
 weighted quality 60, cost 40.
 
 ## Texts

@@ -1,6 +1,7 @@
 # Record template
 
-A run lives in `docs/vibe-council/sessions/<hash12>_<context>/`:
+A run lives in `docs/vibe-workflow/council-sessions/<date>_<title>/`
+(`<date>` is `YYYY-MM-DD`):
 
 - `brief.md`: the exact bytes every member read.
 - `brief-r2.md`: the round 2 prompt, when a round 2 ran.
