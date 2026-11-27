@@ -22,6 +22,8 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
+import tomllib  # noqa: E402
+import uuid  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,7 @@ _spec.loader.exec_module(live_check)
 
 GIT = ["git", "-c", "user.name=layout-eval", "-c", "user.email=layout-eval@example.invalid", "-c", "core.hooksPath=/dev/null"]
 SKILL = "vibe-project-layout"
+ALLOWED_MODELS = ("opencode-go/hungerg-free", "openai/gpt-6.1-terra")  # free, and an included subscription
 DESCRIPTIONS = {
     "current": None,
     "C": ("Use when adding, moving or renaming a file or folder, before picking its path, when a new file may need "
@@ -51,7 +54,7 @@ FIXTURES = {
     "node-files": {
         "prompt": TASK,
         "placed": r"^src/[^/]+\.js$",
-        "lists": ["package.json"],
+        "lists": [{"file": "package.json", "kind": "files", "base": ""}],
         "files": {
             "package.json": json.dumps({"name": "orders", "type": "module", "main": "src/index.js",
                                         "files": ["src/index.js", "src/orders.js", "src/billing.js"]}, indent=2) + "\n",
@@ -68,7 +71,7 @@ FIXTURES = {
     "python-modules": {
         "prompt": TASK,
         "placed": r"^src/[^/]+\.py$",
-        "lists": ["pyproject.toml"],
+        "lists": [{"file": "pyproject.toml", "kind": "py-modules", "base": ""}],
         "files": {
             "pyproject.toml": ('[project]\nname = "inventory"\nversion = "0.1.0"\n\n[tool.setuptools]\n'
                                'package-dir = {"" = "src"}\npy-modules = ["stock", "pricing"]\n'),
@@ -84,7 +87,7 @@ FIXTURES = {
     "monorepo": {
         "prompt": TASK.replace("Add a small helper", "In the api package, add a small helper"),
         "placed": r"^packages/api/src/[^/]+\.js$",
-        "lists": ["packages/api/package.json"],
+        "lists": [{"file": "packages/api/package.json", "kind": "files", "base": "packages/api"}],
         "files": {
             "package.json": json.dumps({"name": "shop", "private": True, "workspaces": ["packages/*"]}, indent=2) + "\n",
             "packages/api/package.json": json.dumps({"name": "@shop/api", "type": "module", "main": "src/server.js",
@@ -103,7 +106,7 @@ FIXTURES = {
     "flat-barrel": {
         "prompt": TASK,
         "placed": r"^[^/]+\.js$",
-        "lists": ["index.js"],
+        "lists": [{"file": "index.js", "kind": "reexports", "base": ""}],
         "files": {
             "package.json": json.dumps({"name": "tiny-utils", "type": "module", "main": "index.js"}, indent=2) + "\n",
             "index.js": ('export { slugify } from "./slugify.js"\nexport { formatMoney } from "./format-money.js"\n'
@@ -121,13 +124,25 @@ FIXTURES = {
     },
 }
 OFFER = re.compile(r"(record|write|save|add|document)\w*\b[^.?\n]{0,80}\blayout|## Project layout", re.I)
+REEXPORT = re.compile(r"""^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']\./([\w.-]+?)(?:\.js)?["']""", re.M)
 
 
 def _git(path, *args, check=False):
     return subprocess.run([*GIT, "-C", str(path), *args], capture_output=True, text=True, check=check).stdout
 
 
-def build_fixture(project, name, package, description, layout):
+def patch_description(text, variant):
+    """Replace the description inside the YAML frontmatter only; anything else is an error, never a silent no-op."""
+    match = re.match(r"---\n(.*?\n)---\n", text, re.S)
+    if not match:
+        raise ValueError("no frontmatter")
+    head, count = re.subn(r"(?m)^description: [^\n]*$", "description: " + DESCRIPTIONS[variant], match.group(1))
+    if count != 1:
+        raise ValueError(f"expected one description line in the frontmatter, found {count}")
+    return "---\n" + head + "---\n" + text[match.end():]
+
+
+def build_fixture(project, name, package, description, layout, marker):
     fixture = FIXTURES[name]
     project.mkdir(parents=True)
     for rel, text in fixture["files"].items():
@@ -144,12 +159,39 @@ def build_fixture(project, name, package, description, layout):
     shutil.copytree(package, plugin)
     index = plugin / "index.js"
     index.write_text(live_check.rename_plugin_id(index.read_text()))
-    if DESCRIPTIONS[description]:
-        skill = plugin / "skills" / SKILL / "SKILL.md"
-        text, count = re.subn(r"(?m)^description: [^\n]*$", "description: " + DESCRIPTIONS[description], skill.read_text(), count=1)
-        assert count == 1, "no description line"
-        skill.write_text(text)
+    skill = plugin / "skills" / SKILL / "SKILL.md"
+    text = patch_description(skill.read_text(), description) if DESCRIPTIONS[description] else skill.read_text()
+    # The marker proves which copy the skill tool returned; both arms carry it, after the body.
+    skill.write_text(text.rstrip("\n") + f"\n\n<!-- eval-marker {marker} -->\n")
     return project
+
+
+def entries(spec, text):
+    if spec["kind"] == "files":
+        value = json.loads(text).get("files")
+        return set(value) if isinstance(value, list) else set()
+    if spec["kind"] == "py-modules":
+        value = tomllib.loads(text).get("tool", {}).get("setuptools", {}).get("py-modules")
+        return set(value) if isinstance(value, list) else set()
+    if spec["kind"] == "reexports":
+        return set(REEXPORT.findall(text))
+    raise ValueError(spec["kind"])
+
+
+def expected_entry(spec, code_file):
+    relative = code_file[len(spec["base"]) + 1:] if spec["base"] else code_file
+    return relative if spec["kind"] == "files" else Path(code_file).stem
+
+
+def is_test(path):
+    parts, name = Path(path).parts, Path(path).name
+    return (bool(set(parts[:-1]) & {"test", "tests", "__tests__"}) or name.endswith((".test.js", ".spec.js", "_test.py"))
+            or (name.startswith("test_") and name.endswith(".py")))
+
+
+def inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path == root or path.startswith(root + os.sep)
 
 
 def _worktrees(project):
@@ -157,62 +199,113 @@ def _worktrees(project):
             if line.startswith("worktree ")]
 
 
-def score(path, base, fixture):
-    new = set(_git(path, "diff", "--name-only", "--diff-filter=A", base).splitlines())
+def _location(path, base, fixture):
+    new = set(_git(path, "diff", "--name-only", "--diff-filter=AR", base).splitlines())
     new |= set(_git(path, "ls-files", "--others", "--exclude-standard").splitlines())
-    code = sorted(p for p in new if p.endswith((".js", ".py")) and "test" not in Path(p).name.lower())
-    code_file = code[0] if code else None
-    registered = False
-    if code_file:
-        stem = Path(code_file).stem
-        added = {name: "\n".join(line for line in _git(path, "diff", "-U0", base, "--", name).splitlines()
-                                 if line.startswith("+") and not line.startswith("+++")) for name in fixture["lists"]}
-        registered = all(re.search(r"\b" + re.escape(stem) + r"\b", text) for text in added.values())
-    return {"code_file": code_file, "code_files": code, "new_files": sorted(new),
-            "placed": bool(code_file and re.match(fixture["placed"], code_file)), "registered": registered}
+    code = sorted(p for p in new if p.endswith((".js", ".py")) and not is_test(p) and not p.startswith(".opencode/"))
+    lists = {}
+    for spec in fixture["lists"]:
+        before = _git(path, "show", f"{base}:{spec['file']}")
+        after = (Path(path) / spec["file"]).read_text() if (Path(path) / spec["file"]).is_file() else ""
+        try:
+            lists[spec["file"]] = (entries(spec, before), entries(spec, after), before != after)
+        except (ValueError, tomllib.TOMLDecodeError):
+            lists[spec["file"]] = (entries(spec, before), set(), True)  # an unparsable list registers nothing
+    registered = bool(code) and all(
+        expected_entry(spec, f) in lists[spec["file"]][1] and expected_entry(spec, f) not in lists[spec["file"]][0]
+        for spec in fixture["lists"] for f in code)
+    return {"code_files": code, "new_files": sorted(new), "registered": registered,
+            "placed": bool(code) and all(re.match(fixture["placed"], f) for f in code),
+            "lists_changed": any(changed for _, _, changed in lists.values())}
 
 
-def best_score(project, base, fixture):
-    here, scored = os.path.realpath(project), []
+def result(project, base, fixture):
+    """The delivered result is the checkout holding the new code; list edits made in any other checkout mark it split."""
+    here, locations = os.path.realpath(project), []
     for path in _worktrees(project):
-        result = score(path, base, fixture)
-        result["where"] = "fixture" if path == here else "linked-worktree"
-        scored.append(result)
-    hits = [s for s in scored if s["code_file"]]
-    return max(hits, key=lambda s: (s["registered"], s["placed"])) if hits else scored[0]
+        scored = _location(path, base, fixture)
+        scored["where"] = "fixture" if path == here else "linked-worktree"
+        locations.append(scored)
+    with_code = [loc for loc in locations if loc["code_files"]]
+    picked = max(with_code, key=lambda loc: len(loc["code_files"])) if with_code else locations[0]
+    chosen = {**picked, "code_locations": len(with_code),
+              "split": any(loc["lists_changed"] for loc in locations if loc is not picked)}
+    return chosen
 
 
-def facts(tools, reply, project):
-    loaded, outside = False, []
+def facts(tools, reply, project, marker):
+    loaded, unverified, outside = False, False, []
+    root = os.path.normpath(str(project))
     for call in tools:
         given = call.get("input") or {}
         if call.get("tool") == "skill" and SKILL in (given.get("name"), given.get("id")):
             loaded = True
+            unverified = unverified or f"eval-marker {marker}" not in (call.get("output") or "")
         path = given.get("filePath") or given.get("path") or ""
-        full = os.path.normpath(os.path.join(str(project), path))
-        if f"skills/{SKILL}" in path and not full.startswith(os.path.normpath(str(project)) + os.sep):
+        if f"skills/{SKILL}" in path and not os.path.normpath(os.path.join(root, path)).startswith(root + os.sep):
             outside.append(path)
         command = given.get("command") or ""
-        if f"skills/{SKILL}" in command and str(project) not in command:
-            outside.append(command[:200])
-    return {"skill_loaded": loaded, "outside_skill_reads": outside, "offered_to_record": bool(OFFER.search(reply or ""))}
+        if f"skills/{SKILL}" in command:
+            outside.append(command[:200])  # a shell read of the skill cannot be placed safely: fail closed
+    return {"skill_loaded": loaded, "unverified_skill_load": unverified, "outside_skill_reads": outside,
+            "offered_to_record": bool(OFFER.search(reply or ""))}
+
+
+def invalid_reason(row):
+    if row.get("error"):
+        return "error"
+    if not row.get("code_files"):
+        return "no_code_file"
+    if row.get("outside_skill_reads"):
+        return "outside_skill_read"
+    if row.get("unverified_skill_load"):
+        return "unverified_skill_load"
+    if row.get("split"):
+        return "split_result"
+    return None
 
 
 def is_valid(row):
-    return not row.get("error") and bool(row.get("code_file")) and not row.get("outside_skill_reads")
+    return invalid_reason(row) is None
 
 
 def summarize(rows):
     cells = {}
     for row in rows:
-        key = (row["experiment"], row["model"], row["description"], row["layout"])
-        cell = cells.setdefault(key, {"trials": 0, "valid": 0, "registered": 0, "skill_loaded": 0, "offered_to_record": 0})
-        cell["trials"] += 1
-        if row["valid"]:
-            cell["valid"] += 1
-            for name in ("registered", "skill_loaded", "offered_to_record"):
-                cell[name] += bool(row.get(name))
+        for fixture in (row["fixture"], "*"):
+            key = (row["experiment"], row["model"], row["description"], row["layout"], fixture)
+            cell = cells.setdefault(key, {"trials": 0, "valid": 0, "registered": 0, "skill_loaded": 0,
+                                          "offered_to_record": 0, "invalid": {}})
+            cell["trials"] += 1
+            if row["valid"]:
+                cell["valid"] += 1
+                for name in ("registered", "skill_loaded", "offered_to_record"):
+                    cell[name] += bool(row.get(name))
+            else:
+                reason = row.get("invalid_reason") or "unknown"
+                cell["invalid"][reason] = cell["invalid"].get(reason, 0) + 1
     return cells
+
+
+def sweep_sessions(project, env):
+    """Delete every session stored for this fixture directory; report unknown when the list cannot be read."""
+    try:
+        listed = json.loads(live_check._run(["opencode", "session", "list", "--standalone", "--format", "json"],
+                                            cwd=project, timeout=60, data="", env=env) or "[]")
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return [], True
+    listed = listed.get("data", listed) if isinstance(listed, dict) else listed
+    deleted, unknown = [], False
+    for item in listed if isinstance(listed, list) else []:
+        session = item.get("id") if isinstance(item, dict) else None
+        if not (isinstance(session, str) and session.startswith("ses")):
+            continue
+        try:
+            live_check._run(["opencode", "session", "delete", session, "--standalone"], cwd=project, timeout=60, data="", env=env)
+            deleted.append(session)
+        except (subprocess.SubprocessError, OSError):
+            unknown = True
+    return deleted, unknown
 
 
 def clean_env(work, project):
@@ -231,32 +324,40 @@ def clean_env(work, project):
 
 def trial(package, work_root, spec):
     started, row = time.time(), {**spec, "error": None}
-    work = Path(tempfile.mkdtemp(prefix="layout-eval-", dir=work_root))
+    work = Path(tempfile.mkdtemp(prefix="layout-eval-", dir=work_root)).resolve()
+    project, env, marker = work / "project", None, uuid.uuid4().hex
     try:
-        project = build_fixture(work / "project", spec["fixture"], package, spec["description"], spec["layout"])
+        build_fixture(project, spec["fixture"], package, spec["description"], spec["layout"], marker)
         base = _git(project, "rev-parse", "HEAD").strip()
         env = clean_env(work, project)
         try:
             answer = live_check.run_model(project, spec["model"], env, prompt=FIXTURES[spec["fixture"]]["prompt"], timeout=1200)
         except (subprocess.SubprocessError, OSError) as error:
             row["error"] = repr(error)[:300]
-            answer = {"reply": "", "tools": [], "session": None, "deleted": False}
-        row.update(best_score(project, base, FIXTURES[spec["fixture"]]))
-        row.update(facts(answer["tools"], answer["reply"], project))
+            answer = {"reply": "", "tools": []}
+        row.update(result(project, base, FIXTURES[spec["fixture"]]))
+        row.update(facts(answer["tools"], answer["reply"], project, marker))
         row["tools_brief"] = [[call.get("tool"), str((call.get("input") or {}).get("name") or (call.get("input") or {}).get("id")
-                               or (call.get("input") or {}).get("filePath") or (call.get("input") or {}).get("path") or (call.get("input") or {}).get("command") or "")[:120]]
-                              for call in answer["tools"]]
-        row.update(tool_calls=len(answer["tools"]), session_left=None if answer.get("deleted") else answer.get("session"),
-                   reply_tail=(answer["reply"] or "")[-600:])
+                               or (call.get("input") or {}).get("filePath") or (call.get("input") or {}).get("path")
+                               or (call.get("input") or {}).get("command") or "")[:120]] for call in answer["tools"]]
+        row.update(tool_calls=len(answer["tools"]), reply_tail=(answer["reply"] or "")[-800:])
     except Exception as error:  # report a broken trial; never hide it
         row["error"] = repr(error)[:300]
     finally:
-        for path in _worktrees(work / "project") if (work / "project" / ".git").exists() else []:
-            if path != os.path.realpath(work / "project"):
-                _git(work / "project", "worktree", "remove", "--force", path)
-                shutil.rmtree(path, ignore_errors=True)
+        if env is not None:
+            row["sessions_deleted"], row["sessions_unknown"] = sweep_sessions(project, env)
+        row["left_behind"] = []
+        if (project / ".git").exists():
+            for path in _worktrees(project):
+                if path == os.path.realpath(project):
+                    continue
+                if inside(path, work):
+                    _git(project, "worktree", "remove", "--force", path)
+                else:  # never delete outside the trial; report it for a person to handle
+                    row["left_behind"].append(path)
         shutil.rmtree(work, ignore_errors=True)
-    row["valid"] = is_valid(row)
+    row["invalid_reason"] = invalid_reason(row)
+    row["valid"] = row["invalid_reason"] is None
     row["seconds"] = round(time.time() - started)
     return row
 
@@ -281,10 +382,13 @@ def main():
     if args.summary:
         rows = [json.loads(line) for line in args.out.read_text().splitlines() if line.strip()]
         for key, cell in sorted(summarize(rows).items(), key=str):
-            print(json.dumps({"experiment": key[0], "model": key[1], "description": key[2], "layout": key[3], **cell}))
+            print(json.dumps({"experiment": key[0], "model": key[1], "description": key[2], "layout": key[3], "fixture": key[4], **cell}))
         return 0
     if not args.model or not args.description:
         parser.error("--model and --description are required unless --summary")
+    for model in args.model:
+        if model not in ALLOWED_MODELS:
+            parser.error(f"{model} is not an authorized model; allowed: {', '.join(ALLOWED_MODELS)}")
     work_root = Path(tempfile.mkdtemp(prefix="layout-eval-run-")).resolve()
     try:
         package = work_root / "package"
@@ -295,7 +399,7 @@ def main():
                 with args.out.open("a") as out:
                     out.write(json.dumps(row) + "\n")
                 print(json.dumps({k: row[k] for k in ("experiment", "model", "fixture", "description", "layout", "rep",
-                                                       "valid", "registered", "skill_loaded", "error") if k in row}), flush=True)
+                                                       "valid", "invalid_reason", "registered", "skill_loaded", "left_behind") if k in row}), flush=True)
     finally:
         shutil.rmtree(work_root, ignore_errors=True)
     return 0

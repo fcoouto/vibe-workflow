@@ -68,6 +68,21 @@ each subscription model (16). Three trials run at once.
 
 `live_check.run_model` gains a `timeout` parameter (default unchanged) so slow models finish.
 
+## Validity and safety rules (from the harness review)
+
+- Provenance: each fixture's skill copy carries a per-trial marker; a skill load whose output lacks it
+  makes the trial invalid. A shell command that touches the skill path also fails the trial closed.
+- Registration compares parsed list entries before and after (`files` array, `py-modules`, `export ... from`
+  lines), for every new non-test module, not text mentions.
+- The result is the checkout holding the new code; a list edit in another checkout marks it `split`
+  (invalid). Invalid trials are counted by reason, per fixture and overall.
+- Sessions stored for the fixture directory are listed and deleted after each trial, even on timeout.
+  Worktrees are removed only inside the trial folder; any other is reported, never deleted.
+- Only `opencode-go/hungerg-free` and `openai/gpt-6.1-terra` are accepted. `claude-agent/haiku` is left out:
+  it fails without the real `~/.claude`, so it cannot run in the clean home.
+- Not sandboxed: the agent's shell can reach real paths, as in every live check; the prompt says not
+  to install or use the network. The offer flag is a regex; offers are classified by reading the replies.
+
 ## Not verified
 
 Other users' plugin sets (the isolated config loads only vibe-workflow), other OpenCode versions,
