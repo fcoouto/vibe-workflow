@@ -1,7 +1,7 @@
 # Security review: proportional ship checks and an on-demand project review
 
-Date: 27 November 2026. Status: proposal for the user's review; not approved.
-Open decisions are listed at the end.
+Date: 27 November 2026. Status: decisions D1 to D3 made by the user; awaiting
+approval of the whole design.
 
 ## Intent
 
@@ -63,7 +63,8 @@ Superpowers, the main workflow partner, has one line on security
 - Findings are so noisy or so often wrong that users learn to ignore them.
 - A review leaks a secret, a private finding or exploit detail into a public PR,
   commit or log.
-- A review changes the checkout: installs, fixes, stashes, commits.
+- A review changes the checkout: installs, fixes, stashes, commits. The one
+  allowed write is a report in the ignored reports folder (Design §3).
 - The ship check becomes a reason to skip the ordinary code review.
 
 ## Constraints
@@ -172,7 +173,8 @@ provider sees the code. (Builder check; my call.) Brief:
   secret's value; when a line looks like a secret, quote only its file, line
   and type, never the line itself, in tool output as well as the report;
 - if `differential-review` or `fp-check` is installed, use them within these
-  limits and skip writing their report file into the repository.
+  limits and point any report file they write at the private reports folder
+  (see Report storage), never elsewhere in the repository.
 
 **Result.** A `Security` section in the PR body: head commit, tier and reason,
 what was checked, findings with severity and status, and limits. The skill tells
@@ -180,9 +182,9 @@ the agent to add the section whatever template the project uses; the bundled
 `vibe-pull-requests` template also gains it. For a public repository, every
 finding that is not plainly harmless (any confirmed or likely one, and any
 secret) appears only as location and class; the detail goes to the user in
-chat. (Builder check; my call.)
+chat and to a private report (see Report storage). (Builder check; my call.)
 
-**What a finding does.** Open decision D1. Proposed: a confirmed high or
+**What a finding does** (user, D1). A confirmed high or
 critical finding that this change introduced or made worse keeps the PR
 `[BLOCKED]` until fixed or the user explicitly accepts it. A pre-existing one is
 reported to the user and does not block an unrelated PR. Medium and low are
@@ -217,10 +219,10 @@ onboarded or not, like `vibe-council`.
 4. **Verify.** Every candidate gets a refute pass before it is reported.
    Confirmed findings get a search for sibling instances (the
    `variant-analysis` idea).
-5. **Report** in chat: summary, findings by severity with location, scenario,
-   fix and confidence, then coverage limits. "Nothing found" means nothing
-   substantiated in the inspected scope. If the user wants a file, write it
-   outside the repository by default; inside only where they say.
+5. **Report.** Save the full report (findings by severity with location,
+   scenario, fix and confidence, then coverage limits) to the private reports
+   folder (see Report storage), and give a summary in chat with the report's
+   path. "Nothing found" means nothing substantiated in the inspected scope.
 6. **No fixes.** Offer to turn chosen findings into a plan; fixes go through
    the normal workflow.
 
@@ -231,7 +233,30 @@ workflows invoke AI agents; `sharp-edges` for API and config design;
 Semgrep or CodeQL if already installed; `c-review` or `rust-review` when the
 language matches.
 
-### 3. Workspace preparation
+### 3. Report storage (user, D3)
+
+Security reports live in `.vibe-workflow/security-reports/` and are never
+published. Used by every full review, and by a ship check whenever details are
+kept out of the PR body (a public repository) or a partner tool writes a report.
+
+- **Location: the main checkout,** found from `git worktree list` (its first
+  entry), not the task worktree. Post-merge cleanup removes task worktrees, and
+  reports must outlive them. (My call.)
+- **The folder's own `.gitignore`** contains exactly `*`, so Git ignores the
+  folder's whole contents, including that file. Nothing in it is ever tracked,
+  whatever the project's root `.gitignore` says.
+- **Before every write:** create the folder if missing, rewrite `.gitignore` if
+  it is missing or differs, then confirm with `git check-ignore -q <report
+  path>`. If the check fails, do not write; give the report in chat and say why.
+- **Files:** `YYYY-MM-DD-HHMM-<full|ship>-<topic>.md`, never overwritten. Folder
+  `0700`, files `0600` where the system supports it. (My call.)
+- **Never** `git add -f` anything in the folder, and never copy a report into a
+  commit, PR, issue or log.
+- **Limits stated to the user once:** ignored is not secret. Backups, cloud
+  sync and `git clean -x` still see or delete the folder. Secrets are still
+  written as file, line and type only, so a leaked report does not leak them.
+
+### 4. Workspace preparation
 
 Add Trail of Bits skills to `vibe-prepare-my-workspace/partners.json` as
 optional skill partners, so the user can see and approve them. Proposed set:
@@ -268,28 +293,22 @@ copies no text.
 - Both a ship check and a user-triggered full review (user).
 - Evaluate Trail of Bits for inclusion (user). The partner-not-copy stance,
   the tiers, the skill name and the triggers are proposals.
-
-## Open decisions for the user
-
-- **D1. What a finding does.** Proposed: a confirmed high or critical finding
-  introduced or worsened by the change keeps the PR `[BLOCKED]`, as does a
-  tier-3 review that could not run; pre-existing ones are reported but do not
-  block an unrelated PR; the rest is listed. Alternative: report only, the
-  merger decides. This matters most where the agent may merge.
-- **D2. Onboarding.** Proposed: no new onboarding question; the ship check is on
-  in every onboarded project, including those already onboarded. Alternative:
-  an opt-out question, which adds a saved setting and needs a default for
-  existing projects.
-- **D3. Where full-review reports go.** Proposed: chat, plus a file outside the
-  repository only on request. Alternative: commit under `docs/` for private
-  repositories, which is an exception to the review writing nothing.
+- **D1. What a finding does** (user, 27 November): a confirmed high or critical
+  finding introduced or worsened by the change keeps the PR `[BLOCKED]`, as does
+  a tier-3 review that could not run; pre-existing ones are reported but do not
+  block an unrelated PR; the rest is listed.
+- **D2. Onboarding** (user, 27 November): no new onboarding question; the ship
+  check is on in every onboarded project, including those already onboarded.
+- **D3. Report storage** (user, 27 November): `.vibe-workflow/security-reports/`
+  with its own `.gitignore`, ensured before every write. Details in Design §3.
 
 ## Review record
 
 A builder check (independent reviewer, another lab) read this design once on
 27 November 2026. Its points on review target, shell access, early redaction,
 delivery gaps, tier-0 escapes, history for going public and provider exposure
-are settled above as my calls. Its remaining points are D1 to D3.
+are settled above as my calls. Its remaining points were D1 to D3, now
+decided by the user.
 
 ## Left to the builder
 
