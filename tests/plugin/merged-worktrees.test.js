@@ -9,10 +9,11 @@ const PORCELAIN = [
   "worktree /wt/detached", "HEAD d4", "detached", "",
   "worktree /wt/locked", "HEAD e5", "branch refs/heads/feat/locked", "locked", "",
   "worktree /wt/moved", "HEAD f6", "branch refs/heads/feat/moved", "prunable gitdir file points to non-existent location", "",
-].join("\n")
+].join("\0")
+const LIST = "worktree list --porcelain -z"
 const MERGED = "for-each-ref --merged refs/remotes/origin/HEAD --format=%(refname:short) refs/heads"
 const ANSWERS = {
-  "worktree list --porcelain": { code: 0, stdout: PORCELAIN },
+  [LIST]: { code: 0, stdout: PORCELAIN },
   [MERGED]: { code: 0, stdout: "main\nfeat/one\nfeat/locked\nfeat/moved\n" },
   "merge-base --is-ancestor d4 refs/remotes/origin/HEAD": { code: 0, stdout: "" },
 }
@@ -81,6 +82,17 @@ test("busy and excluded worktrees are left out", async () => {
 
 test("an incomplete session list suppresses the note", async () => {
   assert.equal(await sweep({ busy: async () => ({ complete: false, dirs: new Set() }) }).note({}), null)
+  const failing = busyDirectories({ session: { list: async () => { throw new Error("list failed") } } }, 1000)
+  assert.equal(await sweep({ busy: failing }).note({}), null)
+})
+
+test("a running session without a directory leaves only exclude protection", async () => {
+  const unlocated = busyDirectories({ session: { list: async () => ({ data: [{ time: { busy: 1001 } }] }) } }, 1000)
+  const open = await sweep({ busy: unlocated }).note({})
+  assert.ok(open.includes("/wt/merged one (feat/one)"))
+  const excluded = await sweep({ busy: unlocated }).note({ exclude: ["/wt/merged one/src"] })
+  assert.ok(!excluded.includes("/wt/merged one ("))
+  assert.ok(excluded.includes("/wt/detached (detached)"))
 })
 
 test("more than ten merged worktrees list ten then the rest as a count", async () => {
@@ -90,7 +102,7 @@ test("more than ten merged worktrees list ten then the rest as a count", async (
     lines.push(`worktree /wt/n${i}`, `HEAD h${i}`, `branch refs/heads/n${i}`, "")
     merged.push(`n${i}`)
   }
-  const answers = { ...ANSWERS, "worktree list --porcelain": { code: 0, stdout: lines.join("\n") },
+  const answers = { ...ANSWERS, [LIST]: { code: 0, stdout: lines.join("\0") },
     [MERGED]: { code: 0, stdout: merged.join("\n") } }
   const note = await sweep({ run: gitRun(answers) }).note({})
   assert.equal(note.match(/\/wt\/n\d+ \(/g).length, 10)
@@ -103,9 +115,33 @@ test("silent on failure, missing origin HEAD or nothing merged", async () => {
   const missingHead = sweep({ run: gitRun({ ...ANSWERS, [MERGED]: { code: 128, stdout: "" } }) })
   assert.equal(await missingHead.note({}), null)
   assert.equal(await sweep({ primary: async () => null }).note({}), null)
-  const onlyPrimary = sweep({ run: gitRun({ ...ANSWERS, "worktree list --porcelain": { code: 0,
-    stdout: "worktree /repo\nHEAD a1\nbranch refs/heads/main\n" } }) })
+  const onlyPrimary = sweep({ run: gitRun({ ...ANSWERS, [LIST]: { code: 0,
+    stdout: "worktree /repo\0HEAD a1\0branch refs/heads/main\0\0" } }) })
   assert.equal(await onlyPrimary.note({}), null)
+})
+
+test("a primary that resolves after the deadline starts no git read", async () => {
+  const calls = []
+  const late = createSweep({
+    primary: () => new Promise((resolve) => setTimeout(() => resolve("/repo"), 30)),
+    run: async (cwd, args) => { calls.push(args.join(" ")); return ANSWERS[args.join(" ")] },
+    busy: async () => { calls.push("busy"); return null },
+    deadline: 10, process: { explained: true },
+  })
+  assert.equal(await late.note({}), null)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.deepEqual(calls, [])
+})
+
+test("busy and excluded paths match raw, even with a tab or a double quote", async () => {
+  const path = '/wt/tab\tq"x'
+  const porcelain = ["worktree /repo", "HEAD a1", "branch refs/heads/main", "",
+    `worktree ${path}`, "HEAD g7", "branch refs/heads/feat/q", ""].join("\0")
+  const run = gitRun({ ...ANSWERS, [LIST]: { code: 0, stdout: porcelain }, [MERGED]: { code: 0, stdout: "main\nfeat/q\n" } })
+  assert.equal(await sweep({ run }).note({}), `vibe-workflow: merged worktrees still on disk: ${path} (feat/q). ${SWEEP}`)
+  const busy = await sweep({ run, busy: async () => ({ complete: true, dirs: new Set([`${path}/sub`]) }) }).note({})
+  assert.equal(busy, null)
+  assert.equal(await sweep({ run }).note({ exclude: [`${path}/src`] }), null)
 })
 
 test("one cancelling deadline covers every read", async () => {
@@ -179,7 +215,12 @@ test("busyDirectories follows pages and reports completeness", async () => {
   assert.equal(full.calls.length, 4)
 
   const failing = stub([new Error("list failed")])
-  assert.equal(await busyDirectories(failing.ctx, started)(new AbortController().signal), null)
+  assert.deepEqual(await busyDirectories(failing.ctx, started)(new AbortController().signal),
+    { complete: false, dirs: new Set() })
+
+  const shapeless = stub([{ items: [] }])
+  assert.deepEqual(await busyDirectories(shapeless.ctx, started)(new AbortController().signal),
+    { complete: false, dirs: new Set() })
 
   const unlocated = stub([page([{ time: { busy: started + 1 } }])])
   assert.equal(await busyDirectories(unlocated.ctx, started)(new AbortController().signal), null)

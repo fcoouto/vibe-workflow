@@ -12,18 +12,22 @@ const EXPLAIN = "Tell your human partner once in your report: cleanup now also r
   "tool caches; other files are asked about before the merge."
 const PROCESS = { explained: false }
 
+// Input is `git worktree list --porcelain -z`: NUL-ended fields, and an empty field ends each record. Paths stay raw.
 export function parseWorktrees(porcelain) {
-  return porcelain.split("\n\n").filter(Boolean).map((block) => {
-    const entry = { path: "", head: null, branch: null, locked: false, prunable: false }
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) entry.path = line.slice("worktree ".length)
-      else if (line.startsWith("HEAD ")) entry.head = line.slice("HEAD ".length)
-      else if (line.startsWith("branch ")) entry.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "")
-      else if (line === "locked" || line.startsWith("locked ")) entry.locked = true
-      else if (line === "prunable" || line.startsWith("prunable ")) entry.prunable = true
-    }
-    return entry
-  })
+  const entries = []
+  let entry = null
+  for (const field of porcelain.split("\0")) {
+    if (field === "") entry = null
+    else if (field.startsWith("worktree ")) {
+      entry = { path: field.slice("worktree ".length), head: null, branch: null, locked: false, prunable: false }
+      entries.push(entry)
+    } else if (!entry) continue
+    else if (field.startsWith("HEAD ")) entry.head = field.slice("HEAD ".length)
+    else if (field.startsWith("branch ")) entry.branch = field.slice("branch ".length).replace(/^refs\/heads\//, "")
+    else if (field === "locked" || field.startsWith("locked ")) entry.locked = true
+    else if (field === "prunable" || field.startsWith("prunable ")) entry.prunable = true
+  }
+  return entries
 }
 
 async function defaultRun(cwd, args, signal) {
@@ -41,9 +45,9 @@ async function defaultRun(cwd, args, signal) {
 export function createSweep({ primary, run = defaultRun, busy = async () => null, deadline = 500, process = PROCESS }) {
   async function find(signal, exclude) {
     const top = await primary()
-    if (!top) return null
+    if (!top || signal.aborted) return null
     const [listed, merged, sessions] = await Promise.all([
-      run(top, ["worktree", "list", "--porcelain"], signal),
+      run(top, ["worktree", "list", "--porcelain", "-z"], signal),
       run(top, ["for-each-ref", "--merged", MERGED, "--format=%(refname:short)", "refs/heads"], signal),
       busy(signal),
     ])
@@ -92,10 +96,10 @@ export function busyDirectories(ctx, started) {
   return async (signal) => {
     const dirs = new Set()
     let page
-    try { page = await ctx.session.list({ limit: PAGE, order: "desc" }) } catch { return null }
+    try { page = await ctx.session.list({ limit: PAGE, order: "desc" }) } catch { return { complete: false, dirs } }
     for (let pages = 1; ; pages++) {
       const items = Array.isArray(page) ? page : page?.data
-      if (!Array.isArray(items)) return pages === 1 ? null : { complete: false, dirs }
+      if (!Array.isArray(items)) return { complete: false, dirs }
       for (const item of items) {
         if (!isRunning(item?.time, started)) continue
         const directory = item?.location?.directory
