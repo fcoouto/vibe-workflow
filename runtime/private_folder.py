@@ -74,6 +74,13 @@ def _open_folder(name, parent):
         raise Refused(f"{name} is a symlink or not a directory") from error
 
 
+def _listed(name, parent, shown):
+    """A name counts only when its parent lists it byte for byte. On a case-insensitive volume another spelling
+    reaches the same folder, and Git, asked about the exact name, does not see the files it tracks there."""
+    if name not in os.listdir(parent):
+        raise Refused(f"{shown} is not stored under exactly that name, so it was left untouched")
+
+
 def _shared(label):
     return f"the {label} already exists under a group-writable {BASE}, so it is not repaired"
 
@@ -124,10 +131,12 @@ def open_private_folder(main, name, label):
         opened.append(os.open(main, os.O_RDONLY | os.O_DIRECTORY))
         _trusted(opened[-1], "the main checkout")
         opened.append(_open_folder(BASE, opened[-1])[0])
+        _listed(BASE, opened[-2], BASE)
         _trusted(opened[-1], BASE)
         shared = bool(os.fstat(opened[-1]).st_mode & 0o020)
         folder, made = _open_folder(name, opened[-1])
         opened.append(folder)
+        _listed(name, opened[-2], f"the {label}")
         found = os.fstat(folder)
         if found.st_uid != os.geteuid():
             raise Refused(f"the {label} is owned by another user")
