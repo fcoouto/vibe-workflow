@@ -930,7 +930,8 @@ throwaway repositories and synthetic settings.
   `.gitignore` through a temporary file and `os.replace`, creates the report with
   `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken), and removes
   the empty file if `git check-ignore -q` fails or if the checked name is no longer the
-  opened folder and file. `tests/tooling/test_store_report.py` runs each case, including a
+  opened folder and file; it removes that entry only while it is still the file it created,
+  and leaves a replacement alone. `tests/tooling/test_store_report.py` runs each case, including a
   linked worktree whose index differs from the main checkout's and a main checkout whose
   path holds a carriage return beside a decoy whose path holds a newline. A checkout made
   with a group-writable umask (`002`, common on Linux) is refused, so its reports go to chat.

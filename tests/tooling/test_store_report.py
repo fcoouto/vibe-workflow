@@ -55,16 +55,26 @@ class StoreReportTest(unittest.TestCase):
         self.linked = self.root / "linked"
         git(self.main, "worktree", "add", "-q", "-b", "task", str(self.linked))
         self.reports = self.main / FOLDER
+        self.assertEqual(self.main.stat().st_mode & 0o777, 0o755)
         self.scratch = self.root / "scratch"
         self.scratch.mkdir(mode=0o700)
         self.sources = 0
 
     def checkout(self, path):
+        """A checkout whose root mode does not depend on the caller's umask."""
         path.mkdir()
+        os.chmod(path, 0o755)
         git(path, "init", "-q", "-b", "main")
         (path / "README.md").write_text("fixture\n")
         git(path, "add", "README.md")
         git(path, "commit", "-qm", "fixture")
+        return path
+
+    def folders(self, path):
+        """Create a folder below the main checkout; `.vibe-workflow` and it get mode 0755 whatever the umask is."""
+        path.mkdir(parents=True, exist_ok=True)
+        for folder in (self.main / ".vibe-workflow", path):
+            os.chmod(folder, 0o755)
         return path
 
     def source(self, body=BODY):
@@ -145,15 +155,14 @@ class StoreReportTest(unittest.TestCase):
         self.assertFalse((self.main / ".vibe-workflow").exists())
 
     def test_an_existing_folder_is_made_private_and_kept(self):
-        self.reports.mkdir(parents=True, mode=0o755)
+        self.folders(self.reports)
         (self.reports / "old.md").write_text("old\n")
-        os.chmod(self.reports, 0o755)
         self.saved(self.cli(self.main, mode="ship"))
         self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.reports / "old.md").read_text(), "old\n")
 
     def test_refuses_when_the_main_checkout_tracks_a_file_the_task_index_does_not(self):
-        self.reports.mkdir(parents=True)
+        self.folders(self.reports)
         (self.reports / ".gitignore").write_text("# tracked on main\n")
         git(self.main, "add", "-f", f"{FOLDER}/.gitignore")
         git(self.main, "commit", "-qm", "track the ignore file")
@@ -200,7 +209,8 @@ class StoreReportTest(unittest.TestCase):
         outside.mkdir()
         for name in (".vibe-workflow", FOLDER):
             with self.subTest(link=name):
-                (self.main / name).parent.mkdir(exist_ok=True)
+                if name == FOLDER:
+                    self.folders(self.main / ".vibe-workflow")
                 os.symlink(outside, self.main / name)
                 self.refused(self.cli(self.linked), "symlink")
                 self.assertEqual(list(outside.iterdir()), [])
@@ -210,8 +220,7 @@ class StoreReportTest(unittest.TestCase):
         self.assertEqual((self.main / FOLDER).read_text(), "a file\n")
 
     def test_refuses_a_checkout_or_settings_folder_others_can_write_and_changes_no_mode(self):
-        base = self.main / ".vibe-workflow"
-        base.mkdir()
+        base = self.folders(self.main / ".vibe-workflow")
         for folder, mode in ((base, 0o775), (base, 0o757), (self.main, 0o775), (self.main, 0o777)):
             with self.subTest(folder=folder.name, mode=oct(mode)):
                 before = folder.stat().st_mode & 0o777
@@ -225,7 +234,7 @@ class StoreReportTest(unittest.TestCase):
 
     def test_refuses_a_folder_owned_by_someone_else(self):
         module = load()
-        self.reports.mkdir(parents=True)
+        self.folders(self.reports)
         with mock.patch.object(module.os, "geteuid", return_value=os.geteuid() + 1):
             with self.assertRaisesRegex(module.Refused, "owned"):
                 self.store(module, self.linked)
@@ -234,7 +243,7 @@ class StoreReportTest(unittest.TestCase):
     def test_refuses_a_symlinked_ignore_file_and_leaves_its_target(self):
         target = self.root / "notes.txt"
         target.write_text("user notes\n")
-        self.reports.mkdir(parents=True)
+        self.folders(self.reports)
         os.symlink(target, self.reports / ".gitignore")
         self.refused(self.cli(self.linked), ".gitignore")
         self.assertEqual(target.read_text(), "user notes\n")
@@ -247,7 +256,7 @@ class StoreReportTest(unittest.TestCase):
     def test_replaces_a_differing_ignore_file_without_writing_through_it(self):
         shared = self.root / "shared.txt"
         shared.write_text("!*.md\n")
-        self.reports.mkdir(parents=True)
+        self.folders(self.reports)
         os.link(shared, self.reports / ".gitignore")
         self.saved(self.cli(self.linked))
         self.assertEqual((self.reports / ".gitignore").read_bytes(), b"*\n")
@@ -268,7 +277,7 @@ class StoreReportTest(unittest.TestCase):
         module = load()
         target = self.root / "victim.txt"
         target.write_text("keep\n")
-        self.reports.mkdir(parents=True)
+        self.folders(self.reports)
         os.symlink(target, self.reports / "2026-11-27-0905-ship-auth.md")
         self.assertEqual(self.store(module, self.linked).name, "2026-11-27-0905-ship-auth-2.md")
         self.assertEqual(target.read_text(), "keep\n")
@@ -312,8 +321,9 @@ class StoreReportTest(unittest.TestCase):
                 (self.reports / ".gitignore").write_bytes(b"*\n")
             return real(directory, *args)
         module.git = swap
-        with self.assertRaisesRegex(module.Refused, "changed"):
+        with self.assertRaisesRegex(module.Refused, "changed") as raised:
             self.store(module, self.linked, body=b"private finding\n")
+        self.assertNotIn("left untouched", str(raised.exception), "the created file was still there to remove")
         self.assertEqual(sorted(p.name for p in moved.iterdir()), [".gitignore"], "the created file is removed")
         self.assertEqual(sorted(p.name for p in self.reports.iterdir()), [".gitignore"])
         self.assertEqual(len(list(self.scratch.iterdir())), 1)
@@ -322,17 +332,40 @@ class StoreReportTest(unittest.TestCase):
         module = load()
         real = module.git
 
+        replaced = []
+
         def swap(directory, *args):
             if args[0] == "check-ignore":
                 (name,) = [p for p in self.reports.iterdir() if p.name != ".gitignore"]
                 name.unlink()
-                name.write_text("someone else's file\n")
+                name.write_bytes(b"someone else's file\n")
+                replaced.append(name)
             return real(directory, *args)
         module.git = swap
-        with self.assertRaisesRegex(module.Refused, "changed"):
+        with self.assertRaisesRegex(module.Refused, "changed.*left untouched"):
             self.store(module, self.linked, body=b"private finding\n")
+        # The refusal cleans up only the file this run created; the file now under that name is not its to delete.
+        self.assertEqual(replaced[0].read_bytes(), b"someone else's file\n")
+        self.assertEqual(sorted(p.name for p in self.reports.iterdir()), [".gitignore", replaced[0].name])
         for path in self.reports.iterdir():
             self.assertNotIn(b"private finding", path.read_bytes())
+
+    def test_a_refusal_leaves_a_link_planted_under_the_report_name(self):
+        module = load()
+        real, victim = module.git, self.root / "victim.txt"
+        victim.write_text("keep\n")
+
+        def swap(directory, *args):
+            if args[0] == "check-ignore":
+                (name,) = [p for p in self.reports.iterdir() if p.name != ".gitignore"]
+                name.unlink()
+                os.symlink(victim, name)
+            return real(directory, *args)
+        module.git = swap
+        with self.assertRaisesRegex(module.Refused, "left untouched"):
+            self.store(module, self.linked, body=b"private finding\n")
+        self.assertEqual(victim.read_text(), "keep\n")
+        self.assertEqual([os.readlink(p) for p in self.reports.iterdir() if p.is_symlink()], [str(victim)])
 
     def test_refusal_never_echoes_the_report(self):
         run = self.cli(self.root, body=b"PRIVATE-SENTINEL\n")

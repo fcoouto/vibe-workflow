@@ -178,7 +178,8 @@ test("the report text reaches the script through a file, never through shell sou
     "mktemp -d", "`0600`", "every argument shell-quoted", "--from '<temporary file>'",
     "deletes the temporary file", "leaves the temporary file in place", "then delete the temporary file",
     "appears once in the session's tool history",
-    "writable by its group or by everyone", "never changes their permissions", "still the folder and the file it opened"])
+    "writable by its group or by everyone", "never changes their permissions", "still the folder and the file it opened",
+    "a different file found under that name is left untouched"])
   assert.ok(!raw.includes("<<"), "no heredoc in the recipe")
   assert.ok(!/standard input|stdin/i.test(raw), "no standard-input transport")
   const [, command] = /```sh\n([\s\S]*?)```/.exec(raw)

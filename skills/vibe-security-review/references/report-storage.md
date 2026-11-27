@@ -62,7 +62,8 @@ What the script does, so a refusal can be explained:
    up to `-99`. Reports are never overwritten and a link is never followed.
 8. Confirms `git -C <main checkout> check-ignore -q <report path>`, then that the
    name Git checked is still the folder and the file it opened. Only then is the
-   report text written. Otherwise it removes the empty file and refuses.
+   report text written. Otherwise it refuses and removes the empty file it
+   created; a different file found under that name is left untouched.
 
 Never `git add -f` anything in this folder. Never copy a report into a commit,
 PR, issue or log. Tell the user once that ignored does not mean secret: backups

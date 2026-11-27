@@ -143,6 +143,19 @@ def _same(path, descriptor):
     return (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino)
 
 
+def _discard(name, folder, created):
+    """Remove the report entry only while it is still the file this run created; say whether it was.
+    An open folder identifies the folder, not whatever now has a name inside it."""
+    try:
+        entry = os.lstat(name, dir_fd=folder)
+    except FileNotFoundError:
+        return True
+    if (entry.st_dev, entry.st_ino) != created:
+        return False
+    os.unlink(name, dir_fd=folder)
+    return True
+
+
 def store(cwd, mode, topic, source, now=None):
     if mode not in ("full", "ship"):
         raise Refused("mode must be full or ship")
@@ -178,6 +191,8 @@ def store(cwd, mode, topic, source, now=None):
         _ensure_ignore(folder)
         name, handle = _create(folder, f"{time.strftime('%Y-%m-%d-%H%M', now or time.localtime())}-{mode}-{topic}")
         path = os.path.join(main, FOLDER, name)
+        created = os.fstat(handle)
+        created = created.st_dev, created.st_ino
         try:
             with os.fdopen(handle, "wb") as file:
                 os.fchmod(file.fileno(), 0o600)
@@ -187,8 +202,13 @@ def store(cwd, mode, topic, source, now=None):
                 if not _same(os.path.join(main, FOLDER), folder) or not _same(path, file.fileno()):
                     raise Refused("the reports folder or the report changed while it was being checked")
                 file.write(body)
+        except (Refused, OSError) as error:
+            reason = str(error) if isinstance(error, Refused) else f"the report could not be written ({type(error).__name__})"
+            if not _discard(name, folder, created):
+                reason += "; another file now has the report's name and was left untouched"
+            raise Refused(reason) from error
         except BaseException:
-            os.unlink(name, dir_fd=folder)
+            _discard(name, folder, created)
             raise
     finally:
         for descriptor in opened:
