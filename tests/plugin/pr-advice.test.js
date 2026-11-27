@@ -265,7 +265,8 @@ test("the user-merges and cleanup sentences appear together", async () => {
   assert.match(note, /Cleanup is on/)
 })
 
-const LINE = "vibe-workflow: merged worktrees still on disk: /wt/x (feat/x). Sweep them per the worktree cleanup steps in vibe-pull-requests."
+const LINE = 'vibe-workflow: merged worktrees still on disk (JSON): [{"path":"/wt/x","branch":"feat/x","repair":false}]. ' +
+  "Sweep them per the worktree cleanup steps in vibe-pull-requests."
 const cleanOn = { state: "on", agent_merge: true, worktree_cleanup: true }
 function fakeSweep(line = LINE) {
   const sweep = { calls: [], note: async (options) => { sweep.calls.push(options); return line } }

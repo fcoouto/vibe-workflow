@@ -3,7 +3,7 @@ import { test } from "node:test"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { mkdtempSync } from "node:fs"
-import { mkdtemp, mkdir, writeFile, readFile, copyFile, realpath, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, readFile, copyFile, realpath, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -2095,7 +2095,8 @@ const sweepGit = (cwd, ...args) => execFileSync("git", ["-c", "user.name=Fixture
   "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always", ...args],
   { cwd, env: sweepEnv, stdio: "pipe", encoding: "utf8" })
 
-// A primary checkout on main with origin/HEAD set, and two merged linked worktrees `a` and `b`.
+// A primary checkout on main with origin/HEAD set, and two linked worktrees `a` and `b` whose branches each have a
+// pushed commit of their own that is merged into the default branch.
 async function mergedWorktrees(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "sweep-hook-")))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -2109,7 +2110,13 @@ async function mergedWorktrees(t) {
   await mkdir(join(primary, ".vibe-workflow"))
   await writeFile(join(primary, ".vibe-workflow", "settings.json"),
     JSON.stringify({ version: 1, features: [{ git_workflow: { enabled: true, worktree_cleanup: true } }] }))
-  for (const name of ["a", "b"]) sweepGit(primary, "worktree", "add", "-q", "-b", name, join(root, name))
+  for (const name of ["a", "b"]) {
+    sweepGit(primary, "worktree", "add", "-q", "-b", name, join(root, name))
+    sweepGit(join(root, name), "commit", "-q", "--allow-empty", "-m", `work ${name}`)
+    sweepGit(join(root, name), "push", "-q", "-u", "origin", name)
+    sweepGit(primary, "merge", "-q", "--no-ff", name, "-m", `merge ${name}`)
+  }
+  sweepGit(primary, "push", "-q", "origin", "main")
   return { root, primary, a: join(root, "a"), b: join(root, "b") }
 }
 
@@ -2143,13 +2150,41 @@ async function sweepHook(t, { root, directory }) {
   return async (event) => { for (const handler of after) await handler(event); return event }
 }
 
+// The paths and branches the note's JSON array names.
+function sweptEntries(result) {
+  const start = "vibe-workflow: merged worktrees still on disk (JSON): "
+  const from = result.indexOf(start), to = result.indexOf(". Sweep them per the worktree cleanup steps")
+  assert.ok(from >= 0 && to > from, result)
+  return JSON.parse(result.slice(from + start.length, to))
+}
+
 test("the merge note carries the sweep list through the registered hook", async (t) => {
   const { root, primary, a, b } = await mergedWorktrees(t)
   const fire = await sweepHook(t, { root, directory: primary })
   const event = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
     input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
-  assert.match(event.result, /merged worktrees still on disk:/)
-  assert.ok(event.result.includes(`${a} (a)`) && event.result.includes(`${b} (b)`), event.result)
+  assert.deepEqual(sweptEntries(event.result), [{ path: a, branch: "a", repair: false }, { path: b, branch: "b", repair: false }])
+})
+
+test("a worktree whose branch was just created, or never pushed, is not named as merged", async (t) => {
+  const { root, primary, b } = await mergedWorktrees(t)
+  sweepGit(primary, "worktree", "add", "-q", "-b", "fresh", join(root, "fresh"))
+  sweepGit(primary, "worktree", "add", "-q", "-b", "tracking", join(root, "tracking"), "origin/main")
+  sweepGit(primary, "worktree", "add", "-q", "--detach", join(root, "detached"))
+  const fire = await sweepHook(t, { root, directory: primary })
+  const event = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
+    input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
+  assert.deepEqual(sweptEntries(event.result).map(({ path }) => path), [join(root, "a"), b, join(root, "detached")],
+    "a detached worktree keeps the ancestor test")
+})
+
+test("a session folder named through a symbolic link still excludes its worktree", async (t) => {
+  const { root, primary, a, b } = await mergedWorktrees(t)
+  await symlink(root, join(root, "alias"))
+  const fire = await sweepHook(t, { root, directory: join(root, "alias", "a") })
+  const merge = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
+    input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
+  assert.deepEqual(sweptEntries(merge.result).map(({ path }) => path), [b])
 })
 
 test("the session's own worktree is excluded even when its workdir points elsewhere", async (t) => {
@@ -2157,10 +2192,10 @@ test("the session's own worktree is excluded even when its workdir points elsewh
   const fire = await sweepHook(t, { root, directory: a })
   const merge = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
     input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
-  assert.ok(merge.result.includes(`${b} (b)`), merge.result)
+  assert.deepEqual(sweptEntries(merge.result).map(({ path }) => path), [b])
   assert.ok(!merge.result.includes(a), merge.result)
   const skill = await fire({ tool: "skill", status: "completed", sessionID: "ses_1",
     input: { id: "using-git-worktrees" }, result: "loaded" })
-  assert.ok(skill.result.includes(`${b} (b)`), skill.result)
+  assert.deepEqual(sweptEntries(skill.result).map(({ path }) => path), [b])
   assert.ok(!skill.result.includes(a), skill.result)
 })

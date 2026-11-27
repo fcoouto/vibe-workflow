@@ -119,7 +119,8 @@ test("skillNote sends the stakes-sized design review in any onboarded project", 
   assert.equal(await failing.skillNote("brainstorming"), null)
 })
 
-const SWEEP_LINE = "vibe-workflow: merged worktrees ready to remove: /work/feature-a"
+const SWEEP_LINE = 'vibe-workflow: merged worktrees still on disk (JSON): [{"path":"/work/feature-a","branch":"feature-a","repair":false}]. ' +
+  "Sweep them per the worktree cleanup steps in vibe-pull-requests."
 function sweepFake(result) {
   const sweep = { calls: [], note: async (options) => { sweep.calls.push(options); if (result instanceof Error) throw result; return result } }
   return sweep
