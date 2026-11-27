@@ -1609,6 +1609,106 @@ test("a real permission prompt shows WAITING immediately during shell activity a
   assert.equal(h.titles.get("ses_1"), waiting)
 })
 
+test("a shell starting during the final idle read still suppresses WAITING", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  let releaseList
+  h.facts.listGate = new Promise((done) => { releaseList = done })
+  await exited(h, "sh_1")
+  await tick()
+  const releaseStart = delaySessionRead(h, "child_slow")
+  h.push(job("child_slow", "sh_2"))
+  await settle()
+  releaseList()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  releaseStart()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
+test("an unreadable unrelated shell cannot strand the idle title", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t, { deadline: 50 })
+  h.facts.parents.child_other = "other"
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  await exited(h, "sh_1")
+  const release = delaySessionRead(h, "child_other")
+  h.push(job("child_other", "sh_other"))
+  await settle()
+  await tick()
+  await tick(50)
+  assert.equal(h.titles.get("ses_1"), waiting)
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("a manual rename during the shell exit checks wins", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  let release
+  h.facts.listGate = new Promise((done) => { release = done })
+  await exited(h, "sh_1")
+  await tick()
+  h.titles.set("ses_1", "My own title")
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), "My own title")
+})
+
+test("the final idle read does not queue a real request behind a slow root read", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  let release
+  const gated = new Promise((done) => { release = done })
+  const get = h.ctx.session.get
+  let firstRootRead = true
+  h.ctx.session.get = async (input) => {
+    if (input.sessionID === "ses_1" && firstRootRead) {
+      firstRootRead = false
+      await gated
+    }
+    return get(input)
+  }
+  await exited(h, "sh_1")
+  await tick()
+  assert.equal(firstRootRead, false)
+  await ask(h, "form.created", "frm_grace")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("disabled Title Sync does not look up cold shell ancestry", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.preference.state = "off"
+  h.registered.preferenceSaved(false)
+  const reads = h.calls.get.length
+  h.push(job("child_unknown", "sh_1"))
+  await settle()
+  assert.equal(h.calls.get.length, reads)
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
 test("a delayed background start cannot relabel a replacement task", async (t) => {
   const h = await host(t)
   await h.write(SPEC)

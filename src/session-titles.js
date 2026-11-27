@@ -331,9 +331,10 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   // Whether a child of the root, or with `withSelf` the root itself, is running now: busy since this server process
   // started and not idle since. A run killed by a restart keeps an old busy time and reads as not running; a long tool
   // call, which moves no timestamp, still reads as running. `ended` ({ id, at }) is a session whose end event arrived
-  // at `at`: that run counts as idle whatever the host still says, but a run that began after `at` does not. Reads and
-  // pending shell starts share one deadline. Timed-out activity reads count as idle; unresolved starts are reported.
-  async function activity(rootID, { ended = null, withSelf = false, starts = [] } = {}) {
+  // at `at`: that run counts as idle whatever the host still says, but a run that began after `at` does not. The two
+  // reads are independent and share one deadline of `deadline` ms; what has not answered by then, or failed, counts as
+  // "nothing runs", so a stuck host call cannot hold the session's queue.
+  async function activity(rootID, { ended = null, withSelf = false } = {}) {
     const childRuns = async () => {
       let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
       for (let pages = 1; ; pages++) {
@@ -346,12 +347,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       }
     }
     const rootRuns = async () => withSelf && running((await ctx.session.get({ sessionID: rootID })).time)
-    const result = { children: false, self: false, startsReady: !starts.length }
+    const result = { children: false, self: false }
     let timer
     await Promise.race([
       Promise.all([childRuns().then((value) => { result.children = value }, () => {}),
-        rootRuns().then((value) => { result.self = value }, () => {}),
-        Promise.all(starts).then(() => { result.startsReady = true })]),
+        rootRuns().then((value) => { result.self = value }, () => {})]),
       new Promise((done) => { timer = setTimeout(done, deadline) }),
     ])
     clearTimeout(timer)
@@ -408,14 +408,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
 
   // Sets or clears WAITING on the meter as it stands, with no git or gh read. Never while the task is fresh: before its
   // first meter (OpenCode titles a new session during its first turn) or when it was bound in the current turn.
-  // `running` and `idle` use the same session read as the title. `still()` rechecks state before the write.
-  async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, idle = false, still = () => true } = {}) {
+  // `known` reuses the shell idle check's session read. `still()` rechecks state before the write.
+  async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, known, still = () => true } = {}) {
     if (!await on()) return
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (task.fresh && !sentTitles.has(task))) return
-    const info = await read(sessionID)
+    const info = known ?? await read(sessionID)
     if (await owns(info) !== true || !current(sessionID, admitted) || sessions.get(sessionID) !== entry ||
-        (whileRunning && !running(info.time)) || (idle && running(info.time)) || !still()) return
+        (whileRunning && !running(info.time)) || !still()) return
     const title = info.title ?? ""
     reconcileTitle(entry, title)
     if (task.cells === 5) { await retire(sessionID, entry, admitted); return }
@@ -470,7 +470,11 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!sessions.size) return rootOf(sessionID, true)
     if (shellRoots.has(sessionID)) return shellRoots.get(sessionID)
     if (shellRoots.size >= MAX_SHELLS) return null
-    const lookup = rootOf(sessionID).finally(() => shellRoots.delete(sessionID))
+    const lookup = (async () => {
+      const cached = await rootOf(sessionID, true)
+      if (cached || !await on()) return cached
+      return rootOf(sessionID)
+    })().finally(() => shellRoots.delete(sessionID))
     shellRoots.set(sessionID, lookup)
     return lookup
   }
@@ -503,6 +507,21 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (before.has(root) && before.get(root) === shellGraces.get(root)) cancelShellGrace(root)
   }
 
+  // A cold start may belong to this root until its ancestry resolves. Bound that uncertainty so an unrelated,
+  // stalled lookup cannot keep an idle title quiet indefinitely.
+  async function waitForShellStarts(still) {
+    let timer, cutoff
+    try {
+      while (still()) {
+        const starts = [...shellStarts].flatMap(([id, start]) => exited.has(id) ? [] : [start])
+        if (!starts.length) break
+        cutoff ??= new Promise((done) => { timer = setTimeout(done, deadline, false) })
+        if (!await Promise.race([Promise.all(starts).then(() => true), cutoff])) break
+      }
+      return timer !== undefined
+    } finally { clearTimeout(timer) }
+  }
+
   function shellExited(shellID) {
     if (typeof shellID !== "string") return
     exited.add(shellID)
@@ -519,10 +538,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     grace.timer = setTimeout(async () => {
       try {
         if (!still() || !await on()) return
-        const starts = [...shellStarts].filter(([id]) => !exited.has(id)).map(([, start]) => start)
-        const now = await activity(root, { starts })
-        if (!now.children && now.startsReady && still()) {
-          await enqueue(root, (admitted) => relabel(root, true, admitted, { idle: true, still }), grace.admission)
+        const now = await activity(root)
+        if (now.children || !still()) return
+        let info = await read(root)
+        if (running(info.time) || !still()) return
+        // Refresh a title that could have changed while waiting for cold starts to resolve.
+        if (await waitForShellStarts(still) && still()) info = await read(root)
+        if (!running(info.time) && still()) {
+          await enqueue(root, (admitted) => relabel(root, true, admitted, { known: info, still }), grace.admission)
         }
       } catch {} finally {
         if (sameGrace()) cancelShellGrace(root)
