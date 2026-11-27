@@ -75,27 +75,40 @@ Run `git status --porcelain --ignored` in the worktree. Every line falls in one 
 - **Real work**: every other line. Untracked (`??`), modified, staged, and ignored paths not
   on the list (`.env`, `reports/`, `.superpowers/`, private evidence folders).
 
-Fixed list, matched on any path segment: `node_modules/`, `__pycache__/`, `*.pyc`,
-`.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.DS_Store`, `dist/`, `build/`,
-`coverage/`, `.coverage`, `.test-artifacts/`. The list lives in the reference only; a
-project cannot extend it in this change.
+Fixed list of tool caches that never hold user files: `node_modules/`, `__pycache__/`,
+`*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.DS_Store`. An entry is
+rebuildable only when the path git reports itself ends in a listed name. A reported parent
+such as `!! build/` is not rebuildable even if a listed name sits inside it, because git
+collapses an ignored directory into one line and its contents (`build/.env`, evidence) are
+not visible. Build and test outputs (`dist/`, `build/`, `coverage/`, `.test-artifacts/`) are
+real work: they can hold evidence, so they are asked about at `[READY]` (section 2), with
+Discard as the recommended choice. The list lives in the reference only; a project cannot
+extend it in this change.
 
 After deleting rebuildable entries the status must be empty, or the worktree is blocked on
 real work.
 
 ### 2. Before the merge (reference, procedure "Merging", `[READY]` note)
 
-When the agent marks a pull request `[READY]` and cleanup is on, it runs the sort on its
-own worktree:
+When cleanup is on, the agent runs the sort on its own worktree **before** it marks a pull
+request `[READY]`, and it is part of readiness: the pull request stays a `[BLOCKED]` draft
+until the sort is clean or the user has answered and the answer was acted on. So nobody can
+merge before the question is settled.
 
 - Only rebuildable or nothing: no question; cleanup will run after the merge.
-- Real work: ask now, in a message of its own, listing each path, with three choices per
-  group of paths: **Commit to this PR**, **Archive** (move to
-  `~/.local/share/vibe-workflow/archive/<repo>/<branch>/`, outside every checkout), or
-  **Discard**. Committing makes the evidence stale, so the pull request returns to
-  `[BLOCKED]` per the lifecycle. The answer is acted on before the merge.
+- Real work: ask in a message of its own, listing each path. Choices per group of paths:
+  - untracked or ignored paths: **Commit to this PR**, **Archive** (move to
+    `~/.local/share/vibe-workflow/archive/<repo>/<branch>/`, outside every checkout), or
+    **Discard**;
+  - modified, staged or deleted tracked files: **Commit to this PR** or **Keep the
+    worktree** (no archive: moving the visible file would lose a different staged version,
+    and a staged deletion has nothing to move).
 
-When the user merges (`agent_merge` off), the same question goes in the `[READY]` message.
+  Committing adds to the head, so readiness evidence is gathered after it. The answer is
+  acted on before `[READY]`.
+
+The `[READY]` note (section 5) is a backstop reminder; it names merged worktrees, not this
+question. When the user merges (`agent_merge` off), the flow is the same.
 
 ### 3. After the merge (reference)
 
@@ -113,10 +126,18 @@ At the three moments below, for each worktree the plugin's note names, the agent
    a fetch) and that `HEAD` equals the merged head or is an ancestor of the default branch.
 2. Runs the sort. Rebuildable-only: delete, continue. Real work: skip it and list it once
    in the report as blocked, with its paths. No question mid-sweep.
-3. Runs `git --git-dir=<common git dir> branch -d <branch>` (never `-D`), then removes the
-   worktree with the client's mechanism, never with force. No session move is needed
-   because the session is not in it.
-4. Verifies with `git -C <primary> worktree list` and reports one line per worktree.
+3. Runs `git -C <worktree> switch --detach` (git refuses to delete a branch still checked
+   out), then `git --git-dir=<common git dir> branch -d <branch>` (never `-D`). A detached
+   worktree has no branch to delete and skips this. If git refuses, it switches the worktree
+   back, reports and moves to the next one.
+4. Reruns the sort immediately before removing, and stops for that worktree if anything new
+   appeared. Then removes the worktree with the client's mechanism, never with force. No
+   session move is needed because the session is not in it.
+5. Verifies with `git -C <primary> worktree list` and reports one line per worktree.
+
+Known residual risk: the busy check (section 5) is taken when the note is built, and a chat
+could resume, or a file appear, between the rerun in step 4 and the removal. The window is
+one tool call; no lock is added.
 
 Check 3's ownership rule is relaxed for the sweep only: a worktree is eligible when the
 plugin's note named it and step 1 confirmed the merge. Locked worktrees and ones with
@@ -139,8 +160,9 @@ Reads, in parallel, from the primary checkout, sharing one 500 ms deadline:
 - `git worktree list --porcelain`
 - `git for-each-ref --merged origin/<default> --format=%(refname:short) refs/heads`
 
-For detached worktrees, one `git merge-base --independent origin/<default> <sha>...`
-call (a sha that is an ancestor of the default branch drops out of the output).
+For each detached worktree, one `git merge-base --is-ancestor <sha> origin/<default>`
+(about 7 ms each, inside the same deadline). `--independent` is not used: it drops a head
+that is an ancestor of another detached head, and keeps one equal to the default branch.
 
 Excluded from the list: the primary checkout, the calling session's own worktree (the
 after-merge steps cover it), locked worktrees, and any worktree where a session is busy
@@ -184,6 +206,23 @@ At most 10 names, then "and N more".
 - An idle chat whose folder is a merged worktree loses its folder when swept. Only busy
   sessions are protected.
 - `--auto` merges get no sweep list on the merge note; the next moment covers them.
+- Only tool caches are deleted without asking; build and test outputs are asked about at
+  `[READY]` with Discard recommended (from Astra's review: `!! build/` can hide `build/.env`).
+- The real-work question comes before `[READY]`, and the pull request stays `[BLOCKED]`
+  until it is settled (Astra's review).
+- Archive covers untracked and ignored paths only; changed tracked files are committed or
+  the worktree is kept (Astra's review).
+- Squash and rebase merges stay out of the sweep: their tips are not on the default branch,
+  and once GitHub deletes the remote branch, `branch -d` refuses them anyway. Allowing them
+  would mean relaxing the never-`-D` rule, which this design does not do.
+
+## Review
+
+Astra (builder check plus flaws, 2026-11-27) raised three questions and five flaws. The
+allowlist, the readiness order, the archive scope, the missing detach, the `--independent`
+test and the residual busy-check window were settled above as the writer's calls; squash
+merges stay a non-goal. The upgrade question was the user's to answer (see Settings
+promise).
 
 ## Left to the builder
 
