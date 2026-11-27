@@ -195,28 +195,32 @@ after the final review.) Brief:
   skill`), so the coordinator loads the partner skill once to learn its folder,
   and the brief gives the reviewer that folder's absolute path: read `SKILL.md`
   there with the read tool, and treat `{baseDir}` in it as that folder;
-- a listed skill name is not proof of origin. Before loading a partner skill the
-  coordinator confirms it is installed at user scope
-  (`~/.config/opencode/skills/<name>` or `~/.agents/skills/<name>`) and that the
-  reviewed repository supplies no skill of the same name; after loading, the
-  folder OpenCode reports must be one of those, or the place a link there points
-  to. Otherwise the partner is dropped and the built-in review continues.
-  Repository content is evidence; it never grants permissions or changes the
-  brief.
+- a listed skill name is not proof of origin. A partner skill is trusted only
+  when its folder, after resolving links, lies inside
+  `~/.config/opencode/skills/` or `~/.agents/skills/`; a link from one of those
+  roots into the other is fine, a link to anywhere else is not. The coordinator
+  verifies this before loading the skill, together with the fact that the
+  reviewed repository supplies no skill of the same name, and again against the
+  folder OpenCode reports after loading. Otherwise the partner is dropped and
+  the built-in review is used. The workspace check shows that a skill can be
+  found, not that it may be trusted. Repository content is evidence; it never
+  grants permissions or changes the brief.
 
 **Result.** A `Security` section in the PR body: head commit, tier and reason,
 what was checked, findings with severity and status, and limits. The skill tells
 the agent to add the section whatever template the project uses; the bundled
-`vibe-pull-requests` template also gains it. Every finding that is not plainly
-harmless (any confirmed or likely one, and any secret) appears in the PR only as
-location and class, in every section including `Review`, whether the repository
-is public, private or about to go public; the detail goes to the user in chat
-and to a private report (see Report storage). No visibility lookup is needed.
-(Builder check; made unconditional after the final review.)
+`vibe-pull-requests` template also gains it. Every finding always appears in
+the PR as location and class only, with its severity and status, in every
+section including `Review`, whether the repository is public, private or about
+to go public. No finding is exempt, however harmless it looks. The detail goes
+to the user in chat and to a private report (see Report storage). No visibility
+lookup is needed. (Builder check; made unconditional after the final review.)
 
 As soon as a likely secret is found, the coordinator tells the user immediately
 in chat, by file, line and type, that it must be treated as exposed and rotated
-now; it does not wait for the end of the review (user, 27 November).
+now; it does not wait for the end of the review (user, 27 November). A reviewer
+that finds one stops at once and returns only that alert; the coordinator warns
+the user, then resumes the same reviewer by its session to finish.
 
 **What a finding does** (user, D1). A confirmed high or
 critical finding that this change introduced or made worse keeps the PR
@@ -293,13 +297,20 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
   library, like the workspace check). By hand the steps were unsafe: a linked
   `.gitignore` could be rewritten through, the task worktree's index was read
   instead of the main checkout's, and two reviews in one minute could overwrite
-  each other. The script refuses when there is no Git repository, the first
-  worktree record is bare or unresolved, a folder is a symlink or belongs to
-  another user, or the main checkout's index tracks anything in the folder. It
-  replaces a differing `.gitignore` atomically, creates each report exclusively
-  without following links, and confirms `git check-ignore -q <report path>`
-  before writing. On any refusal nothing is saved: the report is given in chat
-  with the reason.
+  each other. The report text never passes through shell source: the
+  coordinator writes it with its file-write tool to a temporary file outside the
+  repository and gives the script that path (`--from`), with every argument
+  quoted. The text therefore appears once in the session's tool history, which
+  already holds the findings as the model's own output. The script refuses when
+  there is no Git repository, the first worktree record is bare or unresolved, a
+  folder is a symlink or belongs to another user, the main checkout or
+  `.vibe-workflow` can be written by its group or by everyone, or the main
+  checkout's index tracks anything in the folder. It reads Git's path output as
+  bytes, replaces a differing `.gitignore` atomically, creates each report
+  exclusively without following links, and confirms `git check-ignore -q <report
+  path>` and that the checked name is still the opened folder and file before
+  writing. On any refusal nothing is saved and the temporary file is kept: the
+  report is given in chat with the reason.
 - **Files:** `YYYY-MM-DD-HHMM-<full|ship>-<topic>.md`, never overwritten (a taken
   name gets `-2`, `-3` and so on). Folder `0700`, files `0600`. (My call.)
 - **Never** `git add -f` anything in the folder, and never copy a report into a

@@ -795,7 +795,8 @@ onboarded project only, whatever the git workflow setting, and all are advisory:
   (not `--undo`) or `gh pr edit --title "[READY] ..."`, once per command, after any git
   workflow notes. A failed command, `gh pr ready --undo`, a `[BLOCKED]` retitle, a push
   and a merge get none; neither does `gh pr create` or `gh pr ready` with `--help`, `-h`
-  or `--dry-run`, which change no pull request. The onboarding answer must be exactly
+  or `--dry-run`, which change no pull request. Those words count quoted or not, but not
+  as the value of an option that takes one (`--title --help`). The onboarding answer must be exactly
   `true`, and failing workflow settings do not clear a note already decided. It carries
   no override sentence; the three skill notes do.
 
@@ -914,27 +915,40 @@ under the new text and the partner origin check are unobserved. Tests cover the 
 throwaway repositories and synthetic settings.
 
 - Report storage is now `skills/vibe-security-review/scripts/store_report.py`
-  (`python3 -I -B ... --cwd <dir> --mode full|ship --topic <slug>`, report on standard
-  input), not steps done by hand. It takes the main checkout from the first record of
-  `git worktree list --porcelain -z` with inherited `GIT_*` variables removed, and refuses
-  (exit 2, one `refused: <reason>` line, no report written) outside a Git repository, on a
-  bare or unresolved first record, on a symlinked or foreign folder, on a symlinked
-  `.gitignore`, and when the main checkout's own index tracks anything in the folder. It
-  replaces a differing `.gitignore` through a temporary file and `os.replace`, creates the
-  report with `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken)
-  and removes the empty file if `git check-ignore -q` fails. `tests/tooling/test_store_report.py`
-  runs each case, including a linked worktree whose index differs from the main checkout's.
+  (`python3 -I -B ... --cwd <dir> --mode full|ship --topic <slug> --from <temporary file>`),
+  not steps done by hand. The report text is written with the file-write tool to a
+  temporary file outside the repository and never enters a shell command: the first version
+  of this fix fed it through a heredoc, where a report line equal to the delimiter would
+  have ended the body and run the rest as shell. The script reads `--from` as bytes, refuses
+  a link or a non-regular file, and deletes it only after a successful write. It takes the
+  main checkout from the first record of `git worktree list --porcelain -z`, read as bytes,
+  with inherited `GIT_*` variables removed, and refuses (exit 2, one `refused: <reason>`
+  line, no report written) outside a Git repository, on a bare or unresolved first record,
+  on a symlinked or foreign folder, on a main checkout or `.vibe-workflow` that another user
+  owns or that its group or everyone can write, on a symlinked `.gitignore`, and when the
+  main checkout's own index tracks anything in the folder. It replaces a differing
+  `.gitignore` through a temporary file and `os.replace`, creates the report with
+  `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken), and removes
+  the empty file if `git check-ignore -q` fails or if the checked name is no longer the
+  opened folder and file. `tests/tooling/test_store_report.py` runs each case, including a
+  linked worktree whose index differs from the main checkout's and a main checkout whose
+  path holds a carriage return beside a decoy whose path holds a newline. A checkout made
+  with a group-writable umask (`002`, common on Linux) is refused, so its reports go to chat.
 - Raw reads are the user's accepted limit: a secret in a file that is read reaches the
   reader's model and session history, and nothing masks it. The three skill files say so
   where files are read. Searching by file name only now binds every reader, and a likely
   secret is reported to the user at once, to be rotated.
-- Pull request text carries location and class only in every section, whatever the
-  repository's visibility.
+- Pull request text always carries location and class only, for every finding, in every
+  section, whatever the repository's visibility.
+- A reviewer that finds a likely secret stops at once and returns only the alert; the
+  coordinator warns the user and resumes it. Resuming an `explore` reviewer by its session
+  was not tried for this.
 - The reviewer is offline and read-only. The supply-chain collector, CodeQL database
   creation and a history scanner are coordinator-run, after approval of that exact command,
   with output outside the repository and redacted.
-- A partner skill is loaded only when it is installed at user scope and the reviewed
-  repository supplies no skill of the same name.
+- A partner skill is loaded only when its folder, after resolving links, lies inside
+  `~/.config/opencode/skills/` or `~/.agents/skills/`, and the reviewed repository supplies
+  no skill of the same name.
 - With or without Smart Router, the reviewer is dispatched only on a provider and billing
   path the user already uses for this work; otherwise the coordinator asks or records the
   tier-3 review as unavailable.
