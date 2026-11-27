@@ -1598,6 +1598,8 @@ test("deleting a child restores its cancelled shell grace and ignores a late sta
   await h.start("child_1")
   await tick()
   assert.equal(h.titles.get("ses_1"), quiet)
+  for (let i = 0; i < 64; i++) h.push({ type: "shell.exited", data: { id: `sh_unrelated_${i}` } })
+  await settle()
   const reads = h.calls.run.length
   await h.emit("session.deleted", "child_1")
   await h.start("child_1")
@@ -1606,6 +1608,47 @@ test("deleting a child restores its cancelled shell grace and ignores a late sta
   await tick(1)
   assert.equal(h.titles.get("ses_1"), waiting)
   assert.equal(h.calls.run.length, reads)
+})
+
+test("deletion during a stale busy-child check re-arms shell grace", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  h.facts.listRaw = { data: [{ id: "child_1", get time() {
+    h.push({ type: "session.deleted", data: { sessionID: "child_1" } })
+    return { busy: Date.now() }
+  } }] }
+  await exited(h, "sh_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("a legacy snapshot after deletion still holds WAITING until the shell exits", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await h.emit("session.deleted", "child_1")
+  await h.idle([{ kind: "shell", sessionID: "child_1", shellID: "sh_1" }])
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await exited(h, "sh_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("a late tool result cannot bind a deleted root even if the host still returns it", async (t) => {
+  const h = await host(t)
+  await h.emit("session.deleted")
+  await h.write(SPEC)
+  assert.equal(h.storage.data.has(KEY), false)
+  assert.deepEqual(h.calls.get, [])
 })
 
 test("deletion before a legacy shell exit does not label while another shell runs", async (t) => {

@@ -59,7 +59,7 @@ const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map()
-  const exited = new Map(), deleted = new Set()
+  const exited = new Set(), deleted = new Set(), endedShellOwners = new WeakMap()
   const shellGraces = new Map(), shellRoots = new Map(), shellStarts = new Map(), taskRevisions = new WeakMap()
   let taskRevision = 0
   const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
@@ -82,7 +82,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   // session was forgotten after it was queued (its generation changed) publishes and writes nothing.
   const generation = (sessionID) => generations.get(sessionID) ?? 0
   const admit = (sessionID, revision = preference.revision) => ({ generation: generation(sessionID), revision })
-  const current = (sessionID, admitted) => !controller.signal.aborted && generation(sessionID) === admitted.generation &&
+  const current = (sessionID, admitted) => !controller.signal.aborted && !deleted.has(sessionID) &&
+    generation(sessionID) === admitted.generation &&
     preference.revision === admitted.revision
   const enqueue = (sessionID, job, admitted = admit(sessionID)) => {
     const grace = shellGraces.get(sessionID)
@@ -441,7 +442,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   function track(shellID, root, owner = root) {
-    if (exited.has(shellID) || deleted.has(owner) || deleted.has(root) || controller.signal.aborted) return false
+    if (exited.has(shellID) || deleted.has(root) || controller.signal.aborted) return false
     const entry = sessions.get(root), previous = shells.get(shellID)
     // A local tool result may arrive before the broadcast resolves its owning root.
     if (previous && (previous.entry || (!entry && previous.root === root))) return false
@@ -549,10 +550,20 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
 
   function shellExited(shellID) {
     if (typeof shellID !== "string") return
+    exited.add(shellID)
+    if (exited.size > MAX_SHELLS) exited.delete(exited.values().next().value)
     const shell = shells.get(shellID)
-    if (!exited.has(shellID)) exited.set(shellID, shell)
-    if (exited.size > MAX_SHELLS) exited.delete(exited.keys().next().value)
-    if (shells.delete(shellID)) scheduleShellGrace(shell)
+    if (!shells.delete(shellID)) return
+    const { root, owner } = shell, entry = sessions.get(root)
+    if (!entry?.task || (shell.entry && shell.entry !== entry)) return
+    if (owner !== root && !deleted.has(owner)) {
+      const owners = endedShellOwners.get(entry) ?? new Set()
+      owners.delete(owner)
+      owners.add(owner)
+      if (owners.size > MAX_SHELLS) owners.delete(owners.values().next().value)
+      endedShellOwners.set(entry, owners)
+    }
+    scheduleShellGrace(root, entry)
   }
 
   function sessionDeleted(sessionID) {
@@ -560,13 +571,16 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     deleted.add(sessionID)
     if (deleted.size > MAX_GENERATIONS) deleted.delete(deleted.values().next().value)
     forget(sessionID)
-    // A cancelled shell can start a turn for the child just before deletion. That turn may never emit an end.
-    for (const shell of exited.values()) if (shell?.owner === sessionID) scheduleShellGrace(shell)
+    // A cancelled shell can start a turn just before deletion, and an in-flight idle check may still see it.
+    for (const [root, entry] of sessions) {
+      if (!endedShellOwners.get(entry)?.delete(sessionID) || hasShell(root)) continue
+      cancelShellGrace(root)
+      scheduleShellGrace(root, entry)
+    }
   }
 
-  function scheduleShellGrace(shell) {
-    const { root } = shell, entry = sessions.get(root)
-    if (!entry?.task || entry.silenced || (shell.entry && shell.entry !== entry) || hasShell(root) || activeShellGrace(root)) return
+  function scheduleShellGrace(root, entry) {
+    if (!entry.task || entry.silenced || hasShell(root) || activeShellGrace(root)) return
     const grace = { admission: admit(root), timer: null, queued: 0 }
     const sameGrace = () => shellGraces.get(root) === grace
     const still = () => sameGrace() && activeShellGrace(root) && sessions.get(root) === entry &&
