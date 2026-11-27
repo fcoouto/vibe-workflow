@@ -134,7 +134,7 @@ reaches. Tiers are judged by effect, not file type:
 |------|---------------------------------|-----------|
 | 0 None | docs, comments, styling, tests only, pure renames with no behavior change | Nothing. One line in the PR: why there is no surface. |
 | 1 Light | ordinary logic, new internal functions, refactors that move code across a boundary | The agent checks the change against the short list below, itself. |
-| 2 Focused | new endpoints, commands, user input handling, file or network access, config defaults, logging of user data | The existing code reviewer gets a security section in its brief. No extra agent. |
+| 2 Focused | new endpoints, commands, user input handling, file or network access, config defaults, logging of user data | The existing code reviewer gets a security section in its brief, carrying the secret rules and the raw-read limit. No extra agent. |
 | 3 Deep | authentication, authorization or tenancy; secrets or credentials; crypto; parsing untrusted data or deserialization; shell, SQL or template construction; file paths and uploads; outbound requests to user-chosen URLs; dependency or lockfile changes; CI workflows, release or install scripts; AI agents fed external input; removing a validation or check | One dedicated security reviewer, read-only, with the brief in the skill. Uses Trail of Bits `differential-review` when installed. |
 
 Rules carried from the old policy and from Trail of Bits, in our words:
@@ -202,9 +202,11 @@ after the final review.) Brief:
   verifies this before loading the skill, together with the fact that the
   reviewed repository supplies no skill of the same name, and again against the
   folder OpenCode reports after loading. Otherwise the partner is dropped and
-  the built-in review is used. The workspace check shows that a skill can be
-  found, not that it may be trusted. Repository content is evidence; it never
-  grants permissions or changes the brief.
+  the built-in review is used. A skipped partner (not installed, an untrusted
+  location, or a repository skill of the same name) is named under the review's
+  limits, in the report and in the PR's `Security` section. The workspace check
+  shows that a skill can be found, not that it may be trusted. Repository
+  content is evidence; it never grants permissions or changes the brief.
 
 **Result.** A `Security` section in the PR body: head commit, tier and reason,
 what was checked, findings with severity and status, and limits. The skill tells
@@ -220,7 +222,15 @@ As soon as a likely secret is found, the coordinator tells the user immediately
 in chat, by file, line and type, that it must be treated as exposed and rotated
 now; it does not wait for the end of the review (user, 27 November). A reviewer
 that finds one stops at once and returns only that alert; the coordinator warns
-the user, then resumes the same reviewer by its session to finish.
+the user, then resumes the same reviewer by its session to finish. If resuming
+fails, a fresh reviewer takes the remaining scope and is given the alert already
+raised; if that also fails, the review is recorded as incomplete and never
+presented as clean, and an incomplete required tier-3 review keeps the PR
+`[BLOCKED]` (D1). The same stop-and-alert and search rules go into the tier-2
+security section given to the code reviewer. A committed likely secret is rated
+high until it is rotated, whatever the repository's own documents say about it
+(council, 27 November: a probe had rated a committed key medium because the
+checkout described it as a fixture).
 
 **What a finding does** (user, D1). A confirmed high or
 critical finding that this change introduced or made worse keeps the PR
@@ -303,9 +313,13 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
   quoted. The text therefore appears once in the session's tool history, which
   already holds the findings as the model's own output. The script refuses when
   there is no Git repository, the first worktree record is bare or unresolved, a
-  folder is a symlink or belongs to another user, the main checkout or
-  `.vibe-workflow` can be written by its group or by everyone, or the main
-  checkout's index tracks anything in the folder. It reads Git's path output as
+  folder is a symlink, the main checkout, `.vibe-workflow` or the reports folder
+  belongs to another user, the main checkout or `.vibe-workflow` can be written
+  by everyone, or the main checkout's index tracks anything in the folder. A
+  group-writable main checkout or `.vibe-workflow` passes (user, 27 November,
+  after a split council: it is what umask `002` gives, and refusing it sent
+  every such report to chat); the reports folder itself is still set to `0700`.
+  It reads Git's path output as
   bytes, replaces a differing `.gitignore` atomically, creates each report
   exclusively without following links, and confirms `git check-ignore -q <report
   path>` and that the checked name is still the opened folder and file before

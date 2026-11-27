@@ -925,7 +925,7 @@ throwaway repositories and synthetic settings.
   with inherited `GIT_*` variables removed, and refuses (exit 2, one `refused: <reason>`
   line, no report written) outside a Git repository, on a bare or unresolved first record,
   on a symlinked or foreign folder, on a main checkout or `.vibe-workflow` that another user
-  owns or that its group or everyone can write, on a symlinked `.gitignore`, and when the
+  owns or that everyone can write, on a symlinked `.gitignore`, and when the
   main checkout's own index tracks anything in the folder. It replaces a differing
   `.gitignore` through a temporary file and `os.replace`, creates the report with
   `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken), and removes
@@ -933,8 +933,9 @@ throwaway repositories and synthetic settings.
   opened folder and file; it removes that entry only while it is still the file it created,
   and leaves a replacement alone. `tests/tooling/test_store_report.py` runs each case, including a
   linked worktree whose index differs from the main checkout's and a main checkout whose
-  path holds a carriage return beside a decoy whose path holds a newline. A checkout made
-  with a group-writable umask (`002`, common on Linux) is refused, so its reports go to chat.
+  path holds a carriage return beside a decoy whose path holds a newline. A group-writable
+  main checkout or `.vibe-workflow` (umask `002`, common on Linux) is accepted, by the user's
+  decision after a split council; the reports folder is `0700` either way.
 - Raw reads are the user's accepted limit: a secret in a file that is read reaches the
   reader's model and session history, and nothing masks it. The three skill files say so
   where files are read. Searching by file name only now binds every reader, and a likely
@@ -942,8 +943,15 @@ throwaway repositories and synthetic settings.
 - Pull request text always carries location and class only, for every finding, in every
   section, whatever the repository's visibility.
 - A reviewer that finds a likely secret stops at once and returns only the alert; the
-  coordinator warns the user and resumes it. Resuming an `explore` reviewer by its session
-  was not tried for this.
+  coordinator warns the user and resumes it. If resuming fails, a fresh reviewer takes the
+  remaining scope with the alert already raised; if that fails too, the review is recorded
+  as incomplete, never as clean. Resuming an `explore` reviewer by its session was not
+  tried for this.
+- A committed likely secret is rated high until it is rotated, whatever the repository's
+  documents say. The second secret probe above rated the fixture key medium because the
+  clone's copy of this file described it; that rating no longer follows from the text.
+- The tier-2 security section given to the code reviewer carries the secret rules and the
+  raw-read limit, and a skipped partner skill is named under the review's limits.
 - The reviewer is offline and read-only. The supply-chain collector, CodeQL database
   creation and a history scanner are coordinator-run, after approval of that exact command,
   with output outside the repository and redacted.
