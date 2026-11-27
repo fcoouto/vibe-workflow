@@ -120,8 +120,10 @@ test("the cleanup reference rechecks before it acts and sorts once more before i
   const order = text.slice(text.indexOf("## Order"), text.indexOf("## Archive"))
   const step = (n) => order.slice(order.indexOf(`\n${n}. `), order.indexOf(`\n${n + 1}. `))
   const act = step(3)
-  for (const phrase of ["manifest", "digest", "skip the archive command", "git switch --detach"]) assert.ok(act.includes(phrase), phrase)
-  assert.ok(act.indexOf("manifest") < act.indexOf("archive command"), "the recheck comes before the first action")
+  for (const phrase of ["manifest", "digest", "skip the archive command", "git switch --detach", "very next command",
+    "immediately before it removes that path"]) assert.ok(act.includes(phrase), phrase)
+  const order3 = ["manifest", "archive command", "discard command", "caches command", "print no row"].map((phrase) => act.indexOf(phrase))
+  assert.ok(order3.every((index, i) => index >= 0 && (i === 0 || order3[i - 1] < index)), "recheck, archive, discard, caches, empty")
   const remove = step(6)
   for (const phrase of ["sort once more", "absolute", "exit 0 and print no row"]) assert.ok(remove.includes(phrase), phrase)
 })
@@ -129,7 +131,8 @@ test("the cleanup reference rechecks before it acts and sorts once more before i
 test("the sweep settles the client and the worktree's identity before it changes anything", async () => {
   const text = await read("references/worktree-cleanup.md")
   const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees"))
-  for (const phrase of ["Codex-managed", "--show-toplevel", "--path-format=absolute --git-common-dir", "symbolic-ref --short -q HEAD",
+  for (const phrase of ["Codex-managed", "leftovers.py' identity", "--primary", "--detached", "symbolic link", "backlink",
+    "no other registered worktree", "refused: the worktree's Git pointer is broken", "Never repair", "caches command",
     "worktree repair", "is not enough", "exit 0 and print no row"]) {
     assert.ok(sweep.includes(phrase), phrase)
   }
@@ -138,8 +141,20 @@ test("the sweep settles the client and the worktree's identity before it changes
   const at = (phrase) => { const index = steps.indexOf(phrase); assert.ok(index >= 0, phrase); return index }
   for (const later of ["worktree repair", "gh pr list", "switch --detach", "branch -d", "rebuildable"]) {
     assert.ok(at("Codex-managed") < at(later), `the client check comes before ${later}`)
-    assert.ok(at("--show-toplevel") < at(later) || later === "worktree repair", `identity comes before ${later}`)
+    assert.ok(at("leftovers.py' identity") < at(later), `identity comes before ${later}`)
   }
-  assert.ok(steps.lastIndexOf("--git-common-dir") > at("worktree repair"), "the common dir is checked again after a repair")
+  assert.ok(steps.lastIndexOf("identity") > at("worktree repair"), "identity is checked again after a repair")
   assert.ok(first("Codex-managed") >= 0)
+})
+
+test("the cleanup reference deletes only through the script, one rechecked path at a time", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  assert.doesNotMatch(text, /\brm\b/, "no shell delete in the rules")
+  for (const phrase of ["leftovers.py' discard", "--digest '<digest>'", "leftovers.py' caches", '{"discarded": ', "never by a shell command",
+    "immediately before it removes that path", "tracked or staged", "never through a symbolic link", '"tracked": 0',
+    "Never fall back to one choice for the whole row", "unreadable folder", "named `.git`"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  const procedure = await read("references/procedure.md")
+  assert.doesNotMatch(procedure, /\brm\b/)
 })
