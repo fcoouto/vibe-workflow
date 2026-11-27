@@ -302,3 +302,33 @@ Exact note wording, how the parallel reads and deadline are shared with existing
 whether `ctx.session.list` gives directories (if not, say so and fall back to excluding
 nothing beyond the caller's own worktree, recorded as a known risk), and the reference's
 layout.
+
+## Addendum: what changed during the build (2026-11-28)
+
+Task reviews and the final security review changed parts of this design. Where this
+addendum and the sections above disagree, the addendum and the shipped reference
+(`skills/vibe-pull-requests/references/worktree-cleanup.md`) win.
+
+- **Leftover handling runs through `skills/vibe-pull-requests/scripts/leftovers.py`**
+  (`sort`, `expand`, `manifest`, `discard`, `caches`, `identity`), not through hand-run
+  `git status` and `rm`. Reviews showed that quoted names, partial listings, link-following
+  and status changes made the prose steps unsafe. The rebuildable list now lives in the
+  script and the reference (section 1 said "the reference only").
+- **Discard and cache removal** recheck each path's git status and content digest just
+  before removing it, through descriptors that follow no link and cross no device. Any
+  nested `.git`, an `assume-unchanged` or `skip-worktree` entry, or a paused git operation
+  blocks cleanup. A failed sort may be answered with **Keep the worktree**, so `[READY]` is
+  never blocked for good.
+- **Commit** is offered only for untracked paths, and only when exactly the approved paths
+  are staged and committed.
+- **Archive** (`archive.py`) takes `--head` and refuses unless the worktree's registration,
+  backlink, live branch and HEAD match the confirmed merge. Detached worktrees are not
+  archived.
+- **The note** names entries as a JSON array, only for branches with their own pushed
+  upstream (never-started branches are not named), with at most 8 concurrent detached
+  checks. It is suppressed when any running session lacks a folder while others report one.
+  Being named is a candidate, never authorization.
+- **The sweep never runs `git worktree repair`** (section 4 said it repairs first): a broken
+  worktree is skipped and reported with the command. Hooks are disabled for the detach and
+  branch delete; user-configured filter drivers are an accepted residual.
+- Every ruling behind these changes, with its cost if wrong, is listed in the pull request.
