@@ -2,7 +2,7 @@
 
 **Status:** Known-pressure protection, starting thresholds, and [implementation plan](../plans/2026-11-26-subscription-usage-balance.md) approved, 26 November 2026. Implementation is authorized in the task worktree; activation is not.
 
-**Basis:** [Council result](../../vibe-council/sessions/95f3259db853_subscription-usage-balance/result.md) and the Claude and Go exhaustion changes merged in [PR #406](https://github.com/fcoouto/vibe-workflow/pull/406). This draft supersedes the [earlier pace-band proposal](2026-11-20-subscription-usage-balancing-design.md) as the design under review, not as shipped behavior.
+**Basis:** [Council result](../../vibe-workflow/council-sessions/2026-11-26_subscription-usage-balance/result.md) and the Claude and Go exhaustion changes merged in [PR #406](https://github.com/fcoouto/vibe-workflow/pull/406). This draft supersedes the [earlier pace-band proposal](2026-11-20-subscription-usage-balancing-design.md) as the design under review, not as shipped behavior.
 
 ## Goal and boundaries
 

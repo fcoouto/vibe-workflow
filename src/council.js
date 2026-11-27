@@ -1,4 +1,4 @@
-import { registerSkill } from "./onboarding.js"
+import { registerSkill, registerSkillCommand } from "./onboarding.js"
 
 const NO_AUTHORITY = { admission: false, reservation: false, spend_permit: false }
 const SEAT = /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/
@@ -168,19 +168,9 @@ export async function registerCouncil(ctx, { roster }) {
     },
     execute: async (request, { signal } = {}) => ({ content: JSON.stringify(await roster(request, signal)) }),
   }))
-  if (typeof ctx.command?.transform !== "function") return
-  const withoutMentions = (items) => items?.map(({ mention, ...item }) => item)
-  await ctx.command.transform((editor) => editor.add({
+  await registerSkillCommand(ctx, {
     name: "vibe-council",
     description: "Run the council on a set of decisions.",
-    execute: async ({ sessionID, prompt, delivery }) => {
-      const extra = typeof prompt?.text === "string" ? prompt.text.trim() : ""
-      await ctx.session.prompt({
-        ...prompt, sessionID,
-        text: extra ? `Use the vibe-council skill. ${extra}` : "Use the vibe-council skill.",
-        files: withoutMentions(prompt?.files), agents: withoutMentions(prompt?.agents),
-        skills: withoutMentions(prompt?.skills), delivery,
-      })
-    },
-  }))
+    line: "Use the vibe-council skill.",
+  })
 }

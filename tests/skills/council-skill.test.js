@@ -16,7 +16,7 @@ test("skill frontmatter matches the registration pattern and links the procedure
 
 test("procedure carries the process, roster and failure rules", async () => {
   hasAll(await read("references/procedure.md"), [
-    "vibe_council_roster", 'agent: "explore"', "#<variant>", "docs/vibe-council/sessions/",
+    "vibe_council_roster", 'agent: "explore"', "#<variant>", "docs/vibe-workflow/council-sessions/<date>_<title>/",
     "shasum -a 256", '{"v":1}', '"count"', "fewer_seats", "Scores: Artificial Analysis via OpenRouter",
     "no vote", "did not vote", "Round 2", "worktree", "paid overflow", "call `vibe_council_roster` again",
     "| Seat | Model ID | Name | Variant | Paid overflow | Lab | Score |",
@@ -43,6 +43,20 @@ test("brief template carries the member rules", async () => {
     "Answer independently", "optimistic", "KEEP | CHANGE", "Compounding", "Top 3",
     "500 words", "Forbidden paths", "15 tool calls",
   ])
+})
+
+test("records live under docs/vibe-workflow/council-sessions and carry no hash in the folder name", async () => {
+  for (const name of ["SKILL.md", "references/procedure.md", "references/brief-template.md", "references/record-template.md"]) {
+    const text = await read(name)
+    assert.ok(!text.includes("docs/vibe-council"), `${name}: old path`)
+    assert.ok(!text.includes("<hash12>") && !text.includes("draft_"), `${name}: hash folder`)
+  }
+  hasAll(await read("references/record-template.md"), ["docs/vibe-workflow/council-sessions/<date>_<title>/"])
+  for (const name of ["../../README.md", "../../PRODUCT.md"]) {
+    const text = await readFile(new URL(name, root), "utf8")
+    assert.ok(text.includes("docs/vibe-workflow/council-sessions/<date>_<title>/"), `${name}: new path`)
+    assert.ok(!text.includes("docs/vibe-council"), `${name}: old path`)
+  }
 })
 
 test("record template carries the record fields", async () => {

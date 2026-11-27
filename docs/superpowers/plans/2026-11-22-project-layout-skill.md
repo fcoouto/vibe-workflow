@@ -8,7 +8,7 @@
 
 **Tech Stack:** Markdown skill files, JavaScript ES modules (`node --test`), Python 3.11 `unittest`.
 
-**Spec:** `docs/superpowers/specs/2026-11-22-project-layout-skill-design.md` (council record: `docs/vibe-council/sessions/7d1638d3e1cb_file-layout-skill/result.md`)
+**Spec:** `docs/superpowers/specs/2026-11-22-project-layout-skill-design.md` (council record: `docs/vibe-workflow/council-sessions/2026-11-21_file-layout-skill/result.md`)
 
 ## Global Constraints
 
@@ -35,7 +35,7 @@
 ### Task 1: Task branch and design record
 
 **Files:**
-- Create (already written): `docs/superpowers/specs/2026-11-22-project-layout-skill-design.md`, `docs/superpowers/plans/2026-11-22-project-layout-skill.md`, `docs/vibe-council/sessions/7d1638d3e1cb_file-layout-skill/` (`brief.md`, `answers/*.md`, `result.md`)
+- Create (already written): `docs/superpowers/specs/2026-11-22-project-layout-skill-design.md`, `docs/superpowers/plans/2026-11-22-project-layout-skill.md`, `docs/vibe-workflow/council-sessions/2026-11-21_file-layout-skill/` (`brief.md`, `answers/*.md`, `result.md`)
 
 - [ ] **Step 1: Create the branch**
 
@@ -45,7 +45,7 @@ Expected: `Switched to a new branch 'feat/project-layout-skill'`
 - [ ] **Step 2: Commit the records**
 
 ```bash
-git add docs/superpowers docs/vibe-council
+git add docs/superpowers docs/vibe-workflow/council-sessions
 git commit -m "docs: design, plan and council record for the project layout skill"
 ```
 

@@ -137,7 +137,7 @@ def _frontmatter_version(path):
 
 
 def integration_present(spec, config, home):
-    kind, base = spec["kind"], home / ".config/opencode"
+    kind, base, folder = spec["kind"], home / ".config/opencode", None
     if kind == "plugin":
         found = any(spec["match"] in name for name in _plugin_names(config))
     elif kind == "mcp":
@@ -145,7 +145,11 @@ def integration_present(spec, config, home):
         servers = mcp.get("servers") if isinstance(mcp, dict) else None
         found = isinstance(mcp, dict) and (spec["name"] in mcp or isinstance(servers, dict) and spec["name"] in servers)
     elif kind == "skill":
-        found = (base / "skills" / spec["name"]).exists()
+        # OpenCode also reads the shared ~/.agents/skills folder; its own folder is looked at first.
+        # A folder without a SKILL.md file is not a skill, so an incomplete one never hides a usable copy.
+        folders = [root / spec["name"] for root in (base / "skills", home / ".agents/skills")]
+        folder = next((path for path in folders if (path / "SKILL.md").is_file()), None)
+        found = folder is not None
     elif kind == "file":
         found = (base / spec["path"]).is_file()
     else:
@@ -154,7 +158,7 @@ def integration_present(spec, config, home):
     if not found or not pattern:
         return found, None
     if pattern == "frontmatter" and kind == "skill":
-        return found, _frontmatter_version(base / "skills" / spec["name"] / "SKILL.md")
+        return found, _frontmatter_version(folder / "SKILL.md")
     return found, _cached_version(pattern, home)
 
 

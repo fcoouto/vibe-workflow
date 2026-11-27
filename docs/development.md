@@ -274,7 +274,7 @@ shows a notice once per session when it is false. Below-level picks get no feedb
 `allowed_efforts` and `allowed_harnesses` are removed on this branch (release 0.11.0); they were advertised
 in 0.10.0, so a caller still sending them gets `invalid_request`. Pinning stays outside the router. Design:
 `docs/superpowers/specs/2026-11-24-router-steering-design.md`; council:
-`docs/vibe-council/sessions/08d7b6126f45_router-constraints/result.md`.
+`docs/vibe-workflow/council-sessions/2026-11-24_router-constraints/result.md`.
 
 ## Onboarding in a worktree: what is known
 
@@ -425,7 +425,7 @@ the bundled function is named `ClaudeInstructions.register`.
 Until the change below, the Smart Router instruction was pushed on every step for every
 provider, and `claude-agent` sessions also got the entry `vibe-workflow-smart-router`,
 read from the second step on, following a council run
-(`docs/vibe-council/sessions/a129ba8dd79c_router-instruction-delivery/result.md`), which
+(`docs/vibe-workflow/council-sessions/2026-11-21_router-instruction-delivery/result.md`), which
 found that no channel reached a `claude-agent` session's first model call.
 
 PR #366's probes found one: the `subagent` tool's `model` parameter description, edited
@@ -712,3 +712,330 @@ A local level-2 review comparison with balancing off and on used the same live r
 returned the same advisory picks: no qualifying route on another subscription met the price and score bounds.
 Fixtures cover cross-subscription promotion; this live pass verified baseline behavior, not a promotion or behavior
 under an installed plugin. No inference ran, no reset was observed, and other client versions remain unverified.
+
+## Security review: what is known
+
+Trail of Bits portability, from a static reading on 27 November 2026 of
+`trailofbits/skills` at `149d7b21f4067765b82e67029730b42d228ef4b4` (committed 12 November
+2026). Nothing was installed or run; nothing here is observed on OpenCode.
+
+OpenCode 2.3.2 (read from its binary) loads a skill's text unchanged and appends
+`Base directory for this skill: <dir>` and "Relative paths in this skill ... are relative
+to this base directory." It substitutes no placeholder, so a literal `{baseDir}` stays in
+the text and the model must resolve it from that line. Frontmatter fields such as
+`allowed-tools` are not applied. Claude Code plugin parts (`agents/`, `hooks/`,
+`commands/`, namespaced `subagent_type` names) do not load from a skill folder.
+
+- `differential-review`: `allowed-tools: Read Write Grep Glob Bash`; no `{baseDir}`.
+  Optional delegation to the plugin agent `differential-review:adversarial-modeler`, which
+  OpenCode lacks; `adversarial.md` in the skill covers the same phase. Always writes
+  `<PROJECT>_DIFFERENTIAL_REVIEW_<DATE>.md` with no fixed location, so the brief must point
+  it at the reports folder. Uses `gh pr view`. Verdict: likely portable.
+- `fp-check`: `{baseDir}` links to six references; `allowed-tools` names Claude Code-only
+  tools (`AskUserQuestion`, `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`, `LSP`). Its deep
+  path runs three plugin agents, one of which (`poc-builder`) writes and runs executable
+  exploit and unit-test PoCs; a plugin `Stop` hook enforces completion. The PoC step breaks
+  the review's read-only and no-exploit rules. Verdict: Claude Code only for the deep path;
+  not used as a partner. Its refute-before-report idea stays, in our own words.
+- `agentic-actions-auditor`: `allowed-tools: Read Grep Glob Bash`; `{baseDir}` links to its
+  references. Can fetch a remote repository's workflows through `gh api`; local workflows
+  need no network. Verdict: likely portable.
+- `sharp-edges`: `allowed-tools: Read Grep Glob`; no `{baseDir}`; an optional plugin agent.
+  Verdict: likely portable.
+- `supply-chain-risk-auditor`: runs its bundled Python through
+  `uv run {baseDir}/scripts/collect.py` and `render.py`; needs `uv`, an authenticated `gh`
+  and network access to package registries and GitHub; writes its output outside the
+  audited repository by default. Running it executes third-party code, so it needs the
+  user's approval of that exact run. Verdict: likely portable where `uv` is installed.
+
+Observed live, 27 November 2026, OpenCode 2.3.2, before implementation. Each probe ran
+`opencode run --standalone` in a throwaway Git project with a private config home
+(`XDG_CONFIG_HOME`) holding copies of the four skills at the pinned SHA under
+`opencode/skills/<name>/`; every session was deleted afterwards. Models:
+`claude-agent/haiku` and `openai/gpt-6.1-terra`.
+
+- All four skills load through the skill tool on both models; their frontmatter
+  (`allowed-tools`, quoted descriptions) causes no error.
+- `{baseDir}` is resolved by the model on both: `agentic-actions-auditor`'s
+  `references/foundations.md` was read at the correct absolute path, and
+  `supply-chain-risk-auditor`'s collect step came back as
+  `uv run <skill folder>/scripts/collect.py . --json ...`.
+- Reading a skill's reference file outside the project needs the `external_directory`
+  permission. Default permissions allow it (observed); a deny-all rule set blocks it
+  until an `external_directory` allow rule for the skill folder is added (observed).
+- Asked how to run Phase 5, both models chose `differential-review`'s `adversarial.md`
+  and said the plugin agent `differential-review:adversarial-modeler` is unavailable.
+- An `explore` subagent cannot load skills: its skill call returned
+  `Permission denied: skill`. Given absolute paths, it read `differential-review`'s
+  `SKILL.md` and `adversarial.md` with the read tool and quoted both headings. A
+  reviewer therefore gets a partner skill's folder path in its brief, not a skill name.
+- Plugin commands still register: the background service (OpenCode 2.3.2, the user's
+  installed vibe-workflow) lists `vibe-council` in `GET /api/command`. Running a plugin
+  command was observed on 2.2.6 only; `opencode run "<text>"` stores `/name args` as plain
+  text and does not run commands. `opencode api get ... --standalone` returned empty
+  skill, command and agent lists, so it is not a probe for them.
+- Report storage, in a throwaway repository with a linked worktree:
+  `git worktree list --porcelain`'s first entry is the main checkout from both; with the
+  folder `.gitignore` set to `*`, `git -C <main> check-ignore -q` passes and both checkouts
+  stay clean; `0700`/`0600` hold; removing the linked worktree keeps the reports; an edited
+  `.gitignore` or a tracked report makes `check-ignore` fail; a symlinked folder is
+  detected with `[ -L ]`; `git clean -ndx` lists the folder.
+- On this machine `uv` is installed; `gitleaks`, `semgrep` and `codeql` are not.
+
+Notes, as built (`src/skill-advice.js`, `src/pr-advice.js`). All four are gated on an
+onboarded project only, whatever the git workflow setting, and all are advisory:
+
+- `SHIP_NOTES["requesting-code-review"]`: when that skill loads. Classify before the code
+  reviewer is dispatched.
+- `SHIP_NOTES["subagent-driven-development"]`: when that skill loads. One ship check for
+  the whole branch at the final review, not per task.
+- `SHIP_NOTES["finishing-a-development-branch"]`: when that skill loads. With the git
+  workflow on it follows the integration note in the same tool result, on its own line.
+- `SHIP_PR`: after a successful shell command that runs `gh pr create`, `gh pr ready`
+  (not `--undo`) or `gh pr edit --title "[READY] ..."`, once per command, after any git
+  workflow notes. A failed command, `gh pr ready --undo`, a `[BLOCKED]` retitle, a push
+  and a merge get none; neither does `gh pr create` or `gh pr ready` with `--help`, `-h`
+  or `--dry-run`, which change no pull request. Those words count quoted or not, but not
+  as the value of an option that takes one (`--title --help`). The onboarding answer must be exactly
+  `true`, and failing workflow settings do not clear a note already decided. It carries
+  no override sentence; the three skill notes do.
+
+A skill name is matched on its last segment, so `superpowers:requesting-code-review`
+matches. A skill the user attaches to a prompt makes no tool call, so it gets no note.
+`--injection` does not cover the skill-load notes: its isolated config has no superpowers
+skills. It proves only that the `execute.after` hook, which they share, still appends to
+tool results. `SHIP_PR` is not in it either: its shell probe runs a branch switch, not a
+`gh` command. Tests cover the note texts and gates with synthetic settings.
+
+Observed live after the build, 27 November 2026, OpenCode 2.3.2, branch at `eea423c`. Every
+run used a throwaway `live_check.py` clone with this branch's package as a project-local
+plugin, onboarded with Smart Router saved as off, and an `origin` set to a throwaway local
+bare repository. All eleven probe sessions (five of them one probe's own subagents) were deleted
+and confirmed gone; no clone was left. `--injection` passed again on this note state
+(`claude-agent/haiku`, `openai/gpt-6.1-terra`, `opencode-go/claude-haiku-5-5` and the shell
+probe); the record was already dated that day, so the file did not change.
+
+1. **Skill notes: pass.** One session per setting on the background service (its default
+   model, `opencode/seaglass-alpha-free`), which also loads the user's installed plugin.
+   Asked to load `requesting-code-review` and then `finishing-a-development-branch` and
+   make no other call, the agent made exactly those two calls. With the git workflow on,
+   the first result ended with its ship note and the second held the integration note,
+   then the ship note on its own line, then the integration note again from the installed
+   plugin. With it off, each result held only its ship note. In both replies the plan put
+   the ship check before the code reviewer is dispatched and before the pull request is
+   opened or readied. Not observed: `subagent-driven-development`, and a real delivery.
+   `live_check.py --prompt` prints only the first `vibe-workflow:` line of a tool result,
+   so it hides a second note; these runs read the whole result.
+2. **`SHIP_PR`: pass, with a stub `gh`.** Isolated runs (`--isolated`), one
+   `gh pr create --draft --title "[BLOCKED] probe"` each. With the real `gh` the command
+   cannot succeed: the isolated config home leaves `gh` signed out (exit 4), and a local
+   bare origin is no GitHub host (exit 1 when signed in). That run returned no note, which
+   is the rule for a failed command. With a stub `gh` first on `PATH` that prints a fake
+   URL and exits 0, the result held `SHIP_PR` alone with the git workflow off, and the
+   summary note followed by `SHIP_PR` with it on; the model quoted them. Not observed: a
+   real pull request, `gh pr ready` and a `[READY]` retitle.
+3. **Synthetic secret: fail for tool output, pass for the reply.** One isolated run of 275
+   seconds, on a clone whose one commit above `origin/main` added `src/upload-client.js`
+   with `accessKeyId` set to `AKIA` plus 16 `X`. Asked for the ship check, the agent loaded
+   the skill, read its three references, chose tier 3 for "secrets or credentials" and
+   dispatched an `explore` reviewer. Its reply and `Security` section named only
+   `src/upload-client.js:4` and the type, said no value was reproduced, and rated the
+   finding medium, confirmed and introduced, not blocking. No report file was written and
+   nothing in the clone changed. The value did reach tool results: the coordinator's `read`
+   of the changed file returned it once, and the reviewer's `read` of that file and three
+   of its `grep` calls returned it four times; the reviewer's reasoning repeated it. The
+   brief the coordinator wrote for the reviewer did not contain it. So "never in tool
+   output" does not hold: `ship-check.md` tells the coordinator to review the diff and says
+   nothing about how to read a changed file that may hold a secret, and the reviewer used
+   the grep tool, which prints matching lines, against `reviewer-brief.md`'s "print file
+   names, not matching lines". Two more things were seen. Without Smart Router the
+   coordinator first set the reviewer's model to `opencode/claude-opus-5-5#max`, a
+   pay-as-you-go route on the session's own provider; it failed with `provider.quota`
+   (insufficient balance, cost 0), and the second dispatch, with no model, ran as
+   `opencode/seaglass-alpha-free`. While waiting for the background reviewer the
+   coordinator polled with six `true` shell calls and three "No-op" subagents, and its
+   reply first said the review could not run before the reviewer's answer replaced it.
+4. **Command listing: pass.** `GET /api/command` on the background service, with the
+   location sent as `location[directory]=<clone>`, listed `vibe-security-review` ("Run a
+   full security review of this project.") beside `vibe-council`; `GET /api/skill` listed
+   the skill. A plain `?directory=` is ignored and answers for the server's default
+   location, where the installed plugin has no such command. Running the command was not
+   observed.
+5. **Partner install: fail against the design.** `DISABLE_TELEMETRY=1 npx skills add
+   https://github.com/trailofbits/skills --skill <name> -g -a opencode -y` (skills CLI
+   1.9.1), run once per skill with `HOME` and `XDG_CONFIG_HOME` in a throwaway folder,
+   left one copy of each skill in `<HOME>/.agents/skills/<name>/` at the pinned commit and
+   a `<HOME>/.agents/.skill-lock.json`. It made no link and no copy in
+   `<HOME>/.config/opencode/`: the CLI lists OpenCode as a "universal" agent that reads
+   `~/.agents/skills/` itself. `--copy` gave the same result, and `docs/commands.md` names
+   no option that adds the link, although `docs/agents.md` gives OpenCode's global path as
+   `~/.config/opencode/skills/`. `check.py` with that `HOME` then reported the four rows
+   `missing` (`integration_missing`), because it looks only in
+   `~/.config/opencode/skills/<name>`; after links were added by hand in the throwaway
+   folder it reported all four `ready`. OpenCode 2.3.2 does read `~/.agents/skills/`: on
+   this machine skills that exist only there are in the service's skill list. So the skills
+   would load, but Prepare Workspace would keep reporting them missing, and the procedure's
+   "linked for OpenCode" is not what the CLI does. Nothing was written to the real
+   `~/.agents` or `~/.config/opencode`; both folders' listings were the same before and
+   after. This needs the user's decision.
+
+Changed after those runs (`6d1a955`), then probes 3 and 5 run again the same way, 27
+November 2026, OpenCode 2.3.2. The secret rule now allows reading a changed file and
+forbids repeating a value or searching with anything that prints matching lines; the
+reviewer's fallback model is the top tier on the session's own provider, never a
+pay-as-you-go route without approval; the coordinator waits instead of polling; and
+`check.py` counts a skill as present in `~/.config/opencode/skills/<name>` or
+`~/.agents/skills/<name>`, the OpenCode folder first.
+
+3. **Synthetic secret, second run: pass.** Same fixture and prompt, one isolated run of
+   248 seconds, this time with Smart Router saved as on. The value appeared only where a
+   file was read: the coordinator's `read` of the changed file and its `git diff
+   <merge-base>..HEAD`, and the reviewer's `read` of that file. No search returned it: the
+   coordinator searched with `git grep -l` and `grep -o` on field names, and the reviewer's
+   grep calls were on symbol names only. The reply, the `Security` section, the brief
+   written for the reviewer and the reviewer's answer and reasoning did not contain it; no
+   report file was written and the clone did not change. The coordinator called
+   `smart_router_select` once (review, critical), without the `reviewing` field the brief
+   asks for, got `claude-agent/fable` at high effort on the included subscription, and
+   dispatched one `explore` reviewer with that model. It then waited: no polling call. Both
+   sessions were deleted and confirmed gone. Limits: one run; the root session's own model
+   is not recorded by `opencode run`; and the clone's copy of this file describes the
+   fixture, which both agents read and cited as counterevidence, so the medium, not
+   blocking rating says little about an unknown key. The fallback without Smart Router was
+   not run again.
+5. **Partner install, second run: pass.** The same four commands in a fresh throwaway
+   `HOME` (skills CLI 1.9.1, commit `149d7b2`) again left only
+   `<HOME>/.agents/skills/<name>/` and no `<HOME>/.config/opencode/` folder. `check.py`
+   with that `HOME` reported the four Trail of Bits rows `ready`. The real `~/.agents` and
+   `~/.config/opencode` skill listings were the same before and after.
+
+Changed after the final whole-branch review, 27 November 2026. None of this was run live:
+probes 1 to 5 were not repeated, so an agent calling the storage script, the secret probe
+under the new text and the partner origin check are unobserved. Tests cover the code with
+throwaway repositories and synthetic settings.
+
+- Report storage is now `skills/vibe-security-review/scripts/store_report.py`
+  (`python3 -I -B ... --cwd <dir> --mode full|ship --topic <slug> --from <temporary file>`),
+  not steps done by hand. The report text is written with the file-write tool to a
+  temporary file outside the repository and never enters a shell command: the first version
+  of this fix fed it through a heredoc, where a report line equal to the delimiter would
+  have ended the body and run the rest as shell. The script reads `--from` as bytes, refuses
+  a link or a non-regular file, and deletes it only after a successful write. It takes the
+  main checkout from the first record of `git worktree list --porcelain -z`, read as bytes,
+  with inherited `GIT_*` variables removed, and refuses (exit 2, one `refused: <reason>`
+  line, no report written) outside a Git repository, on a bare or unresolved first record,
+  on a symlinked or foreign folder, on a main checkout or `.vibe-workflow` that another user
+  owns or that everyone can write, on a symlinked `.gitignore`, and when the
+  main checkout's own index tracks anything in the folder. It replaces a differing
+  `.gitignore` through a temporary file and `os.replace`, creates the report with
+  `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken), and removes
+  the empty file if `git check-ignore -q` fails or if the checked name is no longer the
+  opened folder and file; it removes that entry only while it is still the file it created,
+  and leaves a replacement alone. `tests/tooling/test_store_report.py` runs each case, including a
+  linked worktree whose index differs from the main checkout's and a main checkout whose
+  path holds a carriage return beside a decoy whose path holds a newline. A group-writable
+  main checkout or `.vibe-workflow` (umask `002`, common on Linux) is accepted, by the user's
+  decision after a split council; the reports folder is `0700` either way. Under such a
+  parent an existing reports folder is used only if it is already `0700` with the right
+  `.gitignore`; otherwise it is refused and neither its mode nor its `.gitignore` changes.
+- Raw reads are the user's accepted limit: a secret in a file that is read reaches the
+  reader's model and session history, and nothing masks it. The three skill files say so
+  where files are read. Searching by file name only now binds every reader, and a likely
+  secret is reported to the user at once, to be rotated.
+- Pull request text always carries location and class only, for every finding, in every
+  section, whatever the repository's visibility.
+- A reviewer that finds a likely secret stops at once and returns only the alert; the
+  coordinator warns the user and resumes it. If resuming fails, a fresh reviewer takes the
+  remaining scope with the alert already raised; if that fails too, the review is recorded
+  as incomplete, never as clean. Resuming an `explore` reviewer by its session was not
+  tried for this.
+- A committed likely secret is rated high until it is rotated, whatever the repository's
+  documents say. The second secret probe above rated the fixture key medium because the
+  clone's copy of this file described it; that rating no longer follows from the text.
+- The tier-2 security section given to the code reviewer carries the secret rules and the
+  raw-read limit, and a skipped partner skill is named under the review's limits.
+- The reviewer is offline and read-only. The supply-chain collector, CodeQL database
+  creation and a history scanner are coordinator-run, after approval of that exact command,
+  with output outside the repository and redacted.
+- A partner skill is loaded only when its folder, after resolving links, lies inside
+  `~/.config/opencode/skills/` or `~/.agents/skills/`, and the reviewed repository supplies
+  no skill of the same name.
+- With or without Smart Router, the reviewer is dispatched only on a provider and billing
+  path the user already uses for this work; otherwise the coordinator asks or records the
+  tier-3 review as unavailable.
+- The history search is `git log --all --diff-merges=separate -G'<pattern>' --format=%H
+  --name-only`. Seen locally (Git 2.54 and 2.56, a throwaway repository, also a test): for a
+  value present only in a merge commit, plain `--all -G` printed nothing, and the new form
+  printed the merge commit and the file name. `gitleaks` is named only with `--redact=100`
+  and no report file; it is not installed here, so that flag was not run.
+- `check.py` counts a skill only when its folder holds a `SKILL.md` file, so an empty or
+  incomplete OpenCode folder is `missing` and does not hide a valid shared copy.
+
+Agent-driven path, observed live, 27 November 2026, OpenCode 2.3.2, branch at `a9ffb15`. One isolated
+standalone session (a `live_check.py` `prepare()` clone with this branch's package as a project-local
+plugin, an empty private config home, Smart Router saved as on, `origin` a throwaway bare repository),
+327 seconds, cost 0, deleted afterwards and confirmed gone. The clone's one commit above `origin/main`
+added `src/thumbnail-handler.js`, which puts a URL parameter into an `exec` shell string, and
+`config/upload-storage.json` with an `accessKeyId` of `AKIA` plus 16 `X`. The agent was asked to run the
+ship check on that branch and save the report. `opencode run` does not record the root session's model.
+
+1. **Tier: pass. Reviewer: not dispatched.** The agent chose tier 3. It never called
+   `smart_router_select` and started no subagent: it recorded the tier-3 review as unavailable, because
+   the clone's `AGENTS.md` forbids inference without explicit authorization and the prompt granted none,
+   and it kept the pull request `[BLOCKED]`. That is the fallback the reviewer brief describes. The
+   model, the route and the reviewer are therefore unobserved.
+2. **Stop and alert: fail for timing; reviewer stop and resume unobserved.** The coordinator read the
+   value in `git diff` 29 seconds in and flagged the file with a names-only search at 94 seconds. Its
+   request to rotate reached the user only in the final reply at 308 seconds, after the review and after
+   the report was saved, under a heading "Immediate secret alert" with file, line and type. An earlier
+   message at 181 seconds named the file but asked for nothing.
+3. **Severity: pass.** The committed key was rated high "until rotated", although the agent judged that
+   the value looks synthetic. It did not read this file, so a repository document playing the key down
+   was not part of the run.
+4. **Storage: pass.** `mktemp -d` under the system temp folder, the body written there with the write
+   tool (not refused), then `store_report.py` with five single-quoted arguments and `--from`; no heredoc.
+   The report landed in the clone's `.vibe-workflow/security-reports/` at `0600`, folder `0700`,
+   `.gitignore` of `*`, `git status --porcelain` empty. The script deleted the temporary file and the
+   agent removed the empty folder.
+5. **Secret handling: pass.** The value is absent from the reply, the saved report, its `Security`
+   section and every tool input. Secret searches used `git grep -l` and `rg -l`. Two tool results hold
+   it, both accepted reads: `git diff <merge-base>..HEAD` and the `read` of the config file.
+6. **Limits: pass.** The reply and the report name the reviewer not run, `differential-review` not
+   available, no scanner, nothing executed, no check that the key is live and no history scan.
+
+Still unobserved after this run: a dispatched reviewer under the current brief, its stop at a secret,
+resuming it by session, and the fallback to a fresh reviewer. The real `~/.config/opencode` and
+`~/.agents` listings were the same before and after; the session read `~/ai-memory-vault/MEMORY.md` and
+wrote nothing there.
+
+Reviewer path, observed live, 27 November 2026, OpenCode 2.3.2, branch at `7ccadd1`. The user accepted
+the first run's rotation request arriving in the final reply, and asked for this second run. Same
+isolation, settings and fixture; the prompt also authorized one tier-3 reviewer on an
+included-subscription route chosen through Smart Router. One session of 283 seconds on
+`opencode/seaglass-alpha-free` (the default of an empty config) and one `explore` child; both cost 0,
+both deleted and confirmed gone.
+
+1. **Router and reviewer: pass.** `smart_router_select` was called once, through `execute`, with
+   `reviewing` set to the coordinator's own model. It answered `claude-agent/fable`, effort high,
+   `included_subscription`, `paid_overflow` unknown, with the notice that no reviewer from another lab
+   reaches the task's level. One `explore` reviewer ran on `claude-agent/fable#high`. No polling.
+2. **Reviewer stop and resume: unobserved.** The coordinator read the value first (54 seconds) and
+   alerted the user (85 seconds) before dispatching (140 seconds). Its brief carried the stop rule, said
+   the alert for that file and line was already raised, and asked for it once with the other findings.
+   The reviewer did that in one round: no stop, no resume, no fresh reviewer, review complete.
+3. **Rotation request: pass,** at 85 seconds, before the review continued, and again in the final reply.
+4. **Storage: pass,** as in the first run: `mktemp -d`, the write tool, `store_report.py` with quoted
+   arguments and `--from`, report at `0600` in a `0700` folder, `git status --porcelain` empty, temporary
+   file and folder gone. The agent ran `chmod 600` on the temporary file first.
+5. **Secret handling: pass.** The value is absent from the reply, the saved report, the `Security`
+   section, every tool input of both sessions and every search output. It is in two accepted reads (the
+   coordinator's `git diff`, the reviewer's `read` of the config file) and, four times, in the
+   coordinator's stored reasoning for one step.
+6. **Limits: pass.** No scanner, no partner skill (`differential-review` not installed), nothing
+   executed, key liveness not tested, reachability unverified.
+
+Also seen: the reviewer read the paragraph above, which describes this fixture, and kept the key at
+high "until rotated"; every finding in the `Security` section was location, class, severity and status
+only. Still unobserved: a reviewer meeting a secret the coordinator has not already reported, its stop,
+resuming it by session, and the fallback to a fresh reviewer. With the secret inside the diff the
+coordinator always reads it first, so that needs a different fixture.

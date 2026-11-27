@@ -30,7 +30,7 @@ python3 -B scripts/package.py --output dist
 - `runtime/` is the import-only Python library that ships. Keep it flat: `validate.py` allows only single-level `runtime.X` imports, and two import cycles (`claude_usage` and `native_catalog`; `routing_observations` and `opencode_account`) mean any package split would be cyclic or layered. Revisit when the cycles are gone or it passes about 25 modules.
 - `scripts/` holds command entry points. Only `select.py` ships; `validate`, `package`, `manifest` and `live_check` are development tools.
 - `tests/` groups by what it covers: `plugin/` and `skills/` hold Node `<module>.test.js`; `runtime/` and `tooling/` hold Python `test_<module>.py`, and `tooling/` also holds the dev-tool checks and `opencode-verified.json`. Only `__init__.py` stays at the top. Run Python with `-t .` (see the commands above).
-- `skills/<id>/` holds `SKILL.md` plus `references/`; `docs/` holds specs and plans under `superpowers/` and council records under `vibe-council/`.
+- `skills/<id>/` holds `SKILL.md` plus `references/`; `docs/` holds specs and plans under `superpowers/` and council records under `vibe-workflow/council-sessions/`.
 - A new shipped file must be covered by `package.json` `files` (a directory entry covers the files inside it) and listed in `scripts/manifest.py` in the same change.
 
 The active extraction task retains its original pinned policy and local-only

@@ -3,7 +3,7 @@
 Status: approved by the user 2026-11-22, including option A: the skill is always registered and
 the `writing-plans` note is gated on "onboarded"; it is not a feature with its own setting or
 onboarding question.
-Council record: [`docs/vibe-council/sessions/7d1638d3e1cb_file-layout-skill/result.md`](../../vibe-council/sessions/7d1638d3e1cb_file-layout-skill/result.md).
+Council record: [`docs/vibe-workflow/council-sessions/2026-11-21_file-layout-skill/result.md`](../../vibe-workflow/council-sessions/2026-11-21_file-layout-skill/result.md).
 
 ## Intent
 
@@ -126,7 +126,7 @@ Same gate, no new setting. The existing note text is unchanged.
   the shipped pieces and are updated the same way the council skill did.
 - Failing test before behavior changes; independent review before acceptance.
 - Work on a task branch in this worktree (`HEAD` is detached at `b5d5faa`). The council
-  record under `docs/vibe-council/sessions/` ships with the PR.
+  record under `docs/vibe-workflow/council-sessions/` ships with the PR.
 
 ## Follow-up (separate PRs, not this one)
 

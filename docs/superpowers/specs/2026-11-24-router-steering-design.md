@@ -1,7 +1,7 @@
 # Smart Router: narrowing without pinning, and reviewer independence
 
 Date: 24 November 2026. Status: decided by the user after the council
-`docs/vibe-council/sessions/08d7b6126f45_router-constraints/result.md`; this short
+`docs/vibe-workflow/council-sessions/2026-11-24_router-constraints/result.md`; this short
 design records the decisions for the plan.
 
 ## Intent

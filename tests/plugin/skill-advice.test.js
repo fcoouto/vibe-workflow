@@ -15,7 +15,7 @@ function advisor(settings = on, extra = {}) {
 test("disabled, not onboarded, unreadable or failing settings add no skill note and never throw", async () => {
   for (const settings of [{ state: "off", agent_merge: false }, { state: "not_onboarded", agent_merge: null },
     { state: "blocked", reason: "project_settings_invalid" }, new Error("boom"), null]) {
-    assert.equal(await advisor(settings).skillNote("finishing-a-development-branch"), null)
+    assert.equal(await advisor(settings, { isOnboarded: false }).skillNote("finishing-a-development-branch"), null)
     assert.equal(await advisor(settings).skillNote("using-git-worktrees"), null)
   }
 })
@@ -24,16 +24,23 @@ const LEAD = "vibe-workflow: your human partner's declared integration choice, s
   "and open a pull request, following the vibe-pull-requests skill ([BLOCKED] draft, then [READY]). Skip the options " +
   "menu and do not ask; the skill's other steps still apply. "
 const LAST = "An explicit request from your human partner in this session overrides this."
+const SHIP_REVIEW = "vibe-workflow: your human partner asks for a security check sized to the change. Before you " +
+  "dispatch the code reviewer, follow the vibe-security-review skill's ship check: pick the change's tier, add its " +
+  "security section to the reviewer's brief at tier 2, and dispatch its security reviewer at tier 3. " + LAST
+const SHIP_FINAL = "vibe-workflow: your human partner asks for a security check sized to the change. At the final " +
+  "whole-branch review, follow the vibe-security-review skill's ship check once for the whole branch, not per task. " + LAST
+const SHIP_FINISH = "vibe-workflow: before you open or ready the pull request, confirm the vibe-security-review ship " +
+  "check covers the current head and its Security section is in the body; run it if not. " + LAST
 const WORKTREE = "vibe-workflow: your human partner's declared worktree preference, set during onboarding: always work " +
   "in a worktree, never in the primary checkout. Do not ask for consent. " + LAST
 test("skillNote states the onboarding decision for the finishing and worktree skills only", async () => {
   const merges = advisor({ state: "on", agent_merge: true, worktree_cleanup: true })
   assert.equal(await merges.skillNote("superpowers:finishing-a-development-branch"), LEAD +
     "You may merge it yourself once it is [READY] and its evidence is current. " +
-    "After a confirmed merge, follow the worktree cleanup steps in vibe-pull-requests. " + LAST)
+    "After a confirmed merge, follow the worktree cleanup steps in vibe-pull-requests. " + LAST + "\n" + SHIP_FINISH)
   const user = advisor({ state: "on", agent_merge: false, worktree_cleanup: null })
   assert.equal(await user.skillNote("finishing-a-development-branch"), LEAD +
-    "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge. " + LAST)
+    "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge. " + LAST + "\n" + SHIP_FINISH)
   assert.equal(await merges.skillNote("superpowers:using-git-worktrees"), WORKTREE)
   assert.equal(await user.skillNote("using-git-worktrees"), WORKTREE)
   const { skillNote, calls } = advisor()
@@ -60,6 +67,27 @@ const DESIGN = "vibe-workflow: your human partner asks that the design check mat
   "rewrites.\" Give the reviewer the document path only, for one pass, and sort its flaws into the same three piles. " +
   "Set its model as planning work (level 3); without Smart Router, the top tier. " + LAST
 const MODEL_NAME = /haiku|opus|sonnet|fable|astra|terra|luna|gemini/i
+
+test("skillNote sends the ship check on review and final-review skills in any onboarded project", async () => {
+  for (const note of [SHIP_REVIEW, SHIP_FINAL, SHIP_FINISH]) assert.doesNotMatch(note, MODEL_NAME)
+  for (const settings of [on, { state: "off" }, null]) {
+    const { skillNote } = advisor(settings)
+    assert.equal(await skillNote("superpowers:requesting-code-review"), SHIP_REVIEW)
+    assert.equal(await skillNote("subagent-driven-development"), SHIP_FINAL)
+  }
+  assert.equal(await advisor(on, { isOnboarded: false }).skillNote("requesting-code-review"), null)
+  assert.equal(await advisor(on, { onboarded: async () => { throw new Error("boom") } }).skillNote("requesting-code-review"), null)
+})
+
+test("finishing gets the security note alone when the git workflow is off, and after the workflow note when on", async () => {
+  assert.equal(await advisor({ state: "off" }).skillNote("finishing-a-development-branch"), SHIP_FINISH)
+  const user = advisor({ state: "on", agent_merge: false, worktree_cleanup: null })
+  const workflow = LEAD + "Stop at [READY] and tell your human partner it awaits their merge. Keep the worktree after the merge. " + LAST
+  assert.equal(await user.skillNote("finishing-a-development-branch"), workflow + "\n" + SHIP_FINISH)
+  assert.equal(await advisor({ state: "off" }, { isOnboarded: false }).skillNote("finishing-a-development-branch"), null)
+  assert.equal(await advisor(new Error("boom")).skillNote("finishing-a-development-branch"), SHIP_FINISH)
+  assert.equal(await advisor(on, { onboarded: async () => { throw new Error("boom") } }).skillNote("finishing-a-development-branch"), workflow)
+})
 
 test("skillNote pre-approves the recommended execution method in any onboarded project", async () => {
   assert.doesNotMatch(PLAN, MODEL_NAME)

@@ -21,6 +21,10 @@ apply; never invent values.
 
 [reviewer, scope and rounds; findings and their disposition, or a link to the review report]
 
+## Security
+
+[head commit; tier and reason; what was checked; findings with severity and status, or "None substantiated"; limits. Follow the vibe-security-review skill.]
+
 ## Readiness
 
 Fill this in when the title becomes `[READY]`. Refer to the evidence above.

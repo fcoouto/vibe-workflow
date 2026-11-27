@@ -53,7 +53,7 @@ test("preview registers bundled onboarding, defaults on and writes nothing", asy
   assert.equal(preview.client, "opencode")
   assert.equal(preview.enabled, true)
   assert.equal(preview.readiness.state, "setup_needed")
-  assert.deepEqual([...skills.keys()], ["vibe-onboard-project", "vibe-prepare-my-workspace", "vibe-pull-requests", "vibe-council", "vibe-project-layout"])
+  assert.deepEqual([...skills.keys()], ["vibe-onboard-project", "vibe-prepare-my-workspace", "vibe-pull-requests", "vibe-council", "vibe-project-layout", "vibe-security-review"])
   const skill = skills.get("vibe-onboard-project")
   assert.equal(skill.id, "vibe-onboard-project")
   assert.match(tool.get("vibe_workflow_onboard").description, /\bvibe-onboard-project\b/)
@@ -523,7 +523,7 @@ test("only apply with enabled true lets the setup check fetch scores", async (t)
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
   for (const name of ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
-    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md"]) {
+    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md", "skills/vibe-security-review/SKILL.md"]) {
     await mkdir(join(root, name, ".."), { recursive: true })
     await copyFile(new URL(`../../${name}`, import.meta.url), join(root, name))
   }

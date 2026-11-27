@@ -39,6 +39,10 @@ since the evidence was gathered. Evidence is output observed on this head, never
 recollection and never a prefix. A rebase, conflict fix, base update or new commit
 makes affected evidence stale.
 
+The Security section must cover the current head, and no blocking finding from the
+vibe-security-review ship check may remain open. Add the section even when the
+project's own template wins.
+
 ## Merging
 
 - If agents may not merge, stop at `[READY]` and tell the user the pull request
@@ -67,9 +71,13 @@ something else changed it, tell the user and change nothing.
 When the git workflow is on, working in a worktree is the user's
 declared choice from onboarding: do not ask for consent to create one.
 
-The one exception is the user's decision to keep it current. After an agent
+One exception is the user's decision to keep it current. After an agent
 merge, if the primary checkout is clean and on `main`, run `git fetch origin main`
 and then `git merge --ff-only origin/main` there. A change to
 `.vibe-workflow/settings.json` alone does not make it unclean for this rule. If it
 is dirty, diverged, detached or uncertain, or the fast-forward is refused, report
 that and change nothing.
+
+The other exception is writing a report into the ignored
+`.vibe-workflow/security-reports/` folder, as the vibe-security-review skill's
+report storage describes. This does not make the checkout unclean.

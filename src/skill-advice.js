@@ -29,18 +29,35 @@ const SKILL_NOTES = {
   "using-git-worktrees": { gate: "git_workflow", note: () => "vibe-workflow: your human partner's declared worktree preference, set during " +
     "onboarding: always work in a worktree, never in the primary checkout. Do not ask for consent. " + OVERRIDE },
 }
+const SHIP_NOTES = {
+  "requesting-code-review": "vibe-workflow: your human partner asks for a security check sized to the change. Before you " +
+    "dispatch the code reviewer, follow the vibe-security-review skill's ship check: pick the change's tier, add its " +
+    "security section to the reviewer's brief at tier 2, and dispatch its security reviewer at tier 3. " + OVERRIDE,
+  "subagent-driven-development": "vibe-workflow: your human partner asks for a security check sized to the change. At the final " +
+    "whole-branch review, follow the vibe-security-review skill's ship check once for the whole branch, not per task. " + OVERRIDE,
+  "finishing-a-development-branch": "vibe-workflow: before you open or ready the pull request, confirm the vibe-security-review ship " +
+    "check covers the current head and its Security section is in the body; run it if not. " + OVERRIDE,
+}
 
 export function createSkillAdvisor({ settings, onboarded = async () => false }) {
   return {
     async skillNote(skill) {
+      if (typeof skill !== "string") return null
+      const key = skill.split(/[:/]/).pop()
+      const entry = Object.hasOwn(SKILL_NOTES, key) && SKILL_NOTES[key]
+      let note = null, ship = null
       try {
-        const entry = typeof skill === "string" && Object.hasOwn(SKILL_NOTES, skill.split(/[:/]/).pop()) &&
-          SKILL_NOTES[skill.split(/[:/]/).pop()]
-        if (!entry) return null
-        if (entry.gate === "onboarded") return await onboarded() === true ? entry.note() : null
-        const state = await settings()
-        return state?.state === "on" ? entry.note(state) : null
-      } catch { return null }
+        if (entry?.gate === "onboarded") {
+          if (await onboarded() === true) note = entry.note()
+        } else if (entry) {
+          const state = await settings()
+          if (state?.state === "on") note = entry.note(state)
+        }
+      } catch {}
+      try {
+        if (Object.hasOwn(SHIP_NOTES, key) && await onboarded() === true) ship = SHIP_NOTES[key]
+      } catch {}
+      return [note, ship].filter(Boolean).join("\n") || null
     },
   }
 }

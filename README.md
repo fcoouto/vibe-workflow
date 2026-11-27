@@ -85,8 +85,24 @@ routes through. Before it starts, `vibe_council_roster` checks your accounts
 with the same local, token-free reads as Smart Router, whether or not Smart
 Router is on. The first council downloads the public scores if they are missing,
 and later councils refresh them in the background about weekly. The record is
-saved in `docs/vibe-council/sessions/<hash>_<topic>/` of the checkout where the
+saved in `docs/vibe-workflow/council-sessions/<date>_<title>/` of the checkout where the
 work happens, and is committed with it. The coordinator never votes; you decide.
+
+## Security review
+
+In an onboarded project, agents run a ship check before delivering work: a
+security check sized to what the change touches. A prose-only change with no
+security effect gets one line; a change to sign-in, secrets or dependencies gets
+its own read-only reviewer. The result goes in the pull request's `Security`
+section. The reminders are advisory, and a clean check is not proof that the
+code is safe.
+
+For a full review of a project, onboarded or not, run `/vibe-security-review` or
+ask: **“Use `vibe-security-review` to review this project.”** It reports findings
+and fixes nothing. Reports are saved in `.vibe-workflow/security-reports/` of the
+main checkout and are never committed. `vibe-prepare-my-workspace` offers four
+optional Trail of Bits skills it can use: `differential-review`, `sharp-edges`,
+`agentic-actions-auditor` and `supply-chain-risk-auditor`.
 
 ## Scores
 
