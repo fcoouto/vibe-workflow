@@ -712,3 +712,38 @@ A local level-2 review comparison with balancing off and on used the same live r
 returned the same advisory picks: no qualifying route on another subscription met the price and score bounds.
 Fixtures cover cross-subscription promotion; this live pass verified baseline behavior, not a promotion or behavior
 under an installed plugin. No inference ran, no reset was observed, and other client versions remain unverified.
+
+## Security review: what is known
+
+Trail of Bits portability, from a static reading on 27 November 2026 of
+`trailofbits/skills` at `149d7b21f4067765b82e67029730b42d228ef4b4` (committed 12 November
+2026). Nothing was installed or run; nothing here is observed on OpenCode.
+
+OpenCode 2.3.2 (read from its binary) loads a skill's text unchanged and appends
+`Base directory for this skill: <dir>` and "Relative paths in this skill ... are relative
+to this base directory." It substitutes no placeholder, so a literal `{baseDir}` stays in
+the text and the model must resolve it from that line. Frontmatter fields such as
+`allowed-tools` are not applied. Claude Code plugin parts (`agents/`, `hooks/`,
+`commands/`, namespaced `subagent_type` names) do not load from a skill folder.
+
+- `differential-review`: `allowed-tools: Read Write Grep Glob Bash`; no `{baseDir}`.
+  Optional delegation to the plugin agent `differential-review:adversarial-modeler`, which
+  OpenCode lacks; `adversarial.md` in the skill covers the same phase. Always writes
+  `<PROJECT>_DIFFERENTIAL_REVIEW_<DATE>.md` with no fixed location, so the brief must point
+  it at the reports folder. Uses `gh pr view`. Verdict: likely portable.
+- `fp-check`: `{baseDir}` links to six references; `allowed-tools` names Claude Code-only
+  tools (`AskUserQuestion`, `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`, `LSP`). Its deep
+  path runs three plugin agents, one of which (`poc-builder`) writes and runs executable
+  exploit and unit-test PoCs; a plugin `Stop` hook enforces completion. The PoC step breaks
+  the review's read-only and no-exploit rules. Verdict: Claude Code only for the deep path;
+  not used as a partner. Its refute-before-report idea stays, in our own words.
+- `agentic-actions-auditor`: `allowed-tools: Read Grep Glob Bash`; `{baseDir}` links to its
+  references. Can fetch a remote repository's workflows through `gh api`; local workflows
+  need no network. Verdict: likely portable.
+- `sharp-edges`: `allowed-tools: Read Grep Glob`; no `{baseDir}`; an optional plugin agent.
+  Verdict: likely portable.
+- `supply-chain-risk-auditor`: runs its bundled Python through
+  `uv run {baseDir}/scripts/collect.py` and `render.py`; needs `uv`, an authenticated `gh`
+  and network access to package registries and GitHub; writes its output outside the
+  audited repository by default. Running it executes third-party code, so it needs the
+  user's approval of that exact run. Verdict: likely portable where `uv` is installed.
