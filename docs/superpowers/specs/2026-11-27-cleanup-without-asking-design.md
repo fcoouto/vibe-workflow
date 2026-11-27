@@ -109,6 +109,14 @@ is settled. The check itself only reads.
     worktree** (no archive: moving the visible file would lose a different staged version,
     and a staged deletion has nothing to move).
 
+  Recommended choices for council records (`docs/vibe-workflow/council-sessions/<date>_<title>/`,
+  which the `vibe-council` rules commit with the work):
+  - an untracked session folder that has `result.md`: **Commit to this PR (Recommended)**;
+  - an untracked session folder without `result.md` (a run that did not finish):
+    **Archive (Recommended)**, since it may hold members' answers;
+  - the folder shown as ignored (`!!`), because the project chose to keep records out of
+    git: **Archive (Recommended)**.
+
   **Commit** is acted on before `[READY]`; it adds to the head, so readiness evidence is
   gathered after it. **Archive** and **Discard** are recorded and run only after the merge
   is confirmed (section 3); if the pull request closes unmerged, nothing is touched. The
