@@ -128,6 +128,20 @@ test("the cleanup reference rechecks before it acts and sorts once more before i
   for (const phrase of ["sort once more", "absolute", "exit 0 and print no row"]) assert.ok(remove.includes(phrase), phrase)
 })
 
+test("the cleanup reference pins removals to the confirmed merge and never reads silence as nothing removed", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  const flat = text.replace(/\s+/g, " ")
+  for (const phrase of ["`<head>` is the full commit hash", "`git rev-parse HEAD` prints", "`--detached` in place of `--branch '<branch>'`",
+    "is on another branch", "`HEAD` is another commit", "the `branch` and `head` the identity command printed",
+    "refused: <path>: it was removed, but reporting that failed", "The path is gone", "never conclude that nothing was removed",
+    "holds only a repository", "any `.git` entry below the top folder", "strips trailing CR and LF", "cannot be checked"]) {
+    assert.ok(flat.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(flat, /with no path: nothing was removed at all/, "a refusal with no path is defined by when it happens")
+  const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees"))
+  assert.ok(sweep.replace(/\s+/g, " ").includes("with the `branch` and `head`"), "the sweep passes what it confirmed")
+})
+
 test("the sweep settles the client and the worktree's identity before it changes anything", async () => {
   const text = await read("references/worktree-cleanup.md")
   const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees"))
@@ -161,6 +175,7 @@ test("the cleanup reference deletes only through the script, one rechecked path 
   for (const mode of ["discard", "caches"]) {
     const command = text.split("\n").find((line) => line.includes(`leftovers.py' ${mode} `)) ?? ""
     assert.ok(command.includes("--worktree '<worktree>' --primary '<primary>'"), `${mode} names the main checkout`)
+    assert.ok(command.includes("--branch '<branch>' --head '<head>'"), `${mode} names the confirmed branch and commit`)
   }
   assert.doesNotMatch(text, /only if it changed/, "a partial removal can follow any error")
   const procedure = await read("references/procedure.md")

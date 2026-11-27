@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -17,8 +18,11 @@ EACH = (*STATUS, "--ignored", "--untracked-files=all")
 ABSOLUTE = ("rev-parse", "--path-format=absolute")
 BROKEN = "the worktree's Git pointer is broken"
 USAGE = ("invalid arguments; give sort, expand, manifest, discard, caches or identity, then --worktree <dir> and "
-         "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name>, --detached")
+         "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name> or "
+         "--detached, --head <commit> (the full hash)")
 UNTOUCHED, PARTLY = "nothing in it was removed", "it may be partly removed"
+UNREPORTED = "it was removed, but reporting that failed"
+COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 CAPABLE = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and hasattr(os, "fchdir")
            and os.listdir in os.supports_fd and os.stat in os.supports_follow_symlinks
            and {os.open, os.stat, os.readlink, os.unlink, os.rmdir} <= os.supports_dir_fd)
@@ -236,6 +240,23 @@ def _scan(parent, name, shown, hashed, device):
     return node
 
 
+def _nested(folder, shown, device):
+    """Refuse a `.git` entry anywhere below an open folder, except the worktree's own. Git lists nothing for a
+    folder that holds only a repository, yet removing the worktree deletes it. No link is followed and no other
+    device is entered."""
+    for name in sorted(os.fsencode(name) for name in os.listdir(folder)):
+        if name.lower() == b".git":
+            if shown or name != b".git":
+                raise Refused(f"{os.fsdecode(shown + name)!r} is a repository inside the worktree that Git does not "
+                              "list; removing the worktree would delete it")
+        elif stat.S_ISDIR(os.stat(name, dir_fd=folder, follow_symlinks=False).st_mode):
+            descriptor = _open_folder(folder, name, device)
+            try:
+                _nested(descriptor, shown + name + b"/", device)
+            finally:
+                os.close(descriptor)
+
+
 def _statuses(shown):
     """Everything Git says at and below a path: every status of each name, and the names its index holds.
     One name can have two statuses, such as a staged deletion next to the same untracked file."""
@@ -312,9 +333,10 @@ def _delete(parent, node, device):
     os.rmdir(node.name, dir_fd=parent)
 
 
-def _take(top, parts, shown, check):
-    """Read one path, check it again with `check`, and remove it straight after. A refusal names the path and
-    says whether any of it can be gone: nothing before the removal starts, perhaps some of it after."""
+def _take(top, parts, shown, check, done):
+    """Read one path, check it again with `check`, remove it straight after, and report it with `done`. A refusal
+    names the path and says whether any of it can be gone: nothing before the removal starts, perhaps some of it
+    after, all of it when only the report failed."""
     try:
         root, _, summary = _inspect(top, parts, hashed=check.hashed)
         reason = check(root, summary)
@@ -324,13 +346,18 @@ def _take(top, parts, shown, check):
         raise Refused(f"{shown}: {_reason(error)}; {UNTOUCHED}") from error
     opened = []
     try:
-        parent, device = _parent(top, parts, opened)
-        _delete(parent, root, device)
+        try:
+            parent, device = _parent(top, parts, opened)
+            _delete(parent, root, device)
+        finally:
+            for descriptor in opened:
+                os.close(descriptor)
     except (OSError, RecursionError, Refused) as error:
         raise Refused(f"{shown}: {_reason(error)}; {PARTLY}") from error
-    finally:
-        for descriptor in opened:
-            os.close(descriptor)
+    try:
+        done(shown)
+    except (OSError, ValueError) as error:
+        raise Refused(f"{shown}: {UNREPORTED} ({type(error).__name__}); nothing after it was touched") from error
 
 
 def _reason(error):
@@ -370,10 +397,32 @@ def _records(primary):
     return records
 
 
-def identity(worktree, primary, wanted=None):
+def _pointed(worktree, pointer):
+    """The Git folder a worktree's `.git` file names, read as Git reads it: every trailing CR and LF is dropped,
+    and a relative name starts at the worktree. The pointer is broken only when that folder is verified absent."""
+    try:
+        if not stat.S_ISREG(os.lstat(pointer).st_mode):
+            raise Refused("the path's .git is not a worktree pointer file")
+        with open(os.open(pointer, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)), "rb") as file:
+            named = file.read(1 << 16).rstrip(b"\r\n")
+    except OSError as error:
+        raise Refused("the path is not a worktree folder") from error
+    if not named.startswith(b"gitdir: ") or named == b"gitdir: ":
+        raise Refused("the path's .git is not a worktree pointer file")
+    named = os.path.join(os.fsencode(worktree), named[len(b"gitdir: "):])
+    try:
+        os.lstat(named)
+    except FileNotFoundError as error:
+        raise Refused(BROKEN) from error
+    except (OSError, ValueError) as error:
+        raise Refused("the Git folder that the path's .git names could not be checked") from error
+    return named
+
+
+def identity(worktree, primary, branch, head=None):
     """Enter the named folder only when it is the worktree this repository registers under that name and nothing
-    else. `wanted` is (branch,) to also require that branch, where None is a detached head. Returns the open top
-    folder and the row."""
+    else, on that branch, where None is a detached head, and, when `head` is given, at that commit. Returns the
+    open top folder and the row."""
     if not primary or not os.path.isabs(worktree) or os.path.realpath(worktree) != worktree:
         raise Refused("--worktree must be an absolute path that is not, and does not pass through, a symbolic link, "
                       "and --primary must name the repository's main checkout")
@@ -382,23 +431,12 @@ def identity(worktree, primary, wanted=None):
     if not records or not _same(records[0]["path"], primary):
         raise Refused("--primary is not the repository's main checkout")
     mine = [record for record in records[1:] if record["path"] == worktree]
-    if len(mine) != 1 or mine[0]["locked"] or (wanted and mine[0]["branch"] != wanted[0]):
+    if len(mine) != 1 or mine[0]["locked"] or mine[0]["branch"] != branch:
         raise Refused("the repository does not register this path as an unlocked worktree on that branch")
     if any(record is not mine[0] and os.path.realpath(record["path"]) == worktree for record in records):
         raise Refused("another registered worktree resolves to this path")
     pointer = os.path.join(worktree, ".git")
-    try:
-        if not stat.S_ISREG(os.lstat(pointer).st_mode):
-            raise Refused("the path's .git is not a worktree pointer file")
-        with open(os.open(pointer, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)), "rb") as file:
-            named = file.read(1 << 16).removesuffix(b"\n")
-    except OSError as error:
-        raise Refused("the path is not a worktree folder") from error
-    if not named.startswith(b"gitdir: "):
-        raise Refused("the path's .git is not a worktree pointer file")
-    named = os.path.join(os.fsencode(worktree), named[len(b"gitdir: "):])
-    if not os.path.lexists(named):
-        raise Refused(BROKEN)
+    named = _pointed(worktree, pointer)
     common = _line(*ABSOLUTE, "--git-common-dir", at=primary)
     top = _enter(worktree)
     try:
@@ -413,38 +451,47 @@ def identity(worktree, primary, wanted=None):
         if (not _same(named, git_dir) or not _same(os.path.dirname(git_dir), os.path.join(common, b"worktrees"))
                 or backlink != pointer):
             raise Refused("the repository's backlink does not point at this path")
-        code, head = _git("symbolic-ref", "--short", "-q", "HEAD", codes=(0, 1))
-        branch = os.fsdecode(head.removesuffix(b"\n")) if code == 0 else None
-        if branch != mine[0]["branch"] or (wanted and branch != wanted[0]):
+        code, name = _git("symbolic-ref", "--short", "-q", "HEAD", codes=(0, 1))
+        if (os.fsdecode(name.removesuffix(b"\n")) if code == 0 else None) != branch:
             raise Refused("the worktree is not on that branch")
-        return top, {"worktree": worktree, "branch": branch, "head": os.fsdecode(_line("rev-parse", "HEAD"))}
+        live = os.fsdecode(_line("rev-parse", "--verify", "HEAD^{commit}"))
+        if head is not None and live != head:
+            raise Refused("the worktree's HEAD is not the commit that was confirmed")
+        return top, {"worktree": worktree, "branch": branch, "head": live}
     except BaseException:
         os.close(top)
         raise
 
 
 def run(args, done):
-    """Do one mode. Read modes return every line at once; removing modes report each removed path as they go."""
+    """Do one mode. Read modes return every line at once; removing modes report each removed path as they go,
+    and only in the worktree, on the branch and at the commit the merge was confirmed for."""
     mode, paths = args.mode, [_relative(path) for path in args.paths]
-    takes = {"sort": (), "expand": ("paths",), "manifest": ("paths",), "discard": ("paths", "digests", "primary"),
-             "caches": ("primary",), "identity": ("primary", "branch", "detached")}[mode]
+    pinned = ("primary", "branch", "detached", "head")
+    takes = {"sort": (), "expand": ("paths",), "manifest": ("paths",), "discard": ("paths", "digests", *pinned),
+             "caches": pinned, "identity": pinned[:3]}[mode]
     given = {"paths": args.paths, "digests": args.digests, "primary": args.primary, "branch": args.branch,
-             "detached": args.detached}
+             "detached": args.detached, "head": args.head}
     if any(value and name not in takes for name, value in given.items()):
         raise Refused(USAGE)
     if (mode in ("manifest", "discard") and not paths) or (mode == "discard" and len(paths) != len(args.digests)):
         raise Refused(USAGE)
     if mode in ("discard", "caches", "identity"):
-        if not args.primary or (mode == "identity" and bool(args.branch) == args.detached):
+        if not args.primary or bool(args.branch) == args.detached:
             raise Refused(USAGE)
-        top, row = identity(args.worktree, args.primary, (args.branch,) if mode == "identity" else None)
+        if mode != "identity" and not COMMIT.fullmatch(args.head or ""):
+            raise Refused(USAGE)
+        top, row = identity(args.worktree, args.primary, args.branch or None, args.head)
     else:
         top = _enter(args.worktree)
     try:
         if mode == "identity":
             return [json.dumps(row)]
         if mode == "sort":
-            return [json.dumps(row) for row in _entries(_out(*SORT))]
+            rows = _entries(_out(*SORT))
+            if not rows:
+                _nested(top, b"", _device(os.fstat(top)))
+            return [json.dumps(row) for row in rows]
         if mode == "expand":
             return [json.dumps(row) for row in _entries(_out(*EXPAND, "--", *(b"/".join(path) for path in paths)), only="??")]
         if mode == "manifest":
@@ -456,8 +503,7 @@ def run(args, done):
         if mode == "discard":
             for path, digest in zip(paths, args.digests):
                 shown = os.fsdecode(b"/".join(path))
-                _take(top, path, json.dumps(shown) if _unsafe(os.fsencode(shown)) else shown, _approved(digest))
-                done(shown)
+                _take(top, path, json.dumps(shown) if _unsafe(os.fsencode(shown)) else shown, _approved(digest), done)
             return []
         for status, name, _ in list(_fields(_out(*SORT))):
             if _rebuildable(status, name):
@@ -466,11 +512,25 @@ def run(args, done):
                     parts = _relative(shown)
                 except Refused as refusal:
                     raise Refused(f"{shown}: {refusal}; {UNTOUCHED}") from refusal
-                _take(top, parts, shown, _cache(name))
-                done(shown)
+                _take(top, parts, shown, _cache(name), done)
         return []
     finally:
-        os.close(top)
+        try:
+            os.close(top)
+        except OSError:
+            pass  # A failed close of a folder that was only read must not hide what was removed.
+
+
+def _mute():
+    """Point a standard output that failed at nothing, so the refusal's exit code survives the last flush."""
+    try:
+        nothing = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(nothing, sys.stdout.fileno())
+        finally:
+            os.close(nothing)
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
 def main(argv=None):
@@ -482,12 +542,15 @@ def main(argv=None):
     parser.add_argument("--primary")
     parser.add_argument("--branch")
     parser.add_argument("--detached", action="store_true")
+    parser.add_argument("--head")
     try:
         try:
             lines = run(parser.parse_args(argv), lambda path: print(f"removed: {path}", flush=True))
         except (OSError, RecursionError) as error:
             raise Refused(f"a path could not be read or removed ({type(error).__name__})") from error
     except Refused as refusal:
+        if UNREPORTED in str(refusal):
+            _mute()
         print(f"refused: {refusal}", file=sys.stderr)
         return 2
     for line in lines:

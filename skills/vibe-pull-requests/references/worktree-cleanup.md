@@ -46,6 +46,13 @@ deletes them without force.
   row. A git warning or an unreadable folder makes it fail, because the listing would be
   incomplete. Never treat a failed sort as empty: the step that needed it stops.
 
+Git lists nothing for a folder that holds only a repository, such as `saved/.git/config`
+with no other file, yet removing the worktree deletes it. So before the sort prints no
+row, it walks the whole worktree, never through a symbolic link and never onto another
+device, and refuses when it finds any `.git` entry below the top folder other than the
+worktree's own `.git`. The refusal names that entry. It is real work that only the user
+can move or remove: report it, and never remove it or the worktree yourself.
+
 `group` puts every row in exactly one group:
 
 - **Rebuildable**: the status is `!!`, and the last path component of `path` equals one of
@@ -106,17 +113,33 @@ is refused too. A bind mount of the same device is not detected.
 ### Removing
 
 Leftover files are removed only by these two commands, never by a shell command of your
-own. `<primary>` is the primary checkout's path. Before it removes anything, each command
-makes the identity check of "Sweeping older merged worktrees" step 2 on the worktree:
-the repository registers exactly that path, its backlink points at it, and its common git
-dir is the repository's. Both remove through folders opened from the worktree's top
-folder, never through a symbolic link and never onto another device.
+own. Both remove through folders opened from the worktree's top folder, never through a
+symbolic link and never onto another device.
+
+Both commands are pinned to the merge you confirmed:
+
+- `<primary>` is the primary checkout's path.
+- `<branch>` is the branch the merge was confirmed for. For a detached worktree, give
+  `--detached` in place of `--branch '<branch>'`.
+- `<head>` is the full commit hash the merge was confirmed for, never a short hash or a
+  name such as `HEAD`. For your own worktree it is what `git rev-parse HEAD` prints when
+  check 2 passes. In the sweep, `<branch>` and `<head>` are the `branch` and `head` the
+  identity command printed, once step 3 confirmed the merge for them.
+
+Before it removes anything, each command makes the identity check of "Sweeping older
+merged worktrees" step 2 on the worktree: the repository registers exactly that path on
+that branch, its backlink points at it, and its common git dir is the repository's. It
+then refuses, with nothing removed, when the worktree is on another branch, is detached
+when you named a branch, is on a branch when you said detached, or its `HEAD` is another
+commit. A worktree that moved after the merge was confirmed is not the one you confirmed:
+confirm the merge again from the start, never pass the new values just to get past the
+refusal.
 
 The discard command removes approved **Discard** paths. Give each path, then the digest
 recorded for it:
 
 ```sh
-python3 -I -B '<skill folder>/scripts/leftovers.py' discard --worktree '<worktree>' --primary '<primary>' --path '<path>' --digest '<digest>' --path '<path>' --digest '<digest>'
+python3 -I -B '<skill folder>/scripts/leftovers.py' discard --worktree '<worktree>' --primary '<primary>' --branch '<branch>' --head '<head>' --path '<path>' --digest '<digest>' --path '<path>' --digest '<digest>'
 ```
 
 It takes the paths in order. For each one it builds the manifest again and checks it
@@ -127,7 +150,7 @@ or when a file in it is neither untracked nor ignored.
 The caches command removes every rebuildable row:
 
 ```sh
-python3 -I -B '<skill folder>/scripts/leftovers.py' caches --worktree '<worktree>' --primary '<primary>'
+python3 -I -B '<skill folder>/scripts/leftovers.py' caches --worktree '<worktree>' --primary '<primary>' --branch '<branch>' --head '<head>'
 ```
 
 It sorts the worktree itself. It reads each rebuildable row, then asks git again
@@ -144,11 +167,17 @@ Read the result of either command the same way:
   - `refused: <path>: <reason>; it may be partly removed`: the removal itself failed.
     This follows any error, such as a folder that cannot be changed, and not only a
     change made by someone else.
-  - `refused: <reason>` with no path: nothing was removed at all.
+  - `refused: <path>: it was removed, but reporting that failed (<error>); nothing after
+    it was touched`: the removal succeeded and its `removed:` line could not be written.
+    The path is gone.
+  - `refused: <reason>` with no path: the command stopped before its first removal, such
+    as on a failed identity, branch or `HEAD` check. This run removed nothing.
 
   Report the lines and the refusal. Remove nothing more, by this command or any other
   means: cleanup of this worktree is blocked.
-- **Anything else**: treat it as refused, the same way.
+- **Anything else** (another exit code, no refusal line, or output that is cut off):
+  treat it as refused, the same way, and never conclude that nothing was removed. Sort
+  the worktree to see what is left, and report that.
 
 Accepted residual risk: a path replaced between its last check and its removal, or a
 folder moved out while it is being removed, is not detected, because a worktree has one
@@ -264,7 +293,8 @@ nothing if any does:
    `git merge-base --is-ancestor HEAD origin/<default branch>` after
    `git fetch origin <default branch>`.
 2. `HEAD` equals `headRefOid` or is an ancestor of `origin/<default branch>`, so nothing
-   was added after the merge.
+   was added after the merge. Record the full hash `git rev-parse HEAD` prints: it is the
+   `<head>` the removing commands need.
 3. This is a linked worktree (its git dir differs from the common git dir), not the
    primary checkout, and it is your session's own working directory or one you created
    in this session. Never another worktree, and never one found only by listing worktrees.
@@ -477,13 +507,16 @@ Then, for each named worktree, in this order:
    - Exit 0: continue. Skip the worktree if it has a `.gitmodules` file.
    - Exactly `refused: the worktree's Git pointer is broken` (the note may say
      `needs repair`, and `git worktree list` may show `prunable`). The script says this
-     only when the path's `.git` file names a git folder that does not exist. Run
-     `git -C <primary> worktree repair <worktree>`, which rewrites git's own metadata
-     only. Then run the identity command again: a `git status` that works is not enough.
-     Unless it now exits 0, skip the worktree and report it.
-   - Any other refusal or exit, such as a git error, warning or timeout: skip the worktree
-     and report it. Never repair it.
-3. **Confirm the merge.** `HEAD` is the `head` the identity command printed.
+     only when the path's `.git` file names a git folder that does not exist. It reads
+     that file as git does, so it strips trailing CR and LF, and it has verified that the
+     folder is absent. Run `git -C <primary> worktree repair <worktree>`, which rewrites
+     git's own metadata only. Then run the identity command again: a `git status` that
+     works is not enough. Unless it now exits 0, skip the worktree and report it.
+   - Any other refusal or exit, such as a git error, warning or timeout, or a git folder
+     that cannot be checked because of a permission or other error: skip the worktree and
+     report it. Never repair it.
+3. **Confirm the merge.** `HEAD` is the `head` the identity command printed. It is the
+   `<head>` of step 4, so the caches command refuses if `HEAD` moved after this step.
    - With a branch: run
      `gh pr list --head <branch> --state merged --json number,headRefOid,baseRefName`. It
      must return a pull request whose `baseRefName` is the default branch, and `HEAD` must
@@ -496,7 +529,8 @@ Then, for each named worktree, in this order:
 4. **Sort its leftover files.** If the sort fails or any row is real work, skip the
    worktree, change nothing in it, and report it once as blocked, with the paths. Answers
    from another session do not count. If every row is rebuildable, run the caches command
-   ("Removing" says how); if it refuses, stop for this worktree.
+   with the `branch` and `head` that step 3 confirmed ("Removing" says how); if it
+   refuses, stop for this worktree.
 5. **Delete the branch.** A detached worktree has no branch: go to step 6. Otherwise run
    `git -C <worktree> switch --detach`, because git refuses to delete a branch that is
    still checked out, then `git --git-dir=<common git dir> branch -d <branch>`.

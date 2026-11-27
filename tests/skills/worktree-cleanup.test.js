@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -112,6 +112,25 @@ test("git worktree remove deletes ignored files, and status --porcelain --ignore
   assert.match(must(path, "status", "--porcelain", "--ignored"), /!! \.env[\s\S]*!! \.private\//)
   must(path, "switch", "-q", "--detach")
   assert.ok(git(primary, "worktree", "remove", path).ok, "git removes it without force, ignored files included")
+})
+
+test("a folder that holds only a repository is invisible to status, and git removes it with the worktree", async (t) => {
+  const { primary, worktree } = await repository(t)
+  const path = await worktree("nested", { push: true })
+  await mkdir(join(path, "saved", ".git"), { recursive: true })
+  await writeFile(join(path, "saved", ".git", "config"), "[core]\n")
+  assert.equal(must(path, "status", "--porcelain", "--ignored"), "", "git lists nothing for it")
+  assert.ok(git(primary, "worktree", "remove", path).ok, "git removes it without force")
+  await assert.rejects(readFile(join(path, "saved", ".git", "config")), "the nested files are gone")
+})
+
+test("git reads a worktree pointer file that ends in CR LF", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("crlf")
+  const pointer = await readFile(join(path, ".git"), "utf8")
+  assert.match(pointer, /^gitdir: [^\r\n]+\n$/)
+  await writeFile(join(path, ".git"), pointer.replace("\n", "\r\n"))
+  assert.equal(must(path, "rev-parse", "--abbrev-ref", "HEAD"), "crlf")
 })
 
 // The reference's rule: status `!!`, and the last path component, as git prints it, equals a listed name (`*.pyc`: ends in `.pyc`).

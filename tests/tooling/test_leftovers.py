@@ -54,18 +54,25 @@ class LeftoversTest(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def run_script(self, mode, *paths, worktree=None, extra=()):
+    def run_script(self, mode, *paths, worktree=None, extra=(), stdout=subprocess.PIPE):
         command = [sys.executable, "-I", "-B", str(SCRIPT), mode, "--worktree", str(worktree or self.linked)]
         for path in paths:
             command += ["--path", path]
-        return subprocess.run([*command, *extra], cwd=self.root, capture_output=True, text=True, timeout=60)
+        return subprocess.run([*command, *extra], cwd=self.root, stdout=stdout, stderr=subprocess.PIPE, text=True, timeout=60)
 
-    def discard(self, *pairs, worktree=None, primary=None):
+    def pin(self, branch="feat/x", head=None):
+        """The branch, or detached head, and the commit a removing mode is told the merge was confirmed for."""
+        head = head or git(self.linked, "rev-parse", "HEAD").strip()
+        return [*(("--branch", branch) if branch else ("--detached",)), "--head", head]
+
+    def discard(self, *pairs, worktree=None, primary=None, pin=None, stdout=subprocess.PIPE):
         extra = [item for path, digest in pairs for item in ("--path", path, "--digest", digest)]
-        return self.run_script("discard", worktree=worktree, extra=[*extra, "--primary", str(primary or self.main)])
+        extra += ["--primary", str(primary or self.main), *(pin or self.pin())]
+        return self.run_script("discard", worktree=worktree, extra=extra, stdout=stdout)
 
-    def caches(self, worktree=None, primary=None):
-        return self.run_script("caches", worktree=worktree, extra=["--primary", str(primary or self.main)])
+    def caches(self, worktree=None, primary=None, pin=None, stdout=subprocess.PIPE):
+        extra = ["--primary", str(primary or self.main), *(pin or self.pin())]
+        return self.run_script("caches", worktree=worktree, extra=extra, stdout=stdout)
 
     def inside(self, *argv, **patches):
         """Run the script in this process, so one of its functions can be replaced; the current folder is restored."""
@@ -393,12 +400,13 @@ class LeftoversTest(unittest.TestCase):
         (self.main / "notes.md").write_text("x\n")
         (self.main / "node_modules").mkdir()
         digest = self.digest("notes.md")
-        primary = ["--primary", str(self.main)]
+        pin = self.pin()
+        primary = ["--primary", str(self.main), *pin]
         self.refused(self.run_script("discard", extra=primary))
         self.refused(self.run_script("discard", "notes.md", extra=primary))
         self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest, "--digest", digest, *primary]))
-        self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest]))
-        self.refused(self.run_script("caches"))
+        self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest, *pin]))
+        self.refused(self.run_script("caches", extra=pin))
         self.refused(self.run_script("caches", "node_modules", extra=primary))
         self.stopped(self.discard(("notes.md", digest), worktree=self.main))
         self.refused(self.caches(worktree=self.main))
@@ -440,7 +448,8 @@ class LeftoversTest(unittest.TestCase):
                 return node
             return scanned
 
-        code, out, err = self.inside("caches", "--worktree", str(self.linked), "--primary", str(self.main), _scan=stage_after)
+        code, out, err = self.inside("caches", "--worktree", str(self.linked), "--primary", str(self.main), *self.pin(),
+                                     _scan=stage_after)
         self.assertEqual((code, out), (2, ""), err)
         self.assertRegex(err, r"\Arefused: node_modules/: [^\n]+; nothing in it was removed\n\Z")
         self.assertTrue((self.linked / "node_modules/pkg/index.js").exists())
@@ -525,7 +534,7 @@ class LeftoversTest(unittest.TestCase):
         def another(device):
             return lambda info: -1 if info.st_ino in mounted else device(info)
 
-        worktree, primary = ["--worktree", str(self.linked)], ["--primary", str(self.main)]
+        worktree, primary = ["--worktree", str(self.linked)], ["--primary", str(self.main), *self.pin()]
         for argv in (["manifest", *worktree, "--path", "out"], ["discard", *worktree, "--path", "out", "--digest", digest, *primary],
                      ["caches", *worktree, *primary]):
             with self.subTest(mode=argv[0]):
@@ -556,6 +565,112 @@ class LeftoversTest(unittest.TestCase):
         self.stopped(run)
         self.assertRegex(run.stderr, r"\Arefused: a.md: [^\n]+; nothing in it was removed\n\Z")
 
+    def test_a_folder_that_holds_only_a_repository_makes_sort_refuse_instead_of_printing_no_row(self):
+        self.write("saved/.git/config", "[core]\n")
+        self.assertEqual(git(self.linked, "status", "--porcelain", "--ignored"), "", "Git lists nothing for it")
+        run = self.run_script("sort")
+        self.refused(run)
+        self.assertIn("'saved/.git'", run.stderr)
+        shutil.rmtree(self.linked / "saved")
+        self.assertEqual(self.rows("sort"), [])
+
+    def test_a_repository_below_an_ignored_folder_or_named_in_another_case_makes_sort_refuse(self):
+        for name in ("build/saved/.git/config", "src/deep/er/.GIT/HEAD"):
+            with self.subTest(name=name):
+                self.write(name)
+                self.assertEqual(git(self.linked, "status", "--porcelain", "--ignored"), "", "Git lists nothing for it")
+                run = self.run_script("sort")
+                self.refused(run)
+                self.assertIn(repr(str(Path(name).parent)), run.stderr)
+                shutil.rmtree(self.linked / Path(name).parts[0] / Path(name).parts[1])
+        (self.linked / "src/.git").write_text("gitdir: /nowhere\n")
+        listed = self.run_script("sort")
+        self.assertNotEqual((listed.returncode, listed.stdout), (0, ""), "a .git file in a folder never passes as clean")
+
+    def test_the_walk_for_repositories_follows_no_link_and_crosses_no_device(self):
+        outside = self.outside()
+        (outside / ".git").mkdir()
+        (self.linked / "src/link").symlink_to(outside)
+        self.write("src/deep/kept.md")
+        git(self.linked, "add", "-A")
+        git(self.linked, "commit", "-qm", "a tracked link and a deep folder")
+        self.assertEqual(self.rows("sort"), [], "a link is an entry, never a folder to read")
+        mounted = os.stat(self.linked / "src/deep").st_ino
+        code, out, err = self.inside("sort", "--worktree", str(self.linked),
+                                     _device=lambda device: lambda info: -1 if info.st_ino == mounted else device(info))
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertIn("another device", err)
+        self.write("notes.md")
+        (self.linked / "src/deep/.git").mkdir()
+        self.assertEqual([row["path"] for row in self.rows("sort")], ["notes.md"], "rows are printed; only an empty answer is walked")
+
+    def test_removing_modes_refuse_a_worktree_that_left_the_confirmed_branch(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest, confirmed = self.digest("notes.md"), self.pin()
+        git(self.linked, "switch", "-q", "-c", "feat/unmerged")
+        git(self.linked, "switch", "-q", "--detach")
+        for state, pins in (("feat/unmerged", (confirmed, self.pin(branch=None))), (None, (confirmed, self.pin("feat/unmerged")))):
+            git(self.linked, "switch", "-q", *((state,) if state else ("--detach",)))
+            for pin in pins:
+                for run in (self.discard(("notes.md", digest), pin=pin), self.caches(pin=pin)):
+                    with self.subTest(state=state, pin=pin[:2]):
+                        self.refused(run)
+                        self.assertIn("on that branch", run.stderr)
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+        run = self.caches(pin=self.pin(branch=None))
+        self.assertEqual((run.returncode, run.stdout, run.stderr), (0, "removed: node_modules/\n", ""))
+
+    def test_removing_modes_refuse_a_worktree_whose_head_moved_after_the_merge_was_confirmed(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest, confirmed = self.digest("notes.md"), self.pin()
+        git(self.linked, "commit", "-q", "--allow-empty", "-m", "after the merge")
+        for run in (self.discard(("notes.md", digest), pin=confirmed), self.caches(pin=confirmed)):
+            self.refused(run)
+            self.assertEqual(run.stderr, "refused: the worktree's HEAD is not the commit that was confirmed\n")
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+        run = self.discard(("notes.md", digest))
+        self.assertEqual((run.returncode, run.stdout, run.stderr), (0, "removed: notes.md\n", ""))
+
+    def test_removing_modes_need_the_confirmed_branch_and_a_full_commit_hash(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest, (_, branch, _, head) = self.digest("notes.md"), self.pin()
+        primary = ["--primary", str(self.main)]
+        for pin in ([], ["--branch", branch], ["--head", head], ["--detached", "--branch", branch, "--head", head],
+                    ["--branch", branch, "--head", "HEAD"], ["--branch", branch, "--head", head[:12]],
+                    ["--branch", branch, "--head", head.upper()], ["--branch", branch, "--head", head + "0"]):
+            with self.subTest(pin=pin):
+                for run in (self.run_script("discard", extra=["--path", "notes.md", "--digest", digest, *primary, *pin]),
+                            self.run_script("caches", extra=[*primary, *pin])):
+                    self.refused(run)
+                    self.assertIn("--head <commit>", run.stderr)
+        self.refused(self.run_script("identity", extra=[*primary, "--branch", branch, "--head", head]))
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+
+    def test_a_removal_that_could_not_be_reported_is_named_as_removed(self):
+        for name in ("a.md", "b.md", "node_modules/x.js", "src/__pycache__/x.pyc"):
+            self.write(name)
+        pairs = [(path, self.digest(path)) for path in ("a.md", "b.md")]
+        report = r"\Arefused: ([^\n:]+): it was removed, but reporting that failed \(\w+\); nothing after it was touched\n\Z"
+        steps = ((lambda out: self.discard(*pairs, stdout=out), {"a.md"}, {"b.md", "node_modules/", "src/__pycache__/"}),
+                 (lambda out: self.caches(stdout=out), {"node_modules/", "src/__pycache__/"}, {"b.md"}))
+        for remove, candidates, untouched in steps:
+            reader, writer = os.pipe()
+            os.close(reader)
+            try:
+                run = remove(writer)
+            finally:
+                os.close(writer)
+            self.assertEqual(run.returncode, 2, run.stderr)
+            self.assertRegex(run.stderr, report)
+            gone = run.stderr.split(": ")[1]
+            self.assertIn(gone, candidates)
+            self.assertFalse((self.linked / gone).exists(), "the path it names is gone")
+            self.assertEqual({row["path"] for row in self.rows("sort")}, untouched | candidates - {gone},
+                             "it stopped at the first path it could not report")
+
     def test_identity_calls_a_pointer_broken_only_when_its_git_folder_is_missing(self):
         head = self.main / ".git/worktrees/linked/HEAD"
         head.write_text("garbage\n")
@@ -575,6 +690,40 @@ class LeftoversTest(unittest.TestCase):
         self.assertEqual(self.inside(*argv)[0], 0)
         code, out, err = self.inside(*argv, subprocess=timing_out(subprocess.run))
         self.assertEqual((code, out, err), (2, "", "refused: Git could not run\n"))
+
+    def test_identity_reads_the_pointer_file_as_git_does(self):
+        pointer = self.linked / ".git"
+        named = pointer.read_bytes().rstrip(b"\n")
+        for ending in (b"\r\n", b"\n\n", b"\r\n\r\n", b""):
+            with self.subTest(ending=ending):
+                pointer.write_bytes(named + ending)
+                self.assertEqual(git(self.linked, "rev-parse", "--abbrev-ref", "HEAD").strip(), "feat/x", "Git accepts it")
+                run = self.identity(self.linked, "feat/x")
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+        pointer.write_bytes(b"gitdir: \r\n")
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertNotIn("pointer is broken", run.stderr)
+
+    def test_identity_does_not_call_a_pointer_broken_when_its_git_folder_cannot_be_checked(self):
+        if os.geteuid() == 0:
+            self.skipTest("root passes through every folder")
+        closed = self.root / "closed"
+        closed.mkdir()
+        (self.linked / ".git").write_text(f"gitdir: {closed}/gone\n")
+        closed.chmod(0)
+        self.addCleanup(closed.chmod, 0o700)
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertNotIn("pointer is broken", run.stderr)
+        closed.chmod(0o700)
+        (closed / "file").write_text("x\n")
+        (self.linked / ".git").write_text(f"gitdir: {closed}/file/gone\n")
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertNotIn("pointer is broken", run.stderr)
+        (self.linked / ".git").write_text(f"gitdir: {closed}/gone\n")
+        self.assertEqual(self.identity(self.linked, "feat/x").stderr, "refused: the worktree's Git pointer is broken\n")
 
     def second(self, name="second"):
         path = self.root / name
