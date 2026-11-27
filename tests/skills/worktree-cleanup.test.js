@@ -208,6 +208,30 @@ test("worktree repair fixes a worktree after the repository moved", async (t) =>
   assert.equal(must(path, ...commonDir), must(moved, ...commonDir), "repaired into this repository")
 })
 
+test("the documented switch and branch delete run no hook when hooks are pointed at nothing", async (t) => {
+  const { root, common, worktree } = await repository(t)
+  const marker = join(root, "hook-ran")
+  await mkdir(join(common, "hooks"), { recursive: true })
+  for (const name of ["post-checkout", "reference-transaction"]) {
+    await writeFile(join(common, "hooks", name), `#!/bin/sh\necho ${name} >> '${marker}'\n`, { mode: 0o755 })
+  }
+  // No `core.hooksPath` from the fixture here: only what the command itself passes.
+  const raw = (cwd, ...args) => spawnSync("git", args, { cwd, env, encoding: "utf8" })
+  const quiet = await worktree("quiet", { push: true })
+  const loud = await worktree("loud", { push: true })
+  await assert.rejects(readFile(marker), "the fixture itself ran no hook")
+  const detached = raw(quiet, "-c", "core.hooksPath=/dev/null", "switch", "-q", "--detach")
+  assert.equal(detached.status, 0, detached.stderr)
+  const deleted = raw(quiet, "-c", "core.hooksPath=/dev/null", `--git-dir=${common}`, "branch", "-d", "quiet")
+  assert.equal(deleted.status, 0, deleted.stderr)
+  await assert.rejects(readFile(marker), "the documented commands ran no hook")
+  assert.equal(raw(loud, "switch", "-q", "--detach").status, 0)
+  assert.equal(raw(loud, `--git-dir=${common}`, "branch", "-d", "loud").status, 0)
+  const ran = await readFile(marker, "utf8")
+  assert.match(ran, /post-checkout/, "without the setting, the switch runs the hook")
+  assert.match(ran, /reference-transaction/, "without the setting, the branch delete runs the hook")
+})
+
 const commonDir = ["rev-parse", "--path-format=absolute", "--git-common-dir"]
 // Raw stdout: `-z` output is NUL-separated and must not be trimmed or mixed with stderr.
 const entries = (cwd, ...args) => {
