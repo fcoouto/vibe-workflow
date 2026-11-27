@@ -309,7 +309,7 @@ git add docs/development.md
 git commit -m "docs: record Trail of Bits portability, static reading"
 ```
 
-Task 7 runs only if the user authorizes it at Step 4; otherwise the skills stay unlisted and Task 6 follows.
+Task 7 runs only if the user authorizes it at Step 4, and then before Task 6 so the final checks cover it; otherwise the skills stay unlisted and Task 6 follows.
 
 ### Task 6: Product docs, README and live injection check
 
