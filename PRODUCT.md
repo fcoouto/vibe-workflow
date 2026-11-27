@@ -49,7 +49,7 @@ overlapping behavior.
   providers in `config/routes.json` with local, token-free account reads,
   whether or not Smart Router is on. It launches nothing and grants no
   admission, reservation or spend permit. Records go to
-  `docs/vibe-council/sessions/<hash>_<topic>/` and are committed with the work.
+  `docs/vibe-workflow/council-sessions/<date>_<title>/` and are committed with the work.
   The coordinator never votes; the user decides.
 - Pull request guidance: the `vibe-pull-requests` skill (lifecycle, readiness,
   template, primary checkout) and advisory notes after matching shell commands.

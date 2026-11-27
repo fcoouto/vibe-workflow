@@ -62,12 +62,12 @@ picked ones.
      values from an answer with `ready: true`.
 4. **Write the brief.** Use [the brief template](brief-template.md). Pick the record
    location first (see Where the record goes). Then:
-   1. Write the brief to `docs/vibe-council/sessions/draft_<context>/brief.md`.
-      `<context>` is a short lowercase slug of the topic: at most 40 characters,
-      `[a-z0-9-]`.
-   2. Run `shasum -a 256` on it. Keep the full hash.
-   3. Rename the folder to `<hash12>_<context>`, where `<hash12>` is the first 12 hex
-      digits of the hash.
+   1. Write the brief to
+      `docs/vibe-workflow/council-sessions/<date>_<title>/brief.md`. `<date>` is
+      today's local date as `YYYY-MM-DD`. `<title>` is a short lowercase slug of the
+      topic: at most 40 characters, `[a-z0-9-]`. If that folder already exists, add
+      `-2` (then `-3`) to the title.
+   2. Run `shasum -a 256` on it. Keep the full hash for `result.md`.
 
    The brief never contains its own folder path. Never put secrets or personal data
    in it.
