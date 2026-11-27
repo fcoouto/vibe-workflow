@@ -9,7 +9,8 @@ tier-3 triggers, or the full-review area and bound.
 The reviewer is read-only by instruction: shell access remains available. No
 installs, builds, scanner runs or partner scripts unless the user approved that exact run;
 being installed is not approval. Never use real credentials or contact live services.
-Do not write or run exploit code.
+The coordinator asks the user first and names each approved command in the brief;
+the reviewer runs nothing that is not named there. Do not write or run exploit code.
 
 Trace untrusted input to sensitive operations and inspect callers. For every
 candidate, look for counterevidence such as upstream validation, ownership
@@ -24,9 +25,13 @@ lines; inspect safely without exposing values.
 
 If `differential-review` appears in the coordinator's available skills, use it
 within these limits for tier 3. Read its `adversarial.md` rather than delegating
-to its plugin agent. Point its report file to the private reports folder under
-[report-storage.md](report-storage.md); if storage is unavailable, do not write
-the report elsewhere. Never use `fp-check`: its deep path writes and runs exploit code.
+to its plugin agent. The reviewer never writes files. The reviewer must skip or
+redirect any report file a partner skill requests to its response, not a file,
+and returns findings to the coordinator.
+The coordinator writes the report using [report-storage.md](report-storage.md).
+If no verified path exists, the reviewer writes nothing; the coordinator follows
+the chat fallback in the storage procedure. Never use `fp-check`: its deep path
+writes and runs exploit code.
 
 An `explore` reviewer cannot load skills (`Permission denied: skill` was observed).
 For each partner skill named in either mode, the coordinator loads it once and

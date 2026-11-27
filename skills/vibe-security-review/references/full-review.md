@@ -32,4 +32,6 @@ them during review. Use `supply-chain-risk-auditor` for dependencies,
 and config design, and `c-review` or `rust-review` when the language matches.
 Use Semgrep or CodeQL only if already installed. Run each tool or partner script
 only after the user approves that exact run. `supply-chain-risk-auditor` sends
-package names to registries and GitHub; disclose this before asking.
+package names to registries and GitHub; disclose this before asking. The
+coordinator asks the user before the sweep and names approved commands in each
+sweep brief. Reviewers run no other commands from these tools or scripts.

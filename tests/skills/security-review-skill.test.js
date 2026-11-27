@@ -30,6 +30,24 @@ test("reviewer brief carries the read-only, routing and redaction rules", async 
     "available skills", "approved that exact run", "installed is not approval", "cannot load skills",
     "Base directory for this skill:", "{baseDir}", "read tool"])
 })
+test("reviewer returns findings without writing partner reports", async () => {
+  hasAll((await read("references/reviewer-brief.md")).replace(/\s+/g, " "), [
+    "The reviewer never writes files",
+    "skip or redirect any report file",
+    "returns findings to the coordinator",
+    "coordinator writes the report using",
+    "If no verified path exists, the reviewer writes nothing",
+  ])
+})
+test("coordinator obtains exact-run approval and names commands in each brief", async () => {
+  hasAll((await read("references/reviewer-brief.md")).replace(/\s+/g, " "), [
+    "coordinator asks the user first and names each approved command in the brief",
+    "reviewer runs nothing that is not named there",
+  ])
+  hasAll((await read("references/full-review.md")).replace(/\s+/g, " "), [
+    "coordinator asks the user before the sweep and names approved commands in each sweep brief",
+  ])
+})
 test("full review states its bound, areas, verification and output", async () => {
   hasAll(await read("references/full-review.md"), ["bound", "supply chain", "AI-agent", "refute", "sibling",
     "report-storage.md", "reviewer-brief.md", "No fixes", "supply-chain-risk-auditor", "agentic-actions-auditor", "sharp-edges",
