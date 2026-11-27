@@ -56,7 +56,7 @@
   - `A pre-existing finding is reported to the user and does not block an unrelated pull request.`
   - `If a required tier-3 review could not run, the pull request stays [BLOCKED] and says so.`
   Going public covers every ref that will become visible: list them with `git for-each-ref`, scan history with `gitleaks` only after the user approves that exact run, else search with `git log --all -G'<pattern>' --format=%H --name-only` so commits and file names print, never matching lines.
-- `reviewer-brief.md` (spec §1 Reviewer): the brief to fill in for a tier-3 reviewer or a full-review sweep: `agent: "explore"`; model via `smart_router_select` with `reviewing` set to the author's model, else the top tier; only providers already in use; read-only by instruction, no installs, builds, scanner runs or partner scripts unless the user approved that exact run (being installed is not approval); never use real credentials or contact live services; the trace / counterevidence / confirmed-likely-hardening / introduced-or-pre-existing rules; secrets quoted as file, line and type only, in tool output as well as the report (search with options that print file names, not matching lines); Trail of Bits `differential-review` and `fp-check` used when listed in the agent's available skills, with any report file pointed at the reports folder. These rules apply in both modes.
+- `reviewer-brief.md` (spec §1 Reviewer): the brief to fill in for a tier-3 reviewer or a full-review sweep: `agent: "explore"`; model via `smart_router_select` with `reviewing` set to the author's model, else the top tier; only providers already in use; read-only by instruction, no installs, builds, scanner runs or partner scripts unless the user approved that exact run (being installed is not approval); never use real credentials or contact live services; the trace / counterevidence / confirmed-likely-hardening / introduced-or-pre-existing rules; secrets quoted as file, line and type only, in tool output as well as the report (search with options that print file names, not matching lines); Trail of Bits `differential-review` used when listed in the agent's available skills, reading its `adversarial.md` rather than delegating to its plugin agent, with its report file pointed at the reports folder; `fp-check` never used, because its deep path writes and runs exploit code (see `docs/development.md`, Security review: what is known). These rules apply in both modes.
 - `full-review.md` (spec §2): steps 1-6 (bound first, map, sweep by area with the seven areas, verify with a refute pass and sibling search, report to the reports folder plus a chat summary with the path, no fixes); partner tools and Semgrep or CodeQL used when present, each only after the user approves that exact run; `supply-chain-risk-auditor` also says it sends package names to registries and GitHub.
 - `report-storage.md` (spec §3): main checkout from the first entry of `git worktree list --porcelain`; folder `.vibe-workflow/security-reports/`; refuse if `.vibe-workflow` or the reports folder is a symlink, or if `git ls-files` lists anything inside the folder; folder `.gitignore` exactly `*`, rewritten when missing or different; `git -C <main checkout> check-ignore -q <report path>` before writing, and on failure no write, report in chat with the reason; not a Git repository or no main checkout found means the same chat fallback; file name `YYYY-MM-DD-HHMM-<full|ship>-<topic>.md`, with `-2`, `-3` appended when taken, never overwritten; `0700` folder, `0600` files; never `git add -f`, never copy a report into a commit, PR, issue or log; the stated limits (backups, cloud sync, `git clean -x`).
 
@@ -81,8 +81,8 @@ test("ship check carries the tiers, rules and PR section", async () => {
 test("reviewer brief carries the read-only, routing and redaction rules", async () => {
   hasAll(await read("references/reviewer-brief.md"), ['agent: "explore"', "smart_router_select", "reviewing", "top tier",
     "counterevidence", "confirmed", "likely", "hardening", "pre-existing", "file, line and type", "tool output",
-    "real credentials", "live services", "differential-review", "fp-check", "available skills", "approved that exact run",
-    "installed is not approval"])
+    "real credentials", "live services", "differential-review", "adversarial.md", "fp-check", "exploit code",
+    "available skills", "approved that exact run", "installed is not approval"])
 })
 test("full review states its bound, areas, verification and output", async () => {
   hasAll(await read("references/full-review.md"), ["bound", "supply chain", "AI-agent", "refute", "sibling",
@@ -298,16 +298,13 @@ git commit -m "feat: add the Security section to pull request guidance"
 **Files:**
 - Modify: `docs/development.md` (new section `## Security review: what is known`, after the last section)
 
-- [ ] **Step 1: Pin the revision.** Run `gh api repos/trailofbits/skills/commits/main --jq .sha` and keep the SHA.
-- [ ] **Step 2: Read, do not install.** Fetch the `SKILL.md` of `differential-review`, `fp-check`, `agentic-actions-auditor`, `sharp-edges` and `supply-chain-risk-auditor` from `https://raw.githubusercontent.com/trailofbits/skills/<SHA>/plugins/<name>/skills/<name>/SKILL.md`. For each, record: tools named in `allowed-tools`; uses of `{baseDir}`, `${CLAUDE_PLUGIN_ROOT}`, the `Workflow` tool or plugin agents; bundled scripts and their runtime needs (`uv`, `gh`, network).
-- [ ] **Step 3: Write the section**: one line per skill with those facts and a verdict, `likely portable` or `Claude Code only`, marked "static reading, not observed on OpenCode", with the date and the SHA.
-- [ ] **Step 4: Stop.** Do not edit `skills/vibe-prepare-my-workspace/partners.json`. Its procedure marks a tool without official OpenCode support as `not-supported`, and listing needs a live load check that requires installing. Report the verdicts to the user and ask whether to authorize a live check or leave the skills unlisted (detection through the available skills list still works).
-- [ ] **Step 5: Commit**
+Steps 1-3 and 5 were done before implementation, on 27 November 2026 (commit "docs: record Trail of Bits portability, static reading"). Only Step 4's decision remains.
 
-```bash
-git add docs/development.md
-git commit -m "docs: record Trail of Bits portability, static reading"
-```
+- [x] **Step 1: Pin the revision.** `149d7b21f4067765b82e67029730b42d228ef4b4`.
+- [x] **Step 2: Read, do not install.** The five skills' `SKILL.md`, references and plugin parts at that SHA, plus OpenCode 2.3.2's skill loader.
+- [x] **Step 3: Write the section** `## Security review: what is known` in `docs/development.md`. Verdicts: `differential-review`, `agentic-actions-auditor`, `sharp-edges` and `supply-chain-risk-auditor` likely portable; `fp-check` not used.
+- [ ] **Step 4: Stop.** Do not edit `skills/vibe-prepare-my-workspace/partners.json`. Its procedure marks a tool without official OpenCode support as `not-supported`, and listing needs a live load check that requires installing. Report the verdicts to the user and ask whether to authorize a live check or leave the skills unlisted (detection through the available skills list still works).
+- [x] **Step 5: Commit** (done)
 
 Task 7 runs only if the user authorizes it at Step 4, and then before Task 6 so the final checks cover it; otherwise the skills stay unlisted and Task 6 follows.
 

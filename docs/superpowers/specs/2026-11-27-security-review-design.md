@@ -172,9 +172,10 @@ provider sees the code. (Builder check; my call.) Brief:
 - never run commands with real credentials, contact live services or print a
   secret's value; when a line looks like a secret, quote only its file, line
   and type, never the line itself, in tool output as well as the report;
-- if `differential-review` or `fp-check` is installed, use them within these
-  limits and point any report file they write at the private reports folder
-  (see Report storage), never elsewhere in the repository.
+- if `differential-review` is installed, use it within these limits, read its
+  `adversarial.md` instead of delegating to its plugin agent, and point its report
+  file at the private reports folder (see Report storage), never elsewhere in the
+  repository. Do not use `fp-check`: its deep path writes and runs exploit code.
 
 **Result.** A `Security` section in the PR body: head commit, tier and reason,
 what was checked, findings with severity and status, and limits. The skill tells
@@ -260,8 +261,8 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
 
 Add Trail of Bits skills to `vibe-prepare-my-workspace/partners.json` as
 optional skill partners, so the user can see and approve them. Proposed set:
-`differential-review`, `fp-check`, `agentic-actions-auditor`, `sharp-edges`,
-`supply-chain-risk-auditor`. Each needs a portability check on OpenCode before
+`differential-review`, `agentic-actions-auditor`, `sharp-edges`,
+`supply-chain-risk-auditor` (`fp-check` dropped after the static check). Each needs a portability check on OpenCode before
 it is listed (see "Left to the builder").
 
 ## Trail of Bits evaluation
@@ -269,7 +270,7 @@ it is listed (see "Left to the builder").
 | Skill | Use in vibe-workflow | Why |
 |-------|----------------------|-----|
 | `differential-review` | Partner, tier 3 | Strongest change review. Too heavy below tier 3; writes a report file by default. |
-| `fp-check` | Partner, and idea in our briefs | Refute-before-report is the main defense against noisy findings. |
+| `fp-check` | Idea only (refute-before-report, in our briefs) | Refute-before-report is the main defense against noisy findings. Not a partner: its deep path writes and runs exploit PoCs, which breaks the read-only and no-exploit rules (pre-implementation check, `docs/development.md`). |
 | `insecure-defaults` | Idea only (checklist categories) | Runs through Claude Code's `Workflow` tool; not runnable on OpenCode. |
 | `sharp-edges` | Partner (full review), idea for the short list | Read-only skill; likely portable. |
 | `supply-chain-risk-auditor` | Partner (full review, dependency changes) | Script-measured; needs `uv`, `gh` and network, so ask first. |
