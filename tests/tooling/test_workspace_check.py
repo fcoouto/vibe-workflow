@@ -102,12 +102,34 @@ class LocalTest(unittest.TestCase):
         self.assertTrue(present({"kind": "file", "path": "plugins/rtk.ts"}, {}, self.home)[0])
         self.assertFalse(present({"kind": "file", "path": "plugins/none.ts"}, {}, self.home)[0])
         (self.config_dir / "skills/impeccable").mkdir(parents=True)
+        self.assertFalse(present({"kind": "skill", "name": "impeccable"}, {}, self.home)[0], "an empty folder is no skill")
+        (self.config_dir / "skills/impeccable/SKILL.md").write_text("---\nname: impeccable\n---\n")
         self.assertTrue(present({"kind": "skill", "name": "impeccable"}, {}, self.home)[0])
+
+    def test_a_skill_needs_a_regular_skill_file(self):
+        present = self.check.integration_present
+        spec = {"kind": "skill", "name": "sharp-edges", "version_from": "frontmatter"}
+        skills = self.config_dir / "skills"
+        skills.mkdir()
+        (skills / "sharp-edges").write_text("a plain file, not a skill folder\n")
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+        (skills / "sharp-edges").unlink()
+        (skills / "sharp-edges/SKILL.md").mkdir(parents=True)
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+
+    def test_incomplete_opencode_folder_falls_back_to_a_valid_shared_copy(self):
+        (self.config_dir / "skills/sharp-edges/references").mkdir(parents=True)
+        shared = self.home / ".agents/skills/sharp-edges"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: sharp-edges\nversion: 1.2.0\n---\n")
+        spec = {"kind": "skill", "name": "sharp-edges", "version_from": "frontmatter"}
+        self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "1.2.0"))
 
     def test_symlinked_skill_is_present_and_dangling_is_missing(self):
         present = self.check.integration_present
         target = self.home / "agents/caveman"
         target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("---\nname: caveman\n---\n")
         skills = self.config_dir / "skills"
         skills.mkdir()
         os.symlink(target, skills / "caveman")
@@ -158,6 +180,8 @@ class LocalTest(unittest.TestCase):
         spec = {"kind": "skill", "name": "sharp-edges"}
         self.assertFalse(self.check.integration_present(spec, {}, self.home)[0])
         (self.home / ".agents/skills/sharp-edges").mkdir(parents=True)
+        self.assertFalse(self.check.integration_present(spec, {}, self.home)[0])
+        (self.home / ".agents/skills/sharp-edges/SKILL.md").write_text("---\nname: sharp-edges\n---\n")
         self.assertTrue(self.check.integration_present(spec, {}, self.home)[0])
 
 
@@ -425,6 +449,8 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(partner["why"], why)
                 self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
                 (self.config_dir / "skills" / name).mkdir(parents=True)
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing", "an empty folder is not ready")
+                (self.config_dir / "skills" / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
                 self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
 
     def test_shared_folder_alone_makes_a_trail_of_bits_partner_ready(self):
