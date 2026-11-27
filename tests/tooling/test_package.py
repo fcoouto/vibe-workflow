@@ -116,6 +116,7 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-security-review/SKILL.md", "skills/vibe-security-review/references/ship-check.md",
                     "skills/vibe-security-review/references/full-review.md", "skills/vibe-security-review/references/reviewer-brief.md",
                     "skills/vibe-security-review/references/report-storage.md",
+                    "skills/vibe-security-review/scripts/store_report.py",
                     "scripts/select.py", "config/routes.json"}
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
