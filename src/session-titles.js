@@ -84,6 +84,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   const current = (sessionID, admitted) => !controller.signal.aborted && generation(sessionID) === admitted.generation &&
     preference.revision === admitted.revision
   const enqueue = (sessionID, job, admitted = admit(sessionID)) => {
+    const grace = shellGraces.get(sessionID)
+    if (grace) grace.queued++
     const next = (chains.get(sessionID) ?? Promise.resolve()).then(() => {
       if (current(sessionID, admitted)) return job(admitted)
     }).catch(() => {})
@@ -507,18 +509,39 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (before.has(root) && before.get(root) === shellGraces.get(root)) cancelShellGrace(root)
   }
 
-  // A cold start may belong to this root until its ancestry resolves. Bound that uncertainty so an unrelated,
-  // stalled lookup cannot keep an idle title quiet indefinitely.
-  async function waitForShellStarts(still) {
+  // Wait outside the title queue. Retry the read if a competing title operation or an unresolved shell start
+  // arrives before the write. Cold starts share one deadline so an unrelated lookup cannot strand the title.
+  async function finishShellGrace(root, grace, still) {
     let timer, cutoff
+    let expired = false
+    const unresolved = () => expired ? [] : [...shellStarts].flatMap(([id, start]) => exited.has(id) ? [] : [start])
     try {
       while (still()) {
-        const starts = [...shellStarts].flatMap(([id, start]) => exited.has(id) ? [] : [start])
-        if (!starts.length) break
-        cutoff ??= new Promise((done) => { timer = setTimeout(done, deadline, false) })
-        if (!await Promise.race([Promise.all(starts).then(() => true), cutoff])) break
+        const queued = chains.get(root)
+        if (queued) {
+          await queued
+          continue
+        }
+        const starts = unresolved()
+        if (starts.length) {
+          cutoff ??= new Promise((done) => { timer = setTimeout(done, deadline, false) })
+          expired = !await Promise.race([Promise.all(starts).then(() => true), cutoff])
+          continue
+        }
+        const revision = grace.queued
+        const info = await read(root)
+        if (running(info.time) || !still()) return
+        if (grace.queued !== revision || unresolved().length) continue
+        let retry = false
+        await enqueue(root, (admitted) => relabel(root, true, admitted, {
+          known: info,
+          still: () => {
+            retry = grace.queued !== revision + 1 || unresolved().length > 0
+            return !retry && still()
+          },
+        }), grace.admission)
+        if (!retry) return
       }
-      return timer !== undefined
     } finally { clearTimeout(timer) }
   }
 
@@ -530,7 +553,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!shells.delete(shellID)) return
     const { root } = shell, entry = sessions.get(root)
     if (!entry?.task || entry.silenced || (shell.entry && shell.entry !== entry) || hasShell(root)) return
-    const grace = { admission: admit(root), timer: null }
+    const grace = { admission: admit(root), timer: null, queued: 0 }
     const sameGrace = () => shellGraces.get(root) === grace
     const still = () => sameGrace() && activeShellGrace(root) && sessions.get(root) === entry &&
       !hasShell(root) && !pending.get(root)?.size
@@ -539,14 +562,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       try {
         if (!still() || !await on()) return
         const now = await activity(root)
-        if (now.children || !still()) return
-        let info = await read(root)
-        if (running(info.time) || !still()) return
-        // Refresh a title that could have changed while waiting for cold starts to resolve.
-        if (await waitForShellStarts(still) && still()) info = await read(root)
-        if (!running(info.time) && still()) {
-          await enqueue(root, (admitted) => relabel(root, true, admitted, { known: info, still }), grace.admission)
-        }
+        if (!now.children) await finishShellGrace(root, grace, still)
       } catch {} finally {
         if (sameGrace()) cancelShellGrace(root)
       }

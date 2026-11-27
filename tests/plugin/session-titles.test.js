@@ -1668,6 +1668,53 @@ test("a manual rename during the shell exit checks wins", async (t) => {
   assert.equal(h.titles.get("ses_1"), "My own title")
 })
 
+test("a manual rename while shell grace waits behind a title save wins", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const save = h.storage.set
+  let release
+  const gate = new Promise((done) => { release = done })
+  h.storage.set = async (...args) => { await gate; return save(...args) }
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await exited(h, "sh_1")
+  await tick()
+  h.titles.set("ses_1", "My own title")
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), "My own title")
+})
+
+test("a cold shell start during a refreshed title read can still veto WAITING", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  h.facts.parents.child_other = "other"
+  const releaseOther = delaySessionRead(h, "child_other")
+  h.push(job("child_other", "sh_other"))
+  await settle()
+  await exited(h, "sh_1")
+  await tick()
+  const releaseRoot = delaySessionRead(h, "ses_1")
+  releaseOther()
+  await settle()
+  const releaseStart = delaySessionRead(h, "child_slow")
+  h.push(job("child_slow", "sh_2"))
+  await settle()
+  releaseRoot()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  releaseStart()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), quiet)
+})
+
 test("the final idle read does not queue a real request behind a slow root read", async (t) => {
   const tick = shellClock(t)
   const h = await host(t)
