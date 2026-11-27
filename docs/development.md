@@ -781,3 +781,24 @@ Observed live, 27 November 2026, OpenCode 2.3.2, before implementation. Each pro
   `.gitignore` or a tracked report makes `check-ignore` fail; a symlinked folder is
   detected with `[ -L ]`; `git clean -ndx` lists the folder.
 - On this machine `uv` is installed; `gitleaks`, `semgrep` and `codeql` are not.
+
+Notes, as built (`src/skill-advice.js`, `src/pr-advice.js`). All four are gated on an
+onboarded project only, whatever the git workflow setting, and all are advisory:
+
+- `SHIP_NOTES["requesting-code-review"]`: when that skill loads. Classify before the code
+  reviewer is dispatched.
+- `SHIP_NOTES["subagent-driven-development"]`: when that skill loads. One ship check for
+  the whole branch at the final review, not per task.
+- `SHIP_NOTES["finishing-a-development-branch"]`: when that skill loads. With the git
+  workflow on it follows the integration note in the same tool result, on its own line.
+- `SHIP_PR`: after a successful shell command that runs `gh pr create`, `gh pr ready`
+  (not `--undo`) or `gh pr edit --title "[READY] ..."`, once per command, after any git
+  workflow notes. A failed command, `gh pr ready --undo`, a `[BLOCKED]` retitle, a push
+  and a merge get none. It carries no override sentence; the three skill notes do.
+
+A skill name is matched on its last segment, so `superpowers:requesting-code-review`
+matches. A skill the user attaches to a prompt makes no tool call, so it gets no note.
+`--injection` does not cover the skill-load notes: its isolated config has no superpowers
+skills. It proves only that the `execute.after` hook, which they share, still appends to
+tool results. `SHIP_PR` is not in it either: its shell probe runs a branch switch, not a
+`gh` command. Tests cover the note texts and gates with synthetic settings.
