@@ -164,13 +164,13 @@ def _events(output):
             continue
 
 
-def run_model(project, model, env, prompt=INJECTION_PROMPT):
+def run_model(project, model, env, prompt=INJECTION_PROMPT, timeout=300):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
     # caller's input out of the prompt.
     out = _run(["opencode", "run", "--standalone", "--archived", *(["-m", model] if model else []),
                 "--format", "json", prompt],
-               cwd=project, timeout=300, data="", env={**env, "PWD": str(project)})
+               cwd=project, timeout=timeout, data="", env={**env, "PWD": str(project)})
     # One event per line. Only top-level `text` events are the model's reply; a `tool_use` event is one tool call,
     # and the text nested in its result is the tool's output, not the reply.
     texts, tools, sessions = {}, {}, []
