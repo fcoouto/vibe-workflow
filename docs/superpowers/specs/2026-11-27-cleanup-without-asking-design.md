@@ -52,7 +52,7 @@ worktree whose `.git` file pointed at the repository's old path.
 - Breaking a chat that is still working in a worktree.
 - A plugin hook that runs per step, polls, calls the network or runs a write command.
 - Touching the primary checkout's files, HEAD or index, except writing new files under
-  `.vibe-workflow/.archives/` (section 7).
+  `.vibe-workflow/archives/` through the archive script (section 7).
 - Deleting, moving or archiving anything before the merge is confirmed.
 
 ## Approaches
@@ -202,21 +202,40 @@ An existing `worktree_cleanup: true` authorizes the new behavior; nothing is ask
 
 ### 7. Archive folder (user's choice, 2026-11-27)
 
-Archive moves paths to `<primary checkout>/.vibe-workflow/.archives/<branch>/`, keeping each
-path's place relative to the worktree root. A branch with slashes nests (`design/x` becomes
-`design/x/`). If that folder already exists, a `-<YYYYMMDD-HHMMSS>` suffix is added; nothing
-is overwritten. The agent creates the folder; it is the second exception to "never touch the
-primary checkout", next to `.vibe-workflow/settings.json`, and like that file it does not
-make the primary checkout unclean for the fast-forward rule. Writing it changes no tracked
-file, HEAD or index.
+Archive moves paths to `<primary checkout>/.vibe-workflow/archives/<branch>/`, keeping each
+path's place relative to the worktree root. No leading dot, matching PR #408's
+`.vibe-workflow/security-reports/`. A branch with slashes nests (`design/x` becomes
+`design/x/`). If that folder already exists, a `-<YYYYMMDD-HHMMSS>` suffix is added, then
+`-2`, `-3`; nothing is overwritten. The folder is the second exception to "never touch the
+primary checkout", next to `.vibe-workflow/settings.json` (PR #408's reports folder is a
+third), and like that file it does not make the primary checkout unclean for the
+fast-forward rule. Writing it changes no tracked file, HEAD or index.
 
-How it stays out of git (user's choice, 2026-11-27): the folder ignores itself. When the
-agent first creates `.vibe-workflow/.archives/`, it writes `.vibe-workflow/.archives/.gitignore`
-containing `*` before moving anything in. This works in every project at once, needs no
-commit, and the primary checkout never shows a new untracked path. Before each archive the
-agent checks the file exists with that content and rewrites it if not. Rejected: a tracked
-`.vibe-workflow/.gitignore`, because already-onboarded projects would show it untracked in
-the primary checkout until committed.
+How it stays out of git (user's choice, 2026-11-27): the folder ignores itself with its own
+`.gitignore` containing exactly `*`, the same pattern as PR #408's reports folder. A
+folder's own `*` is the deepest rule, so no other ignore file can undo it; it needs no
+commit, and already-onboarded projects never show a new untracked path. Rejected: one
+tracked `.vibe-workflow/.gitignore` for all private folders, because a task branch could
+edit it to stop ignoring a folder, and each project would need a commit before it works.
+
+How it is written (user's choice, 2026-11-27): never by hand. PR #408 found that hand
+writes into such a folder are unsafe (a linked `.gitignore` could be written through), and
+routes every write through a bundled script. Archive does the same and shares #408's
+folder checks rather than copying them:
+
+- The private-folder checks of `skills/vibe-security-review/scripts/store_report.py` move
+  into one shared module that both scripts use: find the main checkout, refuse a linked or
+  non-directory `.vibe-workflow` or target folder, refuse tracked files in it, require the
+  checkout and `.vibe-workflow` to belong to this user and not be group- or world-writable,
+  create the folder `0700`, keep its `.gitignore` at exactly `*` (replaced atomically, never
+  through a link), and confirm with `git check-ignore` before writing. `store_report.py`
+  keeps its behavior and its tests.
+- A new archive script in `skills/vibe-pull-requests/scripts/` uses that module and moves
+  each approved path with a rename only: never a copy, never following a link, refusing a
+  path git tracks, a path outside the worktree, a destination that exists, and a move
+  across file systems. It prints each archived destination, or `refused: <reason>` and
+  moves nothing more.
+- This depends on PR #408 being merged; the branch is rebased onto it first.
 
 ## Constraints
 
