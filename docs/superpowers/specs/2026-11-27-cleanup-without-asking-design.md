@@ -51,7 +51,9 @@ worktree whose `.git` file pointed at the repository's old path.
 - Using `--force`, `-D`, or `worktree_remove` with `force`.
 - Breaking a chat that is still working in a worktree.
 - A plugin hook that runs per step, polls, calls the network or runs a write command.
-- Touching the primary checkout's files, HEAD or index.
+- Touching the primary checkout's files, HEAD or index, except writing new files under
+  `.vibe-workflow/.archives/` (section 7).
+- Deleting, moving or archiving anything before the merge is confirmed.
 
 ## Approaches
 
@@ -71,7 +73,11 @@ worktree whose `.git` file pointed at the repository's old path.
 Run `git status --porcelain --ignored` in the worktree. Every line falls in one group:
 
 - **Rebuildable**: an ignored entry (`!!`) whose path matches the fixed list below. The agent
-  deletes these without asking, then reruns the status command.
+  deletes these without asking, only after the merge is confirmed, then reruns the status
+  command.
+
+Nothing is deleted, moved or archived before the merge is confirmed (user's rule,
+2026-11-27). Sorting is read-only; the actions it leads to run after the merge.
 - **Real work**: every other line. Untracked (`??`), modified, staged, and ignored paths not
   on the list (`.env`, `reports/`, `.superpowers/`, private evidence folders).
 
@@ -92,27 +98,32 @@ real work.
 
 When cleanup is on, the agent runs the sort on its own worktree **before** it marks a pull
 request `[READY]`, and it is part of readiness: the pull request stays a `[BLOCKED]` draft
-until the sort is clean or the user has answered and the answer was acted on. So nobody can
-merge before the question is settled.
+until the sort is clean or the user has answered. So nobody can merge before the question
+is settled. The check itself only reads.
 
 - Only rebuildable or nothing: no question; cleanup will run after the merge.
 - Real work: ask in a message of its own, listing each path. Choices per group of paths:
-  - untracked or ignored paths: **Commit to this PR**, **Archive** (move to
-    `~/.local/share/vibe-workflow/archive/<repo>/<branch>/`, outside every checkout), or
-    **Discard**;
+  - untracked or ignored paths: **Commit to this PR**, **Archive** (move to the project's
+    archive folder, section 7), or **Discard**;
   - modified, staged or deleted tracked files: **Commit to this PR** or **Keep the
     worktree** (no archive: moving the visible file would lose a different staged version,
     and a staged deletion has nothing to move).
 
-  Committing adds to the head, so readiness evidence is gathered after it. The answer is
-  acted on before `[READY]`.
+  **Commit** is acted on before `[READY]`; it adds to the head, so readiness evidence is
+  gathered after it. **Archive** and **Discard** are recorded and run only after the merge
+  is confirmed (section 3); if the pull request closes unmerged, nothing is touched. The
+  answer lives in the session. If the merge is later seen from another session, that
+  session does not know the answer, so the sweep treats those paths as real work: skipped
+  and reported (section 4).
 
 The `[READY]` note (section 5) is a backstop reminder; it names merged worktrees, not this
 question. When the user merges (`agent_merge` off), the flow is the same.
 
 ### 3. After the merge (reference)
 
-The existing checks and order stay, except check 4 becomes the sort in section 1. The final
+The existing checks and order stay, except check 4 becomes: once checks 1–3 and 5 pass, run
+the archive and discard answers from section 2, delete rebuildable entries, then rerun the
+sort; it must now be empty, or cleanup is blocked. The final
 report states exactly one of: **Cleanup verified** (with the step 7 output), or **Cleanup
 blocked** (the reason and the paths). It never ends on an open question; any question was
 asked at `[READY]`.
@@ -189,6 +200,19 @@ An existing `worktree_cleanup: true` authorizes the new behavior; nothing is ask
   caches; other files are asked about before the merge." Tracked in memory only, so it may
   repeat after a restart.
 
+### 7. Archive folder (user's choice, 2026-11-27)
+
+Archive moves paths to `<primary checkout>/.vibe-workflow/.archives/<branch>/`, keeping each
+path's place relative to the worktree root. A branch with slashes nests (`design/x` becomes
+`design/x/`). If that folder already exists, a `-<YYYYMMDD-HHMMSS>` suffix is added; nothing
+is overwritten. The agent creates the folder; it is the second exception to "never touch the
+primary checkout", next to `.vibe-workflow/settings.json`, and like that file it does not
+make the primary checkout unclean for the fast-forward rule. Writing it changes no tracked
+file, HEAD or index.
+
+How it stays out of git: pending the user's choice (see the open question in the
+conversation).
+
 ## Constraints
 
 - Plugin: read-only git, no `gh`, no network, no new dependencies; Node ES modules.
@@ -214,7 +238,6 @@ An existing `worktree_cleanup: true` authorizes the new behavior; nothing is ask
 ## Calls made (the writer's; the user can change any)
 
 - The rebuildable list is fixed in the reference; no per-project list.
-- Archive location is outside every checkout, under `~/.local/share/vibe-workflow/archive/`.
 - The sweep never asks mid-way; blocked worktrees are reported, and asked about only at the
   next `[READY]` of that branch, which may never come. A blocked older worktree therefore
   stays until the user acts on the report.
