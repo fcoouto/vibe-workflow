@@ -144,8 +144,10 @@ export function classify(command) {
     if (first === "cd" || first === "pushd") moved = true
     else if (first === "gh" && second === "pr") {
       const rest = words.slice(3)
-      if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest) })
-      else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo") })
+      // Help and dry-run forms change no pull request, so they must not prompt a ship check.
+      const preview = flag(rest, "--help", "-h", "--dry-run") && { preview: true }
+      if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest), ...preview })
+      else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo"), ...preview })
       else if (third === "edit") { const title = titleOf(rest); if (title !== null) actions.push({ kind: "pr_retitle", title }) }
       else if (third === "merge") actions.push({ kind: "pr_merge", auto: flag(rest, "--auto") })
     } else if (first === "git") {
@@ -207,12 +209,13 @@ export function createAdvisor({ settings, primary, checkout, onboarded = async (
         if (!event || !SHELLS.has(event.tool) || !event.ok || typeof event.command !== "string") return null
         const actions = classify(event.command)
         if (!actions.length) return null
-        const eligible = actions.some((action) => action.kind === "pr_create" ||
-          (action.kind === "pr_ready" && !action.undo) ||
+        const eligible = actions.some((action) => (action.kind === "pr_create" && !action.preview) ||
+          (action.kind === "pr_ready" && !action.undo && !action.preview) ||
           (action.kind === "pr_retitle" && action.title.startsWith("[READY]")))
-        let ship = false
-        if (eligible) { try { ship = await onboarded() } catch {} }
-        const state = await settings()
+        // The two gates are independent: failing workflow settings never clear a ship note already decided.
+        let ship = false, state = null
+        if (eligible) { try { ship = await onboarded() === true } catch {} }
+        try { state = await settings() } catch {}
         if (state?.state !== "on") return ship ? SHIP_PR : null
         const agentMerge = state.agent_merge === true, cleanup = state.worktree_cleanup === true, notes = []
         const arm = (value) => { if (sessionID) { if (value) remember(armed, sessionID, true); else armed.delete(sessionID) } }

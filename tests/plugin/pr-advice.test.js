@@ -80,6 +80,42 @@ test("onboarded PR ship guidance is independent of git workflow", async () => {
   assert.equal(await advise("gh pr create && gh pr ready 3"), SHIP_PR)
 })
 
+test("help and dry-run forms get no ship note, with the git workflow off or on", async () => {
+  let asked = 0
+  const onboarded = async () => { asked++; return true }
+  const previews = ["gh pr create --help", "gh pr create -h", "gh pr create --draft --dry-run", 'gh pr create --title "[BLOCKED] x" --dry-run',
+    "gh pr ready --help", "gh pr ready 3 -h", "gh pr ready 3 --dry-run", "rtk gh pr create --help"]
+  const off = advisor({ state: "off" }, { onboarded })
+  for (const command of previews) assert.equal(await off.advise(command), null, command)
+  assert.equal(await off.advise('gh pr edit 3 --title "[BLOCKED] x"'), null)
+  assert.equal(asked, 0, "the onboarding state is not read for a command that cannot get the note")
+  for (const command of previews) {
+    assert.equal(await advisor(on, { onboarded }).advise(command), await advisor().advise(command), command)
+  }
+  // A quoted flag is text, not a flag, and a real command beside a preview still gets one note.
+  assert.equal(await off.advise('gh pr create --title "--help"'), SHIP_PR)
+  assert.equal(await off.advise("gh pr create --help; gh pr create --fill"), SHIP_PR)
+  assert.deepEqual(classify("gh pr create --dry-run"), [{ kind: "pr_create", draft: false, title: null, preview: true }])
+  assert.deepEqual(classify("gh pr ready --help"), [{ kind: "pr_ready", undo: false, preview: true }])
+})
+
+test("the ship note needs an onboarding answer of exactly true, and survives failing workflow settings", async () => {
+  const command = 'gh pr create --draft --title "[BLOCKED] x"'
+  const existing = await advisor().advise(command)
+  for (const answer of ["true", 1, {}, [], null, undefined, false]) {
+    const onboarded = async () => answer
+    assert.equal(await advisor({ state: "off" }, { onboarded }).advise(command), null, JSON.stringify(answer))
+    assert.equal(await advisor(on, { onboarded }).advise(command), existing, JSON.stringify(answer))
+  }
+  const onboarded = async () => true
+  assert.equal(await advisor(new Error("boom"), { onboarded }).advise(command), SHIP_PR)
+  assert.equal(await advisor(new Error("boom"), { onboarded }).advise("gh pr merge 3"), null)
+  assert.equal(await advisor(new Error("boom")).advise(command), null)
+  for (const settings of [null, { state: "blocked", reason: "project_settings_invalid" }]) {
+    assert.equal(await advisor(settings, { onboarded }).advise(command), SHIP_PR)
+  }
+})
+
 test("case 2 is armed by cases 1 and 3, fires once on the next push, then disarms, per session", async () => {
   const { advise } = advisor()
   assert.equal(await advise("git push origin x"), null)
