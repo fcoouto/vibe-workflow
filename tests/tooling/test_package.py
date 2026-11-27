@@ -113,6 +113,7 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
                     "skills/vibe-pull-requests/references/pull-request-template.md",
                     "skills/vibe-pull-requests/references/worktree-cleanup.md",
+                    "skills/vibe-pull-requests/scripts/archive.py",
                     "skills/vibe-security-review/SKILL.md", "skills/vibe-security-review/references/ship-check.md",
                     "skills/vibe-security-review/references/full-review.md", "skills/vibe-security-review/references/reviewer-brief.md",
                     "skills/vibe-security-review/references/report-storage.md",
@@ -121,7 +122,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "claude_quota", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council", "feedback", "usage_balance"]}
+            "native_catalog", "claude_usage", "claude_quota", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council", "feedback", "usage_balance", "private_folder"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
