@@ -5,7 +5,6 @@ import importlib.util
 import io
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +15,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "skills/vibe-pull-requests/scripts/archive.py"
 ARCHIVES = ".vibe-workflow/archives"
+DAY = "2026-11-27"
+RUN = f"{DAY}_feat-x"
+# The CLI as a subprocess, with the local date held at DAY so folder names are exact and never flake at midnight.
+FROZEN = ("import runpy, sys, time\n"
+          "real = time.strftime\n"
+          f"time.strftime = lambda fmt, *rest: {DAY!r} if fmt == '%Y-%m-%d' else real(fmt, *rest)\n"
+          "sys.argv = sys.argv[1:]\n"
+          "runpy.run_path(sys.argv[0], run_name='__main__')\n")
 
 
 def load():
@@ -78,11 +85,25 @@ class ArchiveTest(unittest.TestCase):
 
     def archive(self, *paths, branch="feat/x", worktree=None, cwd=None):
         """Run the script from a folder that is no repository, unless the caller names another one."""
-        command = [sys.executable, "-I", "-B", str(SCRIPT), "--worktree", str(worktree or self.linked),
+        command = [sys.executable, "-I", "-B", "-c", FROZEN, str(SCRIPT), "--worktree", str(worktree or self.linked),
                    "--branch", branch]
         for path in paths:
             command += ["--path", path]
         return subprocess.run(command, cwd=cwd or self.root, capture_output=True, text=True, timeout=30)
+
+    def run_in_process(self, args, exdev=False):
+        """Call the script's main here, with the date held at DAY and, when asked, every rename failing across devices."""
+        module = load()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(module.time, "strftime", return_value=DAY))
+            if exdev:
+                stack.enter_context(mock.patch.object(module.os, "rename",
+                                                      side_effect=OSError(errno.EXDEV, "Cross-device link")))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", *args])
+        return code, out.getvalue(), err.getvalue()
 
     def refused(self, run):
         self.assertEqual(run.returncode, 2, run.stderr)
@@ -92,14 +113,17 @@ class ArchiveTest(unittest.TestCase):
     def archived(self):
         return [name for name in files(self.archives) if name != ".gitignore"]
 
+    def names(self):
+        return sorted(path.name for path in self.archives.iterdir())
+
     def test_moves_ignored_and_untracked_paths_keeping_layout(self):
         (self.linked / ".env").write_text("SECRET=1\n")
         (self.linked / "reports").mkdir()
         (self.linked / "reports/a.md").write_text("finding\n")
         run = self.archive(".env", "reports/a.md")
         self.assertEqual(run.returncode, 0, run.stderr)
-        first = self.archives / "feat/x/.env"
-        second = self.archives / "feat/x/reports/a.md"
+        first = self.archives / RUN / ".env"
+        second = self.archives / RUN / "reports/a.md"
         self.assertEqual(run.stdout.splitlines(), [str(first), str(second)])
         self.assertEqual(first.read_text(), "SECRET=1\n")
         self.assertEqual(second.read_text(), "finding\n")
@@ -107,16 +131,53 @@ class ArchiveTest(unittest.TestCase):
         self.assertFalse((self.linked / "reports/a.md").exists())
         self.assertEqual(git(self.main, "status", "--porcelain"), "")
 
-    def test_second_run_gets_a_suffix_and_never_overwrites(self):
+    def test_second_run_gets_dash_two_and_never_overwrites(self):
         (self.linked / ".env").write_text("first\n")
         self.assertEqual(self.archive(".env").returncode, 0)
         (self.linked / ".env").write_text("second\n")
         run = self.archive(".env")
         self.assertEqual(run.returncode, 0, run.stderr)
-        dest = Path(run.stdout.strip())
-        self.assertRegex(dest.relative_to(self.archives).as_posix(), r"\Afeat/x-\d{8}-\d{6}/\.env\Z")
-        self.assertEqual(dest.read_text(), "second\n")
-        self.assertEqual((self.archives / "feat/x/.env").read_text(), "first\n")
+        self.assertEqual(Path(run.stdout.strip()), self.archives / f"{RUN}-2" / ".env")
+        self.assertEqual((self.archives / f"{RUN}-2/.env").read_text(), "second\n")
+        self.assertEqual((self.archives / RUN / ".env").read_text(), "first\n")
+        (self.linked / ".env").write_text("third\n")
+        run = self.archive(".env")
+        self.assertEqual(Path(run.stdout.strip()), self.archives / f"{RUN}-3" / ".env")
+
+    def test_a_slash_branch_gets_one_flat_folder(self):
+        (self.linked / ".env").write_text("x\n")
+        run = self.archive(".env", branch="fix/title-sync")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(Path(run.stdout.strip()), self.archives / f"{DAY}_fix-title-sync" / ".env")
+        self.assertEqual(self.names(), [".gitignore", f"{DAY}_fix-title-sync"])
+        (self.linked / ".env").write_text("y\n")
+        self.assertEqual(self.archive(".env", branch="feat/a/b").returncode, 0)
+        self.assertEqual(self.names(), [".gitignore", f"{DAY}_feat-a-b", f"{DAY}_fix-title-sync"])
+
+    def test_the_last_free_name_dash_ninety_nine_is_used(self):
+        self.base()
+        self.archives.mkdir(mode=0o700)
+        for name in [RUN, *(f"{RUN}-{number}" for number in range(2, 99))]:
+            (self.archives / name).mkdir()
+        (self.linked / ".env").write_text("x\n")
+        run = self.archive(".env")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(Path(run.stdout.strip()), self.archives / f"{RUN}-99" / ".env")
+
+    def test_names_past_dash_ninety_nine_are_refused_and_nothing_is_overwritten(self):
+        self.base()
+        self.archives.mkdir(mode=0o700)
+        taken = [RUN, *(f"{RUN}-{number}" for number in range(2, 100))]
+        for name in taken:
+            (self.archives / name).mkdir()
+            (self.archives / name / "keep.txt").write_text(name)
+        (self.linked / ".env").write_text("x\n")
+        run = self.archive(".env")
+        self.refused(run)
+        self.assertIn("no free archive folder name", run.stderr)
+        self.assertEqual(self.names(), [".gitignore", *sorted(taken)])
+        self.assertEqual((self.archives / f"{RUN}-99/keep.txt").read_text(), f"{RUN}-99")
+        self.assertEqual((self.linked / ".env").read_text(), "x\n")
 
     def test_refuses_tracked_absolute_dotdot_git_and_linked_parent(self):
         outside = self.root / "outside"
@@ -167,14 +228,10 @@ class ArchiveTest(unittest.TestCase):
 
     def test_cross_device_is_refused_and_source_kept(self):
         (self.linked / ".env").write_text("x\n")
-        module = load()
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.chdir(self.main), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", ".env"])
+        code, out, err = self.run_in_process(["--path", ".env"], exdev=True)
         self.assertEqual(code, 2)
-        self.assertEqual(out.getvalue(), "")
-        self.assertRegex(err.getvalue(), r"\Arefused: \.env is on another device; it was kept and nothing was copied\n\Z")
+        self.assertEqual(out, "")
+        self.assertRegex(err, r"\Arefused: \.env is on another device; it was kept and nothing was copied\n\Z")
         self.assertEqual((self.linked / ".env").read_text(), "x\n")
         self.assertEqual(self.archived(), [])
 
@@ -182,7 +239,7 @@ class ArchiveTest(unittest.TestCase):
         (self.linked / ".env").write_text("x\n")
         run = self.archive(".env", "README.md")
         self.assertEqual(run.returncode, 2, run.stderr)
-        dest = self.archives / "feat/x/.env"
+        dest = self.archives / RUN / ".env"
         self.assertEqual(run.stdout.splitlines(), [f"archived: {dest}"])
         self.assertEqual(run.stderr.splitlines(), ["refused: README.md is tracked by Git"])
         self.assertEqual(dest.read_text(), "x\n")
@@ -197,7 +254,7 @@ class ArchiveTest(unittest.TestCase):
         (self.linked / ".env").write_text("y\n")
         run = self.archive(".env", branch="task", worktree=other_linked, cwd=self.main)
         self.assertEqual(run.returncode, 0, run.stderr)
-        dest = other / ARCHIVES / "task/.env"
+        dest = other / ARCHIVES / f"{DAY}_task" / ".env"
         self.assertEqual(run.stdout.splitlines(), [str(dest)])
         self.assertEqual(dest.read_text(), "x\n")
         self.assertEqual((self.linked / ".env").read_text(), "y\n")
@@ -216,7 +273,7 @@ class ArchiveTest(unittest.TestCase):
         (self.linked / "reports/sub/b.md").write_text("b\n")
         run = self.archive("reports")
         self.assertEqual(run.returncode, 0, run.stderr)
-        dest = self.archives / "feat/x/reports"
+        dest = self.archives / RUN / "reports"
         self.assertEqual(run.stdout.splitlines(), [str(dest)])
         self.assertEqual(files(dest), ["a.md", "sub/b.md"])
         self.assertEqual((dest / "sub/b.md").read_text(), "b\n")
@@ -233,7 +290,7 @@ class ArchiveTest(unittest.TestCase):
         os.symlink("nowhere", self.linked / "notes/dangling")
         run = self.archive("notes")
         self.assertEqual(run.returncode, 0, run.stderr)
-        dest = self.archives / "feat/x/notes"
+        dest = self.archives / RUN / "notes"
         self.assertEqual(os.readlink(dest / "file-link"), str(outside / "secret.txt"))
         self.assertEqual(os.readlink(dest / "dir-link"), str(outside))
         self.assertEqual(os.readlink(dest / "dangling"), "nowhere")
@@ -247,7 +304,7 @@ class ArchiveTest(unittest.TestCase):
         os.symlink(outside, self.linked / "link")
         run = self.archive("link")
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertEqual(os.readlink(self.archives / "feat/x/link"), str(outside))
+        self.assertEqual(os.readlink(self.archives / RUN / "link"), str(outside))
         self.assertFalse(os.path.lexists(self.linked / "link"))
         self.assertEqual((outside / "secret.txt").read_text(), "keep\n")
 
@@ -258,8 +315,8 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual((self.linked / "reports/a.md").read_text(), "a\n")
         run = self.archive("reports/")
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertEqual(run.stdout.splitlines(), [str(self.archives / "feat/x/reports")])
-        self.assertEqual(files(self.archives / "feat/x/reports"), ["a.md"])
+        self.assertEqual(run.stdout.splitlines(), [str(self.archives / RUN / "reports")])
+        self.assertEqual(files(self.archives / RUN / "reports"), ["a.md"])
 
     def test_a_git_entry_named_in_another_case_is_refused(self):
         if not case_insensitive(self.root):
@@ -272,13 +329,13 @@ class ArchiveTest(unittest.TestCase):
 
     def test_archived_lines_arrive_before_the_refusal_when_streams_merge(self):
         (self.linked / ".env").write_text("x\n")
-        command = [sys.executable, "-I", "-B", str(SCRIPT), "--worktree", str(self.linked), "--branch", "feat/x",
-                   "--path", ".env", "--path", "README.md"]
+        command = [sys.executable, "-I", "-B", "-c", FROZEN, str(SCRIPT), "--worktree", str(self.linked),
+                   "--branch", "feat/x", "--path", ".env", "--path", "README.md"]
         run = subprocess.run(command, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, timeout=30)
         self.assertEqual(run.returncode, 2)
         self.assertEqual(run.stdout.splitlines(),
-                         [f"archived: {self.archives / 'feat/x/.env'}", "refused: README.md is tracked by Git"])
+                         [f"archived: {self.archives / RUN / '.env'}", "refused: README.md is tracked by Git"])
 
     def test_each_path_releases_its_descriptors_before_the_next(self):
         module = load()
@@ -299,49 +356,32 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual(len(set(counts)), 1, counts)
 
     def test_a_refused_first_move_leaves_no_run_folder(self):
-        module = load()
         (self.linked / ".env").write_text("x\n")
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", ".env"])
+        code, out, err = self.run_in_process(["--path", ".env"], exdev=True)
         self.assertEqual(code, 2)
-        self.assertEqual(err.getvalue(), "refused: .env is on another device; it was kept and nothing was copied\n")
-        self.assertFalse((self.archives / "feat" / "x").exists())
-        self.assertEqual(self.archived(), [])
+        self.assertEqual(err, "refused: .env is on another device; it was kept and nothing was copied\n")
+        self.assertEqual(self.names(), [".gitignore"])
         self.assertEqual((self.linked / ".env").read_text(), "x\n")
 
     def test_a_refused_nested_first_move_removes_the_folders_it_made(self):
-        module = load()
         (self.linked / "reports").mkdir()
         (self.linked / "reports/a.md").write_text("a\n")
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", "reports/a.md"])
+        code, out, err = self.run_in_process(["--path", "reports/a.md"], exdev=True)
         self.assertEqual(code, 2)
-        self.assertRegex(err.getvalue(), r"\Arefused: reports/a\.md is on another device")
-        self.assertEqual(files(self.archives), [".gitignore"])
-        self.assertFalse((self.archives / "feat").exists())
+        self.assertRegex(err, r"\Arefused: reports/a\.md is on another device")
+        self.assertEqual(self.names(), [".gitignore"])
         self.assertEqual((self.linked / "reports/a.md").read_text(), "a\n")
 
-    def test_a_refused_move_keeps_the_folders_that_existed_before_the_run(self):
-        module = load()
-        (self.linked / "old").mkdir()
-        (self.linked / "old/keep.txt").write_text("k\n")
+    def test_a_refused_move_keeps_the_folder_that_existed_before_the_run(self):
+        self.base()
+        self.archives.mkdir(mode=0o700)
+        (self.archives / RUN).mkdir()
         (self.linked / "reports").mkdir()
         (self.linked / "reports/a.md").write_text("a\n")
-        self.assertEqual(self.archive("old/keep.txt", branch="feat/y").returncode, 0)
-        shutil.rmtree(self.archives / "feat/y")
-        self.assertTrue((self.archives / "feat").is_dir())
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", "reports/a.md"])
+        code, out, err = self.run_in_process(["--path", "reports/a.md"], exdev=True)
         self.assertEqual(code, 2)
-        self.assertEqual(files(self.archives), [".gitignore"])
-        self.assertEqual(list((self.archives / "feat").iterdir()), [], "the empty folder that existed stays")
-        self.assertFalse((self.archives / "feat/x").exists())
+        self.assertEqual(self.names(), [".gitignore", RUN])
+        self.assertEqual(list((self.archives / RUN).iterdir()), [], "the folder that existed stays, empty")
 
     def test_a_name_in_another_case_is_refused_and_nothing_moves(self):
         if not case_insensitive(self.root):

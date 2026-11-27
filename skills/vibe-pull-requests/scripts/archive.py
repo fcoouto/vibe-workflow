@@ -96,27 +96,20 @@ def _listed(folder, name, path):
         raise Refused(f"{path} does not exist as named")
 
 
-def _run_folder(archives, branch, stamp, opened, made):
-    """Make this run's folder named after the branch, with the next free suffix when that name is taken.
-    `made` records each folder this run creates, as the parts below the archives folder."""
-    *parents, leaf = branch.split("/")
-    parent, here = archives, ()
-    for part in parents:
-        here = (*here, part)
-        if _mkdir(parent, part):
-            made.append(here)
-        parent = _open_dir(parent, part)
-        opened.append(parent)
-    for suffix in ("", f"-{stamp}", *(f"-{stamp}-{number}" for number in range(2, 100))):
+def _run_folder(archives, branch, day, opened, made):
+    """Make this run's one flat folder, <day>_<branch with "/" as "-">, with -2 to -99 when that name is taken.
+    `made` records the folder this run creates, as the parts below the archives folder."""
+    flat = f"{day}_{branch.replace('/', '-')}"
+    for suffix in ("", *(f"-{number}" for number in range(2, 100))):
         try:
-            os.mkdir(leaf + suffix, 0o700, dir_fd=parent)
+            os.mkdir(flat + suffix, 0o700, dir_fd=archives)
         except FileExistsError:
             continue
-        made.append((*here, leaf + suffix))
-        run = _open_dir(parent, leaf + suffix)
+        made.append((flat + suffix,))
+        run = _open_dir(archives, flat + suffix)
         opened.append(run)
-        return (*here, leaf + suffix), run
-    raise Refused("no free archive folder name is left for this second")
+        return flat + suffix, run
+    raise Refused("no free archive folder name is left for this branch today")
 
 
 def _unmake(folder, made):
@@ -165,12 +158,12 @@ def _source(path, root, worktree, git_entry, opened):
     return source
 
 
-def _move(path, source, run, run_parts, main, made, opened):
+def _move(path, source, run, run_name, main, made, opened):
     """Move one checked path into this run's folder with its layout kept. Every refusal comes before the move."""
-    destination = os.path.join(main, BASE, ARCHIVES, *run_parts, path)
+    destination = os.path.join(main, BASE, ARCHIVES, run_name, path)
     if git(main, "check-ignore", "-q", "--", destination).returncode:
         raise Refused(f"Git does not ignore the archive destination for {path}")
-    target, here = run, run_parts
+    target, here = run, (run_name,)
     parts = path.split("/")
     for part in parts[:-1]:
         here = (*here, part)
@@ -198,9 +191,9 @@ def archive(worktree, branch, paths, moved):
     _branch(main, branch)
     entry = os.lstat(os.path.join(real, ".git"))
     git_entry = entry.st_dev, entry.st_ino
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    day = time.strftime("%Y-%m-%d")
     folder, opened = open_private_folder(main, ARCHIVES, "archives folder")
-    run = run_parts = None
+    run = run_name = None
     made = []
     try:
         opened.append(os.open(real, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
@@ -211,8 +204,8 @@ def archive(worktree, branch, paths, moved):
             try:
                 source = _source(path, root, real, git_entry, fds)
                 if run is None:
-                    run_parts, run = _run_folder(folder, branch, stamp, opened, made)
-                moved.append(_move(path, source, run, run_parts, main, made, fds))
+                    run_name, run = _run_folder(folder, branch, day, opened, made)
+                moved.append(_move(path, source, run, run_name, main, made, fds))
             finally:
                 for descriptor in fds:
                     os.close(descriptor)
