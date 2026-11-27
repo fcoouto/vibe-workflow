@@ -3,6 +3,9 @@ import { test } from "node:test"
 import { classify, createAdvisor } from "../../src/pr-advice.js"
 
 const on = { state: "on", agent_merge: false }
+const SHIP_PR = "vibe-workflow: before this pull request is reviewed or merged, its Security section must cover the " +
+  "current head (vibe-security-review ship check). If it is missing or stale, run the check now; if a blocking finding " +
+  "is open, keep or return the pull request to draft, titled [BLOCKED] when the git workflow is on."
 function advisor(settings = on, extra = {}) {
   const calls = { settings: 0 }
   const value = createAdvisor({
@@ -57,6 +60,24 @@ test("case 1 fires with a fix for each missing piece", async () => {
   assert.match(await advise('gh pr create --draft --title "feat: a"'), /gh pr edit --title "\[BLOCKED\] <title>"/)
   const fill = await advise("gh pr create --draft --fill")
   assert.doesNotMatch(fill, /gh pr edit --title/)
+})
+
+test("onboarded PR ship guidance is independent of git workflow", async () => {
+  const onboarded = async () => true
+  const command = 'gh pr create --draft --title "[BLOCKED] x"'
+  const existing = await advisor().advise(command)
+  assert.equal(await advisor(on, { onboarded }).advise(command), `${existing}\n${SHIP_PR}`)
+  const { advise } = advisor({ state: "off" }, { onboarded })
+  for (const cmd of ["gh pr create", "gh pr ready 3", 'gh pr edit 3 --title "[READY] x"']) {
+    assert.equal(await advise(cmd), SHIP_PR)
+  }
+  for (const cmd of ["gh pr ready 3 --undo", "git push"]) assert.equal(await advise(cmd), null)
+  assert.equal(await advise("gh pr create", "ses_a", { ok: false }), null)
+  assert.equal(await advisor({ state: "off" }).advise(command), null)
+  const throwing = async () => { throw new Error("boom") }
+  assert.equal(await advisor(on, { onboarded: throwing }).advise(command), existing)
+  assert.equal(await advisor({ state: "off" }, { onboarded: throwing }).advise(command), null)
+  assert.equal(await advise("gh pr create && gh pr ready 3"), SHIP_PR)
 })
 
 test("case 2 is armed by cases 1 and 3, fires once on the next push, then disarms, per session", async () => {

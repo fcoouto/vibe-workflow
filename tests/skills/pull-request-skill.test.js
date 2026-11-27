@@ -31,16 +31,19 @@ test("procedure states the lifecycle, readiness, merge and checkout rules", asyn
   for (const phrase of ["[BLOCKED]", "[READY]", "[SUPERSEDED]", "--undo", "git fetch origin main", "--ff-only",
     "agent_merge", ".github/pull_request_template.md", ".vibe-workflow/settings.json", "worktree",
     '{"v":1,"op":"inspect","feature":"git_workflow"}', "agent_merge", "observed on this head", "Never touch the primary checkout", "## Finishing a branch",
-    "do not offer other ways to integrate it", "declared choice from onboarding"]) {
+    "do not offer other ways to integrate it", "declared choice from onboarding", ".vibe-workflow/security-reports/",
+    "vibe-security-review", "Security section"]) {
     assert.ok(text.includes(phrase), phrase)
   }
 })
 
-test("template has the five sections", async () => {
+test("template has the six sections", async () => {
   const text = await read("references/pull-request-template.md")
-  for (const heading of ["Why", "What changes", "Checks", "Review", "Readiness"]) {
+  for (const heading of ["Why", "What changes", "Checks", "Review", "Security", "Readiness"]) {
     assert.match(text, new RegExp(`^## ${heading}$`, "m"), heading)
   }
+  assert.ok(text.indexOf("## Review") < text.indexOf("## Security"))
+  assert.ok(text.indexOf("## Security") < text.indexOf("## Readiness"))
 })
 
 test("skill files never point to Superpowers or claim enforcement", async () => {

@@ -102,7 +102,10 @@ test("a frozen event is left unchanged without throwing", async (t) => {
 test("failing, invalid or disabled settings add nothing and never throw", async (t) => {
   for (const settings of ["not json", { enabled: false, agent_merge: false }, null, { enabled: "yes" }]) {
     const { fire } = await fixture(t, { settings })
-    assert.equal((await fire(create)).result, "done", JSON.stringify(settings))
+    const note = "vibe-workflow: before this pull request is reviewed or merged, its Security section must cover the " +
+      "current head (vibe-security-review ship check). If it is missing or stale, run the check now; if a blocking finding " +
+      "is open, keep or return the pull request to draft, titled [BLOCKED] when the git workflow is on."
+    assert.equal((await fire(create)).result, settings?.enabled === false ? `done\n\n${note}` : "done", JSON.stringify(settings))
   }
 })
 

@@ -23,7 +23,7 @@ function appendNote(event, note) {
 
 // The host's event shape varies by version: every field is read defensively and a missing one keeps the note silent.
 export async function registerAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout }) {
-  const advisor = createAdvisor({ settings, primary, checkout })
+  const advisor = createAdvisor({ settings, primary, checkout, onboarded })
   const skills = createSkillAdvisor({ settings, onboarded })
   let closed = false
   const close = () => { closed = true; advisor.clear() }

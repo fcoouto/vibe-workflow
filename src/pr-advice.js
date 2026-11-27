@@ -166,6 +166,9 @@ export function classify(command) {
 
 const SUMMARY = "vibe-workflow: open pull requests as [BLOCKED] drafts, mark one [READY] only when its checks and review " +
   "cover the current head, and return it to [BLOCKED] draft after any push or base change. See the vibe-pull-requests skill."
+const SHIP_PR = "vibe-workflow: before this pull request is reviewed or merged, its Security section must cover the " +
+  "current head (vibe-security-review ship check). If it is missing or stale, run the check now; if a blocking finding " +
+  "is open, keep or return the pull request to draft, titled [BLOCKED] when the git workflow is on."
 const NOTES = {
   notDraft: "vibe-workflow: this pull request was not opened as a draft; run `gh pr ready --undo` to make it one.",
   notBlocked: 'vibe-workflow: retitle it with `gh pr edit --title "[BLOCKED] <title>"`.',
@@ -194,7 +197,7 @@ function remember(map, key, value) {
   if (map.size > MAX_SESSIONS) map.delete(map.keys().next().value)
 }
 
-export function createAdvisor({ settings, primary, checkout }) {
+export function createAdvisor({ settings, primary, checkout, onboarded = async () => false }) {
   const armed = new Map()
   const branches = new Map()
   return {
@@ -204,8 +207,13 @@ export function createAdvisor({ settings, primary, checkout }) {
         if (!event || !SHELLS.has(event.tool) || !event.ok || typeof event.command !== "string") return null
         const actions = classify(event.command)
         if (!actions.length) return null
+        const eligible = actions.some((action) => action.kind === "pr_create" ||
+          (action.kind === "pr_ready" && !action.undo) ||
+          (action.kind === "pr_retitle" && action.title.startsWith("[READY]")))
+        let ship = false
+        if (eligible) { try { ship = await onboarded() } catch {} }
         const state = await settings()
-        if (state?.state !== "on") return null
+        if (state?.state !== "on") return ship ? SHIP_PR : null
         const agentMerge = state.agent_merge === true, cleanup = state.worktree_cleanup === true, notes = []
         const arm = (value) => { if (sessionID) { if (value) remember(armed, sessionID, true); else armed.delete(sessionID) } }
         for (const action of actions) {
@@ -236,6 +244,7 @@ export function createAdvisor({ settings, primary, checkout }) {
             }
           }
         }
+        if (ship) notes.push(SHIP_PR)
         return notes.length ? notes.join("\n") : null
       } catch { return null }
     },
