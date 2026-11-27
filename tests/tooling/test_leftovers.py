@@ -574,18 +574,43 @@ class LeftoversTest(unittest.TestCase):
         shutil.rmtree(self.linked / "saved")
         self.assertEqual(self.rows("sort"), [])
 
-    def test_a_repository_below_an_ignored_folder_or_named_in_another_case_makes_sort_refuse(self):
-        for name in ("build/saved/.git/config", "src/deep/er/.GIT/HEAD"):
-            with self.subTest(name=name):
-                self.write(name)
-                self.assertEqual(git(self.linked, "status", "--porcelain", "--ignored"), "", "Git lists nothing for it")
+    def test_a_repository_below_an_ignored_folder_makes_sort_refuse(self):
+        self.write("build/saved/.git/config")
+        self.assertEqual(git(self.linked, "status", "--porcelain", "--ignored"), "", "Git lists nothing for it")
+        run = self.run_script("sort")
+        self.refused(run)
+        self.assertIn("'build/saved/.git'", run.stderr)
+        shutil.rmtree(self.linked / "build")
+        (self.linked / "src/.git").write_text("gitdir: /nowhere\n")
+        self.refused(self.run_script("sort"))
+
+    def test_a_repository_named_in_another_letter_case_makes_sort_refuse_whatever_git_lists(self):
+        self.write("src/deep/er/.GIT/HEAD")
+        listings = set()
+        for folding in ("true", "false"):
+            with self.subTest(ignoreCase=folding):
+                git(self.linked, "config", "core.ignoreCase", folding)
+                listings.add(git(self.linked, "status", "--porcelain", "--ignored"))
                 run = self.run_script("sort")
                 self.refused(run)
-                self.assertIn(repr(str(Path(name).parent)), run.stderr)
-                shutil.rmtree(self.linked / Path(name).parts[0] / Path(name).parts[1])
-        (self.linked / "src/.git").write_text("gitdir: /nowhere\n")
-        listed = self.run_script("sort")
-        self.assertNotEqual((listed.returncode, listed.stdout), (0, ""), "a .git file in a folder never passes as clean")
+                self.assertIn("'src/deep/er/.GIT'", run.stderr)
+        self.assertLessEqual(listings, {"", "?? src/deep/\n"}, "Git hides it or lists its folder; the script refuses both ways")
+
+    def test_a_hidden_repository_makes_sort_and_expand_refuse_whatever_rows_git_lists(self):
+        self.write("saved/.git/config", "[core]\n")
+        self.write(".DS_Store")
+        self.write("notes/a.md")
+        self.assertEqual(git(self.linked, "status", "--porcelain", "--ignored"), "?? notes/\n!! .DS_Store\n",
+                         "Git lists the cache and the notes, never the repository")
+        for mode, paths in (("sort", ()), ("expand", ()), ("expand", ("notes",))):
+            with self.subTest(mode=mode, paths=paths):
+                run = self.run_script(mode, *paths)
+                self.refused(run)
+                self.assertIn("'saved/.git'", run.stderr)
+        self.assertTrue((self.linked / ".DS_Store").exists() and (self.linked / "saved/.git/config").exists())
+        shutil.rmtree(self.linked / "saved")
+        self.assertEqual([row["path"] for row in self.rows("sort")], ["notes/", ".DS_Store"])
+        self.assertEqual([row["path"] for row in self.rows("expand")], ["notes/a.md"])
 
     def test_the_walk_for_repositories_follows_no_link_and_crosses_no_device(self):
         outside = self.outside()
@@ -601,8 +626,11 @@ class LeftoversTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""), err)
         self.assertIn("another device", err)
         self.write("notes.md")
-        (self.linked / "src/deep/.git").mkdir()
-        self.assertEqual([row["path"] for row in self.rows("sort")], ["notes.md"], "rows are printed; only an empty answer is walked")
+        code, out, err = self.inside("sort", "--worktree", str(self.linked),
+                                     _device=lambda device: lambda info: -1 if info.st_ino == mounted else device(info))
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertIn("another device", err)
+        self.assertEqual([row["path"] for row in self.rows("sort")], ["notes.md"])
 
     def test_removing_modes_refuse_a_worktree_that_left_the_confirmed_branch(self):
         self.write("notes.md")

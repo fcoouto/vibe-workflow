@@ -134,9 +134,11 @@ test("the cleanup reference pins removals to the confirmed merge and never reads
   for (const phrase of ["`<head>` is the full commit hash", "`git rev-parse HEAD` prints", "`--detached` in place of `--branch '<branch>'`",
     "is on another branch", "`HEAD` is another commit", "the `branch` and `head` the identity command printed",
     "refused: <path>: it was removed, but reporting that failed", "The path is gone", "never conclude that nothing was removed",
-    "holds only a repository", "any `.git` entry below the top folder", "strips trailing CR and LF", "cannot be checked"]) {
+    "holds only a repository", "any `.git` entry below the top folder", "whatever rows git listed",
+    "Every sort and every expansion", "strips trailing CR and LF", "cannot be checked"]) {
     assert.ok(flat.includes(phrase), phrase)
   }
+  assert.doesNotMatch(flat, /before the sort prints no row/, "the repository check runs on every sort, not only an empty one")
   assert.doesNotMatch(flat, /with no path: nothing was removed at all/, "a refusal with no path is defined by when it happens")
   const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees"))
   assert.ok(sweep.replace(/\s+/g, " ").includes("with the `branch` and `head`"), "the sweep passes what it confirmed")

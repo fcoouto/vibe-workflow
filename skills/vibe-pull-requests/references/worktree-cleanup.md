@@ -47,11 +47,14 @@ deletes them without force.
   incomplete. Never treat a failed sort as empty: the step that needed it stops.
 
 Git lists nothing for a folder that holds only a repository, such as `saved/.git/config`
-with no other file, yet removing the worktree deletes it. So before the sort prints no
-row, it walks the whole worktree, never through a symbolic link and never onto another
-device, and refuses when it finds any `.git` entry below the top folder other than the
-worktree's own `.git`. The refusal names that entry. It is real work that only the user
-can move or remove: report it, and never remove it or the worktree yourself.
+with no other file, yet removing the worktree deletes it. Every sort and every expansion
+therefore walks the whole worktree before it prints anything, whatever rows git listed,
+never through a symbolic link and never onto another device. It refuses when it finds any
+`.git` entry below the top folder other than the worktree's own `.git`, or a folder on
+another device. The refusal names that entry and prints no row, so a repository beside
+other leftover files, or inside a tool cache, stops the sort the same way. It is real work
+that only the user can move or remove: report it, and never remove it or the worktree
+yourself.
 
 `group` puts every row in exactly one group:
 
@@ -153,7 +156,8 @@ The caches command removes every rebuildable row:
 python3 -I -B '<skill folder>/scripts/leftovers.py' caches --worktree '<worktree>' --primary '<primary>' --branch '<branch>' --head '<head>'
 ```
 
-It sorts the worktree itself. It reads each rebuildable row, then asks git again
+It reads git's listing itself, without the walk for repositories that a sort makes, so
+run it only after a sort that exited 0. It reads each rebuildable row, then asks git again
 immediately before it removes that row. The row must still be one ignored entry, with
 nothing tracked or staged in it, nothing unsafe in it, and every file in it ignored.
 
@@ -189,6 +193,8 @@ When cleanup is on ("When") and your session works in a linked worktree, sort th
 worktree before you mark its pull request `[READY]`. This is part of readiness, whoever
 merges. It only reads.
 
+- **The sort fails or refuses**: the pull request stays a `[BLOCKED]` draft. Report the
+  refusal. When it names a `.git` entry, the user moves or removes it; then sort again.
 - **No row, or only rebuildable rows**: there is no question. Cleanup runs after the merge.
 - **Any real work**: the pull request stays a `[BLOCKED]` draft until the user has answered.
   Ask in a message of its own, never at the end of a report. List every real-work path. For

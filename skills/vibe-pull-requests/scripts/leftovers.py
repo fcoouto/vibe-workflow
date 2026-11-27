@@ -242,8 +242,8 @@ def _scan(parent, name, shown, hashed, device):
 
 def _nested(folder, shown, device):
     """Refuse a `.git` entry anywhere below an open folder, except the worktree's own. Git lists nothing for a
-    folder that holds only a repository, yet removing the worktree deletes it. No link is followed and no other
-    device is entered."""
+    folder that holds only a repository, yet removing the worktree deletes it; its other rows say nothing about
+    one. No link is followed and no other device is entered."""
     for name in sorted(os.fsencode(name) for name in os.listdir(folder)):
         if name.lower() == b".git":
             if shown or name != b".git":
@@ -487,13 +487,11 @@ def run(args, done):
     try:
         if mode == "identity":
             return [json.dumps(row)]
-        if mode == "sort":
-            rows = _entries(_out(*SORT))
-            if not rows:
-                _nested(top, b"", _device(os.fstat(top)))
+        if mode in ("sort", "expand"):
+            listing = (*EXPAND, "--", *(b"/".join(path) for path in paths)) if mode == "expand" else SORT
+            rows = _entries(_out(*listing), only="??" if mode == "expand" else None)
+            _nested(top, b"", _device(os.fstat(top)))  # Whatever the rows: no listing passes over a hidden repository.
             return [json.dumps(row) for row in rows]
-        if mode == "expand":
-            return [json.dumps(row) for row in _entries(_out(*EXPAND, "--", *(b"/".join(path) for path in paths)), only="??")]
         if mode == "manifest":
             lines = []
             for path in paths:
