@@ -274,6 +274,17 @@ publishes for each (`npx skills add https://github.com/trailofbits/skills --skil
 <name> -g -a opencode`), whose OpenCode global folder is
 `~/.config/opencode/skills/`, the folder the workspace check reads.
 
+**Partner scope across clients** (user, 27 November). vibe-workflow starts with
+OpenCode and will add Codex, Claude, Cursor and others. Partners always install at
+user scope. Skills keep one shared copy in `~/.agents/skills/`, linked into each
+client's skills folder, so a later client only adds a link. Plugins and MCP
+servers are per client, because each client has its own format and config: offer
+each partner for every installed client it officially supports, mark the rest
+`not-supported`, and never write config for a client that is not installed. This
+plan stays OpenCode-only; multi-client Prepare Workspace (client detection and
+per-client installs) is a separate project. `partners.json` already keys entries
+by client, so it needs no schema change.
+
 ## Trail of Bits evaluation
 
 | Skill | Use in vibe-workflow | Why |

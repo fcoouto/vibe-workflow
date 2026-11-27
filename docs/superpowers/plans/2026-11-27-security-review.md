@@ -333,7 +333,7 @@ The user decided (27 November) that the four portable skills are offered with th
 Run: `python3 -B -m unittest tests.tooling.test_workspace_check -v && node --test tests/skills/workspace-skill.test.js`
 Expected: FAIL on the new ids and phrases.
 
-- [ ] **Step 3: Implement.** Add the four entries. In `procedure.md` step 5, add: a skill partner whose `docs` page is on skills.sh installs with the command that page shows, plus `-g -a opencode` (user scope, OpenCode only) and `DISABLE_TELEMETRY=1` (the CLI otherwise reports skill names and files); `-y` only after the user approved that exact list. Nothing else in the procedure changes.
+- [ ] **Step 3: Implement.** Add the four entries. In `procedure.md` step 5, add: a skill partner whose `docs` page is on skills.sh installs with the command that page shows, plus `-g -a opencode` (user scope; one shared copy in `~/.agents/skills/`, linked for OpenCode, the only client today) and `DISABLE_TELEMETRY=1` (the CLI otherwise reports skill names and files); `-y` only after the user approved that exact list. Nothing else in the procedure changes.
 - [ ] **Step 4: Run both suites**
 
 Run: `python3 -B -m unittest discover -s tests -t . && node --test "tests/**/*.test.js"`
@@ -350,7 +350,7 @@ Task 7 Step 6 probe 5 observes the real install path.
 ### Task 7: Product docs, README and live injection check
 
 **Files:**
-- Modify: `PRODUCT.md` (move "code and security review" out of Planned evaluations; add a Security review bullet under Available now: skill, command, ship-check notes, report folder, advisory and not yet observed live)
+- Modify: `PRODUCT.md` (move "code and security review" out of Planned evaluations; add a Security review bullet under Available now: skill, command, ship-check notes, report folder, advisory and not yet observed live; add a Planned evaluations bullet for multi-client Prepare Workspace, with the partner-scope rule from the design)
 - Modify: `README.md` (a short `## Security review` section, through the `impeccable` skill)
 - Modify: `docs/development.md` (in the Task 5 section: the note texts' triggers and that skill-load notes are not covered by `--injection`)
 - Modify: `tests/tooling/opencode-verified.json` (only if the injection check writes it)
@@ -383,5 +383,5 @@ git commit -m "docs: describe the security review"
   2. Run `gh pr create --draft --title "[BLOCKED] probe"` with `--origin` pointing at a throwaway local bare repository: `SHIP_PR` is in the result with the git workflow off and on.
   3. Commit a synthetic secret (`AKIA` followed by 16 `X`) in a tier-3 change and ask for the ship check: no tool output, reply or report contains the value; the finding names only file, line and type.
   4. `/vibe-security-review` is listed by the background service's `GET /api/command` after the plugin is exported (read-only).
-  5. The Task 6 install command, run with `HOME` and `XDG_CONFIG_HOME` set to a throwaway folder, puts each skill under `<HOME>/.config/opencode/skills/<name>/`, and `python3 -I -B skills/vibe-prepare-my-workspace/scripts/check.py` with that `HOME` reports the four rows ready. If the CLI writes elsewhere, record where and fix the partner entries.
+  5. The Task 6 install command, run with `HOME` and `XDG_CONFIG_HOME` set to a throwaway folder, leaves one shared copy of each skill in `<HOME>/.agents/skills/<name>/` and a link to it at `<HOME>/.config/opencode/skills/<name>` (the design's partner-scope decision), and `python3 -I -B skills/vibe-prepare-my-workspace/scripts/check.py` with that `HOME` reports the four rows ready. If the CLI makes a plain copy in the OpenCode folder instead, find the option in its documentation (`vercel-labs/skills`, `docs/commands.md`) that keeps the shared copy, update the Task 6 procedure text and test phrases, and rerun; if no option does, record what it did and bring it to the user.
   Record each result, pass or fail, in `docs/development.md` under `## Security review: what is known`, and commit (`docs: record security review live checks`). A failure goes back to its task; do not retry the same way.
