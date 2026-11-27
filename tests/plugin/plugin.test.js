@@ -2113,12 +2113,31 @@ async function mergedWorktrees(t) {
   return { root, primary, a: join(root, "a"), b: join(root, "b") }
 }
 
+// The plugin's git reads drop GIT_* variables, so the host's global and XDG config is replaced through HOME instead.
+async function isolatedGitConfig(t) {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "sweep-home-")))
+  const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: join(home, ".config") })
+  t.after(async () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    await rm(home, { recursive: true, force: true })
+  })
+}
+
 // The hook copy runs in the session's own folder, so `directory` is that folder.
 async function sweepHook(t, { root, directory }) {
+  await isolatedGitConfig(t)
   const h = host(directory, { state_dir: join(root, "state") })
   const after = []
   h.ctx.tool.hook = async (name, handler) => { if (name === "execute.after") after.push(handler) }
-  h.ctx.session.list = async () => ({ data: [{ id: "ses_idle", time: { created: 1, updated: 1 } }] })
+  // A running session with no location: busyDirectories returns null and the sweep still answers.
+  h.ctx.session.list = async () => {
+    const now = Date.now()
+    return { data: [{ id: "ses_running", time: { created: now, updated: now, busy: now } }] }
+  }
   const cleanup = await (await load()).setup(h.ctx)
   t.after(() => cleanup?.())
   return async (event) => { for (const handler of after) await handler(event); return event }
