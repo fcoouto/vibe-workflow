@@ -50,7 +50,7 @@ const MAX_SHELLS = 64
 const SHELL_EXIT_GRACE_MS = 200
 const JOB = "experimental.job.updated"
 const STEP = "session.step.ended"
-const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP, JOB]
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP, JOB, "session.deleted"]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
 // OpenCode evaluates plugin modules separately per location in the same server realm.
@@ -58,7 +58,8 @@ const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
-  const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
+  const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map()
+  const exited = new Map(), deleted = new Set()
   const shellGraces = new Map(), shellRoots = new Map(), shellStarts = new Map(), taskRevisions = new WeakMap()
   let taskRevision = 0
   const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
@@ -69,7 +70,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     controller.abort()
     for (const id of shellGraces.keys()) cancelShellGrace(id)
     leave(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear()
-    shellStarts.clear(); shellRoots.clear()
+    shellStarts.clear(); shellRoots.clear(); exited.clear(); deleted.clear()
   }
   const unavailable = { registered: false, close, preferenceSaved: () => {} }
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return unavailable
@@ -341,7 +342,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       let page = await ctx.session.list({ parentID: rootID, limit: MAX_CHILDREN, order: "desc" })
       for (let pages = 1; ; pages++) {
         const items = Array.isArray(page) ? page : page?.data
-        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && running(info?.time) &&
+        if (Array.isArray(items) && items.some((info) => typeof info?.id === "string" && !deleted.has(info.id) && running(info?.time) &&
           !(ended && info.id === ended.id && info.time.busy <= ended.at))) return true
         const next = page?.cursor?.next
         if (typeof next !== "string" || pages >= MAX_PAGES) return false
@@ -439,14 +440,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     return false
   }
 
-  function track(shellID, root) {
-    if (exited.has(shellID) || controller.signal.aborted) return false
+  function track(shellID, root, owner = root) {
+    if (exited.has(shellID) || deleted.has(owner) || deleted.has(root) || controller.signal.aborted) return false
     const entry = sessions.get(root), previous = shells.get(shellID)
     // A local tool result may arrive before the broadcast resolves its owning root.
     if (previous && (previous.entry || (!entry && previous.root === root))) return false
     const first = !hasShell(root)
     cancelShellGrace(root)
-    shells.set(shellID, { root, entry })
+    shells.set(shellID, { root, entry, owner })
     if (shells.size > MAX_SHELLS) {
       // Unrelated broadcasts must not displace a bound task's shells.
       const unbound = [...shells].find(([, shell]) => !shell.entry || sessions.get(shell.root) !== shell.entry)
@@ -485,14 +486,15 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (info?.kind !== "shell" || typeof info.shellID !== "string") return
     const { sessionID, shellID, status } = info
     if (status === "completed" || status === "error" || status === "cancelled") return shellExited(shellID)
-    if (status !== "running" || typeof sessionID !== "string" || controller.signal.aborted || exited.has(shellID) || shells.get(shellID)?.entry ||
+    if (status !== "running" || typeof sessionID !== "string" || deleted.has(sessionID) || controller.signal.aborted ||
+        exited.has(shellID) || shells.get(shellID)?.entry ||
         shellStarts.has(shellID) || shellStarts.size >= MAX_SHELLS) return
     const source = admit(sessionID)
     const revision = taskRevision
     const start = shellRoot(sessionID).then((root) => {
       const entry = sessions.get(root)
       if (!root || !current(sessionID, source) || entry?.silenced || (taskRevisions.get(entry) ?? 0) > revision ||
-          !track(shellID, root) || !entry?.task) return
+          !track(shellID, root, sessionID) || !entry?.task) return
       void enqueue(root, (admitted) => relabel(root, false, admitted, {
         still: () => sessions.get(root) === entry && hasShell(root) && !pending.get(root)?.size,
       }), admit(root, source.revision))
@@ -506,7 +508,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!shellGraces.size || sessions.has(sessionID)) return
     const before = new Map(shellGraces)
     const root = await shellRoot(sessionID)
-    if (before.has(root) && before.get(root) === shellGraces.get(root)) cancelShellGrace(root)
+    if (!deleted.has(sessionID) && before.has(root) && before.get(root) === shellGraces.get(root)) cancelShellGrace(root)
   }
 
   // Wait outside the title queue. Retry the read if a competing title operation or an unresolved shell start
@@ -547,12 +549,24 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
 
   function shellExited(shellID) {
     if (typeof shellID !== "string") return
-    exited.add(shellID)
-    if (exited.size > MAX_SHELLS) exited.delete(exited.values().next().value)
     const shell = shells.get(shellID)
-    if (!shells.delete(shellID)) return
+    if (!exited.has(shellID)) exited.set(shellID, shell)
+    if (exited.size > MAX_SHELLS) exited.delete(exited.keys().next().value)
+    if (shells.delete(shellID)) scheduleShellGrace(shell)
+  }
+
+  function sessionDeleted(sessionID) {
+    if (deleted.has(sessionID)) return
+    deleted.add(sessionID)
+    if (deleted.size > MAX_GENERATIONS) deleted.delete(deleted.values().next().value)
+    forget(sessionID)
+    // A cancelled shell can start a turn for the child just before deletion. That turn may never emit an end.
+    for (const shell of exited.values()) if (shell?.owner === sessionID) scheduleShellGrace(shell)
+  }
+
+  function scheduleShellGrace(shell) {
     const { root } = shell, entry = sessions.get(root)
-    if (!entry?.task || entry.silenced || (shell.entry && shell.entry !== entry) || hasShell(root)) return
+    if (!entry?.task || entry.silenced || (shell.entry && shell.entry !== entry) || hasShell(root) || activeShellGrace(root)) return
     const grace = { admission: admit(root), timer: null, queued: 0 }
     const sameGrace = () => shellGraces.get(root) === grace
     const still = () => sameGrace() && activeShellGrace(root) && sessions.get(root) === entry &&
@@ -791,7 +805,9 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     try {
       await ctx.session.hook?.("experimental.idle", ({ sessionID, background }) => {
         if (!sessions.get(sessionID)?.task || !Array.isArray(background)) return
-        for (const job of background) if (job?.kind === "shell" && typeof job.shellID === "string") track(job.shellID, sessionID)
+        for (const job of background) {
+          if (job?.kind === "shell" && typeof job.shellID === "string") track(job.shellID, sessionID, job.sessionID)
+        }
       })
     } catch {}
     // Settings are saved at the checkout root, which several location copies may share.
@@ -815,6 +831,8 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
           if (event?.type === "shell.exited") { shellExited(event.data?.id); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
+          if (event.type === "session.deleted") { sessionDeleted(sessionID); continue }
+          if (deleted.has(sessionID)) continue
           if (event.type === STEP) stepProgress(event, sessionID)
           else if (event.type === "session.moved") forget(sessionID)
           else if (TURNS.includes(event.type)) {

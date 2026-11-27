@@ -284,7 +284,7 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
     "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
-    "permission.replied", "form.replied", "form.cancelled", "shell.exited", "session.step.ended", "experimental.job.updated"])
+    "permission.replied", "form.replied", "form.cancelled", "shell.exited", "session.step.ended", "experimental.job.updated", "session.deleted"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -1583,6 +1583,50 @@ test("a resumed descendant or replacement shell cancels the final-exit grace", a
   await settle()
   assert.equal(h.titles.get("ses_1"), quiet)
   await exited(h, "sh_3")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("deleting a child restores its cancelled shell grace and ignores a late start", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  await exited(h, "sh_1")
+  await h.start("child_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  const reads = h.calls.run.length
+  await h.emit("session.deleted", "child_1")
+  await h.start("child_1")
+  await tick(199)
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await tick(1)
+  assert.equal(h.titles.get("ses_1"), waiting)
+  assert.equal(h.calls.run.length, reads)
+})
+
+test("deletion before a legacy shell exit does not label while another shell runs", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await h.idle([
+    { kind: "shell", sessionID: "child_1", shellID: "sh_1" },
+    { kind: "shell", sessionID: "child_2", shellID: "sh_2" },
+  ])
+  await h.end()
+  await h.emit("session.deleted", "child_1")
+  h.facts.active = ["child_1"] // A stale native list row cannot keep the root busy after deletion.
+  await exited(h, "sh_1")
+  await h.start("child_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await exited(h, "sh_2")
+  await h.start("child_1")
   await tick()
   assert.equal(h.titles.get("ses_1"), waiting)
 })
