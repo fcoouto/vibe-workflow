@@ -51,10 +51,14 @@
 **Content each file must carry** (prose is the implementer's; every decision below comes from the spec):
 
 - `SKILL.md`: description line, for example `Use when work is about to be delivered (code review, finishing a branch, completing a plan) to run a security check sized to the change, or when the user asks for a full security review of a project.` Body: two modes, which reference to read for each, read-only rule, "no findings is not proof of safety".
-- `ship-check.md` (spec §1): what is reviewed (merge-base to head plus staged, unstaged and untracked files about to be committed); the tier table 0-3 with triggers verbatim from the spec; the three tier rules plus the never-tier-0 list; the short list; that tier 2 adds a security section to the existing reviewer's brief and tier 3 dispatches one reviewer with `reviewer-brief.md`; the `Security` PR section fields (head commit, tier and reason, checked, findings with severity and status, limits), added whatever template the project uses, including its own `.github/pull_request_template.md`; public-repository redaction; D1 blocking rule; re-check only the tiers new commits reach; going public covers Git history (`gitleaks` if installed, else `git log -p`).
-- `reviewer-brief.md` (spec §1 Reviewer): the brief to fill in for a tier-3 reviewer or a full-review sweep: `agent: "explore"`; model via `smart_router_select` with `reviewing` set to the author's model, else the top tier; only providers already in use; read-only by instruction, no installs, builds, scanner runs or partner scripts without the user's approval of that exact run; the trace / counterevidence / confirmed-likely-hardening / introduced-or-pre-existing rules; secrets quoted as file, line and type only; Trail of Bits `differential-review` and `fp-check` used when listed in the agent's available skills, with any report file pointed at the reports folder.
-- `full-review.md` (spec §2): steps 1-6 (bound first, map, sweep by area with the seven areas, verify with a refute pass and sibling search, report to the reports folder plus a chat summary with the path, no fixes); partner tools used when present, `supply-chain-risk-auditor` only after asking.
-- `report-storage.md` (spec §3): main checkout from the first entry of `git worktree list --porcelain`; folder `.vibe-workflow/security-reports/`; folder `.gitignore` exactly `*`, rewritten when missing or different; `git -C <main checkout> check-ignore -q <report path>` before writing, and on failure no write, report in chat with the reason; no main checkout found means the same chat fallback; file name `YYYY-MM-DD-HHMM-<full|ship>-<topic>.md`, never overwritten; `0700` folder, `0600` files; never `git add -f`, never copy a report into a commit, PR, issue or log; the stated limits (backups, cloud sync, `git clean -x`).
+- `ship-check.md` (spec §1): the ship check adds to the ordinary code review and never replaces it; tier 0 skips only the security work. What is reviewed (merge-base to head plus staged, unstaged and untracked files about to be committed); the tier table 0-3 with triggers verbatim from the spec; the three tier rules plus the never-tier-0 list; the short list; that tier 2 adds a security section to the existing reviewer's brief and tier 3 dispatches one reviewer with `reviewer-brief.md`; the `Security` PR section fields (head commit, tier and reason, checked, findings with severity and status, limits), added whatever template the project uses, including its own `.github/pull_request_template.md`; public-repository redaction; re-check only the tiers new commits reach. The D1 rule, as these three sentences verbatim:
+  - `A confirmed high or critical finding that this change introduced or made worse keeps the pull request [BLOCKED] until it is fixed or the user explicitly accepts it.`
+  - `A pre-existing finding is reported to the user and does not block an unrelated pull request.`
+  - `If a required tier-3 review could not run, the pull request stays [BLOCKED] and says so.`
+  Going public covers every ref that will become visible: list them with `git for-each-ref`, scan history with `gitleaks` only after the user approves that exact run, else search with `git log --all -G'<pattern>' --format=%H --name-only` so commits and file names print, never matching lines.
+- `reviewer-brief.md` (spec §1 Reviewer): the brief to fill in for a tier-3 reviewer or a full-review sweep: `agent: "explore"`; model via `smart_router_select` with `reviewing` set to the author's model, else the top tier; only providers already in use; read-only by instruction, no installs, builds, scanner runs or partner scripts unless the user approved that exact run (being installed is not approval); never use real credentials or contact live services; the trace / counterevidence / confirmed-likely-hardening / introduced-or-pre-existing rules; secrets quoted as file, line and type only, in tool output as well as the report (search with options that print file names, not matching lines); Trail of Bits `differential-review` and `fp-check` used when listed in the agent's available skills, with any report file pointed at the reports folder. These rules apply in both modes.
+- `full-review.md` (spec §2): steps 1-6 (bound first, map, sweep by area with the seven areas, verify with a refute pass and sibling search, report to the reports folder plus a chat summary with the path, no fixes); partner tools and Semgrep or CodeQL used when present, each only after the user approves that exact run; `supply-chain-risk-auditor` also says it sends package names to registries and GitHub.
+- `report-storage.md` (spec §3): main checkout from the first entry of `git worktree list --porcelain`; folder `.vibe-workflow/security-reports/`; refuse if `.vibe-workflow` or the reports folder is a symlink, or if `git ls-files` lists anything inside the folder; folder `.gitignore` exactly `*`, rewritten when missing or different; `git -C <main checkout> check-ignore -q <report path>` before writing, and on failure no write, report in chat with the reason; not a Git repository or no main checkout found means the same chat fallback; file name `YYYY-MM-DD-HHMM-<full|ship>-<topic>.md`, with `-2`, `-3` appended when taken, never overwritten; `0700` folder, `0600` files; never `git add -f`, never copy a report into a commit, PR, issue or log; the stated limits (backups, cloud sync, `git clean -x`).
 
 - [ ] **Step 1: Write the failing test** `tests/skills/security-review-skill.test.js`, in the style of `tests/skills/council-skill.test.js` (`read`, `hasAll` helpers):
 
@@ -65,23 +69,30 @@ test("skill frontmatter matches the registration pattern and links every referen
   for (const ref of ["ship-check.md", "full-review.md", "reviewer-brief.md", "report-storage.md"]) assert.ok(text.includes(`references/${ref}`), ref)
 })
 test("ship check carries the tiers, rules and PR section", async () => {
-  hasAll(await read("references/ship-check.md"), ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "merge-base", "untracked",
+  const text = await read("references/ship-check.md")
+  hasAll(text, ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "merge-base", "untracked", "never replaces",
     "take the higher one", "Removing a check", "AGENTS.md", "SKILL.md", "## Security", ".github/pull_request_template.md",
-    "[BLOCKED]", "pre-existing", "introduced", "could not run", "git log -p", "gitleaks", "reviewer-brief.md", "report-storage.md"])
+    "git for-each-ref", "--all", "--name-only", "gitleaks", "approves that exact run", "reviewer-brief.md", "report-storage.md"])
+  hasAll(text.replace(/\s+/g, " "), [
+    "A confirmed high or critical finding that this change introduced or made worse keeps the pull request [BLOCKED] until it is fixed or the user explicitly accepts it.",
+    "A pre-existing finding is reported to the user and does not block an unrelated pull request.",
+    "If a required tier-3 review could not run, the pull request stays [BLOCKED] and says so."])
 })
 test("reviewer brief carries the read-only, routing and redaction rules", async () => {
   hasAll(await read("references/reviewer-brief.md"), ['agent: "explore"', "smart_router_select", "reviewing", "top tier",
-    "counterevidence", "confirmed", "likely", "hardening", "pre-existing", "file, line and type", "differential-review", "fp-check",
-    "available skills", "approved that exact run"])
+    "counterevidence", "confirmed", "likely", "hardening", "pre-existing", "file, line and type", "tool output",
+    "real credentials", "live services", "differential-review", "fp-check", "available skills", "approved that exact run",
+    "installed is not approval"])
 })
 test("full review states its bound, areas, verification and output", async () => {
   hasAll(await read("references/full-review.md"), ["bound", "supply chain", "AI-agent", "refute", "sibling",
-    "report-storage.md", "No fixes", "supply-chain-risk-auditor", "agentic-actions-auditor", "sharp-edges", "Semgrep", "CodeQL"])
+    "report-storage.md", "reviewer-brief.md", "No fixes", "supply-chain-risk-auditor", "agentic-actions-auditor", "sharp-edges",
+    "Semgrep", "CodeQL", "approves that exact run"])
 })
 test("report storage keeps reports private and outside the task worktree", async () => {
   hasAll(await read("references/report-storage.md"), [".vibe-workflow/security-reports/", "git worktree list --porcelain",
     "check-ignore -q", "exactly `*`", "rewrite", "chat", "0700", "0600", "git add -f", "never overwritten", "git clean -x",
-    "not a Git repository"])
+    "not a Git repository", "symlink", "git ls-files", "-2"])
 })
 test("no skill file copies Trail of Bits text or claims enforcement", async () => {
   for (const name of ["SKILL.md", ...["ship-check", "full-review", "reviewer-brief", "report-storage"].map((n) => `references/${n}.md`)]) {
@@ -121,7 +132,8 @@ git commit -m "feat: add vibe-security-review skill"
 - Modify: `src/council.js:172-185` (use `registerSkillCommand`; behavior unchanged)
 - Modify: `index.js:600` (register skill and command after `vibe-project-layout`)
 - Modify: `tests/plugin/onboarding.test.js:56`, `tests/skills/pull-request-skill.test.js:22`, `tests/skills/workspace-skill.test.js:24` (append `vibe-security-review` to the skill lists)
-- Modify: `tests/plugin/plugin.test.js:145` (fixture copies `skills/vibe-security-review/SKILL.md`)
+- Modify: `tests/plugin/plugin.test.js:145` and `tests/plugin/onboarding.test.js:526` (both fixtures copy `skills/vibe-security-review/SKILL.md`)
+- Modify: `tests/tooling/test_package.py:145-147` (exported skill list gains `['vibe-security-review', 'vibe-security-review']`)
 - Test: `tests/plugin/plugin.test.js` (new test beside the council command test at line 1079)
 
 **Interfaces:**
@@ -152,9 +164,9 @@ Expected: FAIL: no `vibe-security-review` command, skill lists one short.
 
 - [ ] **Step 3: Implement** `registerSkillCommand` in `src/onboarding.js`; switch `registerCouncil` to call it with `{ name: "vibe-council", description: "Run the council on a set of decisions.", line: "Use the vibe-council skill." }`; in `index.js` after `registerSkill(ctx, "vibe-project-layout")` add `registerSkill(ctx, "vibe-security-review")` then `registerSkillCommand(ctx, { name: "vibe-security-review", description: "Run a full security review of this project.", line: "Use the vibe-security-review skill for a full review." })`. Registration is unconditional (any project, like the council).
 
-- [ ] **Step 4: Run the full Node suite**
+- [ ] **Step 4: Run both suites**
 
-Run: `node --test "tests/**/*.test.js"`
+Run: `node --test "tests/**/*.test.js" && python3 -B -m unittest discover -s tests -t .`
 Expected: all pass, including the unchanged council command test and "setup succeeds without a command API".
 
 - [ ] **Step 5: Commit**
@@ -168,6 +180,7 @@ git commit -m "feat: register the security review skill and command"
 
 **Files:**
 - Modify: `src/skill-advice.js`
+- Modify: `tests/plugin/pr-hook.test.js:204` (the workflow-off fixture is onboarded, so its finishing load now returns the content plus `SHIP_FINISH`; assert that instead of `untouched()`)
 - Test: `tests/plugin/skill-advice.test.js`
 
 **Interfaces:**
@@ -226,30 +239,39 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/skill-advice.js tests/plugin/skill-advice.test.js
+git add src/skill-advice.js tests/plugin/skill-advice.test.js tests/plugin/pr-hook.test.js
 git commit -m "feat: prompt the security ship check at review and finish"
 ```
 
 ### Task 4: Pull request guidance
 
 **Files:**
-- Modify: `src/pr-advice.js:156-167` (`SUMMARY`, `NOTES.userMerges`, `NOTES.agentMerges`)
+- Modify: `src/pr-advice.js` (`createAdvisor` and a new `SHIP_PR` note)
+- Modify: `src/advice.js:28` (pass `onboarded` to `createAdvisor`)
 - Modify: `skills/vibe-pull-requests/references/pull-request-template.md` (add `## Security` between `## Review` and `## Readiness`)
 - Modify: `skills/vibe-pull-requests/references/procedure.md` (Readiness and The primary checkout sections)
 - Test: `tests/plugin/pr-advice.test.js`, `tests/skills/pull-request-skill.test.js`
 
 **Interfaces:**
-- Consumes: skill and reference names from Task 1.
+- Consumes: skill and reference names from Task 1; `onboarded: () => Promise<boolean>` as `registerAdvice` already receives it.
+- Produces: `createAdvisor({ settings, primary, checkout, onboarded = async () => false })`. Existing notes stay exactly as they are and keep their git-workflow gate.
 
-Exact additions:
-- `SUMMARY` gains, before ` See the vibe-pull-requests skill.`: ` Its Security section must cover the current head before [READY] (vibe-security-review ship check).`
-- `NOTES.userMerges` and `NOTES.agentMerges` each gain a leading sentence after `vibe-workflow: `: `confirm the Security section covers this head and no blocking security finding is open; `. Keep the rest of each string as is.
+The security reminder is separate from the git-workflow notes, because D2 puts the ship check in every onboarded project, and `advise` returns early when the git workflow is off (`src/pr-advice.js:208`). Exact string:
+
+```js
+const SHIP_PR = "vibe-workflow: before this pull request is reviewed or merged, its Security section must cover the " +
+  "current head (vibe-security-review ship check). If it is missing or stale, run the check now; if a blocking finding " +
+  "is open, keep or return the pull request to draft, titled [BLOCKED] when the git workflow is on."
+```
+
+Rule: on a successful `pr_create`, `pr_ready` without `--undo`, or `pr_retitle` to `[READY]`, append `SHIP_PR` once per command when `onboarded()` is `true`, whatever the git workflow state. With the git workflow on, it comes after the existing notes. A throwing `onboarded` adds nothing and never throws.
+
 - Template section body: `[head commit; tier and reason; what was checked; findings with severity and status, or "None substantiated"; limits. Follow the vibe-security-review skill.]`
 - Procedure, Readiness: add that the `Security` section covers the current head and no blocking finding (vibe-security-review ship check) is open; the section is added even when the project's own template wins.
 - Procedure, The primary checkout: add a second exception: writing a report into the ignored `.vibe-workflow/security-reports/` folder, as the vibe-security-review skill's report storage describes. It does not make the checkout unclean.
 
 - [ ] **Step 1: Write the failing tests**
-  - `tests/plugin/pr-advice.test.js`: `gh pr create --draft --title "[BLOCKED] x"` note matches `/Security section must cover the current head before \[READY\]/`; `gh pr ready 3` note matches `/no blocking security finding is open/` for both `agent_merge` true and false.
+  - `tests/plugin/pr-advice.test.js`: with the git workflow on and onboarded, `gh pr create --draft --title "[BLOCKED] x"` returns the existing notes then `SHIP_PR`; with settings `{ state: "off" }` and onboarded, `gh pr create`, `gh pr ready 3` and `gh pr edit 3 --title "[READY] x"` each return exactly `SHIP_PR`; `gh pr ready 3 --undo`, `git push` and a failed command return `null`; not onboarded with the git workflow off returns `null`; a throwing `onboarded` returns the git-workflow notes alone (or `null` when off).
   - `tests/skills/pull-request-skill.test.js`: the "five sections" test becomes six, adding `Security`, and asserts its index lies between `## Review` and `## Readiness`; the procedure phrase list gains `".vibe-workflow/security-reports/"`, `"vibe-security-review"`, `"Security section"`.
 
 - [ ] **Step 2: Run to verify they fail**
@@ -267,7 +289,7 @@ Expected: all pass (fix any exact-string expectation of `SUMMARY` in `tests/plug
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/pr-advice.js skills/vibe-pull-requests tests
+git add src/pr-advice.js src/advice.js skills/vibe-pull-requests tests
 git commit -m "feat: add the Security section to pull request guidance"
 ```
 
@@ -276,15 +298,18 @@ git commit -m "feat: add the Security section to pull request guidance"
 **Files:**
 - Modify: `docs/development.md` (new section `## Security review: what is known`, after the last section)
 
-- [ ] **Step 1: Read, do not install.** Fetch the `SKILL.md` of `differential-review`, `fp-check`, `agentic-actions-auditor`, `sharp-edges` and `supply-chain-risk-auditor` from `https://raw.githubusercontent.com/trailofbits/skills/main/plugins/<name>/skills/<name>/SKILL.md`. For each, record: tools named in `allowed-tools`; uses of `{baseDir}`, `${CLAUDE_PLUGIN_ROOT}`, the `Workflow` tool or plugin agents; bundled scripts and their runtime needs (`uv`, `gh`, network).
-- [ ] **Step 2: Write the section**: one line per skill with those facts and a verdict, `likely portable` or `Claude Code only`, marked "static reading, not observed on OpenCode", with the date and the upstream commit read (`gh api repos/trailofbits/skills/commits/main --jq .sha`).
-- [ ] **Step 3: Stop.** Do not edit `skills/vibe-prepare-my-workspace/partners.json`. Its procedure marks a tool without official OpenCode support as `not-supported`, and listing needs a live load check that requires installing. Report the verdicts to the user and ask whether to authorize a live check or leave the skills unlisted (detection through the available skills list still works).
-- [ ] **Step 4: Commit**
+- [ ] **Step 1: Pin the revision.** Run `gh api repos/trailofbits/skills/commits/main --jq .sha` and keep the SHA.
+- [ ] **Step 2: Read, do not install.** Fetch the `SKILL.md` of `differential-review`, `fp-check`, `agentic-actions-auditor`, `sharp-edges` and `supply-chain-risk-auditor` from `https://raw.githubusercontent.com/trailofbits/skills/<SHA>/plugins/<name>/skills/<name>/SKILL.md`. For each, record: tools named in `allowed-tools`; uses of `{baseDir}`, `${CLAUDE_PLUGIN_ROOT}`, the `Workflow` tool or plugin agents; bundled scripts and their runtime needs (`uv`, `gh`, network).
+- [ ] **Step 3: Write the section**: one line per skill with those facts and a verdict, `likely portable` or `Claude Code only`, marked "static reading, not observed on OpenCode", with the date and the SHA.
+- [ ] **Step 4: Stop.** Do not edit `skills/vibe-prepare-my-workspace/partners.json`. Its procedure marks a tool without official OpenCode support as `not-supported`, and listing needs a live load check that requires installing. Report the verdicts to the user and ask whether to authorize a live check or leave the skills unlisted (detection through the available skills list still works).
+- [ ] **Step 5: Commit**
 
 ```bash
 git add docs/development.md
 git commit -m "docs: record Trail of Bits portability, static reading"
 ```
+
+Task 7 runs only if the user authorizes it at Step 4; otherwise the skills stay unlisted and Task 6 follows.
 
 ### Task 6: Product docs, README and live injection check
 
@@ -316,3 +341,22 @@ git commit -m "docs: describe the security review"
 ```
 
 - [ ] **Step 5: Run the injection check** (pre-authorized): `python3 -B scripts/live_check.py --injection`. Expected: every model and the shell probe pass. If it writes `tests/tooling/opencode-verified.json`, commit that file (`git commit -m "test: record injection check"`). If it fails, stop and tell the user; do not retry another way.
+
+### Task 7 (only with the user's authorization from Task 5): live portability check and partner listing
+
+**Files:**
+- Modify: `skills/vibe-prepare-my-workspace/partners.json`
+- Modify: `skills/vibe-prepare-my-workspace/references/procedure.md` (only if the user approves listing skills whose official docs do not cover OpenCode)
+- Modify: `docs/development.md` (the Task 5 section)
+- Test: `tests/tooling/test_workspace_check.py`
+
+- [ ] **Step 1: Confirm the exact authorization**: which skills, installed where (user scope `~/.config/opencode/skills/<name>/`, which `check.py` reads), from the Task 5 SHA. No answer is not consent.
+- [ ] **Step 2: Install and observe.** Copy each approved skill folder at the pinned SHA. In a new session, confirm each appears in the available skills list and loads through the skill tool. Record pass or fail per skill, with the OpenCode version and date, in `docs/development.md`.
+- [ ] **Step 3: Write the failing test** in `tests/tooling/test_workspace_check.py`: each passing skill has a partner entry with `clients.opencode = {"kind": "skill", "name": "<name>"}`, `upstream = {"type": "presence"}` (as `graphify-skill`), a `docs` URL under `https://github.com/trailofbits/skills/`, and a `why` line; a skill that failed Step 2 has no entry.
+- [ ] **Step 4: Run it to verify it fails**, then add the entries, then run `python3 -B -m unittest discover -s tests -t .`. Expected: all pass.
+- [ ] **Step 5: Commit**
+
+```bash
+git add skills/vibe-prepare-my-workspace docs/development.md tests/tooling/test_workspace_check.py
+git commit -m "feat: list portable Trail of Bits skills as workspace partners"
+```
