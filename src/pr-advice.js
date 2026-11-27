@@ -134,6 +134,22 @@ function titleOf(words) {
   return null
 }
 
+// Options of `gh pr create` and `gh pr ready` whose value is the next word.
+const VALUE_OPTIONS = new Set(["--title", "-t", "--body", "-b", "--body-file", "-F", "--base", "-B", "--head", "-H",
+  "--repo", "-R", "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p",
+  "--template", "-T"])
+const PREVIEW_OPTIONS = new Set(["--help", "-h", "--dry-run"])
+
+// Help and dry-run forms change no pull request, so they must not prompt a ship check. gh receives a quoted
+// word without its quotes, so quoting is ignored here; a word that is another option's value is data, not a flag.
+function isPreview(words) {
+  for (let index = 0; index < words.length; index++) {
+    if (VALUE_OPTIONS.has(words[index].text)) index++
+    else if (PREVIEW_OPTIONS.has(words[index].text)) return true
+  }
+  return false
+}
+
 export function classify(command) {
   const actions = []
   let moved = false
@@ -144,8 +160,9 @@ export function classify(command) {
     if (first === "cd" || first === "pushd") moved = true
     else if (first === "gh" && second === "pr") {
       const rest = words.slice(3)
-      if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest) })
-      else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo") })
+      const preview = (third === "create" || third === "ready") && isPreview(rest) && { preview: true }
+      if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest), ...preview })
+      else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo"), ...preview })
       else if (third === "edit") { const title = titleOf(rest); if (title !== null) actions.push({ kind: "pr_retitle", title }) }
       else if (third === "merge") actions.push({ kind: "pr_merge", auto: flag(rest, "--auto") })
     } else if (first === "git") {
@@ -166,6 +183,9 @@ export function classify(command) {
 
 const SUMMARY = "vibe-workflow: open pull requests as [BLOCKED] drafts, mark one [READY] only when its checks and review " +
   "cover the current head, and return it to [BLOCKED] draft after any push or base change. See the vibe-pull-requests skill."
+const SHIP_PR = "vibe-workflow: before this pull request is reviewed or merged, its Security section must cover the " +
+  "current head (vibe-security-review ship check). If it is missing or stale, run the check now; if a blocking finding " +
+  "is open, keep or return the pull request to draft, titled [BLOCKED] when the git workflow is on."
 const NOTES = {
   notDraft: "vibe-workflow: this pull request was not opened as a draft; run `gh pr ready --undo` to make it one.",
   notBlocked: 'vibe-workflow: retitle it with `gh pr edit --title "[BLOCKED] <title>"`.',
@@ -194,7 +214,7 @@ function remember(map, key, value) {
   if (map.size > MAX_SESSIONS) map.delete(map.keys().next().value)
 }
 
-export function createAdvisor({ settings, primary, checkout }) {
+export function createAdvisor({ settings, primary, checkout, onboarded = async () => false }) {
   const armed = new Map()
   const branches = new Map()
   return {
@@ -204,8 +224,14 @@ export function createAdvisor({ settings, primary, checkout }) {
         if (!event || !SHELLS.has(event.tool) || !event.ok || typeof event.command !== "string") return null
         const actions = classify(event.command)
         if (!actions.length) return null
-        const state = await settings()
-        if (state?.state !== "on") return null
+        const eligible = actions.some((action) => (action.kind === "pr_create" && !action.preview) ||
+          (action.kind === "pr_ready" && !action.undo && !action.preview) ||
+          (action.kind === "pr_retitle" && action.title.startsWith("[READY]")))
+        // The two gates are independent: failing workflow settings never clear a ship note already decided.
+        let ship = false, state = null
+        if (eligible) { try { ship = await onboarded() === true } catch {} }
+        try { state = await settings() } catch {}
+        if (state?.state !== "on") return ship ? SHIP_PR : null
         const agentMerge = state.agent_merge === true, cleanup = state.worktree_cleanup === true, notes = []
         const arm = (value) => { if (sessionID) { if (value) remember(armed, sessionID, true); else armed.delete(sessionID) } }
         for (const action of actions) {
@@ -236,6 +262,7 @@ export function createAdvisor({ settings, primary, checkout }) {
             }
           }
         }
+        if (ship) notes.push(SHIP_PR)
         return notes.length ? notes.join("\n") : null
       } catch { return null }
     },

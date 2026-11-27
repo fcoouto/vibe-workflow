@@ -15,6 +15,23 @@ export async function registerSkill(ctx, skill) {
   await ctx.skill.transform((editor) => editor.add({ id: skill, name: skill, path, description, content }))
 }
 
+export async function registerSkillCommand(ctx, { name, description, line }) {
+  if (typeof ctx.command?.transform !== "function") return
+  const withoutMentions = (items) => items?.map(({ mention, ...item }) => item)
+  await ctx.command.transform((editor) => editor.add({
+    name, description,
+    execute: async ({ sessionID, prompt, delivery }) => {
+      const extra = typeof prompt?.text === "string" ? prompt.text.trim() : ""
+      await ctx.session.prompt({
+        ...prompt, sessionID,
+        text: extra ? `${line} ${extra}` : line,
+        files: withoutMentions(prompt?.files), agents: withoutMentions(prompt?.agents),
+        skills: withoutMentions(prompt?.skills), delivery,
+      })
+    },
+  }))
+}
+
 const features = ["smart_router", "git_workflow", "session_titles"]
 
 export async function registerOnboarding(ctx, projects, checkSetup, prGuard, titlesGuard, inspectGitWorkflow) {

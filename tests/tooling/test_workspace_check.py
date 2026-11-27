@@ -102,12 +102,34 @@ class LocalTest(unittest.TestCase):
         self.assertTrue(present({"kind": "file", "path": "plugins/rtk.ts"}, {}, self.home)[0])
         self.assertFalse(present({"kind": "file", "path": "plugins/none.ts"}, {}, self.home)[0])
         (self.config_dir / "skills/impeccable").mkdir(parents=True)
+        self.assertFalse(present({"kind": "skill", "name": "impeccable"}, {}, self.home)[0], "an empty folder is no skill")
+        (self.config_dir / "skills/impeccable/SKILL.md").write_text("---\nname: impeccable\n---\n")
         self.assertTrue(present({"kind": "skill", "name": "impeccable"}, {}, self.home)[0])
+
+    def test_a_skill_needs_a_regular_skill_file(self):
+        present = self.check.integration_present
+        spec = {"kind": "skill", "name": "sharp-edges", "version_from": "frontmatter"}
+        skills = self.config_dir / "skills"
+        skills.mkdir()
+        (skills / "sharp-edges").write_text("a plain file, not a skill folder\n")
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+        (skills / "sharp-edges").unlink()
+        (skills / "sharp-edges/SKILL.md").mkdir(parents=True)
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+
+    def test_incomplete_opencode_folder_falls_back_to_a_valid_shared_copy(self):
+        (self.config_dir / "skills/sharp-edges/references").mkdir(parents=True)
+        shared = self.home / ".agents/skills/sharp-edges"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: sharp-edges\nversion: 1.2.0\n---\n")
+        spec = {"kind": "skill", "name": "sharp-edges", "version_from": "frontmatter"}
+        self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "1.2.0"))
 
     def test_symlinked_skill_is_present_and_dangling_is_missing(self):
         present = self.check.integration_present
         target = self.home / "agents/caveman"
         target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("---\nname: caveman\n---\n")
         skills = self.config_dir / "skills"
         skills.mkdir()
         os.symlink(target, skills / "caveman")
@@ -132,6 +154,35 @@ class LocalTest(unittest.TestCase):
         (skill / "SKILL.md").write_text("---\nname: impeccable\nversion: 4.10.0\n---\nbody version: 9.9.9\n")
         spec = {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}
         self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "4.10.0"))
+
+    def test_skill_in_the_shared_folder_is_present(self):
+        present = self.check.integration_present
+        spec = {"kind": "skill", "name": "differential-review", "version_from": "frontmatter"}
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+        shared = self.home / ".agents/skills/differential-review"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: differential-review\nversion: 1.2.0\n---\n")
+        self.assertEqual(present(spec, {}, self.home), (True, "1.2.0"))
+        self.assertTrue(present({"kind": "skill", "name": "differential-review"}, {}, self.home)[0])
+
+    def test_skill_version_prefers_the_opencode_folder_over_the_shared_one(self):
+        for folder, version in ((self.home / ".agents/skills/impeccable", "1.0.0"),
+                                (self.config_dir / "skills/impeccable", "4.10.0")):
+            folder.mkdir(parents=True)
+            (folder / "SKILL.md").write_text(f"---\nname: impeccable\nversion: {version}\n---\n")
+        spec = {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}
+        self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "4.10.0"))
+
+    def test_dangling_opencode_link_falls_back_to_the_shared_folder(self):
+        skills = self.config_dir / "skills"
+        skills.mkdir()
+        os.symlink(self.home / "gone", skills / "sharp-edges")
+        spec = {"kind": "skill", "name": "sharp-edges"}
+        self.assertFalse(self.check.integration_present(spec, {}, self.home)[0])
+        (self.home / ".agents/skills/sharp-edges").mkdir(parents=True)
+        self.assertFalse(self.check.integration_present(spec, {}, self.home)[0])
+        (self.home / ".agents/skills/sharp-edges/SKILL.md").write_text("---\nname: sharp-edges\n---\n")
+        self.assertTrue(self.check.integration_present(spec, {}, self.home)[0])
 
 
 class UpstreamTest(unittest.TestCase):
@@ -366,7 +417,9 @@ class MainTest(unittest.TestCase):
     def test_shipped_partners_json_is_valid(self):
         shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
         ids = [p["id"] for p in shipped["partners"]]
-        self.assertEqual(ids, ["superpowers", "ponytail", "caveman", "impeccable", "context7", "rtk",
+        self.assertEqual(ids, ["superpowers", "ponytail", "caveman", "impeccable", "context7",
+                               "tob-differential-review", "tob-sharp-edges", "tob-agentic-actions-auditor",
+                               "tob-supply-chain-risk-auditor", "rtk",
                                "graphify-cli", "graphify-skill", "git", "gh", "python"])
         for partner in shipped["partners"]:
             self.assertTrue(partner["why"] and partner["docs"].startswith("https://"), partner["id"])
@@ -374,6 +427,44 @@ class MainTest(unittest.TestCase):
             if upstream["type"] in ("npm", "github", "raw"):
                 self.assertTrue(self.check.latest_version(upstream, lambda url: self.assertTrue(
                     self.check._allowed(url), url) or '{"version": "1", "tag_name": "1"}'))
+
+    def test_trail_of_bits_partners_and_presence(self):
+        expected = {
+            "differential-review": "Deep security review of high-risk changes, used by the vibe-security-review ship check.",
+            "sharp-edges": "Finds misuse-prone APIs and dangerous configuration in a full security review.",
+            "agentic-actions-auditor": "Audits GitHub Actions workflows that run AI agents.",
+            "supply-chain-risk-auditor": "Dependency and supply-chain risk report; needs uv and network access, and runs only with approval.",
+        }
+        shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
+        partners = {p["id"]: p for p in shipped["partners"]}
+        env = self.check.Env(home=self.home, run=lambda argv: self.fail("unexpected command"),
+                             fetch=lambda url: self.fail("unexpected network"))
+        for name, why in expected.items():
+            with self.subTest(name=name):
+                partner = partners.get(f"tob-{name}")
+                self.assertIsNotNone(partner)
+                self.assertEqual(partner["clients"], {"opencode": {"kind": "skill", "name": name}})
+                self.assertEqual(partner["upstream"], {"type": "presence"})
+                self.assertEqual(partner["docs"], f"https://skills.sh/trailofbits/skills/{name}")
+                self.assertEqual(partner["why"], why)
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
+                (self.config_dir / "skills" / name).mkdir(parents=True)
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing", "an empty folder is not ready")
+                (self.config_dir / "skills" / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
+
+    def test_shared_folder_alone_makes_a_trail_of_bits_partner_ready(self):
+        shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
+        partner = next(p for p in shipped["partners"] if p["id"] == "tob-differential-review")
+        env = self.check.Env(home=self.home, run=lambda argv: self.fail("unexpected command"),
+                             fetch=lambda url: self.fail("unexpected network"))
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
+        shared = self.home / ".agents/skills/differential-review"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: differential-review\n---\n")
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
+        (self.config_dir / "skills/differential-review").mkdir(parents=True)
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
 
 
 if __name__ == "__main__":

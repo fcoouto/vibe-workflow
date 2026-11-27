@@ -69,6 +69,28 @@ overlapping behavior.
   map, through `safe-refactor` when it is installed. It is always registered and has no setting. In any
   onboarded project the `writing-plans` note gains one sentence pointing to it.
   Advisory, and not yet observed live.
+- Security review: the `vibe-security-review` skill and `/vibe-security-review`
+  command. Its ship check sizes the security work to what a change touches (tier 0
+  none, 1 light, 2 focused, 3 deep with one read-only reviewer) and records the
+  result in the pull request's `Security` section; its full mode reviews a whole
+  project within a stated bound, in any project, onboarded or not. In every
+  onboarded project, notes point to the ship check when `requesting-code-review`,
+  `subagent-driven-development` or `finishing-a-development-branch` loads, and
+  after a pull request is created or marked ready. Full reports go to
+  `.vibe-workflow/security-reports/` in the main checkout, a folder whose own
+  `.gitignore` keeps everything in it untracked. A bundled script writes them; when
+  storage is unsafe it refuses and the report goes to chat. A secret in a file the
+  review reads reaches the reviewing models; a likely one is reported at once, to
+  be rotated. Trail of Bits skills are used when
+  installed and are offered by `vibe-prepare-my-workspace`, never bundled. A review
+  fixes nothing and makes no claim that code is secure. Advisory. Observed on
+  OpenCode 2.3.2 (27 November 2026): the `requesting-code-review` and
+  `finishing-a-development-branch` notes, the pull request note with a stub `gh`
+  only, the command listing and one ship check. Not observed: the
+  `subagent-driven-development` note, a real pull request, a full review and
+  everything changed after the final review, which tests alone cover. What
+  those runs found and what changed after them is in `docs/development.md`,
+  "Security review: what is known".
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
@@ -98,8 +120,15 @@ different from the approved future onboarding default below.
   lookup before agent merges, or cleaning up stale worktrees and branches that
   already exist:
   [issue #328](https://github.com/fcoouto/vibe-workflow/issues/328).
-- Tests and builds, plus code and security review: apply the same partnership
-  principle. Their exact feature boundaries remain open.
+- Tests, builds and code review: apply the same partnership principle. Their
+  exact feature boundaries remain open.
+- Multi-client Prepare Workspace (client detection and per-client installs), a
+  separate project; today it covers OpenCode only. The partner-scope rule it must
+  keep: partners always install at user scope. Skills keep one shared copy in
+  `~/.agents/skills/`, read directly by clients that support that folder (OpenCode
+  does) and linked into the others, so a later client only adds a link. Plugins and MCP servers are per client: offer each partner for
+  every installed client it officially supports, mark the rest `not-supported`,
+  and never write config for a client that is not installed.
 
 ## Product Principles
 
