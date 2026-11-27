@@ -24,14 +24,42 @@
 6. **No fixes.** Offer to turn chosen findings into a plan; fixes follow the
    normal workflow.
 
+## Secrets
+
+These rules bind every reader: each sweep reviewer, and a coordinator working
+alone on a small project.
+
+- Reading files is necessary and is not quoting. Accepted limit: reading a file
+  sends any secret in it to the reader's model and session history; nothing masks
+  it.
+- Never repeat a secret's value in a reply, report, pull request, commit, log or
+  any command you write. Quote it as file, line and type only.
+- Search for secrets only with commands that list file names, such as `rg -l` or
+  `git grep -l`; never use a search tool or option that prints matching lines for
+  a secret pattern.
+- As soon as a likely secret is found, the coordinator tells the user immediately
+  in chat, by file, line and type, that it must be treated as exposed and rotated
+  now. Do not wait for the end of the review.
+
 ## Optional partners
 
-Use available partner tools only within the reviewer brief's limits, never install
-them during review. Use `supply-chain-risk-auditor` for dependencies,
-`agentic-actions-auditor` for workflows invoking AI agents, `sharp-edges` for API
-and config design, and `c-review` or `rust-review` when the language matches.
-Use Semgrep or CodeQL only if already installed. Run each tool or partner script
-only after the user approves that exact run. `supply-chain-risk-auditor` sends
-package names to registries and GitHub; disclose this before asking. The
-coordinator asks the user before the sweep and names approved commands in each
-sweep brief. Reviewers run no other commands from these tools or scripts.
+Never install a tool during a review. Check where each partner skill comes from
+before loading it, as [reviewer-brief.md](reviewer-brief.md) describes.
+
+Reviewers use partner guidance that only reads local files:
+`agentic-actions-auditor` for local workflows invoking AI agents, `sharp-edges`
+for API and config design, and `c-review` or `rust-review` when the language
+matches. A reviewer runs a tool or partner script only when it needs no network,
+credentials or writes and the user approves that exact run. The coordinator asks
+the user before the sweep and names approved commands in each sweep brief.
+Reviewers run no other commands from these tools or scripts.
+
+Anything that needs network, credentials or writes is coordinator-run only and
+never given to a reviewer: `supply-chain-risk-auditor`'s collector (a signed-in
+`gh`, package names sent to registries and GitHub, an output file), CodeQL
+database creation, and a Semgrep run that downloads rules or writes a cache. Use
+Semgrep or CodeQL only if already installed. Before asking, the coordinator tells
+the user what the command sends, where it sends it and where its output goes. It
+runs only after the user approves that exact command, with output in a temp or
+scratch folder outside the repository, redacted before any of it reaches a brief
+or the report. Without approval, skip it and record the limit.

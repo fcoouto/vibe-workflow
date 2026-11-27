@@ -21,12 +21,20 @@ Choose the highest tier reached by any part, based on effect, not file type.
 
 ## Secrets
 
-When you read the diff yourself, reading a changed file is necessary and is not
-quoting. Never repeat a secret's value in a reply, report, pull request, commit,
-log or any command you write. Quote it as file, line and type only. Search for
-secrets only with commands that list file names, such as `rg -l` or
-`git grep -l`; never use a search tool or option that prints matching lines for a
-secret pattern.
+These rules bind every reader: the coordinator, a reviewer, and a coordinator
+working alone.
+
+- To review a change, reading a changed file is necessary and is not quoting.
+  Accepted limit: reading a file sends any secret in it to the reader's model and
+  session history; nothing masks it.
+- Never repeat a secret's value in a reply, report, pull request, commit, log or
+  any command you write. Quote it as file, line and type only.
+- Search for secrets only with commands that list file names, such as `rg -l` or
+  `git grep -l`; never use a search tool or option that prints matching lines for
+  a secret pattern.
+- As soon as a likely secret is found, the coordinator tells the user immediately
+  in chat, by file, line and type, that it must be treated as exposed and rotated
+  now. Do not wait for the end of the check.
 
 ## Short list
 
@@ -51,16 +59,24 @@ A pre-existing finding is reported to the user and does not block an unrelated p
 If a required tier-3 review could not run, the pull request stays [BLOCKED] and says so.
 List medium and low findings without blocking.
 
-For a public repository, put only location and class in the PR for every finding
-that is not plainly harmless, including every confirmed or likely finding and
-every secret. Share details in chat and a private report using
-[report-storage.md](report-storage.md).
+In the pull request, every finding that is not plainly harmless appears as
+location and class only: every confirmed or likely finding and every secret.
+This holds in every section, including `Review`, whether the repository is
+public, private or about to go public. Details go to chat and a private report
+saved with [report-storage.md](report-storage.md).
 
 ## Going public
 
 Cover history and every ref that will become visible, not only the checkout.
-List refs with `git for-each-ref`. Use an installed history-aware scanner such
-as `gitleaks` only after the user approves that exact run. Otherwise search
-history with `git log --all -G'<pattern>' --format=%H --name-only`: print commits
-and file names, never matching lines. Scanner output must not print secret values
-either. State the limits of the search.
+List refs with `git for-each-ref`. Search history with
+`git log --all --diff-merges=separate -G'<pattern>' --format=%H --name-only`. It
+includes merge diffs, so a secret added while resolving a merge is found, and it
+prints commits and file names, never matching lines.
+
+An installed history-aware scanner such as `gitleaks` is coordinator-run only,
+and only after the user approves that exact run. Run it with `--redact=100` and
+with no report file, which would hold raw matches. Scanner output must not print
+secret values.
+
+State which refs were examined, what was left out (commits no ref reaches, such
+as reflog entries) and the limits of the search.
