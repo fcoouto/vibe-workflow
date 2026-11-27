@@ -52,7 +52,7 @@ exactly as written, apart from the markers and the saved choice's place.
 
 - Header: Worktree cleanup
 - Question: Clean up after a pull request is merged in this project?
-- Context: Agents work on each task in a separate folder, called a worktree. After a confirmed merge, cleanup removes that folder and its local branch. It also removes older merged worktrees and tool caches such as `node_modules`. It never removes unmerged work, and asks before the merge about any other files left in the folder.
+- Context: Agents work on each task in a separate folder, called a worktree. After a confirmed merge, cleanup removes that folder, its local branch and older merged worktrees, and deletes tool caches such as `node_modules` without asking. Before the pull request is marked ready, it asks about any other files in the task's folder. Older worktrees with such files are skipped and reported, never asked about. It never removes unmerged work.
 - Choices:
   - Clean up (Recommended) — Remove the folder and branch after each merge.
   - Keep them — You remove worktrees and branches yourself.

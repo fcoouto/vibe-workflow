@@ -341,8 +341,9 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   assert.match(questions[1], /Turn off git guidance — No PR reminders, and no cleanup\./)
   for (const [index, phrase] of [[1, "Reminders are not available in this OpenCode, so this is guidance only."],
     [1, "current for the latest commit"], [1, "[BLOCKED]"],
-    [2, "It also removes older merged worktrees and tool caches such as"],
-    [2, "asks before the merge about any other files left in the folder"],
+    [2, "and older merged worktrees, and deletes tool caches such as `node_modules` without asking."],
+    [2, "Before the pull request is marked ready, it asks about any other files in the task's folder."],
+    [2, "Older worktrees with such files are skipped and reported, never asked about."],
     [4, "This OpenCode does not send session events, so titles will not update yet."],
     [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
     assert.ok(questions[index].includes(phrase), phrase)
