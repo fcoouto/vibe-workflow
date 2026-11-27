@@ -802,3 +802,75 @@ matches. A skill the user attaches to a prompt makes no tool call, so it gets no
 skills. It proves only that the `execute.after` hook, which they share, still appends to
 tool results. `SHIP_PR` is not in it either: its shell probe runs a branch switch, not a
 `gh` command. Tests cover the note texts and gates with synthetic settings.
+
+Observed live after the build, 27 November 2026, OpenCode 2.3.2, branch at `eea423c`. Every
+run used a throwaway `live_check.py` clone with this branch's package as a project-local
+plugin, onboarded with Smart Router saved as off, and an `origin` set to a throwaway local
+bare repository. All eleven probe sessions (five of them one probe's own subagents) were deleted
+and confirmed gone; no clone was left. `--injection` passed again on this note state
+(`claude-agent/haiku`, `openai/gpt-6.1-terra`, `opencode-go/claude-haiku-5-5` and the shell
+probe); the record was already dated that day, so the file did not change.
+
+1. **Skill notes: pass.** One session per setting on the background service (its default
+   model, `opencode/seaglass-alpha-free`), which also loads the user's installed plugin.
+   Asked to load `requesting-code-review` and then `finishing-a-development-branch` and
+   make no other call, the agent made exactly those two calls. With the git workflow on,
+   the first result ended with its ship note and the second held the integration note,
+   then the ship note on its own line, then the integration note again from the installed
+   plugin. With it off, each result held only its ship note. In both replies the plan put
+   the ship check before the code reviewer is dispatched and before the pull request is
+   opened or readied. Not observed: `subagent-driven-development`, and a real delivery.
+   `live_check.py --prompt` prints only the first `vibe-workflow:` line of a tool result,
+   so it hides a second note; these runs read the whole result.
+2. **`SHIP_PR`: pass, with a stub `gh`.** Isolated runs (`--isolated`), one
+   `gh pr create --draft --title "[BLOCKED] probe"` each. With the real `gh` the command
+   cannot succeed: the isolated config home leaves `gh` signed out (exit 4), and a local
+   bare origin is no GitHub host (exit 1 when signed in). That run returned no note, which
+   is the rule for a failed command. With a stub `gh` first on `PATH` that prints a fake
+   URL and exits 0, the result held `SHIP_PR` alone with the git workflow off, and the
+   summary note followed by `SHIP_PR` with it on; the model quoted them. Not observed: a
+   real pull request, `gh pr ready` and a `[READY]` retitle.
+3. **Synthetic secret: fail for tool output, pass for the reply.** One isolated run of 275
+   seconds, on a clone whose one commit above `origin/main` added `src/upload-client.js`
+   with `accessKeyId` set to `AKIA` plus 16 `X`. Asked for the ship check, the agent loaded
+   the skill, read its three references, chose tier 3 for "secrets or credentials" and
+   dispatched an `explore` reviewer. Its reply and `Security` section named only
+   `src/upload-client.js:4` and the type, said no value was reproduced, and rated the
+   finding medium, confirmed and introduced, not blocking. No report file was written and
+   nothing in the clone changed. The value did reach tool results: the coordinator's `read`
+   of the changed file returned it once, and the reviewer's `read` of that file and three
+   of its `grep` calls returned it four times; the reviewer's reasoning repeated it. The
+   brief the coordinator wrote for the reviewer did not contain it. So "never in tool
+   output" does not hold: `ship-check.md` tells the coordinator to review the diff and says
+   nothing about how to read a changed file that may hold a secret, and the reviewer used
+   the grep tool, which prints matching lines, against `reviewer-brief.md`'s "print file
+   names, not matching lines". Two more things were seen. Without Smart Router the
+   coordinator first set the reviewer's model to `opencode/claude-opus-5-5#max`, a
+   pay-as-you-go route on the session's own provider; it failed with `provider.quota`
+   (insufficient balance, cost 0), and the second dispatch, with no model, ran as
+   `opencode/seaglass-alpha-free`. While waiting for the background reviewer the
+   coordinator polled with six `true` shell calls and three "No-op" subagents, and its
+   reply first said the review could not run before the reviewer's answer replaced it.
+4. **Command listing: pass.** `GET /api/command` on the background service, with the
+   location sent as `location[directory]=<clone>`, listed `vibe-security-review` ("Run a
+   full security review of this project.") beside `vibe-council`; `GET /api/skill` listed
+   the skill. A plain `?directory=` is ignored and answers for the server's default
+   location, where the installed plugin has no such command. Running the command was not
+   observed.
+5. **Partner install: fail against the design.** `DISABLE_TELEMETRY=1 npx skills add
+   https://github.com/trailofbits/skills --skill <name> -g -a opencode -y` (skills CLI
+   1.9.1), run once per skill with `HOME` and `XDG_CONFIG_HOME` in a throwaway folder,
+   left one copy of each skill in `<HOME>/.agents/skills/<name>/` at the pinned commit and
+   a `<HOME>/.agents/.skill-lock.json`. It made no link and no copy in
+   `<HOME>/.config/opencode/`: the CLI lists OpenCode as a "universal" agent that reads
+   `~/.agents/skills/` itself. `--copy` gave the same result, and `docs/commands.md` names
+   no option that adds the link, although `docs/agents.md` gives OpenCode's global path as
+   `~/.config/opencode/skills/`. `check.py` with that `HOME` then reported the four rows
+   `missing` (`integration_missing`), because it looks only in
+   `~/.config/opencode/skills/<name>`; after links were added by hand in the throwaway
+   folder it reported all four `ready`. OpenCode 2.3.2 does read `~/.agents/skills/`: on
+   this machine skills that exist only there are in the service's skill list. So the skills
+   would load, but Prepare Workspace would keep reporting them missing, and the procedure's
+   "linked for OpenCode" is not what the CLI does. Nothing was written to the real
+   `~/.agents` or `~/.config/opencode`; both folders' listings were the same before and
+   after. This needs the user's decision.

@@ -80,8 +80,12 @@ overlapping behavior.
   `.vibe-workflow/security-reports/` in the main checkout, a folder whose own
   `.gitignore` keeps everything in it untracked. Trail of Bits skills are used when
   installed and are offered by `vibe-prepare-my-workspace`, never bundled. A review
-  fixes nothing and makes no claim that code is secure. Advisory, and not yet
-  observed live.
+  fixes nothing and makes no claim that code is secure. Advisory. Its notes, its
+  command listing and one ship check were observed on OpenCode 2.3.2 (27 November
+  2026); that check kept a secret's value out of its reply but not out of tool
+  results, and the partner install leaves no link in OpenCode's skills folder, so
+  Prepare Workspace reports the skills missing. See `docs/development.md`,
+  "Security review: what is known".
 
 The shipped router configuration examples are disabled and empty. This is
 different from the approved future onboarding default below.
