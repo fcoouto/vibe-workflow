@@ -182,7 +182,7 @@ test("a settings file without the worktree_cleanup key adds no cleanup sentence"
   assert.doesNotMatch(result, /Cleanup is on/)
 })
 
-test("a finishing-skill load gets the onboarding decision; failed loads, other skills and off settings do not", async (t) => {
+test("a finishing-skill load gets the onboarding decision and ship check; failed loads and other skills do not", async (t) => {
   const skill = async (hooks, id, result, status = "completed") => {
     const event = { tool: "skill", status, sessionID: "ses_1", input: { id }, result }
     await hooks.get("execute.after")(event)
@@ -201,7 +201,11 @@ test("a finishing-skill load gets the onboarding decision; failed loads, other s
   assert.equal(design.content.length, 2)
   assert.match(design.content[1].text, /^\n\nvibe-workflow: your human partner asks that the design check match the stakes/)
   const off = await fixture(t, { settings: { enabled: false, agent_merge: false } })
-  assert.deepEqual(await skill(off.hooks, "superpowers:finishing-a-development-branch", untouched()), untouched())
+  const offResult = await skill(off.hooks, "superpowers:finishing-a-development-branch", untouched())
+  assert.deepEqual(offResult.content[0], { type: "text", text: "menu" })
+  assert.equal(offResult.content[1].text, "\n\nvibe-workflow: before you open or ready the pull request, confirm the vibe-security-review ship " +
+    "check covers the current head and its Security section is in the body; run it if not. " +
+    "An explicit request from your human partner in this session overrides this.")
 })
 
 test("a worktree-skill load gets the declared worktree preference only when the git workflow is on", async (t) => {
