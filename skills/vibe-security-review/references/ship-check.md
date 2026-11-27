@@ -59,11 +59,11 @@ A pre-existing finding is reported to the user and does not block an unrelated p
 If a required tier-3 review could not run, the pull request stays [BLOCKED] and says so.
 List medium and low findings without blocking.
 
-In the pull request, every finding that is not plainly harmless appears as
-location and class only: every confirmed or likely finding and every secret.
-This holds in every section, including `Review`, whether the repository is
-public, private or about to go public. Details go to chat and a private report
-saved with [report-storage.md](report-storage.md).
+Every finding is always described in the pull request by location and class
+only, with its severity and status: no scenario, no exploit or fix detail, no
+secret value. This holds for every finding, in every section, including `Review`,
+whether the repository is public, private or about to go public. Details go to
+chat and a private report saved with [report-storage.md](report-storage.md).
 
 ## Going public
 

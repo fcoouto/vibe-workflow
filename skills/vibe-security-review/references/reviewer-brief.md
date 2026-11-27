@@ -42,24 +42,33 @@ masks it. Never repeat a secret's value in a reply, report, pull request, commit
 log or any command you write. Quote it as file, line and type only. Search for
 secrets only with commands that list file names, such as `rg -l` or
 `git grep -l`; never use a search tool or option that prints matching lines for a
-secret pattern. Put a likely secret first in your result, so the coordinator can
-tell the user immediately to rotate it.
+secret pattern.
+
+A reviewer that finds a likely secret stops at once and returns only the alert:
+file, line and type. The coordinator tells the user immediately to rotate it,
+then resumes the same reviewer by its session to finish the review.
 
 ## Partner skills
 
+A partner skill is trusted only when its folder, after resolving links, lies
+inside `~/.config/opencode/skills/` or `~/.agents/skills/`. A link from one of
+those two roots into the other is fine; a link to anywhere else is not.
+
 Before loading a partner skill, the coordinator confirms that it is installed at
-user scope (`~/.config/opencode/skills/<name>` or `~/.agents/skills/<name>`) and
-that the reviewed repository supplies no skill of the same name (for example
-under `.opencode/skills/`, `.agents/skills/` or `.claude/skills/`). If either
-check fails, do not load it; continue the built-in review.
+user scope (`~/.config/opencode/skills/<name>` or `~/.agents/skills/<name>`),
+that the folder still lies inside one of those two roots after resolving links
+(for example with `realpath`), and that the reviewed repository supplies no
+skill of the same name (for example under `.opencode/skills/`, `.agents/skills/`
+or `.claude/skills/`). If any check fails, do not load it; use the built-in
+review.
 
 An `explore` reviewer cannot load skills (`Permission denied: skill` was observed).
 For each partner skill named in either mode, the coordinator loads it once and
 takes its absolute folder from the skill tool's `Base directory for this skill:`
-line. That path must be one of those two user-scope folders, or the place a link
-there points to. If it is not, discard what was loaded and continue the built-in
-review. Put the path in the brief. The reviewer reads `<folder>/SKILL.md` with the
-read tool and treats `{baseDir}` as that folder.
+line. The coordinator verifies it again: after resolving links, that path must
+lie inside one of the two roots. If it does not, discard what was loaded and
+continue the built-in review. Put the path in the brief. The reviewer reads
+`<folder>/SKILL.md` with the read tool and treats `{baseDir}` as that folder.
 
 If `differential-review` appears in the coordinator's available skills and passes
 those checks, use it within these limits for tier 3. Read its `adversarial.md`

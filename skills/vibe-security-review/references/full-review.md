@@ -40,6 +40,9 @@ alone on a small project.
 - As soon as a likely secret is found, the coordinator tells the user immediately
   in chat, by file, line and type, that it must be treated as exposed and rotated
   now. Do not wait for the end of the review.
+- A sweep reviewer that finds a likely secret stops at once and returns only the
+  alert: file, line and type. The coordinator tells the user immediately to
+  rotate it, then resumes the same reviewer by its session to finish its area.
 
 ## Optional partners
 
