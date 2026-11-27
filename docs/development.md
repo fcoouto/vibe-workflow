@@ -747,3 +747,37 @@ the text and the model must resolve it from that line. Frontmatter fields such a
   and network access to package registries and GitHub; writes its output outside the
   audited repository by default. Running it executes third-party code, so it needs the
   user's approval of that exact run. Verdict: likely portable where `uv` is installed.
+
+Observed live, 27 November 2026, OpenCode 2.3.2, before implementation. Each probe ran
+`opencode run --standalone` in a throwaway Git project with a private config home
+(`XDG_CONFIG_HOME`) holding copies of the four skills at the pinned SHA under
+`opencode/skills/<name>/`; every session was deleted afterwards. Models:
+`claude-agent/haiku` and `openai/gpt-6.1-terra`.
+
+- All four skills load through the skill tool on both models; their frontmatter
+  (`allowed-tools`, quoted descriptions) causes no error.
+- `{baseDir}` is resolved by the model on both: `agentic-actions-auditor`'s
+  `references/foundations.md` was read at the correct absolute path, and
+  `supply-chain-risk-auditor`'s collect step came back as
+  `uv run <skill folder>/scripts/collect.py . --json ...`.
+- Reading a skill's reference file outside the project needs the `external_directory`
+  permission. Default permissions allow it (observed); a deny-all rule set blocks it
+  until an `external_directory` allow rule for the skill folder is added (observed).
+- Asked how to run Phase 5, both models chose `differential-review`'s `adversarial.md`
+  and said the plugin agent `differential-review:adversarial-modeler` is unavailable.
+- An `explore` subagent cannot load skills: its skill call returned
+  `Permission denied: skill`. Given absolute paths, it read `differential-review`'s
+  `SKILL.md` and `adversarial.md` with the read tool and quoted both headings. A
+  reviewer therefore gets a partner skill's folder path in its brief, not a skill name.
+- Plugin commands still register: the background service (OpenCode 2.3.2, the user's
+  installed vibe-workflow) lists `vibe-council` in `GET /api/command`. Running a plugin
+  command was observed on 2.2.6 only; `opencode run "<text>"` stores `/name args` as plain
+  text and does not run commands. `opencode api get ... --standalone` returned empty
+  skill, command and agent lists, so it is not a probe for them.
+- Report storage, in a throwaway repository with a linked worktree:
+  `git worktree list --porcelain`'s first entry is the main checkout from both; with the
+  folder `.gitignore` set to `*`, `git -C <main> check-ignore -q` passes and both checkouts
+  stay clean; `0700`/`0600` hold; removing the linked worktree keeps the reports; an edited
+  `.gitignore` or a tracked report makes `check-ignore` fail; a symlinked folder is
+  detected with `[ -L ]`; `git clean -ndx` lists the folder.
+- On this machine `uv` is installed; `gitleaks`, `semgrep` and `codeql` are not.
