@@ -163,6 +163,18 @@ Known limits:
 
 - `git worktree list --porcelain -z` needs git 2.36+; older git keeps the note silent.
 - When the host's session list gives no folders, only the session's own worktree is protected.
+  When only some running sessions give a folder, the note is suppressed.
+- A branch is named only when it has a remote branch other than the default one, so a merged
+  branch that was never pushed is never swept.
+- The sweep never runs `git worktree repair`: a worktree with a broken pointer is skipped and
+  reported with the command for the user.
+- Worktrees made with `git worktree add --relative-paths` fail the identity check (their
+  backlink is relative), so their cleanup always blocks.
+- A tracked file marked assume-unchanged or skip-worktree blocks cleanup, so every sparse
+  checkout does.
+- Cleanup's switch and branch delete run with hooks disabled. Clean and smudge filter drivers
+  that the user configured in their own repository still run when git reads the worktree
+  (accepted residual, single-user model).
 - Concurrent replacement between a check and its removal or move is an accepted residual (no locking).
 - Same-device bind mounts are not detected.
 - Listed tool caches are deleted without asking, even if hand-edited (user decision).
