@@ -385,3 +385,39 @@ git commit -m "docs: describe the security review"
   4. `/vibe-security-review` is listed by the background service's `GET /api/command` after the plugin is exported (read-only).
   5. The Task 6 install command, run with `HOME` and `XDG_CONFIG_HOME` set to a throwaway folder, leaves one shared copy of each skill in `<HOME>/.agents/skills/<name>/` and a link to it at `<HOME>/.config/opencode/skills/<name>` (the design's partner-scope decision), and `python3 -I -B skills/vibe-prepare-my-workspace/scripts/check.py` with that `HOME` reports the four rows ready. If the CLI makes a plain copy in the OpenCode folder instead, find the option in its documentation (`vercel-labs/skills`, `docs/commands.md`) that keeps the shared copy, update the Task 6 procedure text and test phrases, and rerun; if no option does, record what it did and bring it to the user.
   Record each result, pass or fail, in `docs/development.md` under `## Security review: what is known`, and commit (`docs: record security review live checks`). A failure goes back to its task; do not retry the same way.
+
+### Task 8: Fix what the live probes found
+
+Added during execution (27 November) after Task 7's probes; rulings are in the SDD ledger. Product files only change here; Task 7's docs get the re-run results.
+
+**Files:**
+- Modify: `skills/vibe-security-review/references/reviewer-brief.md` (secret rule, model fallback, waiting)
+- Modify: `skills/vibe-security-review/references/ship-check.md` (the coordinator's own reading of changed files)
+- Modify: `skills/vibe-prepare-my-workspace/scripts/check.py` (`integration_present`, kind `skill`)
+- Modify: `skills/vibe-prepare-my-workspace/references/procedure.md` (step 5, the skills.sh sentence)
+- Modify: `docs/superpowers/specs/2026-11-27-security-review-design.md` (two sentences, below)
+- Modify: `docs/development.md` (Security review section: re-run results)
+- Test: `tests/skills/security-review-skill.test.js`, `tests/tooling/test_workspace_check.py`, `tests/skills/workspace-skill.test.js`
+
+**Interfaces:**
+- Produces: `integration_present(spec, config, home)` for kind `skill` returns found when `home/.config/opencode/skills/<name>` or `home/.agents/skills/<name>` exists; `version_from: "frontmatter"` reads `SKILL.md` from whichever folder was found, the OpenCode folder first.
+
+Exact text decisions:
+- Secrets (reviewer-brief.md, replacing the paragraph that starts "Never print secret values"; ship-check.md gets the same rule for the coordinator): reading a changed file is necessary and is not quoting. Never repeat a secret's value in a reply, report, pull request, commit, log or any command you write. Quote it as file, line and type only. Search for secrets only with commands that list file names, such as `rg -l` or `git grep -l`; never use a search tool or option that prints matching lines for a secret pattern.
+- Model fallback (reviewer-brief.md, replacing "without Smart Router use the top tier. Use only providers already in use by the user."): `without Smart Router, use the top tier on this session's own provider. Never pick a pay-as-you-go route (for example the opencode provider) unless the user approved it.`
+- Waiting (reviewer-brief.md, one sentence for the coordinator): `Wait for the reviewer's result; do not poll with shell commands.`
+- Procedure step 5 sentence: replace "linked for OpenCode" with `which OpenCode reads directly`.
+- Spec, Partner scope paragraph: "linked into each client's skills folder" becomes `read directly by clients that support that folder (OpenCode does) and linked into the others`; spec §1 Reviewer bullet "in tool output as well as the report" becomes `in search output as well as the report (reading a file is not quoting it)`.
+
+- [ ] **Step 1: Write the failing tests**
+  - `security-review-skill.test.js`: reviewer brief contains `rg -l`, `git grep -l`, `matching lines`, `pay-as-you-go`, `this session's own provider`, `do not poll`; ship check contains `rg -l` and `reading a changed file is necessary`; neither file contains `in tool output as well as the report`.
+  - `test_workspace_check.py`: a fixture home with only `home/.agents/skills/differential-review/SKILL.md` reports `tob-differential-review` `ready`; with neither folder, `missing`; with both, `ready` and the frontmatter version read from the OpenCode folder.
+  - `workspace-skill.test.js`: the procedure contains `which OpenCode reads directly` and not `linked for OpenCode`.
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `node --test tests/skills/security-review-skill.test.js tests/skills/workspace-skill.test.js && python3 -B -m unittest tests.tooling.test_workspace_check -v`
+Expected: FAIL on the new assertions.
+
+- [ ] **Step 3: Implement** the text decisions and the `check.py` change.
+- [ ] **Step 4: Run every check**: `python3 -B -m unittest discover -s tests -t .`, `node --test "tests/**/*.test.js"`, `python3 -B scripts/validate.py`. Expected: all pass. Commit: `git commit -m "fix: keep secrets out of searches and find shared skills"`.
+- [ ] **Step 5: Re-run probes 3 and 5** (authorized by the user), the same way Task 7 ran them (`docs/development.md`, Security review section). Expected: probe 3 — no reply, report or search output contains the synthetic value; record whether file reads still show it. Probe 5 — `check.py` reports the four rows `ready` with only `<HOME>/.agents/skills/<name>/` present. Delete every session. Record results in `docs/development.md` and commit: `git commit -m "docs: record probe re-runs"`. Since the brief notes changed, run `python3 -B scripts/live_check.py --injection` (pre-authorized) and commit the record if it changes.
