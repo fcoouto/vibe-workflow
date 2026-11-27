@@ -1,7 +1,5 @@
 """Exercise private report storage in throwaway repositories, never a real checkout."""
-import contextlib
 import importlib.util
-import io
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "skills/vibe-security-review/scripts/store_report.py"
 FOLDER = ".vibe-workflow/security-reports"
 NOW = time.struct_time((2026, 11, 27, 9, 5, 0, 4, 331, 0))
+BODY = b"# Report\n"
 
 
 def load():
@@ -42,43 +41,68 @@ def tree(root):
     return seen
 
 
+def identity(path):
+    status = os.stat(path)
+    return status.st_dev, status.st_ino
+
+
 class StoreReportTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
-        self.main = self.root / "main"
-        self.main.mkdir()
-        git(self.main, "init", "-q", "-b", "main")
-        (self.main / "README.md").write_text("fixture\n")
-        git(self.main, "add", "README.md")
-        git(self.main, "commit", "-qm", "fixture")
+        self.main = self.checkout(self.root / "main")
         self.linked = self.root / "linked"
         git(self.main, "worktree", "add", "-q", "-b", "task", str(self.linked))
         self.reports = self.main / FOLDER
+        self.scratch = self.root / "scratch"
+        self.scratch.mkdir(mode=0o700)
+        self.sources = 0
 
-    def cli(self, cwd, mode="full", topic="auth", body=b"# Report\n", env=None):
-        return subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "--cwd", str(cwd), "--mode", mode,
-                               "--topic", topic], input=body, env=env, capture_output=True, timeout=30)
+    def checkout(self, path):
+        path.mkdir()
+        git(path, "init", "-q", "-b", "main")
+        (path / "README.md").write_text("fixture\n")
+        git(path, "add", "README.md")
+        git(path, "commit", "-qm", "fixture")
+        return path
+
+    def source(self, body=BODY):
+        """A report body in a temporary file outside every checkout, as the coordinator writes it."""
+        self.sources += 1
+        path = self.scratch / f"report-{self.sources}.md"
+        path.write_bytes(body)
+        return path
+
+    def cli(self, cwd, mode="full", topic="auth", body=BODY, env=None, source=None, stdin=b""):
+        source = self.source(body) if source is None else source
+        run = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "--cwd", str(cwd), "--mode", mode,
+                              "--topic", topic, "--from", str(source)], input=stdin, env=env,
+                             capture_output=True, timeout=30)
+        run.source, run.body = source, body
+        return run
+
+    def saved(self, run):
+        self.assertEqual((run.returncode, run.stderr), (0, b""))
+        self.assertFalse(os.path.lexists(run.source), "the temporary file is deleted after a successful write")
+        return Path(os.fsdecode(run.stdout.removesuffix(b"\n")))
 
     def refused(self, run, reason=None):
         self.assertEqual(run.returncode, 2, run.stderr)
         self.assertEqual(run.stdout, b"")
         self.assertRegex(run.stderr.decode(), r"\Arefused: [^\n]+\n\Z")
+        self.assertIn("the temporary file was not deleted", run.stderr.decode())
         if reason:
             self.assertIn(reason, run.stderr.decode())
+        if run.body is not None:
+            self.assertEqual(run.source.read_bytes(), run.body, "the temporary file is kept for the chat fallback")
 
-    def store(self, module, cwd, mode="ship", topic="auth", body=b"# Report\n", now=NOW):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = module.main(["--cwd", str(cwd), "--mode", mode, "--topic", topic], body=body, now=now)
-        return code, out.getvalue(), err.getvalue()
+    def store(self, module, cwd, mode="ship", topic="auth", body=BODY, now=NOW):
+        return Path(module.store(str(cwd), mode, topic, str(self.source(body)), now))
 
     def test_stores_in_the_main_checkout_privately_and_leaves_both_checkouts_clean(self):
         env = dict(os.environ, GIT_DIR=str(self.root / "elsewhere/.git"), GIT_WORK_TREE=str(self.root / "elsewhere"))
-        run = self.cli(self.linked, body="# Report\nfinding ñ\n".encode(), env=env)
-        self.assertEqual((run.returncode, run.stderr), (0, b""))
-        path = Path(run.stdout.decode().rstrip("\n"))
+        path = self.saved(self.cli(self.linked, body="# Report\nfinding ñ\n".encode(), env=env))
         self.assertTrue(path.is_absolute())
         self.assertEqual(path.parent, self.reports)
         self.assertRegex(path.name, r"\A\d{4}-\d{2}-\d{2}-\d{4}-full-auth\.md\Z")
@@ -93,11 +117,38 @@ class StoreReportTest(unittest.TestCase):
         self.assertFalse((self.linked / ".vibe-workflow").exists())
         self.assertFalse((self.root / "elsewhere").exists())
 
+    def test_the_report_arrives_byte_for_byte_whatever_it_contains(self):
+        body = (b"# Report\nREPORT\nEOF\n'REPORT'\n$(touch pwned) `touch pwned` ${HOME} \\ \"double\" 'single'\n"
+                b"; rm -rf . #\n\xff\xfe\x01\x7f\r\n\ttab, no final newline")
+        run = self.cli(self.linked, body=body, stdin=b"never read from standard input\n")
+        self.assertEqual(self.saved(run).read_bytes(), body)
+        self.assertEqual([p.name for p in self.root.rglob("pwned")], [])
+        kept = self.cli(self.linked, topic="Bad Topic", body=body)
+        self.refused(kept, "topic")
+        self.assertEqual(kept.source.read_bytes(), body)
+
+    def test_the_body_comes_only_from_a_regular_file_named_by_from(self):
+        target = self.source(b"elsewhere\n")
+        link = self.scratch / "link.md"
+        os.symlink(target, link)
+        for source, reason in ((link, "--from"), (self.scratch, "--from"), (self.scratch / "absent.md", "--from")):
+            with self.subTest(source=source.name):
+                run = self.cli(self.linked, source=source, body=None)
+                self.refused(run, reason)
+        self.assertEqual(target.read_bytes(), b"elsewhere\n")
+        self.assertTrue(link.is_symlink())
+        self.assertFalse((self.main / ".vibe-workflow").exists())
+        run = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "--cwd", str(self.linked), "--mode", "full",
+                              "--topic", "auth"], input=b"# Report on standard input\n", capture_output=True, timeout=30)
+        self.assertEqual((run.returncode, run.stdout), (2, b""))
+        self.assertIn(b"--from", run.stderr)
+        self.assertFalse((self.main / ".vibe-workflow").exists())
+
     def test_an_existing_folder_is_made_private_and_kept(self):
         self.reports.mkdir(parents=True, mode=0o755)
         (self.reports / "old.md").write_text("old\n")
         os.chmod(self.reports, 0o755)
-        self.assertEqual(self.cli(self.main, mode="ship").returncode, 0)
+        self.saved(self.cli(self.main, mode="ship"))
         self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.reports / "old.md").read_text(), "old\n")
 
@@ -117,10 +168,12 @@ class StoreReportTest(unittest.TestCase):
         bare, linked = self.root / "bare.git", self.root / "from-bare"
         git(self.root, "clone", "-q", "--bare", str(self.main), str(bare))
         git(bare, "worktree", "add", "-q", str(linked), "main")
-        before = tree(self.root)
+        def checkouts():
+            return {name: value for name, value in tree(self.root).items() if not name.startswith("scratch")}
+        before = checkouts()
         self.refused(self.cli(linked), "main checkout")
         self.refused(self.cli(bare), "main checkout")
-        self.assertEqual(tree(self.root), before)
+        self.assertEqual(checkouts(), before)
         self.assertFalse((bare / ".vibe-workflow").exists())
 
     def test_refuses_outside_a_git_repository(self):
@@ -129,6 +182,18 @@ class StoreReportTest(unittest.TestCase):
         self.refused(self.cli(plain), "not a Git repository")
         self.assertEqual(list(plain.iterdir()), [])
         self.refused(self.cli(self.root / "absent"))
+
+    def test_a_carriage_return_in_the_main_checkout_path_is_kept(self):
+        real = self.checkout(self.root / "car\rriage")
+        decoy = self.checkout(self.root / "car\nriage")
+        linked = self.root / "from-carriage"
+        git(real, "worktree", "add", "-q", "-b", "task", str(linked))
+        path = self.saved(self.cli(linked))
+        self.assertEqual(identity(path.parents[2]), identity(real))
+        self.assertNotEqual(identity(path.parents[2]), identity(decoy))
+        self.assertEqual(path.read_bytes(), BODY)
+        self.assertFalse((decoy / ".vibe-workflow").exists())
+        self.assertEqual([p.name for p in (real / FOLDER).iterdir() if p.name != ".gitignore"], [path.name])
 
     def test_refuses_a_symlinked_or_non_directory_folder(self):
         outside = self.root / "outside"
@@ -143,6 +208,28 @@ class StoreReportTest(unittest.TestCase):
         (self.main / FOLDER).write_text("a file\n")
         self.refused(self.cli(self.linked), "not a directory")
         self.assertEqual((self.main / FOLDER).read_text(), "a file\n")
+
+    def test_refuses_a_checkout_or_settings_folder_others_can_write_and_changes_no_mode(self):
+        base = self.main / ".vibe-workflow"
+        base.mkdir()
+        for folder, mode in ((base, 0o775), (base, 0o757), (self.main, 0o775), (self.main, 0o777)):
+            with self.subTest(folder=folder.name, mode=oct(mode)):
+                before = folder.stat().st_mode & 0o777
+                os.chmod(folder, mode)
+                self.addCleanup(os.chmod, folder, before)
+                self.refused(self.cli(self.linked), "writable")
+                self.assertEqual(folder.stat().st_mode & 0o777, mode, "a shared folder's mode is never changed")
+                os.chmod(folder, before)
+                self.assertEqual(list(base.iterdir()), [])
+        self.saved(self.cli(self.linked))
+
+    def test_refuses_a_folder_owned_by_someone_else(self):
+        module = load()
+        self.reports.mkdir(parents=True)
+        with mock.patch.object(module.os, "geteuid", return_value=os.geteuid() + 1):
+            with self.assertRaisesRegex(module.Refused, "owned"):
+                self.store(module, self.linked)
+        self.assertEqual(list(self.reports.iterdir()), [])
 
     def test_refuses_a_symlinked_ignore_file_and_leaves_its_target(self):
         target = self.root / "notes.txt"
@@ -162,8 +249,7 @@ class StoreReportTest(unittest.TestCase):
         shared.write_text("!*.md\n")
         self.reports.mkdir(parents=True)
         os.link(shared, self.reports / ".gitignore")
-        run = self.cli(self.linked)
-        self.assertEqual(run.returncode, 0, run.stderr)
+        self.saved(self.cli(self.linked))
         self.assertEqual((self.reports / ".gitignore").read_bytes(), b"*\n")
         self.assertEqual(shared.read_text(), "!*.md\n")
         self.assertEqual(len(list(self.reports.iterdir())), 2, "no temporary file is left behind")
@@ -171,14 +257,12 @@ class StoreReportTest(unittest.TestCase):
 
     def test_two_reports_in_the_same_minute_never_overwrite(self):
         module = load()
-        first = self.store(module, self.linked, body=b"first\n")
-        second = self.store(module, self.main, body=b"second\n")
-        third = self.store(module, self.linked, body=b"third\n")
-        self.assertEqual([code for code, _, _ in (first, second, third)], [0, 0, 0])
-        names = [Path(out.rstrip("\n")).name for _, out, _ in (first, second, third)]
-        self.assertEqual(names, ["2026-11-27-0905-ship-auth.md", "2026-11-27-0905-ship-auth-2.md",
-                                 "2026-11-27-0905-ship-auth-3.md"])
-        self.assertEqual([(self.reports / name).read_bytes() for name in names], [b"first\n", b"second\n", b"third\n"])
+        paths = [self.store(module, cwd, body=body) for cwd, body in
+                 ((self.linked, b"first\n"), (self.main, b"second\n"), (self.linked, b"third\n"))]
+        self.assertEqual([path.name for path in paths], ["2026-11-27-0905-ship-auth.md", "2026-11-27-0905-ship-auth-2.md",
+                                                         "2026-11-27-0905-ship-auth-3.md"])
+        self.assertEqual([path.read_bytes() for path in paths], [b"first\n", b"second\n", b"third\n"])
+        self.assertEqual(list(self.scratch.iterdir()), [], "each temporary file is deleted after its write")
 
     def test_gives_up_after_ninety_nine_names_and_follows_no_planted_link(self):
         module = load()
@@ -186,14 +270,13 @@ class StoreReportTest(unittest.TestCase):
         target.write_text("keep\n")
         self.reports.mkdir(parents=True)
         os.symlink(target, self.reports / "2026-11-27-0905-ship-auth.md")
-        code, out, _ = self.store(module, self.linked)
-        self.assertEqual((code, Path(out.rstrip("\n")).name), (0, "2026-11-27-0905-ship-auth-2.md"))
+        self.assertEqual(self.store(module, self.linked).name, "2026-11-27-0905-ship-auth-2.md")
         self.assertEqual(target.read_text(), "keep\n")
         for number in range(3, 100):
             (self.reports / f"2026-11-27-0905-ship-auth-{number}.md").write_text("taken\n")
-        code, out, err = self.store(module, self.linked)
-        self.assertEqual((code, out), (2, ""))
-        self.assertRegex(err, r"\Arefused: [^\n]+\n\Z")
+        with self.assertRaisesRegex(module.Refused, "no free report name"):
+            self.store(module, self.linked)
+        self.assertEqual(len(list(self.scratch.iterdir())), 1, "the refused report's temporary file is kept")
 
     def test_refuses_bad_topics_modes_and_empty_reports_before_writing(self):
         for topic in ("", "Auth", "-auth", "a/b", "../x", "a b", "a.md", "auth\n", "a" * 62):
@@ -202,16 +285,7 @@ class StoreReportTest(unittest.TestCase):
         self.refused(self.cli(self.linked, mode="deep"), "mode")
         self.refused(self.cli(self.linked, body=b""), "empty")
         self.assertFalse((self.main / ".vibe-workflow").exists())
-        self.assertEqual(self.cli(self.linked, topic="a" * 61).returncode, 0)
-
-    def test_refuses_a_folder_owned_by_someone_else(self):
-        module = load()
-        self.reports.mkdir(parents=True)
-        with mock.patch.object(module.os, "geteuid", return_value=os.geteuid() + 1):
-            code, out, err = self.store(module, self.linked)
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("owned", err)
-        self.assertEqual(list(self.reports.iterdir()), [])
+        self.saved(self.cli(self.linked, topic="a" * 61))
 
     def test_removes_the_empty_file_when_git_does_not_ignore_it(self):
         module = load()
@@ -219,13 +293,46 @@ class StoreReportTest(unittest.TestCase):
 
         def fake(directory, *args):
             if args[0] == "check-ignore":
-                return subprocess.CompletedProcess(args, 1, "", "")
+                return subprocess.CompletedProcess(args, 1, b"", b"")
             return real(directory, *args)
         module.git = fake
-        code, out, err = self.store(module, self.linked)
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("ignore", err)
+        with self.assertRaisesRegex(module.Refused, "ignore"):
+            self.store(module, self.linked)
         self.assertEqual(sorted(p.name for p in self.reports.iterdir()), [".gitignore"])
+
+    def test_refuses_when_the_named_folder_is_no_longer_the_opened_one(self):
+        module = load()
+        real, moved = module.git, self.main / ".vibe-workflow/moved-aside"
+
+        def swap(directory, *args):
+            if args[0] == "check-ignore":
+                # Someone renames the opened folder and puts another, also ignored, under its name.
+                os.rename(self.reports, moved)
+                self.reports.mkdir()
+                (self.reports / ".gitignore").write_bytes(b"*\n")
+            return real(directory, *args)
+        module.git = swap
+        with self.assertRaisesRegex(module.Refused, "changed"):
+            self.store(module, self.linked, body=b"private finding\n")
+        self.assertEqual(sorted(p.name for p in moved.iterdir()), [".gitignore"], "the created file is removed")
+        self.assertEqual(sorted(p.name for p in self.reports.iterdir()), [".gitignore"])
+        self.assertEqual(len(list(self.scratch.iterdir())), 1)
+
+    def test_refuses_when_the_named_report_is_no_longer_the_opened_one(self):
+        module = load()
+        real = module.git
+
+        def swap(directory, *args):
+            if args[0] == "check-ignore":
+                (name,) = [p for p in self.reports.iterdir() if p.name != ".gitignore"]
+                name.unlink()
+                name.write_text("someone else's file\n")
+            return real(directory, *args)
+        module.git = swap
+        with self.assertRaisesRegex(module.Refused, "changed"):
+            self.store(module, self.linked, body=b"private finding\n")
+        for path in self.reports.iterdir():
+            self.assertNotIn(b"private finding", path.read_bytes())
 
     def test_refusal_never_echoes_the_report(self):
         run = self.cli(self.root, body=b"PRIVATE-SENTINEL\n")
