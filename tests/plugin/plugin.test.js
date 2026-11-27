@@ -142,7 +142,7 @@ async function fixture(body, models = listed(info()), extra = {}) {
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
   for (const name of ["config/routes.json", "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
-    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md"]) {
+    "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md", "skills/vibe-security-review/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })
     await copyFile(new URL(`../../${name}`, import.meta.url), target)
@@ -1097,6 +1097,28 @@ test("council command forwards the skill line and strips mentions", async () => 
     assert.deepEqual(prompts[2].skills, [{ name: "y" }])
     assert.equal(prompts[2].sessionID, "s1")
     assert.equal(prompts[2].delivery, "d")
+  } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+test("security review command forwards the skill line and strips mentions", async () => {
+  const commands = new Map(), prompts = []
+  const f = await fixture(checkedSelect, listed(info()), {
+    command: { transform: async (cb) => cb({ add: (c) => commands.set(c.name, c) }) },
+    session: { hook: async () => {}, prompt: async (p) => { prompts.push(p) } },
+  })
+  try {
+    const command = commands.get("vibe-security-review")
+    assert.equal(command.description, "Run a full security review of this project.")
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: "  ", files: [{ path: "a", mention: "m" }] } })
+    await command.execute({ sessionID: "s1", delivery: "d", prompt: { text: " src/api ", agents: [{ name: "x", mention: "m" }],
+      skills: [{ name: "y", mention: "m" }] } })
+    assert.equal(prompts[0].text, "Use the vibe-security-review skill for a full review.")
+    assert.deepEqual(prompts[0].files, [{ path: "a" }])
+    assert.equal(prompts[1].text, "Use the vibe-security-review skill for a full review. src/api")
+    assert.deepEqual(prompts[1].agents, [{ name: "x" }])
+    assert.deepEqual(prompts[1].skills, [{ name: "y" }])
+    assert.equal(prompts[1].sessionID, "s1")
+    assert.equal(prompts[1].delivery, "d")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
 })
 

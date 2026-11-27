@@ -6,7 +6,7 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createRoster, registerCouncil } from "./src/council.js"
-import { registerOnboarding, registerSkill } from "./src/onboarding.js"
+import { registerOnboarding, registerSkill, registerSkillCommand } from "./src/onboarding.js"
 import { registerAdvice } from "./src/advice.js"
 import { createProjectSettings } from "./src/project.js"
 import { registerSessionTitles } from "./src/session-titles.js"
@@ -598,6 +598,12 @@ export default {
         return rest
       } }) })
     await registerSkill(ctx, "vibe-project-layout")
+    await registerSkill(ctx, "vibe-security-review")
+    await registerSkillCommand(ctx, {
+      name: "vibe-security-review",
+      description: "Run a full security review of this project.",
+      line: "Use the vibe-security-review skill for a full review.",
+    })
     // The host may hand the same schema object to every step, so strip the note before deciding to add it.
     async function noteModel(event, routerOn) {
       const model = event?.tools?.subagent?.input?.properties?.model
