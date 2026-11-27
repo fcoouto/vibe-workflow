@@ -264,3 +264,66 @@ test("the user-merges and cleanup sentences appear together", async () => {
   assert.match(note, /chose to merge pull requests themselves/)
   assert.match(note, /Cleanup is on/)
 })
+
+const LINE = "vibe-workflow: merged worktrees still on disk: /wt/x (feat/x). Sweep them per the worktree cleanup steps in vibe-pull-requests."
+const cleanOn = { state: "on", agent_merge: true, worktree_cleanup: true }
+function fakeSweep(line = LINE) {
+  const sweep = { calls: [], note: async (options) => { sweep.calls.push(options); return line } }
+  return sweep
+}
+
+test("the sweep list follows the ready and merge notes only when cleanup is on", async () => {
+  for (const command of ["gh pr ready 3", 'gh pr edit 3 --title "[READY] a"', "gh pr merge 3"]) {
+    const sweep = fakeSweep()
+    const note = await advisor(cleanOn, { sweep }).advise(command)
+    assert.ok(note.endsWith(`\n${LINE}`), command)
+    assert.equal(sweep.calls.length, 1, command)
+  }
+  for (const command of ["gh pr merge 3 --auto", "gh pr ready --undo", "gh pr create --draft", "git push"]) {
+    const sweep = fakeSweep()
+    await advisor(cleanOn, { sweep }).advise(command)
+    assert.equal(sweep.calls.length, 0, command)
+  }
+  for (const worktree_cleanup of [false, null, undefined]) {
+    const sweep = fakeSweep()
+    const settings = { state: "on", agent_merge: true, worktree_cleanup }
+    assert.doesNotMatch(await advisor(settings, { sweep }).advise("gh pr ready 3") ?? "", /merged worktrees/)
+    assert.doesNotMatch(await advisor(settings, { sweep }).advise("gh pr merge 3") ?? "", /merged worktrees/)
+    assert.equal(sweep.calls.length, 0)
+  }
+  const off = fakeSweep()
+  assert.equal(await advisor({ state: "off", agent_merge: true, worktree_cleanup: true }, { sweep: off }).advise("gh pr ready 3"), null)
+  assert.equal(off.calls.length, 0)
+  const once = fakeSweep()
+  const note = await advisor(cleanOn, { sweep: once }).advise("gh pr ready 3 && gh pr merge 3")
+  assert.equal(once.calls.length, 1)
+  assert.equal(note.split(LINE).length - 1, 1)
+})
+
+test("the sweep excludes the command's directory", async () => {
+  const sweep = fakeSweep()
+  await advisor(cleanOn, { sweep }).advise("gh pr merge 3", "ses_a", { directory: "/wt/x/src" })
+  assert.deepEqual(sweep.calls, [{ exclude: ["/wt/x/src"] }])
+})
+
+test("a null sweep note or a missing sweep leaves the existing notes unchanged", async () => {
+  const existing = await advisor(cleanOn).advise("gh pr merge 3")
+  const nothing = { note: async () => null }
+  const throws = { note: async () => { throw new Error("boom") } }
+  assert.equal(await advisor(cleanOn, { sweep: nothing }).advise("gh pr merge 3"), existing)
+  assert.equal(await advisor(cleanOn, { sweep: throws }).advise("gh pr merge 3"), existing)
+  assert.equal(await advisor(cleanOn, { sweep: null }).advise("gh pr merge 3"), existing)
+})
+
+test("case 1 reminds about leftover files only when cleanup is on", async () => {
+  const reminder = "Before marking it [READY], check the worktree's leftover files per the worktree cleanup steps in " +
+    "vibe-pull-requests; delete nothing before the merge."
+  const command = 'gh pr create --draft --title "[BLOCKED] a"'
+  const sweep = fakeSweep()
+  const withCleanup = await advisor({ state: "on", agent_merge: false, worktree_cleanup: true }, { sweep }).advise(command)
+  assert.ok(withCleanup.includes(reminder))
+  assert.equal(sweep.calls.length, 0)
+  const withoutCleanup = await advisor({ state: "on", agent_merge: false, worktree_cleanup: false }, { sweep }).advise(command)
+  assert.doesNotMatch(withoutCleanup, /leftover files/)
+  assert.equal(sweep.calls.length, 0)
+})
