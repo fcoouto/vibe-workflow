@@ -45,7 +45,7 @@ Expected: `Switched to a new branch 'feat/project-layout-skill'`
 - [ ] **Step 2: Commit the records**
 
 ```bash
-git add docs/superpowers docs/vibe-council
+git add docs/superpowers docs/vibe-workflow/council-sessions
 git commit -m "docs: design, plan and council record for the project layout skill"
 ```
 
