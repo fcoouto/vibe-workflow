@@ -323,9 +323,8 @@ decided by the user.
 ## Left to the builder
 
 - Exact note wording, kept to one or two sentences each.
-- Verify which proposed Trail of Bits skills load and run on OpenCode before
-  listing them in `partners.json` (`{baseDir}` placeholders, `allowed-tools`
-  frontmatter, bundled scripts).
+- ~~Verify which proposed Trail of Bits skills load on OpenCode~~ Done before
+  implementation; see `docs/development.md`, Security review: what is known.
 - How the skill detects that a Trail of Bits skill is installed.
 - Splitting the skill's references across files.
 - Tests for the new notes and command registration, following
