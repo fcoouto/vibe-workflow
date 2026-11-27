@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -309,6 +310,55 @@ class ArchiveTest(unittest.TestCase):
         self.assertFalse((self.archives / "feat" / "x").exists())
         self.assertEqual(self.archived(), [])
         self.assertEqual((self.linked / ".env").read_text(), "x\n")
+
+    def test_a_refused_nested_first_move_removes_the_folders_it_made(self):
+        module = load()
+        (self.linked / "reports").mkdir()
+        (self.linked / "reports/a.md").write_text("a\n")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
+            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", "reports/a.md"])
+        self.assertEqual(code, 2)
+        self.assertRegex(err.getvalue(), r"\Arefused: reports/a\.md is on another device")
+        self.assertEqual(files(self.archives), [".gitignore"])
+        self.assertFalse((self.archives / "feat").exists())
+        self.assertEqual((self.linked / "reports/a.md").read_text(), "a\n")
+
+    def test_a_refused_move_keeps_the_folders_that_existed_before_the_run(self):
+        module = load()
+        (self.linked / "old").mkdir()
+        (self.linked / "old/keep.txt").write_text("k\n")
+        (self.linked / "reports").mkdir()
+        (self.linked / "reports/a.md").write_text("a\n")
+        self.assertEqual(self.archive("old/keep.txt", branch="feat/y").returncode, 0)
+        shutil.rmtree(self.archives / "feat/y")
+        self.assertTrue((self.archives / "feat").is_dir())
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(module.os, "rename", side_effect=OSError(errno.EXDEV, "Cross-device link")):
+            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--path", "reports/a.md"])
+        self.assertEqual(code, 2)
+        self.assertEqual(files(self.archives), [".gitignore"])
+        self.assertEqual(list((self.archives / "feat").iterdir()), [], "the empty folder that existed stays")
+        self.assertFalse((self.archives / "feat/x").exists())
+
+    def test_a_name_in_another_case_is_refused_and_nothing_moves(self):
+        if not case_insensitive(self.root):
+            self.skipTest("the temporary volume is case-sensitive")
+        before = (self.linked / "README.md").read_bytes()
+        self.refused(self.archive("readme.md"))
+        self.assertEqual((self.linked / "README.md").read_bytes(), before)
+        self.assertEqual(self.archived(), [])
+
+    def test_a_git_name_in_another_case_below_the_worktree_is_refused(self):
+        if not case_insensitive(self.root):
+            self.skipTest("the temporary volume is case-sensitive")
+        (self.linked / "sub").mkdir()
+        (self.linked / "sub/.git").write_text("gitdir: elsewhere\n")
+        self.refused(self.archive("sub/.GIT"))
+        self.assertEqual((self.linked / "sub/.git").read_text(), "gitdir: elsewhere\n")
+        self.assertEqual(self.archived(), [])
 
     def test_refuses_an_invalid_branch_name(self):
         (self.linked / ".env").write_text("x\n")

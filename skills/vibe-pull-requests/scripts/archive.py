@@ -70,13 +70,17 @@ def _exists(name, folder):
     return True
 
 
-def _open_dir(parent, name, create=False):
-    """Open one folder below parent without following a link; a missing folder is made first when asked."""
-    if create:
-        try:
-            os.mkdir(name, 0o700, dir_fd=parent)
-        except FileExistsError:
-            pass
+def _mkdir(parent, name):
+    """Make one folder below parent; say whether this call made it."""
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent)
+    except FileExistsError:
+        return False
+    return True
+
+
+def _open_dir(parent, name):
+    """Open one folder below parent without following a link."""
     try:
         return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
     except FileNotFoundError as error:
@@ -85,22 +89,55 @@ def _open_dir(parent, name, create=False):
         raise Refused(f"{name} is a symbolic link or not a folder") from error
 
 
-def _run_folder(archives, branch, stamp, opened):
-    """Make this run's folder named after the branch, with the next free suffix when that name is taken."""
+def _listed(folder, name, path):
+    """A name counts only when its folder lists it byte for byte: on a case-insensitive volume another case
+    reaches the same entry, and Git's index does not see it."""
+    if name not in os.listdir(folder):
+        raise Refused(f"{path} does not exist as named")
+
+
+def _run_folder(archives, branch, stamp, opened, made):
+    """Make this run's folder named after the branch, with the next free suffix when that name is taken.
+    `made` records each folder this run creates, as the parts below the archives folder."""
     *parents, leaf = branch.split("/")
-    parent = archives
+    parent, here = archives, ()
     for part in parents:
-        parent = _open_dir(parent, part, create=True)
+        here = (*here, part)
+        if _mkdir(parent, part):
+            made.append(here)
+        parent = _open_dir(parent, part)
         opened.append(parent)
     for suffix in ("", f"-{stamp}", *(f"-{stamp}-{number}" for number in range(2, 100))):
         try:
             os.mkdir(leaf + suffix, 0o700, dir_fd=parent)
         except FileExistsError:
             continue
+        made.append((*here, leaf + suffix))
         run = _open_dir(parent, leaf + suffix)
         opened.append(run)
-        return os.path.join(*parents, leaf + suffix), parent, leaf + suffix, run
+        return (*here, leaf + suffix), run
     raise Refused("no free archive folder name is left for this second")
+
+
+def _unmake(folder, made):
+    """Remove the folders this run made, deepest first; a folder that is no longer empty stays."""
+    for parts in sorted(made, key=len, reverse=True):
+        chain = []
+        try:
+            parent = folder
+            for part in parts[:-1]:
+                parent = _open_dir(parent, part)
+                chain.append(parent)
+            os.rmdir(parts[-1], dir_fd=parent)
+        except (OSError, Refused):
+            pass
+        finally:
+            for descriptor in chain:
+                os.close(descriptor)
+
+
+def _is_git_entry(status, git_entry):
+    return (status.st_dev, status.st_ino) == git_entry
 
 
 def _source(path, root, worktree, git_entry, opened):
@@ -111,14 +148,13 @@ def _source(path, root, worktree, git_entry, opened):
         raise Refused(f"{path} must be a relative path with no empty, '.', '..' or '.git' part")
     source = root
     for part in parts[:-1]:
+        _listed(source, part, path)
         source = _open_dir(source, part)
         opened.append(source)
         if _is_git_entry(os.fstat(source), git_entry):
             raise Refused(f"{path} is the worktree's Git entry")
-    try:
-        status = os.lstat(parts[-1], dir_fd=source)
-    except FileNotFoundError as error:
-        raise Refused(f"{path} does not exist") from error
+    _listed(source, parts[-1], path)
+    status = os.lstat(parts[-1], dir_fd=source)
     if _is_git_entry(status, git_entry):
         raise Refused(f"{path} is the worktree's Git entry")
     listed = git(worktree, "--literal-pathspecs", "ls-files", "--", path)
@@ -129,20 +165,20 @@ def _source(path, root, worktree, git_entry, opened):
     return source
 
 
-def _is_git_entry(status, git_entry):
-    return (status.st_dev, status.st_ino) == git_entry
-
-
-def _move(path, source, run, run_path, main, opened):
+def _move(path, source, run, run_parts, main, made, opened):
     """Move one checked path into this run's folder with its layout kept. Every refusal comes before the move."""
-    destination = os.path.join(run_path, path)
+    destination = os.path.join(main, BASE, ARCHIVES, *run_parts, path)
     if git(main, "check-ignore", "-q", "--", destination).returncode:
         raise Refused(f"Git does not ignore the archive destination for {path}")
-    target = run
-    for part in path.split("/")[:-1]:
-        target = _open_dir(target, part, create=True)
+    target, here = run, run_parts
+    parts = path.split("/")
+    for part in parts[:-1]:
+        here = (*here, part)
+        if _mkdir(target, part):
+            made.append(here)
+        target = _open_dir(target, part)
         opened.append(target)
-    leaf = path.rsplit("/", 1)[-1]
+    leaf = parts[-1]
     if _exists(leaf, target):
         raise Refused(f"{destination} already exists; nothing was overwritten")
     try:
@@ -164,7 +200,8 @@ def archive(worktree, branch, paths, moved):
     git_entry = entry.st_dev, entry.st_ino
     stamp = time.strftime("%Y%m%d-%H%M%S")
     folder, opened = open_private_folder(main, ARCHIVES, "archives folder")
-    run = None
+    run = run_parts = None
+    made = []
     try:
         opened.append(os.open(real, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         root = opened[-1]
@@ -174,18 +211,14 @@ def archive(worktree, branch, paths, moved):
             try:
                 source = _source(path, root, real, git_entry, fds)
                 if run is None:
-                    rel, parent, name, run = _run_folder(folder, branch, stamp, opened)
-                    run_path = os.path.join(main, BASE, ARCHIVES, rel)
-                moved.append(_move(path, source, run, run_path, main, fds))
+                    run_parts, run = _run_folder(folder, branch, stamp, opened, made)
+                moved.append(_move(path, source, run, run_parts, main, made, fds))
             finally:
                 for descriptor in fds:
                     os.close(descriptor)
     except BaseException:
-        if run is not None and not moved:
-            try:
-                os.rmdir(name, dir_fd=parent)
-            except OSError:
-                pass
+        if not moved:
+            _unmake(folder, made)
         raise
     finally:
         for descriptor in opened:
