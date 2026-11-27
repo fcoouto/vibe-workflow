@@ -186,4 +186,52 @@ test("worktree repair fixes a worktree after the repository moved", async (t) =>
   assert.ok(!git(path, "status").ok, "the worktree's .git file names the old path")
   must(moved, "worktree", "repair", path)
   must(path, "status")
+  assert.equal(must(path, ...commonDir), must(moved, ...commonDir), "repaired into this repository")
+})
+
+const commonDir = ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+// Raw stdout: `-z` output is NUL-separated and must not be trimmed or mixed with stderr.
+const entries = (cwd, ...args) => {
+  const done = spawnSync("git", [...identity, ...args], { cwd, env, encoding: "utf8" })
+  assert.equal(done.status, 0, done.stderr)
+  return done.stdout.split("\0").slice(0, -1)
+}
+
+test("the -z listing gives raw names where the line form quotes and escapes them", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("names", { push: true })
+  const names = ['say "hi".md', "caf\u00e9.md", "line\nbreak.md"]
+  for (const name of names) await writeFile(join(path, name), "")
+  const lines = leftovers(path)
+  assert.ok(lines.every((line) => line.startsWith('?? "')), "the line form wraps each of these names in quotes")
+  assert.ok(!lines.some((line) => names.includes(line.slice(3))), "and none of them is the stored name")
+  assert.deepEqual(entries(path, "status", "--porcelain=v1", "-z", "--ignored").sort(), names.map((name) => `?? ${name}`).sort())
+})
+
+test("an untracked folder is one line until --untracked-files=all expands it; an ignored folder never expands", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("collapsed", { push: true })
+  await ignore(path, "/build/\n")
+  for (const name of ["docs/a/result.md", "docs/b/member.md", "build/out.js"]) {
+    await mkdir(join(path, name, ".."), { recursive: true })
+    await writeFile(join(path, name), "")
+  }
+  assert.deepEqual(entries(path, "status", "--porcelain=v1", "-z", "--ignored").sort(), ["!! build/", "?? docs/"])
+  assert.deepEqual(entries(path, "status", "--porcelain=v1", "-z", "--untracked-files=all").sort(),
+    ["?? docs/a/result.md", "?? docs/b/member.md"])
+})
+
+test("a named worktree is known by its live branch, top folder and common git dir", async (t) => {
+  const { root, primary, worktree } = await repository(t)
+  const path = await worktree("named", { push: true })
+  assert.equal(must(path, "rev-parse", "--show-toplevel"), path)
+  assert.equal(must(path, ...commonDir), must(primary, ...commonDir))
+  assert.equal(must(path, "symbolic-ref", "--short", "-q", "HEAD"), "named")
+  must(path, "switch", "-q", "-c", "reused")
+  assert.equal(must(path, "symbolic-ref", "--short", "-q", "HEAD"), "reused", "a stale note names another branch")
+  must(path, "switch", "-q", "--detach")
+  assert.ok(!git(path, "symbolic-ref", "--short", "-q", "HEAD").ok, "detached: no branch")
+  const other = join(root, "other")
+  must(root, "init", "-q", "-b", "main", other)
+  assert.notEqual(must(other, ...commonDir), must(primary, ...commonDir), "a folder of another repository")
 })

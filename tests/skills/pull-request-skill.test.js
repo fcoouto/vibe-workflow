@@ -93,3 +93,53 @@ test("the cleanup reference sorts leftovers, waits for the merge and sweeps olde
   const procedure = await read("references/procedure.md")
   for (const phrase of [".vibe-workflow/archives/", "leftover files"]) assert.ok(procedure.includes(phrase), phrase)
 })
+
+test("the cleanup reference acts on raw names, fingerprints approvals and limits each choice to an exact path", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  for (const phrase of ["scripts/leftovers.py", "status --porcelain=v1 -z --ignored", "--untracked-files=all", "manifest",
+    "sha256", "digest", "Never promote a child's choice to its parent", "never overlap", "forced staging",
+    "Never treat a failed sort as empty", '"unsafe": true']) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  assert.doesNotMatch(text, /find '/, "folder listings come from the script, never from find")
+  const row = (start) => text.split("\n").find((line) => line.startsWith(start)) ?? ""
+  for (const choice of ["Commit to this PR", "Archive", "Discard"]) assert.ok(row("| Untracked (`??`)").includes(`**${choice}**`), choice)
+  assert.match(row("| Ignored (`!!`)"), /\*\*Archive\*\* or \*\*Discard\*\*/)
+  assert.doesNotMatch(row("| Ignored (`!!`)"), /Commit/)
+  const council = [["| Untracked, with `result.md`", "**Commit to this PR (Recommended)**", "Archive"],
+    ["| Untracked, without `result.md`", "**Archive (Recommended)**", "Commit"],
+    ["| Ignored (`!!`) session folder", "**Archive (Recommended)**", "Commit"]]
+  for (const [start, recommended, other] of council) {
+    assert.ok(row(start).includes(recommended), start)
+    assert.ok(!row(start).includes(other), `${start} recommends one choice`)
+  }
+})
+
+test("the cleanup reference rechecks before it acts and sorts once more before it removes", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  const order = text.slice(text.indexOf("## Order"), text.indexOf("## Archive"))
+  const step = (n) => order.slice(order.indexOf(`\n${n}. `), order.indexOf(`\n${n + 1}. `))
+  const act = step(3)
+  for (const phrase of ["manifest", "digest", "skip the archive command", "git switch --detach"]) assert.ok(act.includes(phrase), phrase)
+  assert.ok(act.indexOf("manifest") < act.indexOf("archive command"), "the recheck comes before the first action")
+  const remove = step(6)
+  for (const phrase of ["sort once more", "absolute", "exit 0 and print no row"]) assert.ok(remove.includes(phrase), phrase)
+})
+
+test("the sweep settles the client and the worktree's identity before it changes anything", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees"))
+  for (const phrase of ["Codex-managed", "--show-toplevel", "--path-format=absolute --git-common-dir", "symbolic-ref --short -q HEAD",
+    "worktree repair", "is not enough", "exit 0 and print no row"]) {
+    assert.ok(sweep.includes(phrase), phrase)
+  }
+  const first = (phrase) => sweep.indexOf(phrase)
+  const steps = sweep.slice(sweep.indexOf("\n1. "))
+  const at = (phrase) => { const index = steps.indexOf(phrase); assert.ok(index >= 0, phrase); return index }
+  for (const later of ["worktree repair", "gh pr list", "switch --detach", "branch -d", "rebuildable"]) {
+    assert.ok(at("Codex-managed") < at(later), `the client check comes before ${later}`)
+    assert.ok(at("--show-toplevel") < at(later) || later === "worktree repair", `identity comes before ${later}`)
+  }
+  assert.ok(steps.lastIndexOf("--git-common-dir") > at("worktree repair"), "the common dir is checked again after a repair")
+  assert.ok(first("Codex-managed") >= 0)
+})

@@ -18,90 +18,165 @@ A missing, `false`, `null`, off or blocked result means do nothing.
 
 ## Leftover files
 
-The leftover files of a worktree are the lines `git status --porcelain --ignored` prints
-when run in it. Plain `git status` hides ignored files (local notes, `.env`, private
-evidence folders), yet removing the worktree deletes them without force. Sorting only
-reads. Put every line in exactly one group:
+Every step that says "sort" means this command, with the worktree's absolute top folder:
 
-- **Rebuildable**: the status is `!!`, and the last path component of the path, exactly as
-  git printed it, equals one of these names: `node_modules/`, `__pycache__/`, `*.pyc`,
-  `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.DS_Store`. A name ending in `/` matches
-  only a folder, which git prints with a trailing `/`. `*.pyc` matches a last path component
-  that ends in `.pyc`. These are tool caches that never hold user files.
-- **Real work**: every other line. That is untracked (`??`), modified, staged and deleted
+```sh
+python3 -I -B '<skill folder>/scripts/leftovers.py' sort --worktree '<worktree>'
+```
+
+`<skill folder>` is this skill's "Base directory for this skill:" path. Shell-quote every
+argument of every command in this file: wrap it in single quotes and write a `'` inside it
+as `'\''`.
+
+The script only reads. It runs `git status --porcelain=v1 -z --ignored` in the worktree, so
+every name arrives as it is stored, never in git's quoted display form. The line form,
+`git status --porcelain --ignored`, quotes and escapes unusual names: never compare or act
+on a quoted name, and quote a name only to show it to the user. Plain `git status` hides
+ignored files (local notes, `.env`, private evidence folders), yet removing the worktree
+deletes them without force.
+
+- **Exit 0**: one JSON row per leftover file, such as
+  `{"status": "!!", "path": "node_modules/", "group": "rebuildable"}`. `path` is the stored
+  name, relative to the worktree's top folder; decode it as JSON. No row means no leftover
+  files.
+- **Any other exit** (exit 2 prints `refused: <reason>`): the sort failed and printed no
+  row. Never treat a failed sort as empty: the step that needed it stops.
+
+`group` puts every row in exactly one group:
+
+- **Rebuildable**: the status is `!!`, and the last path component of `path` equals one of
+  these names: `node_modules/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`,
+  `.ruff_cache/`, `.DS_Store`. A name ending in `/` matches only a folder, which git prints
+  with a trailing `/`. `*.pyc` matches a file whose last path component ends in `.pyc`.
+  These are tool caches that never hold user files.
+- **Real work**: every other row. That is untracked (`??`), modified, staged and deleted
   paths, and ignored paths that are not rebuildable: `.env`, `reports/`, private evidence
   folders, and build or test outputs such as `dist/`, `build/`, `coverage/` and
   `.test-artifacts/`, which can hold evidence.
 
-| Line | Group | Why |
+| Status and path | Group | Why |
 |---|---|---|
 | `!! node_modules/` | Rebuildable | Ignored, and the name is listed. |
 | `!! runtime/__pycache__/` | Rebuildable | The last path component is `__pycache__/`. |
 | `!! tools/check.pyc` | Rebuildable | The last path component ends in `.pyc`. |
 | `?? node_modules/` | Real work | Not ignored. |
 | `!! mynode_modules/` | Real work | Not the exact name. |
-| `!! build/` | Real work | Git prints an ignored folder as one line, so `build/.env` or evidence inside it is not visible. A listed name inside it changes nothing. |
+| `!! build/` | Real work | Git prints an ignored folder as one row, so `build/.env` or evidence inside it is not visible. A listed name inside it changes nothing. |
 | `!! .env`, `?? notes.md`, ` M src/a.js` | Real work | Not on the list. |
 
-The list is fixed here: no project file, similar name or guess about a folder's contents
-adds to it. A path git prints in double quotes is real work.
+The list is fixed, here and in the script: no project file, similar name or guess about a
+folder's contents adds to it.
 
-To delete a path, when a step below says so: run `rm -r -- '<worktree>/<path>'`, with the
-path exactly as git printed it minus the trailing `/`. Shell-quote it: wrap it in single
-quotes and write a `'` inside it as `'\''`. Run one `rm` for each printed line, and never
-give it a parent folder, a pattern or a path git did not print.
+A row with `"unsafe": true` has a name with a control character, such as a newline, or
+with bytes that are not UTF-8. Such a name cannot be typed into a command safely. It is
+always real work, and you never delete, archive or commit it.
+
+To delete a path, when a step below says so: run `rm -r -- '<worktree>/<path>'`, with
+`path` as its row or the user's approval gave it, minus one trailing `/`. Run one `rm` for
+each path, and never give it a parent folder, a pattern, or a path that is neither a
+rebuildable row nor an approved **Discard** path.
+
+### Manifests
+
+A manifest fingerprints paths, so a later change to them shows:
+
+```sh
+python3 -I -B '<skill folder>/scripts/leftovers.py' manifest --worktree '<worktree>' --path '<path>' --path '<path>'
+```
+
+- **Exit 0**: for each `--path`, one row per entry at and below it, with its stored name,
+  its `type` (`file`, `folder`, `link` or `other`) and, for a file, the `sha256` of its
+  content. Then one `{"digest": …, "path": …, "entries": …}` row for that path. The digest
+  covers all of its rows, so it changes when a name, a type or any content below the path
+  changes. A link is recorded by its target and never followed.
+- **Any other exit**: a read failed and no row was printed. The paths count as changed.
 
 ## Before `[READY]`
 
 When cleanup is on ("When") and your session works in a linked worktree, sort that
-worktree's leftover files before you mark its pull request `[READY]`. This is part of
-readiness, whoever merges. It only reads.
+worktree before you mark its pull request `[READY]`. This is part of readiness, whoever
+merges. It only reads.
 
-- **No lines, or only rebuildable lines**: there is no question. Cleanup runs after the
-  merge.
+- **No row, or only rebuildable rows**: there is no question. Cleanup runs after the merge.
 - **Any real work**: the pull request stays a `[BLOCKED]` draft until the user has answered.
   Ask in a message of its own, never at the end of a report. List every real-work path. For
-  a folder, also show its file list (`find '<path>' | sort`, run in the worktree's top
-  folder), because git prints a folder as one line and the user must see what they decide.
+  each untracked or ignored one, run its manifest and show its rows as the file list,
+  because git prints a folder as one row and the user must see what they decide.
 
-Offer these choices. The user may answer differently for different paths; the paths that
-share one answer are a group.
+Offer these choices. The user may always answer **Keep the worktree** instead.
 
 | Kind of path | Choices |
 |---|---|
-| Untracked (`??`) or ignored (`!!`) paths | **Commit to this PR**, **Archive** or **Discard** |
+| Untracked (`??`) | **Commit to this PR**, **Archive** or **Discard** |
+| Ignored (`!!`), not rebuildable | **Archive** or **Discard** |
 | Modified, staged or deleted tracked files (every other status) | **Commit to this PR** or **Keep the worktree** |
+| Any row with `"unsafe": true` | **Keep the worktree**, unless the user renames or removes the path themselves |
 
-- **Commit to this PR**: commit and push the paths now, before `[READY]`. This adds to the
-  head, so gather readiness evidence after it.
-- **Archive**: after the merge, the paths move into the primary checkout's archive folder
+- **Commit to this PR**: commit and push the path now, before `[READY]`. This adds to the
+  head, so gather readiness evidence after it. An ignored path gets no such choice:
+  committing one needs forced staging, which you never use.
+- **Archive**: after the merge, the path moves into the primary checkout's archive folder
   ("Archive" below).
-- **Discard**: after the merge, the paths are deleted.
+- **Discard**: after the merge, the path is deleted.
 - **Keep the worktree**: nothing changes. After the merge, cleanup is blocked, and the
   worktree and its branch stay. Tracked files have no Archive choice: moving the visible
   file would lose a different staged version, and a staged deletion has nothing to move.
 
-Mark a choice with `(Recommended)` only in these cases:
+### One choice, one exact path
 
-- Council records in `docs/vibe-workflow/council-sessions/<date>_<title>/`. Git may print
-  only a parent folder; find each session folder in the file list.
-  - An untracked session folder that has `result.md`: **Commit to this PR (Recommended)**.
-  - An untracked session folder without `result.md`, from a run that did not finish:
-    **Archive (Recommended)**, since it may hold members' answers.
-  - A session folder shown as ignored (`!!`), because the project keeps records out of git:
-    **Archive (Recommended)**.
-- Build and test outputs (`dist/`, `build/`, `coverage/`, `.test-artifacts/`):
-  **Discard (Recommended)**.
+A choice applies to one exact path and everything in it. Approved paths never overlap: no
+approved path lies inside another.
 
-Then:
+- By default the exact path is a row's `path`, and the whole row takes one choice.
+- When one real-work row lies inside another row's folder, such as an ignored file inside
+  an untracked folder, ask about the outer path only. Its manifest shows the inner one, and
+  **Archive** or **Discard** covers both. After a **Commit to this PR**, the next sort
+  still prints the inner row; ask about it then.
+- When the choices differ inside one row, split it only like this:
+  - An untracked (`??`) folder: expand it, then ask for each child.
 
-1. For each **Archive** or **Discard** answer, record the choice, the exact status lines and
-   each folder's file list, as shown to the user. Change nothing for them yet. If the pull
-   request closes unmerged, they are never touched.
-2. Act on each **Commit to this PR** answer.
-3. Sort again. The question is settled when every real-work line left has a recorded
-   **Archive**, **Discard** or **Keep the worktree** answer. Ask about any line that does
-   not, the same way. Only then continue to `[READY]`.
+    ```sh
+    python3 -I -B '<skill folder>/scripts/leftovers.py' expand --worktree '<worktree>' --path '<path>'
+    ```
+
+    It runs `git status --porcelain=v1 -z --untracked-files=all` and prints one row for
+    each untracked file in the folder; any other exit than 0 means it failed, and the row
+    stays whole. A child is one of these files, or a folder inside the row's path that
+    the user names or that is a council session folder (below). Each child takes its own
+    choice and its own manifest. A file that lies in no answered child is real work with
+    no answer.
+  - An ignored (`!!`) folder: git cannot expand it. The whole row takes one choice, or the
+    user keeps the worktree.
+- Never promote a child's choice to its parent. An answer for a child never covers its
+  parent, a sibling, or a file that appears later.
+
+### Recommended choices
+
+Mark a choice with `(Recommended)` only in these cases.
+
+Council records are session folders, `docs/vibe-workflow/council-sessions/<date>_<title>/`.
+When an untracked row's path is above the session folders, expand it and ask for each
+session folder.
+
+| Session folder | Recommended choice |
+|---|---|
+| Untracked, with `result.md` | **Commit to this PR (Recommended)** |
+| Untracked, without `result.md` (the run did not finish, and the folder may hold members' answers) | **Archive (Recommended)** |
+| Ignored (`!!`) session folder, or an ignored folder above it (the project keeps records out of git) | **Archive (Recommended)** |
+
+Build and test outputs (`dist/`, `build/`, `coverage/`, `.test-artifacts/`):
+**Discard (Recommended)**.
+
+### After the answers
+
+1. For each **Archive** or **Discard** answer, record the choice, the exact path and its
+   manifest's digest row, from the manifest the user saw. Change nothing for them yet. If
+   the pull request closes unmerged, they are never touched.
+2. Act on each **Commit to this PR** answer: stage exactly the approved path, commit, push.
+3. Sort again. The question is settled when every real-work row left is covered by a
+   recorded **Archive**, **Discard** or **Keep the worktree** answer (check 4 says what
+   covered means). Ask about any row that is not, the same way. Only then continue to
+   `[READY]`.
 
 The answers live in this session only. Another session does not know them, so it treats
 the same paths as real work with no answer.
@@ -123,15 +198,22 @@ nothing if any does:
 3. This is a linked worktree (its git dir differs from the common git dir), not the
    primary checkout, and it is your session's own working directory or one you created
    in this session. Never another worktree, and never one found only by listing worktrees.
-4. Every leftover file is covered. Sort them ("Leftover files"). A line is covered when it
-   is rebuildable, or when it is real work with an **Archive** or **Discard** answer
-   recorded in this session ("Before `[READY]`"). For each such answer, list them again (the
-   status lines, and each folder's file list) and compare with what the user approved. A
-   path that is new, missing or changed stops that group: none of its paths is touched, and
-   the group is reported. This check fails when any line is not covered: real work with no
-   answer in this session, a **Keep the worktree** answer, or a stopped group. Report the
-   paths and leave the worktree; never delete real work silently. This check only reads:
-   the covered files are acted on in step 3 of the order, after checks 1–3 and 5 also pass.
+4. Every leftover file is covered. Sort the worktree. A row is covered when one of these
+   holds:
+   - its group is rebuildable;
+   - its `path` is a path with an **Archive** or **Discard** answer recorded in this
+     session ("Before `[READY]`"), or lies inside one;
+   - it is an untracked folder that was split, and expanding it again shows every file
+     inside such a path.
+
+   Then list them again: run the manifest for every recorded path and compare each digest
+   with the recorded one. A different digest, a missing path or a failed read stops that
+   group, which is the paths that share one answer: none of them is touched, and the group
+   is reported. This check fails when the sort fails, when a group stops, or when any row
+   is not covered: real work with no answer in this session, or a **Keep the worktree**
+   answer. Report the paths and leave the worktree; never delete real work silently. This
+   check only reads: the covered files are acted on in step 3 of the order, after checks
+   1–3 and 5 also pass.
 5. The worktree is not locked (`git worktree list --porcelain` shows no `locked` line for
    it) and has no submodules (no `.gitmodules`), because git would refuse to remove it
    after the branch is already deleted.
@@ -158,12 +240,17 @@ nothing if any does:
 2. Capture the absolute common git dir (`git rev-parse --path-format=absolute --git-common-dir`) and the branch
    name. Check that the primary checkout is on the default branch with
    `git --git-dir=<common git dir> symbolic-ref --short HEAD`; if it is not, stop.
-3. Act on the leftover files that check 4 covered, in this order. If one action fails,
-   stop there: cleanup is blocked, and everything else stays as it is.
-   - Run the archive command once, with every **Archive** path ("Archive" below).
-   - Delete every **Discard** path ("Leftover files" says how).
-   - Delete every rebuildable entry.
-   - Sort again. The output must be empty; any line it prints blocks cleanup.
+3. Act on the leftover files, in this order, one command straight after the other. If a
+   command fails or a rule stops you, stop there: cleanup is blocked, and everything else
+   stays as it is.
+   - **Recheck.** Run the manifest again for every **Archive** and **Discard** path. Each
+     digest must equal the recorded one. This recheck is the one that counts: time may
+     have passed since check 4, for a question in step 1 or a slow command.
+   - **Archive.** Run the archive command once, with every **Archive** path ("Archive"
+     below). If no path has an **Archive** answer, skip the archive command.
+   - **Discard.** Delete every **Discard** path ("Leftover files" says how).
+   - **Caches.** Sort, and delete every row whose group is rebuildable.
+   - **Empty.** Sort again. It must exit 0 and print no row; any row blocks cleanup.
 
    Then, in the worktree, run `git switch --detach`.
 4. Run `git --git-dir=<common git dir> branch -d <branch>`. This safe delete is only a
@@ -191,7 +278,10 @@ nothing if any does:
 6. Remove the worktree as the last action that changes anything, with the client's own
    mechanism and never with force (table below). Do this only after step 5 confirmed the
    move, found none was needed, the removal tool itself makes the move, or the user
-   agreed to remove without one.
+   agreed to remove without one. Immediately before removing, sort once more, naming the
+   worktree by its absolute path, because the session may have left it. The sort must
+   exit 0 and print no row. If it fails or prints a row, stop and report the paths, and
+   that the local branch is already deleted and the worktree remains, detached.
 7. Verify with read-only commands that name the primary checkout's path, because your own
    directory is gone: `git -C <primary> worktree list` and
    `git -C <primary> branch --list <branch>`. If the removal tool made the move (step 5),
@@ -215,21 +305,19 @@ added to its name, then `-3`, up to `-99`; nothing is overwritten. Example: bran
 
 The folder is written only by this skill's script, never by hand: no `mv`, `cp`, `mkdir`
 or edit there. Run the script only in step 3 of the order, so after the merge is confirmed
-and after check 4 listed the paths again:
+and straight after the recheck of the manifests:
 
 ```sh
 python3 -I -B '<skill folder>/scripts/archive.py' --worktree '<worktree>' --branch '<branch>' --path '<relative path>' --path '<relative path>'
 ```
 
-- `<skill folder>` is this skill's "Base directory for this skill:" path.
 - `<worktree>` is the worktree's absolute top folder. The script finds the primary checkout
   from it; the shell's current folder does not matter.
 - `<branch>` is the worktree's branch name, unchanged. The script builds the folder name.
-- Give one `--path` for each approved path and no other: the path relative to the
-  worktree's top folder, as git printed it. One trailing `/` is accepted. Each name must
-  match the stored name byte for byte, so for a path git printed in double quotes give the
-  real name, not the quoted form.
-- Shell-quote every argument: wrap it in single quotes and write a `'` inside it as `'\''`.
+- Give one `--path` for each path with an **Archive** answer and no other: the exact path,
+  relative to the worktree's top folder, as its row or the user's approval gave it. One
+  trailing `/` is accepted. Each name must match the stored name byte for byte.
+- If no path has an **Archive** answer, do not run the command at all.
 
 Then read the result:
 
@@ -272,7 +360,7 @@ cleanup is due too, sweep first: the sweep needs no session move, and your own c
 end this chat.
 
 For the sweep only, check 3's ownership rule is relaxed: a worktree is eligible when the
-note named it and step 2 below confirms its merge. Never sweep the primary checkout, your
+note named it and steps 1 to 3 below pass. Never sweep the primary checkout, your
 session's own worktree (the steps above cover it), or a worktree the note did not name,
 such as those behind "and N more"; a later note names them.
 
@@ -289,14 +377,34 @@ Before the first worktree:
   default branch). If it is not, sweep nothing and report that.
 - Run `git -C <primary> fetch origin <default branch>` once.
 
-Then, for each named worktree:
+Then, for each named worktree, in this order:
 
-1. **Repair if needed.** Read `git -C <primary> worktree list --porcelain`. Skip the
-   worktree if it shows `locked` or has a `.gitmodules` file. If the note says
-   `needs repair`, the list shows `prunable` for it, or `git -C <worktree> status` fails,
-   run `git -C <primary> worktree repair <worktree>`, which rewrites git's own metadata
-   only. If `git -C <worktree> status` still fails, skip the worktree and report it.
-2. **Confirm the merge.** Read `git -C <worktree> rev-parse HEAD`.
+1. **Check the client and the live record, before anything else.**
+   - Codex-managed worktrees are never removed, repaired or changed. Treat the worktree as
+     Codex-managed when your client is Codex and you did not create it yourself in this
+     session, or when its path has a `.codex` folder in it (a guess that only ever skips;
+     it is unverified). If you cannot establish who manages it, skip it and report it.
+   - Read `git -C <primary> worktree list --porcelain`. It must hold a record whose
+     `worktree` line is the note's path, with `branch refs/heads/<branch>` for the note's
+     branch, or `detached` when the note says so, and without a `locked` line. Otherwise
+     the note is stale: skip the worktree and report it.
+2. **Check its identity.** A note can be stale: the folder may now hold another branch or
+   belong to another repository. Run all three:
+   - `git -C <worktree> rev-parse --show-toplevel` must print the note's path.
+   - `git -C <worktree> rev-parse --path-format=absolute --git-common-dir` must print
+     `<common git dir>`.
+   - `git -C <worktree> symbolic-ref --short -q HEAD` must print the note's branch. When
+     the note says `detached`, it must print nothing and exit 1.
+
+   Compare folders after resolving symbolic links in both. Then:
+   - All three match: continue. Skip the worktree if it has a `.gitmodules` file.
+   - One prints something else: skip the worktree and report it. Never repair it.
+   - `rev-parse` fails: the worktree's git pointer is broken. The note may say
+     `needs repair`, and the list in step 1 may show `prunable`. Run
+     `git -C <primary> worktree repair <worktree>`, which rewrites git's own metadata
+     only. Then run all three again, `--git-common-dir` included: a `git status` that
+     works is not enough. Unless all three now match, skip the worktree and report it.
+3. **Confirm the merge.** Read `git -C <worktree> rev-parse HEAD`.
    - With a branch: run
      `gh pr list --head <branch> --state merged --json number,headRefOid,baseRefName`. It
      must return a pull request whose `baseRefName` is the default branch, and `HEAD` must
@@ -306,26 +414,27 @@ Then, for each named worktree:
      `git -C <worktree> merge-base --is-ancestor HEAD origin/<default branch>`.
 
    If the merge is not confirmed, skip the worktree and report it.
-3. **Sort its leftover files** ("Leftover files"). If any line is real work, skip the
+4. **Sort its leftover files.** If the sort fails or any row is real work, skip the
    worktree, change nothing in it, and report it once as blocked, with the paths. Answers
-   from another session do not count. If every line is rebuildable, delete each entry.
-4. **Delete the branch.** A detached worktree has no branch: go to step 5. Otherwise run
+   from another session do not count. If every row is rebuildable, delete each one
+   ("Leftover files" says how).
+5. **Delete the branch.** A detached worktree has no branch: go to step 6. Otherwise run
    `git -C <worktree> switch --detach`, because git refuses to delete a branch that is
    still checked out, then `git --git-dir=<common git dir> branch -d <branch>`.
    If git refuses, never use `-D`: run `git -C <worktree> switch <branch>`, report, and stop
    for this worktree.
-5. **Sort again, then remove.** Sort the leftover files once more. If it prints any line,
+6. **Sort again, then remove.** Sort once more. It must exit 0 and print no row; if not,
    stop for this worktree and report the paths; the worktree stays, detached. Otherwise
    remove the worktree as the very next action. Use the client's own mechanism when it can
    remove a worktree the session is not in (OpenCode's `worktree_remove`); otherwise run
-   `git -C <primary> worktree remove <worktree>`. Never remove with force, and never remove
-   a Codex-managed worktree. No session move is needed: the session is not in it.
-6. **Verify.** Run `git -C <primary> worktree list` and, when it had a branch,
+   `git -C <primary> worktree remove <worktree>`. Never remove with force. No session move
+   is needed: the session is not in it.
+7. **Verify.** Run `git -C <primary> worktree list` and, when it had a branch,
    `git -C <primary> branch --list <branch>`. Neither may still show it.
 
 Report one line for each named worktree: removed, or blocked with the reason and the
 paths. The report does not end on a question.
 
 Known residual risk: the note lists only worktrees where no chat was busy when it was
-built. A chat could resume there, or a file appear, between the sort in step 5 and the
+built. A chat could resume there, or a file appear, between the sort in step 6 and the
 removal. The window is one tool call; there is no lock.

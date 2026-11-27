@@ -114,6 +114,7 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-pull-requests/references/pull-request-template.md",
                     "skills/vibe-pull-requests/references/worktree-cleanup.md",
                     "skills/vibe-pull-requests/scripts/archive.py",
+                    "skills/vibe-pull-requests/scripts/leftovers.py",
                     "skills/vibe-security-review/SKILL.md", "skills/vibe-security-review/references/ship-check.md",
                     "skills/vibe-security-review/references/full-review.md", "skills/vibe-security-review/references/reviewer-brief.md",
                     "skills/vibe-security-review/references/report-storage.md",
