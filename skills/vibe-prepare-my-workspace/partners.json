@@ -37,6 +37,34 @@
       "upstream": {"type": "hosted"}
     },
     {
+      "id": "tob-differential-review",
+      "why": "Deep security review of high-risk changes, used by the vibe-security-review ship check.",
+      "docs": "https://skills.sh/trailofbits/skills/differential-review",
+      "clients": {"opencode": {"kind": "skill", "name": "differential-review"}},
+      "upstream": {"type": "presence"}
+    },
+    {
+      "id": "tob-sharp-edges",
+      "why": "Finds misuse-prone APIs and dangerous configuration in a full security review.",
+      "docs": "https://skills.sh/trailofbits/skills/sharp-edges",
+      "clients": {"opencode": {"kind": "skill", "name": "sharp-edges"}},
+      "upstream": {"type": "presence"}
+    },
+    {
+      "id": "tob-agentic-actions-auditor",
+      "why": "Audits GitHub Actions workflows that run AI agents.",
+      "docs": "https://skills.sh/trailofbits/skills/agentic-actions-auditor",
+      "clients": {"opencode": {"kind": "skill", "name": "agentic-actions-auditor"}},
+      "upstream": {"type": "presence"}
+    },
+    {
+      "id": "tob-supply-chain-risk-auditor",
+      "why": "Dependency and supply-chain risk report; needs uv and network access, and runs only with approval.",
+      "docs": "https://skills.sh/trailofbits/skills/supply-chain-risk-auditor",
+      "clients": {"opencode": {"kind": "skill", "name": "supply-chain-risk-auditor"}},
+      "upstream": {"type": "presence"}
+    },
+    {
       "id": "rtk",
       "why": "Compact command output and fewer wasted tokens.",
       "docs": "https://github.com/rtk-ai/rtk",

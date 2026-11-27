@@ -34,6 +34,11 @@ not on it is out of scope: report it, never install it.
    now from its `docs` page. Follow them at user scope. Keep the user's settings,
    permissions, models and other plugins, and add no duplicate of what OpenCode
    already loads.
+   For a skill partner whose `docs` page is on skills.sh, use the `npx skills add`
+   command shown there with `-g -a opencode` and `DISABLE_TELEMETRY=1`. This uses
+   one shared user-scope copy in `~/.agents/skills/`, linked for OpenCode, the
+   only client today. The CLI otherwise reports skill names and files. Use `-y`
+   only after the user has approved that exact list.
    - Done when: each item is installed or has a reason.
    - On failure: leave the item `missing` with the error. An unreadable source is
      a gap, never a stale copy, memory or another client's steps. A tool with no

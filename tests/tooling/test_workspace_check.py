@@ -366,7 +366,9 @@ class MainTest(unittest.TestCase):
     def test_shipped_partners_json_is_valid(self):
         shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
         ids = [p["id"] for p in shipped["partners"]]
-        self.assertEqual(ids, ["superpowers", "ponytail", "caveman", "impeccable", "context7", "rtk",
+        self.assertEqual(ids, ["superpowers", "ponytail", "caveman", "impeccable", "context7",
+                               "tob-differential-review", "tob-sharp-edges", "tob-agentic-actions-auditor",
+                               "tob-supply-chain-risk-auditor", "rtk",
                                "graphify-cli", "graphify-skill", "git", "gh", "python"])
         for partner in shipped["partners"]:
             self.assertTrue(partner["why"] and partner["docs"].startswith("https://"), partner["id"])
@@ -374,6 +376,29 @@ class MainTest(unittest.TestCase):
             if upstream["type"] in ("npm", "github", "raw"):
                 self.assertTrue(self.check.latest_version(upstream, lambda url: self.assertTrue(
                     self.check._allowed(url), url) or '{"version": "1", "tag_name": "1"}'))
+
+    def test_trail_of_bits_partners_and_presence(self):
+        expected = {
+            "differential-review": "Deep security review of high-risk changes, used by the vibe-security-review ship check.",
+            "sharp-edges": "Finds misuse-prone APIs and dangerous configuration in a full security review.",
+            "agentic-actions-auditor": "Audits GitHub Actions workflows that run AI agents.",
+            "supply-chain-risk-auditor": "Dependency and supply-chain risk report; needs uv and network access, and runs only with approval.",
+        }
+        shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
+        partners = {p["id"]: p for p in shipped["partners"]}
+        env = self.check.Env(home=self.home, run=lambda argv: self.fail("unexpected command"),
+                             fetch=lambda url: self.fail("unexpected network"))
+        for name, why in expected.items():
+            with self.subTest(name=name):
+                partner = partners.get(f"tob-{name}")
+                self.assertIsNotNone(partner)
+                self.assertEqual(partner["clients"], {"opencode": {"kind": "skill", "name": name}})
+                self.assertEqual(partner["upstream"], {"type": "presence"})
+                self.assertEqual(partner["docs"], f"https://skills.sh/trailofbits/skills/{name}")
+                self.assertEqual(partner["why"], why)
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
+                (self.config_dir / "skills" / name).mkdir(parents=True)
+                self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
 
 
 if __name__ == "__main__":

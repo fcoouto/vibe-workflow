@@ -34,7 +34,8 @@ test("registers the workspace skill after onboarding with its bundled files", as
 test("procedure keeps the approval, Python-first and backup rules", async () => {
   const [, skill] = await registered()
   const procedure = await readFile(new URL("./references/procedure.md", `file://${skill.path}`), "utf8")
-  for (const text of ["python3 --version", "scripts/check.py", "approve", "workspace-backups", "needs-user"]) {
+  for (const text of ["python3 --version", "scripts/check.py", "approve", "workspace-backups", "needs-user",
+    "npx skills add", "-g", "-a opencode", "DISABLE_TELEMETRY=1"]) {
     assert.ok(procedure.includes(text), text)
   }
 })
