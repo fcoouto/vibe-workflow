@@ -794,7 +794,10 @@ onboarded project only, whatever the git workflow setting, and all are advisory:
 - `SHIP_PR`: after a successful shell command that runs `gh pr create`, `gh pr ready`
   (not `--undo`) or `gh pr edit --title "[READY] ..."`, once per command, after any git
   workflow notes. A failed command, `gh pr ready --undo`, a `[BLOCKED]` retitle, a push
-  and a merge get none. It carries no override sentence; the three skill notes do.
+  and a merge get none; neither does `gh pr create` or `gh pr ready` with `--help`, `-h`
+  or `--dry-run`, which change no pull request. The onboarding answer must be exactly
+  `true`, and failing workflow settings do not clear a note already decided. It carries
+  no override sentence; the three skill notes do.
 
 A skill name is matched on its last segment, so `superpowers:requesting-code-review`
 matches. A skill the user attaches to a prompt makes no tool call, so it gets no note.
@@ -904,3 +907,41 @@ pay-as-you-go route without approval; the coordinator waits instead of polling; 
    `<HOME>/.agents/skills/<name>/` and no `<HOME>/.config/opencode/` folder. `check.py`
    with that `HOME` reported the four Trail of Bits rows `ready`. The real `~/.agents` and
    `~/.config/opencode` skill listings were the same before and after.
+
+Changed after the final whole-branch review, 27 November 2026. None of this was run live:
+probes 1 to 5 were not repeated, so an agent calling the storage script, the secret probe
+under the new text and the partner origin check are unobserved. Tests cover the code with
+throwaway repositories and synthetic settings.
+
+- Report storage is now `skills/vibe-security-review/scripts/store_report.py`
+  (`python3 -I -B ... --cwd <dir> --mode full|ship --topic <slug>`, report on standard
+  input), not steps done by hand. It takes the main checkout from the first record of
+  `git worktree list --porcelain -z` with inherited `GIT_*` variables removed, and refuses
+  (exit 2, one `refused: <reason>` line, no report written) outside a Git repository, on a
+  bare or unresolved first record, on a symlinked or foreign folder, on a symlinked
+  `.gitignore`, and when the main checkout's own index tracks anything in the folder. It
+  replaces a differing `.gitignore` through a temporary file and `os.replace`, creates the
+  report with `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600` (`-2` to `-99` when the name is taken)
+  and removes the empty file if `git check-ignore -q` fails. `tests/tooling/test_store_report.py`
+  runs each case, including a linked worktree whose index differs from the main checkout's.
+- Raw reads are the user's accepted limit: a secret in a file that is read reaches the
+  reader's model and session history, and nothing masks it. The three skill files say so
+  where files are read. Searching by file name only now binds every reader, and a likely
+  secret is reported to the user at once, to be rotated.
+- Pull request text carries location and class only in every section, whatever the
+  repository's visibility.
+- The reviewer is offline and read-only. The supply-chain collector, CodeQL database
+  creation and a history scanner are coordinator-run, after approval of that exact command,
+  with output outside the repository and redacted.
+- A partner skill is loaded only when it is installed at user scope and the reviewed
+  repository supplies no skill of the same name.
+- With or without Smart Router, the reviewer is dispatched only on a provider and billing
+  path the user already uses for this work; otherwise the coordinator asks or records the
+  tier-3 review as unavailable.
+- The history search is `git log --all --diff-merges=separate -G'<pattern>' --format=%H
+  --name-only`. Seen locally (Git 2.54 and 2.56, a throwaway repository, also a test): for a
+  value present only in a merge commit, plain `--all -G` printed nothing, and the new form
+  printed the merge commit and the file name. `gitleaks` is named only with `--redact=100`
+  and no report file; it is not installed here, so that flag was not run.
+- `check.py` counts a skill only when its folder holds a `SKILL.md` file, so an empty or
+  incomplete OpenCode folder is `missing` and does not hide a valid shared copy.

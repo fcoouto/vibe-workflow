@@ -91,10 +91,11 @@ work happens, and is committed with it. The coordinator never votes; you decide.
 ## Security review
 
 In an onboarded project, agents run a ship check before delivering work: a
-security check sized to what the change touches. A docs change gets one line; a
-change to sign-in, secrets or dependencies gets its own read-only reviewer. The
-result goes in the pull request's `Security` section. The reminders are advisory,
-and a clean check is not proof that the code is safe.
+security check sized to what the change touches. A prose-only change with no
+security effect gets one line; a change to sign-in, secrets or dependencies gets
+its own read-only reviewer. The result goes in the pull request's `Security`
+section. The reminders are advisory, and a clean check is not proof that the
+code is safe.
 
 For a full review of a project, onboarded or not, run `/vibe-security-review` or
 ask: **“Use `vibe-security-review` to review this project.”** It reports findings

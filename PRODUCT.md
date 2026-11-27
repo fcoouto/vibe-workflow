@@ -78,13 +78,17 @@ overlapping behavior.
   `subagent-driven-development` or `finishing-a-development-branch` loads, and
   after a pull request is created or marked ready. Full reports go to
   `.vibe-workflow/security-reports/` in the main checkout, a folder whose own
-  `.gitignore` keeps everything in it untracked. Trail of Bits skills are used when
+  `.gitignore` keeps everything in it untracked. A bundled script writes them; when
+  storage is unsafe it refuses and the report goes to chat. A secret in a file the
+  review reads reaches the reviewing models; a likely one is reported at once, to
+  be rotated. Trail of Bits skills are used when
   installed and are offered by `vibe-prepare-my-workspace`, never bundled. A review
   fixes nothing and makes no claim that code is secure. Advisory. Observed on
   OpenCode 2.3.2 (27 November 2026): the `requesting-code-review` and
   `finishing-a-development-branch` notes, the pull request note with a stub `gh`
   only, the command listing and one ship check. Not observed: the
-  `subagent-driven-development` note, a real pull request and a full review. What
+  `subagent-driven-development` note, a real pull request, a full review and
+  everything changed after the final review, which tests alone cover. What
   those runs found and what changed after them is in `docs/development.md`,
   "Security review: what is known".
 
