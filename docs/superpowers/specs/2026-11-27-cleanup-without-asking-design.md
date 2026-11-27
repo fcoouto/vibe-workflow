@@ -210,8 +210,13 @@ primary checkout", next to `.vibe-workflow/settings.json`, and like that file it
 make the primary checkout unclean for the fast-forward rule. Writing it changes no tracked
 file, HEAD or index.
 
-How it stays out of git: pending the user's choice (see the open question in the
-conversation).
+How it stays out of git (user's choice, 2026-11-27): the folder ignores itself. When the
+agent first creates `.vibe-workflow/.archives/`, it writes `.vibe-workflow/.archives/.gitignore`
+containing `*` before moving anything in. This works in every project at once, needs no
+commit, and the primary checkout never shows a new untracked path. Before each archive the
+agent checks the file exists with that content and rewrites it if not. Rejected: a tracked
+`.vibe-workflow/.gitignore`, because already-onboarded projects would show it untracked in
+the primary checkout until committed.
 
 ## Constraints
 
