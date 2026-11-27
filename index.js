@@ -9,7 +9,8 @@ import { createRoster, registerCouncil } from "./src/council.js"
 import { registerOnboarding, registerSkill, registerSkillCommand } from "./src/onboarding.js"
 import { registerAdvice } from "./src/advice.js"
 import { createProjectSettings } from "./src/project.js"
-import { registerSessionTitles } from "./src/session-titles.js"
+import { busyDirectories, createSweep } from "./src/merged-worktrees.js"
+import { registerSessionTitles, serverStart } from "./src/session-titles.js"
 import { createClaudeLimitHandler } from "./src/claude-limit-events.js"
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -562,8 +563,9 @@ export default {
     const savingTitles = saving("session_titles")
     const onboarded = async () => (await Promise.all([inspectRouter(), gitWorkflow.inspect(), sessionTitles.inspect()]))
       .some(({ state }) => state === "on" || state === "off")
-    const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded,
-      primary: async () => (await gitWorkflow.inspect()).project ?? null })
+    const primary = async () => (await gitWorkflow.inspect()).project ?? null
+    const advice = await registerAdvice(ctx, { settings: () => gitWorkflow.inspect(), onboarded, primary,
+      sweep: createSweep({ primary, busy: busyDirectories(ctx, serverStart()) }) })
     const titles = await registerSessionTitles(ctx, { settings: sessionTitles, gitWorkflow })
     await registerOnboarding(ctx, { smart_router: { ...savingRouter, inspect: inspectRouter,
       // A preview reports the saved state as previous_enabled; false means the router was off when it was read.

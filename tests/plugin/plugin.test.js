@@ -141,7 +141,7 @@ async function fixture(body, models = listed(info()), extra = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "router-transport-")))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["config/routes.json", "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
+  for (const name of ["config/routes.json", "index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/merged-worktrees.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md", "skills/vibe-security-review/SKILL.md"]) {
     const target = join(root, name)
     await mkdir(join(target, ".."), { recursive: true })
@@ -2087,4 +2087,61 @@ test("a clear that timed out does not remove a pick written after it, even when 
     await flush()
     assert.ok(storedKeys(storage).includes(`pick/${fresh}`), "the timed-out clear must not remove the new pick")
   } finally { await f.cleanup?.(); await rm(f.root, { recursive: true }) }
+})
+
+const sweepEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+  GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }
+const sweepGit = (cwd, ...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+  "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always", ...args],
+  { cwd, env: sweepEnv, stdio: "pipe", encoding: "utf8" })
+
+// A primary checkout on main with origin/HEAD set, and two merged linked worktrees `a` and `b`.
+async function mergedWorktrees(t) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sweep-hook-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = join(root, "origin.git"), primary = join(root, "primary")
+  sweepGit(root, "init", "-q", "--bare", "-b", "main", origin)
+  sweepGit(root, "init", "-q", "-b", "main", primary)
+  sweepGit(primary, "remote", "add", "origin", origin)
+  sweepGit(primary, "commit", "-q", "--allow-empty", "-m", "base")
+  sweepGit(primary, "push", "-q", "-u", "origin", "main")
+  sweepGit(primary, "remote", "set-head", "origin", "main")
+  await mkdir(join(primary, ".vibe-workflow"))
+  await writeFile(join(primary, ".vibe-workflow", "settings.json"),
+    JSON.stringify({ version: 1, features: [{ git_workflow: { enabled: true, worktree_cleanup: true } }] }))
+  for (const name of ["a", "b"]) sweepGit(primary, "worktree", "add", "-q", "-b", name, join(root, name))
+  return { root, primary, a: join(root, "a"), b: join(root, "b") }
+}
+
+// The hook copy runs in the session's own folder, so `directory` is that folder.
+async function sweepHook(t, { root, directory }) {
+  const h = host(directory, { state_dir: join(root, "state") })
+  const after = []
+  h.ctx.tool.hook = async (name, handler) => { if (name === "execute.after") after.push(handler) }
+  h.ctx.session.list = async () => ({ data: [{ id: "ses_idle", time: { created: 1, updated: 1 } }] })
+  const cleanup = await (await load()).setup(h.ctx)
+  t.after(() => cleanup?.())
+  return async (event) => { for (const handler of after) await handler(event); return event }
+}
+
+test("the merge note carries the sweep list through the registered hook", async (t) => {
+  const { root, primary, a, b } = await mergedWorktrees(t)
+  const fire = await sweepHook(t, { root, directory: primary })
+  const event = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
+    input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
+  assert.match(event.result, /merged worktrees still on disk:/)
+  assert.ok(event.result.includes(`${a} (a)`) && event.result.includes(`${b} (b)`), event.result)
+})
+
+test("the session's own worktree is excluded even when its workdir points elsewhere", async (t) => {
+  const { root, primary, a, b } = await mergedWorktrees(t)
+  const fire = await sweepHook(t, { root, directory: a })
+  const merge = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
+    input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
+  assert.ok(merge.result.includes(`${b} (b)`), merge.result)
+  assert.ok(!merge.result.includes(a), merge.result)
+  const skill = await fire({ tool: "skill", status: "completed", sessionID: "ses_1",
+    input: { id: "using-git-worktrees" }, result: "loaded" })
+  assert.ok(skill.result.includes(`${b} (b)`), skill.result)
+  assert.ok(!skill.result.includes(a), skill.result)
 })

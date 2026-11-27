@@ -22,9 +22,10 @@ function appendNote(event, note) {
 }
 
 // The host's event shape varies by version: every field is read defensively and a missing one keeps the note silent.
-export async function registerAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout }) {
-  const advisor = createAdvisor({ settings, primary, checkout, onboarded })
-  const skills = createSkillAdvisor({ settings, onboarded })
+export async function registerAdvice(ctx, { settings, onboarded, primary, checkout = defaultCheckout, sweep = null }) {
+  const scoped = sweep && { note: ({ exclude = [] } = {}) => sweep.note({ exclude: [ctx.location?.directory, ...exclude] }) }
+  const advisor = createAdvisor({ settings, primary, checkout, onboarded, sweep: scoped })
+  const skills = createSkillAdvisor({ settings, onboarded, sweep: scoped })
   let closed = false
   const close = () => { closed = true; advisor.clear() }
   if (typeof ctx.tool?.hook !== "function") return { registered: false, close }
