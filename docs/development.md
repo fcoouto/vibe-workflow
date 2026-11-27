@@ -935,7 +935,9 @@ throwaway repositories and synthetic settings.
   linked worktree whose index differs from the main checkout's and a main checkout whose
   path holds a carriage return beside a decoy whose path holds a newline. A group-writable
   main checkout or `.vibe-workflow` (umask `002`, common on Linux) is accepted, by the user's
-  decision after a split council; the reports folder is `0700` either way.
+  decision after a split council; the reports folder is `0700` either way. Under such a
+  parent an existing reports folder is used only if it is already `0700` with the right
+  `.gitignore`; otherwise it is refused and neither its mode nor its `.gitignore` changes.
 - Raw reads are the user's accepted limit: a secret in a file that is read reaches the
   reader's model and session history, and nothing masks it. The three skill files say so
   where files are read. Searching by file name only now binds every reader, and a likely

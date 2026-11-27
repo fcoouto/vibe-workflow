@@ -244,6 +244,64 @@ class StoreReportTest(unittest.TestCase):
         self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def shared_parent(self):
+        """A `.vibe-workflow` its group can write: a group member can rename another folder into the reports place."""
+        base = self.folders(self.main / ".vibe-workflow")
+        os.chmod(base, 0o775)
+        self.addCleanup(os.chmod, base, 0o755)
+        return base
+
+    def test_under_a_group_writable_parent_an_unfamiliar_folder_is_refused_and_left_as_it_is(self):
+        self.shared_parent()
+        # The user's own folder, moved into place by someone else: owned by the user, but not a reports folder.
+        self.reports.mkdir()
+        os.chmod(self.reports, 0o755)
+        (self.reports / ".gitignore").write_bytes(b"build/\n!keep.txt\n")
+        (self.reports / "notes.txt").write_bytes(b"unrelated\n")
+        before = tree(self.main)
+        self.refused(self.cli(self.linked), "left untouched")
+        self.assertEqual(self.reports.stat().st_mode & 0o777, 0o755, "no chmod on an unfamiliar folder")
+        self.assertEqual((self.reports / ".gitignore").read_bytes(), b"build/\n!keep.txt\n")
+        self.assertEqual(tree(self.main), before)
+
+    def test_under_a_group_writable_parent_each_needed_repair_is_refused(self):
+        self.shared_parent()
+        self.reports.mkdir()
+        cases = (("mode", 0o755, b"*\n"), ("mode", 0o750, b"*\n"), ("ignore", 0o700, b"*.log\n"),
+                 ("ignore", 0o700, b"*\n\n"), ("ignore", 0o700, None))
+        for what, mode, ignore in cases:
+            with self.subTest(what=what, mode=oct(mode), ignore=ignore):
+                os.chmod(self.reports, mode)
+                if ignore is None:
+                    (self.reports / ".gitignore").unlink()
+                else:
+                    (self.reports / ".gitignore").write_bytes(ignore)
+                before = tree(self.main)
+                self.refused(self.cli(self.linked), "left untouched")
+                self.assertEqual(self.reports.stat().st_mode & 0o777, mode)
+                self.assertEqual(tree(self.main), before)
+
+    def test_under_a_group_writable_parent_an_already_correct_folder_is_used(self):
+        base = self.shared_parent()
+        self.reports.mkdir()
+        os.chmod(self.reports, 0o700)
+        (self.reports / ".gitignore").write_bytes(b"*\n")
+        (self.reports / "2026-11-26-1000-full-old.md").write_bytes(b"old\n")
+        path = self.saved(self.cli(self.linked))
+        self.assertEqual(path.read_bytes(), BODY)
+        self.assertEqual((self.reports / "2026-11-26-1000-full-old.md").read_bytes(), b"old\n")
+        self.assertEqual((base.stat().st_mode & 0o777, self.reports.stat().st_mode & 0o777), (0o775, 0o700))
+        # A second report goes into the folder the first run created under the same shared parent.
+        second = self.saved(self.cli(self.linked, topic="again"))
+        self.assertEqual(second.parent, self.reports)
+
+    def test_under_a_private_parent_an_existing_folder_is_still_repaired(self):
+        self.folders(self.reports)
+        (self.reports / ".gitignore").write_bytes(b"*.log\n")
+        self.saved(self.cli(self.linked))
+        self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.reports / ".gitignore").read_bytes(), b"*\n")
+
     def test_refuses_a_checkout_or_settings_folder_owned_by_someone_else(self):
         module = load()
         mine = os.geteuid()

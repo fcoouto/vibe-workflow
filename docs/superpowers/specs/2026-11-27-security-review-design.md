@@ -319,6 +319,10 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
   group-writable main checkout or `.vibe-workflow` passes (user, 27 November,
   after a split council: it is what umask `002` gives, and refusing it sent
   every such report to chat); the reports folder itself is still set to `0700`.
+  Under a group-writable `.vibe-workflow` an existing reports folder is never
+  repaired: unless it is already `0700` with a `.gitignore` of exactly `*`, it is
+  refused and left untouched, since a group member could have renamed another of
+  the user's folders into that place.
   It reads Git's path output as
   bytes, replaces a differing `.gitignore` atomically, creates each report
   exclusively without following links, and confirms `git check-ignore -q <report

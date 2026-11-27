@@ -12,6 +12,7 @@ BASE, REPORTS = ".vibe-workflow", "security-reports"
 FOLDER = f"{BASE}/{REPORTS}"
 IGNORE = b"*\n"
 TOPIC = re.compile(r"[a-z0-9][a-z0-9-]{0,60}")
+SHARED = "the reports folder already exists under a group-writable .vibe-workflow, so it is not repaired"
 
 
 class Refused(Exception):
@@ -89,19 +90,21 @@ def _trusted(descriptor, name):
 
 
 def _open_folder(name, parent):
-    """Create the folder when missing, then open it without following a link."""
+    """Create the folder when missing, then open it without following a link. Also says whether this run made it."""
     try:
         os.mkdir(name, 0o700, dir_fd=parent)
+        made = True
     except FileExistsError:
-        pass
+        made = False
     try:
-        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent), made
     except OSError as error:
         raise Refused(f"{name} is a symlink or not a directory") from error
 
 
-def _ensure_ignore(folder):
-    """The folder's own .gitignore must be the single line `*`. A differing regular file is replaced, never edited."""
+def _ensure_ignore(folder, replace=True, create=True):
+    """The folder's own .gitignore must be the single line `*`. A differing regular file is replaced, never edited.
+    Without `replace` or `create` the file is only checked: what would need that change is refused instead."""
     try:
         mode = os.lstat(".gitignore", dir_fd=folder).st_mode
     except FileNotFoundError:
@@ -113,6 +116,8 @@ def _ensure_ignore(folder):
         with os.fdopen(current, "rb") as file:
             if file.read(len(IGNORE) + 1) == IGNORE:
                 return
+    if not (replace if mode is not None else create):
+        raise Refused(f"{SHARED}; its .gitignore is not exactly `*`, and it was left untouched")
     temporary = f".gitignore.{os.getpid()}.{os.urandom(8).hex()}.tmp"
     handle = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=folder)
     try:
@@ -182,14 +187,24 @@ def store(cwd, mode, topic, source, now=None):
     try:
         opened.append(os.open(main, os.O_RDONLY | os.O_DIRECTORY))
         _trusted(opened[-1], "the main checkout")
-        opened.append(_open_folder(BASE, opened[-1]))
+        opened.append(_open_folder(BASE, opened[-1])[0])
         _trusted(opened[-1], BASE)
-        folder = _open_folder(REPORTS, opened[-1])
+        shared = bool(os.fstat(opened[-1]).st_mode & 0o020)
+        folder, made = _open_folder(REPORTS, opened[-1])
         opened.append(folder)
-        if os.fstat(folder).st_uid != os.geteuid():
+        found = os.fstat(folder)
+        if found.st_uid != os.geteuid():
             raise Refused("the reports folder is owned by another user")
-        os.fchmod(folder, 0o700)
-        _ensure_ignore(folder)
+        if shared:
+            # A group member can rename another of this user's folders into this place. Owning the folder is
+            # then no proof that it is the reports folder, so nothing in it is changed to make it fit: it must
+            # already be private, and only a folder made in this run gets its .gitignore written.
+            if found.st_mode & 0o777 != 0o700:
+                raise Refused(f"{SHARED}; its mode is not 0700, and it was left untouched")
+            _ensure_ignore(folder, replace=False, create=made)
+        else:
+            os.fchmod(folder, 0o700)
+            _ensure_ignore(folder)
         name, handle = _create(folder, f"{time.strftime('%Y-%m-%d-%H%M', now or time.localtime())}-{mode}-{topic}")
         path = os.path.join(main, FOLDER, name)
         created = os.fstat(handle)
