@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -112,4 +112,78 @@ test("git worktree remove deletes ignored files, and status --porcelain --ignore
   assert.match(must(path, "status", "--porcelain", "--ignored"), /!! \.env[\s\S]*!! \.private\//)
   must(path, "switch", "-q", "--detach")
   assert.ok(git(primary, "worktree", "remove", path).ok, "git removes it without force, ignored files included")
+})
+
+// The reference's rule: status `!!`, and the last path component, as git prints it, equals a listed name (`*.pyc`: ends in `.pyc`).
+const LISTED = ["node_modules/", "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".DS_Store"]
+const rebuildable = (line) => {
+  if (!line.startsWith("!! ")) return false
+  const last = line.slice(3).match(/[^/]*\/?$/)[0]
+  return LISTED.includes(last) || last.endsWith(".pyc")
+}
+const leftovers = (path) => must(path, "status", "--porcelain", "--ignored").split("\n").filter(Boolean)
+const ignore = async (path, rules) => {
+  await writeFile(join(path, ".gitignore"), rules)
+  must(path, "add", ".gitignore")
+  must(path, "commit", "-q", "-m", "ignore")
+}
+
+test("listed caches can be deleted after the merge, then the worktree is removable", async (t) => {
+  const { primary, worktree } = await repository(t)
+  const path = await worktree("caches", { push: true })
+  // A tracked file keeps `src/` visible: a folder holding only ignored entries collapses into one `!! src/` line.
+  await mkdir(join(path, "src"))
+  await writeFile(join(path, "src", "module.py"), "")
+  must(path, "add", "src")
+  await ignore(path, "node_modules/\n__pycache__/\n.DS_Store\n")
+  must(primary, "merge", "-q", "--no-ff", "caches", "-m", "merge caches")
+  await mkdir(join(path, "node_modules", "pkg"), { recursive: true })
+  await writeFile(join(path, "node_modules", "pkg", "index.js"), "")
+  await mkdir(join(path, "src", "__pycache__"), { recursive: true })
+  await writeFile(join(path, "src", "__pycache__", "module.cpython-311.pyc"), "")
+  await writeFile(join(path, ".DS_Store"), "")
+  const lines = leftovers(path)
+  assert.deepEqual(lines, ["!! .DS_Store", "!! node_modules/", "!! src/__pycache__/"])
+  for (const line of lines) assert.ok(rebuildable(line), line)
+  for (const line of lines) await rm(join(path, line.slice(3).replace(/\/$/, "")), { recursive: true })
+  assert.deepEqual(leftovers(path), [])
+  must(path, "switch", "-q", "--detach")
+  assert.ok(git(primary, "worktree", "remove", path).ok, "removable without force")
+})
+
+test("look-alike and unignored caches are not rebuildable", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("lookalike", { push: true })
+  await mkdir(join(path, "node_modules"))
+  await writeFile(join(path, "node_modules", "index.js"), "")
+  assert.deepEqual(leftovers(path), ["?? node_modules/"])
+  await rm(join(path, "node_modules"), { recursive: true })
+  await ignore(path, "mynode_modules/\n")
+  await mkdir(join(path, "mynode_modules"))
+  await writeFile(join(path, "mynode_modules", "index.js"), "")
+  assert.deepEqual(leftovers(path), ["!! mynode_modules/"])
+  for (const line of ["?? node_modules/", "!! mynode_modules/"]) assert.ok(!rebuildable(line), line)
+})
+
+test("unlisted ignored folders, .env and untracked files stay real work", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("realwork", { push: true })
+  await ignore(path, "/build/\n.env\n")
+  await mkdir(join(path, "build"))
+  await writeFile(join(path, "build", ".env"), "SECRET=1")
+  await writeFile(join(path, ".env"), "SECRET=1")
+  await writeFile(join(path, "notes.md"), "notes")
+  const lines = leftovers(path)
+  assert.deepEqual([...lines].sort(), ["!! .env", "!! build/", "?? notes.md"], "an ignored folder collapses into one line")
+  for (const line of lines) assert.ok(!rebuildable(line), line)
+})
+
+test("worktree repair fixes a worktree after the repository moved", async (t) => {
+  const { root, primary, worktree } = await repository(t)
+  const path = await worktree("moved", { push: true })
+  const moved = join(root, "primary-moved")
+  await rename(primary, moved)
+  assert.ok(!git(path, "status").ok, "the worktree's .git file names the old path")
+  must(moved, "worktree", "repair", path)
+  must(path, "status")
 })

@@ -5,6 +5,8 @@ import plugin from "../../index.js"
 
 const root = new URL("../../skills/vibe-pull-requests/", import.meta.url)
 const read = (name) => readFile(new URL(name, root), "utf8")
+// The `-D` flag itself, not the `-D` inside the `<YYYY-MM-DD>` placeholder.
+const FLAG_D = /(?<![\w-])-D\b/
 
 async function registered() {
   const skills = []
@@ -70,8 +72,24 @@ test("the cleanup reference states the checks, the order, the mapping and the no
     "git -C", "status --porcelain --ignored", "--path-format=absolute", "worktree list --porcelain", ".gitmodules", "origin/<default branch>", "worktree_remove", "ExitWorktree", "git worktree remove", "--delete-branch", "backstop"]) {
     assert.ok(text.includes(phrase), phrase)
   }
-  for (const line of text.split("\n").filter((line) => line.includes("-D"))) assert.match(line, /never/i, line)
+  for (const line of text.split("\n").filter((line) => FLAG_D.test(line))) assert.match(line, /never/i, line)
   const procedure = await read("references/procedure.md")
   assert.ok(procedure.includes("worktree-cleanup.md"))
   assert.match(procedure, /--delete-branch/)
+})
+
+test("the cleanup reference sorts leftovers, waits for the merge and sweeps older worktrees", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  for (const phrase of ["node_modules/", "__pycache__/", "*.pyc", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".DS_Store",
+    "!! build/", "last path component", "Nothing is deleted, moved or archived before the merge is confirmed",
+    "Commit to this PR", "Archive", "Discard", "Keep the worktree", "list them again", "docs/vibe-workflow/council-sessions/",
+    "result.md", "(Recommended)", ".vibe-workflow/archives/<YYYY-MM-DD>_<branch>/", "replaced by `-`", "scripts/archive.py",
+    "python3 -I -B", "never by hand", "refused:", "Cleanup verified", "Cleanup blocked", "## Sweeping older merged worktrees",
+    "gh pr list --head <branch> --state merged", "git -C <worktree> switch --detach", "worktree repair", "prunable"]) {
+    assert.ok(text.includes(phrase), phrase)
+  }
+  for (const line of text.split("\n").filter((line) => /force/i.test(line))) assert.match(line, /never|without/i, line)
+  for (const line of text.split("\n").filter((line) => FLAG_D.test(line))) assert.match(line, /never/i, line)
+  const procedure = await read("references/procedure.md")
+  for (const phrase of [".vibe-workflow/archives/", "leftover files"]) assert.ok(procedure.includes(phrase), phrase)
 })
