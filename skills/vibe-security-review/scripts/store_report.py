@@ -78,13 +78,14 @@ def _kind(path):
 
 
 def _trusted(descriptor, name):
-    """Someone who can write a folder can rename what is inside it, so both must belong to this user alone.
-    Their modes are never changed to make this pass."""
+    """Whoever can write a folder can rename what is inside it, so it must belong to this user and not be
+    open to everyone. A group-writable folder passes: that is what umask 002 gives, and the group is the
+    user's own choice. The modes are never changed to make this pass."""
     status = os.fstat(descriptor)
     if status.st_uid != os.geteuid():
         raise Refused(f"{name} is owned by another user")
-    if status.st_mode & 0o022:
-        raise Refused(f"{name} is writable by its group or by everyone")
+    if status.st_mode & 0o002:
+        raise Refused(f"{name} is writable by everyone")
 
 
 def _open_folder(name, parent):

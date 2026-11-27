@@ -219,18 +219,50 @@ class StoreReportTest(unittest.TestCase):
         self.refused(self.cli(self.linked), "not a directory")
         self.assertEqual((self.main / FOLDER).read_text(), "a file\n")
 
-    def test_refuses_a_checkout_or_settings_folder_others_can_write_and_changes_no_mode(self):
+    def test_refuses_a_checkout_or_settings_folder_everyone_can_write_and_changes_no_mode(self):
         base = self.folders(self.main / ".vibe-workflow")
-        for folder, mode in ((base, 0o775), (base, 0o757), (self.main, 0o775), (self.main, 0o777)):
+        for folder, mode in ((base, 0o777), (base, 0o757), (base, 0o1777), (self.main, 0o777), (self.main, 0o757)):
             with self.subTest(folder=folder.name, mode=oct(mode)):
-                before = folder.stat().st_mode & 0o777
+                before = folder.stat().st_mode & 0o7777
                 os.chmod(folder, mode)
                 self.addCleanup(os.chmod, folder, before)
-                self.refused(self.cli(self.linked), "writable")
-                self.assertEqual(folder.stat().st_mode & 0o777, mode, "a shared folder's mode is never changed")
+                self.refused(self.cli(self.linked), "writable by everyone")
+                self.assertEqual(folder.stat().st_mode & 0o7777, mode, "a shared folder's mode is never changed")
                 os.chmod(folder, before)
                 self.assertEqual(list(base.iterdir()), [])
         self.saved(self.cli(self.linked))
+
+    def test_a_group_writable_checkout_or_settings_folder_is_accepted_and_keeps_its_mode(self):
+        # The usual result of umask 002. The reports folder itself still becomes 0700.
+        base = self.folders(self.main / ".vibe-workflow")
+        for folder in (base, self.main):
+            os.chmod(folder, 0o775)
+            self.addCleanup(os.chmod, folder, 0o755)
+        path = self.saved(self.cli(self.linked))
+        self.assertEqual(path.read_bytes(), BODY)
+        self.assertEqual([folder.stat().st_mode & 0o777 for folder in (base, self.main)], [0o775, 0o775])
+        self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_refuses_a_checkout_or_settings_folder_owned_by_someone_else(self):
+        module = load()
+        mine = os.geteuid()
+        base = self.folders(self.main / ".vibe-workflow")
+        real = module.os.fstat
+        for foreign, reason in ((self.main, "the main checkout is owned by another user"),
+                                (base, ".vibe-workflow is owned by another user")):
+            with self.subTest(folder=foreign.name):
+                target = identity(foreign)
+
+                def fstat(descriptor, real=real, target=target):
+                    status = real(descriptor)
+                    if (status.st_dev, status.st_ino) != target:
+                        return status
+                    return os.stat_result((*status[:4], mine + 1, *status[5:]))
+                with mock.patch.object(module.os, "fstat", fstat):
+                    with self.assertRaisesRegex(module.Refused, reason):
+                        self.store(module, self.linked)
+                self.assertEqual(list(base.iterdir()), [])
 
     def test_refuses_a_folder_owned_by_someone_else(self):
         module = load()
