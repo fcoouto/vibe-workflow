@@ -134,6 +134,22 @@ function titleOf(words) {
   return null
 }
 
+// Options of `gh pr create` and `gh pr ready` whose value is the next word.
+const VALUE_OPTIONS = new Set(["--title", "-t", "--body", "-b", "--body-file", "-F", "--base", "-B", "--head", "-H",
+  "--repo", "-R", "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p",
+  "--template", "-T"])
+const PREVIEW_OPTIONS = new Set(["--help", "-h", "--dry-run"])
+
+// Help and dry-run forms change no pull request, so they must not prompt a ship check. gh receives a quoted
+// word without its quotes, so quoting is ignored here; a word that is another option's value is data, not a flag.
+function isPreview(words) {
+  for (let index = 0; index < words.length; index++) {
+    if (VALUE_OPTIONS.has(words[index].text)) index++
+    else if (PREVIEW_OPTIONS.has(words[index].text)) return true
+  }
+  return false
+}
+
 export function classify(command) {
   const actions = []
   let moved = false
@@ -144,8 +160,7 @@ export function classify(command) {
     if (first === "cd" || first === "pushd") moved = true
     else if (first === "gh" && second === "pr") {
       const rest = words.slice(3)
-      // Help and dry-run forms change no pull request, so they must not prompt a ship check.
-      const preview = flag(rest, "--help", "-h", "--dry-run") && { preview: true }
+      const preview = (third === "create" || third === "ready") && isPreview(rest) && { preview: true }
       if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest), ...preview })
       else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo"), ...preview })
       else if (third === "edit") { const title = titleOf(rest); if (title !== null) actions.push({ kind: "pr_retitle", title }) }

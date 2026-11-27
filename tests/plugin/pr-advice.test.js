@@ -99,6 +99,36 @@ test("help and dry-run forms get no ship note, with the git workflow off or on",
   assert.deepEqual(classify("gh pr ready --help"), [{ kind: "pr_ready", undo: false, preview: true }])
 })
 
+test("a help or dry-run word counts only as an option, never as another option's value", async () => {
+  const onboarded = async () => true
+  const off = () => advisor({ state: "off" }, { onboarded })
+  // The value of a value-taking option is data: the pull request is really created.
+  const values = ["--title", "-t", "--body", "-b", "--body-file", "-F", "--base", "-B", "--head", "-H", "--repo", "-R",
+    "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p", "--template", "-T"]
+  for (const option of values) {
+    for (const word of ["--help", "-h", "--dry-run"]) {
+      assert.equal(await off().advise(`gh pr create ${option} ${word}`), SHIP_PR, `${option} ${word}`)
+    }
+  }
+  assert.equal(await off().advise("gh pr create --title --help"), SHIP_PR)
+  assert.equal(await off().advise('gh pr create "--title" --help'), SHIP_PR)
+  assert.equal(await off().advise("gh pr ready 3 --repo --help"), SHIP_PR)
+  assert.deepEqual(classify("gh pr create --title --help"), [{ kind: "pr_create", draft: false, title: "--help" }])
+  // Quoting does not change the argument gh receives: a standalone quoted flag is still the option.
+  for (const command of ['gh pr create "--help"', "gh pr create '--dry-run'", 'gh pr create "-h"', "gh pr create --dry-run",
+    'gh pr ready "--help"', "gh pr create --title x --help", "gh pr create --title --help --help", "gh pr create --title=x --dry-run"]) {
+    assert.equal(await off().advise(command), null, command)
+  }
+  assert.deepEqual(classify('gh pr create "--help"'), [{ kind: "pr_create", draft: false, title: null, preview: true }])
+  // Existing notes keep their behavior: only the ship note follows the preview flag.
+  for (const command of ["gh pr create --title --help", 'gh pr create "--help"', "gh pr create --draft --dry-run"]) {
+    const existing = await advisor().advise(command)
+    assert.match(existing, /open pull requests as \[BLOCKED\] drafts/, command)
+    const both = await advisor(on, { onboarded }).advise(command)
+    assert.equal(both, command === "gh pr create --title --help" ? `${existing}\n${SHIP_PR}` : existing, command)
+  }
+})
+
 test("the ship note needs an onboarding answer of exactly true, and survives failing workflow settings", async () => {
   const command = 'gh pr create --draft --title "[BLOCKED] x"'
   const existing = await advisor().advise(command)
