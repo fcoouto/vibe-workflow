@@ -18,10 +18,12 @@ ABSOLUTE = ("rev-parse", "--path-format=absolute")
 BROKEN = "the worktree's Git pointer is broken"
 USAGE = ("invalid arguments; give sort, expand, manifest, discard, caches or identity, then --worktree <dir> and "
          "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name>, --detached")
+UNTOUCHED, PARTLY = "nothing in it was removed", "it may be partly removed"
 CAPABLE = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and hasattr(os, "fchdir")
            and os.listdir in os.supports_fd and os.stat in os.supports_follow_symlinks
            and {os.open, os.stat, os.readlink, os.unlink, os.rmdir} <= os.supports_dir_fd)
 FOLDER = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+ABOVE = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
 
 
 class Refused(Exception):
@@ -64,23 +66,33 @@ def _same(first, second):
         return False
 
 
-def _enter(worktree, linked=False):
-    """Open the worktree's top folder without following a link and make it the current folder, so Git and every
-    descriptor work on the same folder whatever the name points to later."""
+def _device(info):
+    """The device an entry is on. A folder on another device than the worktree's top folder is a mount."""
+    return info.st_dev
+
+
+def _enter(worktree):
+    """Open the worktree's top folder one component at a time from the root, never through a link, and make it the
+    current folder, so Git and every descriptor work on the same folder whatever the name points to later."""
     if not CAPABLE:
         raise Refused("this system cannot read a worktree safely")
+    parts = (worktree[:-1] if worktree.endswith("/") else worktree).split("/")
+    if parts[0] != "" or len(parts) < 2 or any(part in ("", ".", "..") for part in parts[1:]):
+        raise Refused("--worktree must be an absolute path with no empty, '.' or '..' part")
     try:
-        if stat.S_ISLNK(os.lstat(worktree).st_mode):
-            raise Refused("--worktree is a symbolic link")
-        top = os.open(worktree, FOLDER)
+        top = os.open("/", ABOVE)
+        for index, part in enumerate(parts[1:], 2):
+            above = top
+            try:
+                top = os.open(part, FOLDER if index == len(parts) else ABOVE, dir_fd=above)
+            finally:
+                os.close(above)
     except OSError as error:
-        raise Refused("--worktree is not a folder") from error
+        raise Refused("--worktree, or a folder above it, is a symbolic link or not a folder") from error
     try:
         os.fchdir(top)
         if not os.path.samestat(os.stat(_line("rev-parse", "--show-toplevel")), os.fstat(top)):
             raise Refused("--worktree is not the worktree's top folder")
-        if linked and _same(_line(*ABSOLUTE, "--git-dir"), _line(*ABSOLUTE, "--git-common-dir")):
-            raise Refused("--worktree is not a linked worktree")
     except BaseException:
         os.close(top)
         raise
@@ -168,37 +180,42 @@ class _Node:
             yield from child.walk()
 
 
-def _open_folder(parent, name, node=None):
-    """Open one folder below an open folder, never through a link, and check it is the entry that was seen."""
+def _open_folder(parent, name, device, node=None):
+    """Open one folder below an open folder, never through a link or onto another device, and check it is the
+    entry that was seen."""
     try:
         descriptor = os.open(name, FOLDER, dir_fd=parent)
     except OSError as error:
         raise Refused(f"{os.fsdecode(name)!r} is a symbolic link, not a folder, or cannot be opened") from error
-    if node is not None and not node.unchanged(os.fstat(descriptor)):
+    info = os.fstat(descriptor)
+    if _device(info) != device or (node is not None and not node.unchanged(info)):
         os.close(descriptor)
-        raise Refused(f"{os.fsdecode(name)!r} changed while it was read")
+        raise Refused(f"{os.fsdecode(name)!r} is on another device (a mount)" if _device(info) != device
+                      else f"{os.fsdecode(name)!r} changed while it was read")
     return descriptor
 
 
 def _parent(top, parts, opened):
-    """Open every folder above a path from the top folder; a linked folder on the way is refused."""
-    folder = top
+    """Open every folder above a path from the top folder; a linked folder or a mount on the way is refused."""
+    folder, device = top, _device(os.fstat(top))
     for part in parts[:-1]:
-        folder = _open_folder(folder, part)
+        folder = _open_folder(folder, part, device)
         opened.append(folder)
-    return folder
+    return folder, device
 
 
-def _scan(parent, name, shown, hashed):
+def _scan(parent, name, shown, hashed, device):
     """Read one entry and everything below it through descriptors opened from its own folder."""
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if _device(info) != device:
+        raise Refused(f"{os.fsdecode(shown)!r} is on another device (a mount)")
     node = _Node(name, info, {"path": os.fsdecode(shown)})
     if node.folder:
         node.row["type"] = "folder"
-        descriptor = _open_folder(parent, name, node)
+        descriptor = _open_folder(parent, name, device, node)
         try:
             for child in sorted(os.fsencode(child) for child in os.listdir(descriptor)):
-                node.children.append(_scan(descriptor, child, shown + b"/" + child, hashed))
+                node.children.append(_scan(descriptor, child, shown + b"/" + child, hashed, device))
         finally:
             os.close(descriptor)
     elif stat.S_ISLNK(info.st_mode):
@@ -220,102 +237,124 @@ def _scan(parent, name, shown, hashed):
 
 
 def _statuses(shown):
-    """What Git says about each file at and below a path: its status, and whether the index holds it."""
-    exact, folders = {}, {}
+    """Everything Git says at and below a path: every status of each name, and the names its index holds.
+    One name can have two statuses, such as a staged deletion next to the same untracked file."""
+    files, folders = {}, {}
     for status, name, _ in _fields(_out(*EACH, "--", shown)):
-        if name.endswith(b"/"):
-            folders[name] = status
-        else:
-            exact[name] = status
+        (folders if name.endswith(b"/") else files).setdefault(name, []).append(status)
     tracked = {name for name in _out("ls-files", "-z", "--", shown).split(b"\0") if name}
-    return exact, folders, tracked
+    return files, folders, tracked
 
 
 def _inspect(top, parts, hashed=True):
-    """One path's entries with their Git status, and the digest row that changes when any of it changes."""
+    """One path's entries with their Git statuses, and the digest row that changes when any of it changes."""
     shown = b"/".join(parts)
     opened = []
     try:
-        root = _scan(_parent(top, parts, opened), parts[-1], shown, hashed)
+        parent, device = _parent(top, parts, opened)
+        root = _scan(parent, parts[-1], shown, hashed, device)
     finally:
         for descriptor in opened:
             os.close(descriptor)
-    exact, folders, tracked = _statuses(shown)
+    files, folders, tracked = _statuses(shown)
     nodes = list(root.walk())
+    rows, found = [node.row for node in nodes], set()
     for node in nodes:
         name = os.fsencode(node.row["path"])
-        if node.folder:
-            continue
-        inside = [folder for folder in folders if name.startswith(folder)]
-        status = exact.get(name) or (folders[max(inside, key=len)] if inside else None)
-        if status is not None:
-            node.row["status"] = status
+        own = name + b"/" if node.folder else name
+        found.add(own)
+        inside = [folder for folder in folders if own.startswith(folder)]
+        statuses = folders.get(own) if node.folder else files.get(name) or (folders[max(inside, key=len)] if inside else None)
+        if statuses:
+            node.row["status"] = sorted(statuses)
         if name in tracked:
             node.row["tracked"] = True
-    lines = [json.dumps(node.row, sort_keys=True) for node in nodes]
+    for name, statuses in sorted({**files, **folders}.items()):
+        if name not in found:
+            rows.append({"path": os.fsdecode(name), "type": "missing", "status": sorted(statuses)})
+    lines = [json.dumps(row, sort_keys=True) for row in rows]
+    every = [status for row in rows for status in row.get("status", ())]
     summary = {"digest": hashlib.sha256("\n".join(lines).encode("ascii")).hexdigest(), "path": os.fsdecode(shown),
-               "entries": len(lines), "statuses": sorted({node.row["status"] for node in nodes if "status" in node.row}),
-               "tracked": len(tracked)}
-    if any(node.row.get("unsafe") for node in nodes):
+               "entries": len(lines), "statuses": sorted(set(every)), "tracked": len(tracked),
+               "staged": sum(status not in ("??", "!!") for status in every)}
+    if any(row.get("unsafe") for row in rows):
         summary["unsafe"] = True
     return root, lines, summary
 
 
-def _delete(parent, node):
+def _removable(root, summary, allowed):
+    """Why one inspected path must stay, or None: nothing in it may be tracked, staged, unsafe or of another status."""
+    if summary["tracked"] or summary["staged"]:
+        return "Git tracks or stages a path in it"
+    if summary.get("unsafe"):
+        return "it holds a repository or a name that cannot be typed"
+    if any(not set(node.row.get("status", ())) <= allowed or "status" not in node.row
+           for node in root.walk() if node.row["type"] in ("file", "link")):
+        return "it holds a file with another Git status"
+    return None
+
+
+def _delete(parent, node, device):
     """Remove one scanned entry through its folder's descriptor. Anything that is not what was scanned stops it."""
     if not node.unchanged(os.stat(node.name, dir_fd=parent, follow_symlinks=False)):
         raise Refused(f"{node.row['path']!r} changed before it was removed")
     if not node.folder:
         os.unlink(node.name, dir_fd=parent)
         return
-    descriptor = _open_folder(parent, node.name, node)
+    descriptor = _open_folder(parent, node.name, device, node)
     try:
         if {os.fsencode(name) for name in os.listdir(descriptor)} != {child.name for child in node.children}:
             raise Refused(f"{node.row['path']!r} changed before it was removed")
         for child in node.children:
-            _delete(descriptor, child)
+            _delete(descriptor, child, device)
     finally:
         os.close(descriptor)
     os.rmdir(node.name, dir_fd=parent)
 
 
-def _remove(top, parts, root):
+def _take(top, parts, shown, check):
+    """Read one path, check it again with `check`, and remove it straight after. A refusal names the path and
+    says whether any of it can be gone: nothing before the removal starts, perhaps some of it after."""
+    try:
+        root, _, summary = _inspect(top, parts, hashed=check.hashed)
+        reason = check(root, summary)
+        if reason:
+            raise Refused(reason)
+    except (OSError, RecursionError, Refused) as error:
+        raise Refused(f"{shown}: {_reason(error)}; {UNTOUCHED}") from error
     opened = []
     try:
-        _delete(_parent(top, parts, opened), root)
+        parent, device = _parent(top, parts, opened)
+        _delete(parent, root, device)
+    except (OSError, RecursionError, Refused) as error:
+        raise Refused(f"{shown}: {_reason(error)}; {PARTLY}") from error
     finally:
         for descriptor in opened:
             os.close(descriptor)
 
 
-def _discard(top, parts, digest):
-    """Check one approved path again, then remove it: same digest, nothing tracked or staged, nothing unsafe."""
-    root, _, summary = _inspect(top, parts)
-    path = summary["path"]
-    if summary["digest"] != digest:
-        raise Refused(f"{path!r} is not what was approved: its digest changed")
-    if summary["tracked"] or summary.get("unsafe"):
-        raise Refused(f"{path!r} holds a path Git tracks or stages, a repository, or a name that cannot be typed")
-    if any(node.row.get("status") not in ("??", "!!") for node in root.walk() if node.row["type"] in ("file", "link")):
-        raise Refused(f"{path!r} holds a file that is neither untracked nor ignored")
-    _remove(top, parts, root)
+def _reason(error):
+    return str(error) if isinstance(error, Refused) else f"it could not be read or removed ({type(error).__name__})"
 
 
-def _cache(top, name):
-    """Check one rebuildable row again, then remove it: still the same ignored entry, with nothing tracked in it."""
-    parts = _relative(os.fsdecode(name))
-    shown = b"/".join(parts)
-    if list(_fields(_out(*SORT, "--", shown))) != [("!!", name, None)] or _out("ls-files", "-z", "--", shown):
-        raise Refused(f"{os.fsdecode(name)!r} is no longer one ignored entry")
-    opened = []
-    try:
-        root = _scan(_parent(top, parts, opened), parts[-1], shown, hashed=False)
-    finally:
-        for descriptor in opened:
-            os.close(descriptor)
-    if root.folder != name.endswith(b"/"):
-        raise Refused(f"{os.fsdecode(name)!r} changed before it was removed")
-    _remove(top, parts, root)
+def _approved(digest):
+    """The check for one approved path: the digest the user approved, and nothing that must stay."""
+    def check(root, summary):
+        if summary["digest"] != digest:
+            return "it is not what was approved: its digest changed"
+        return _removable(root, summary, {"??", "!!"})
+    check.hashed = True
+    return check
+
+
+def _cache(name):
+    """The check for one rebuildable row: still that one ignored entry, and nothing in it that must stay."""
+    def check(root, summary):
+        if list(_fields(_out(*SORT, "--", name.removesuffix(b"/")))) != [("!!", name, None)] or root.folder != name.endswith(b"/"):
+            return "it is no longer one ignored entry"
+        return _removable(root, summary, {"!!"})
+    check.hashed = False
+    return check
 
 
 def _records(primary):
@@ -331,16 +370,19 @@ def _records(primary):
     return records
 
 
-def identity(worktree, primary, branch):
-    """The named folder is the worktree this repository registers under that name, on that branch, and nothing else."""
-    if not os.path.isabs(worktree) or os.path.realpath(worktree) != worktree:
-        raise Refused("--worktree must be an absolute path that is not, and does not pass through, a symbolic link")
+def identity(worktree, primary, wanted=None):
+    """Enter the named folder only when it is the worktree this repository registers under that name and nothing
+    else. `wanted` is (branch,) to also require that branch, where None is a detached head. Returns the open top
+    folder and the row."""
+    if not primary or not os.path.isabs(worktree) or os.path.realpath(worktree) != worktree:
+        raise Refused("--worktree must be an absolute path that is not, and does not pass through, a symbolic link, "
+                      "and --primary must name the repository's main checkout")
     primary = os.path.abspath(primary)
     records = _records(primary)
     if not records or not _same(records[0]["path"], primary):
         raise Refused("--primary is not the repository's main checkout")
     mine = [record for record in records[1:] if record["path"] == worktree]
-    if len(mine) != 1 or mine[0]["locked"] or mine[0]["branch"] != branch:
+    if len(mine) != 1 or mine[0]["locked"] or (wanted and mine[0]["branch"] != wanted[0]):
         raise Refused("the repository does not register this path as an unlocked worktree on that branch")
     if any(record is not mine[0] and os.path.realpath(record["path"]) == worktree for record in records):
         raise Refused("another registered worktree resolves to this path")
@@ -348,50 +390,59 @@ def identity(worktree, primary, branch):
     try:
         if not stat.S_ISREG(os.lstat(pointer).st_mode):
             raise Refused("the path's .git is not a worktree pointer file")
+        with open(os.open(pointer, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)), "rb") as file:
+            named = file.read(1 << 16).removesuffix(b"\n")
     except OSError as error:
         raise Refused("the path is not a worktree folder") from error
-    top = None
+    if not named.startswith(b"gitdir: "):
+        raise Refused("the path's .git is not a worktree pointer file")
+    named = os.path.join(os.fsencode(worktree), named[len(b"gitdir: "):])
+    if not os.path.lexists(named):
+        raise Refused(BROKEN)
+    common = _line(*ABSOLUTE, "--git-common-dir", at=primary)
+    top = _enter(worktree)
     try:
-        try:
-            top = _enter(worktree)
-            git_dir, common = _line(*ABSOLUTE, "--git-dir"), _line(*ABSOLUTE, "--git-common-dir")
-        except Refused as refusal:
-            raise Refused(BROKEN) from refusal
-        if not _same(common, _line(*ABSOLUTE, "--git-common-dir", at=primary)):
+        git_dir = _line(*ABSOLUTE, "--git-dir")
+        if not _same(_line(*ABSOLUTE, "--git-common-dir"), common):
             raise Refused("the path belongs to another repository")
         try:
             with open(os.path.join(git_dir, b"gitdir"), "rb") as file:
-                backlink = os.fsdecode(file.read().removesuffix(b"\n"))
+                backlink = os.fsdecode(file.read(1 << 16).removesuffix(b"\n"))
         except OSError as error:
             raise Refused("the worktree's backlink could not be read") from error
-        if not _same(os.path.dirname(git_dir), os.path.join(common, b"worktrees")) or backlink != pointer:
+        if (not _same(named, git_dir) or not _same(os.path.dirname(git_dir), os.path.join(common, b"worktrees"))
+                or backlink != pointer):
             raise Refused("the repository's backlink does not point at this path")
         code, head = _git("symbolic-ref", "--short", "-q", "HEAD", codes=(0, 1))
-        if (os.fsdecode(head.removesuffix(b"\n")) if code == 0 else None) != branch:
+        branch = os.fsdecode(head.removesuffix(b"\n")) if code == 0 else None
+        if branch != mine[0]["branch"] or (wanted and branch != wanted[0]):
             raise Refused("the worktree is not on that branch")
-        return {"worktree": worktree, "branch": branch, "head": os.fsdecode(_line("rev-parse", "HEAD"))}
-    finally:
-        if top is not None:
-            os.close(top)
+        return top, {"worktree": worktree, "branch": branch, "head": os.fsdecode(_line("rev-parse", "HEAD"))}
+    except BaseException:
+        os.close(top)
+        raise
 
 
 def run(args, done):
     """Do one mode. Read modes return every line at once; removing modes report each removed path as they go."""
     mode, paths = args.mode, [_relative(path) for path in args.paths]
-    takes = {"sort": (), "expand": ("paths",), "manifest": ("paths",), "discard": ("paths", "digests"), "caches": (),
-             "identity": ("primary", "branch", "detached")}[mode]
+    takes = {"sort": (), "expand": ("paths",), "manifest": ("paths",), "discard": ("paths", "digests", "primary"),
+             "caches": ("primary",), "identity": ("primary", "branch", "detached")}[mode]
     given = {"paths": args.paths, "digests": args.digests, "primary": args.primary, "branch": args.branch,
              "detached": args.detached}
     if any(value and name not in takes for name, value in given.items()):
         raise Refused(USAGE)
-    if mode == "identity":
-        if not args.primary or bool(args.branch) == args.detached:
-            raise Refused(USAGE)
-        return [json.dumps(identity(args.worktree, args.primary, args.branch))]
     if (mode in ("manifest", "discard") and not paths) or (mode == "discard" and len(paths) != len(args.digests)):
         raise Refused(USAGE)
-    top = _enter(args.worktree, linked=mode in ("discard", "caches"))
+    if mode in ("discard", "caches", "identity"):
+        if not args.primary or (mode == "identity" and bool(args.branch) == args.detached):
+            raise Refused(USAGE)
+        top, row = identity(args.worktree, args.primary, (args.branch,) if mode == "identity" else None)
+    else:
+        top = _enter(args.worktree)
     try:
+        if mode == "identity":
+            return [json.dumps(row)]
         if mode == "sort":
             return [json.dumps(row) for row in _entries(_out(*SORT))]
         if mode == "expand":
@@ -404,13 +455,19 @@ def run(args, done):
             return lines
         if mode == "discard":
             for path, digest in zip(paths, args.digests):
-                _discard(top, path, digest)
-                done(os.fsdecode(b"/".join(path)))
+                shown = os.fsdecode(b"/".join(path))
+                _take(top, path, json.dumps(shown) if _unsafe(os.fsencode(shown)) else shown, _approved(digest))
+                done(shown)
             return []
         for status, name, _ in list(_fields(_out(*SORT))):
             if _rebuildable(status, name):
-                _cache(top, name)
-                done(os.fsdecode(name))
+                shown = os.fsdecode(name)
+                try:
+                    parts = _relative(shown)
+                except Refused as refusal:
+                    raise Refused(f"{shown}: {refusal}; {UNTOUCHED}") from refusal
+                _take(top, parts, shown, _cache(name))
+                done(shown)
         return []
     finally:
         os.close(top)
@@ -427,7 +484,7 @@ def main(argv=None):
     parser.add_argument("--detached", action="store_true")
     try:
         try:
-            lines = run(parser.parse_args(argv), lambda path: print(json.dumps({"discarded": path}), flush=True))
+            lines = run(parser.parse_args(argv), lambda path: print(f"removed: {path}", flush=True))
         except (OSError, RecursionError) as error:
             raise Refused(f"a path could not be read or removed ({type(error).__name__})") from error
     except Refused as refusal:

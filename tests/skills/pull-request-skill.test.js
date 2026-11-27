@@ -150,11 +150,19 @@ test("the sweep settles the client and the worktree's identity before it changes
 test("the cleanup reference deletes only through the script, one rechecked path at a time", async () => {
   const text = await read("references/worktree-cleanup.md")
   assert.doesNotMatch(text, /\brm\b/, "no shell delete in the rules")
-  for (const phrase of ["leftovers.py' discard", "--digest '<digest>'", "leftovers.py' caches", '{"discarded": ', "never by a shell command",
+  for (const phrase of ["leftovers.py' discard", "--digest '<digest>'", "leftovers.py' caches", "removed: <path>", "never by a shell command",
+    "refused: <path>: <reason>; nothing in it was removed", "refused: <path>: <reason>; it may be partly removed", "any error",
+    "another device", "bind mount", '"staged": 0', "Accepted residual risk", "names a git folder that does not exist",
+    "git rev-parse --show-toplevel", "nothing tracked or staged",
     "immediately before it removes that path", "tracked or staged", "never through a symbolic link", '"tracked": 0',
     "Never fall back to one choice for the whole row", "unreadable folder", "named `.git`"]) {
     assert.ok(text.includes(phrase), phrase)
   }
+  for (const mode of ["discard", "caches"]) {
+    const command = text.split("\n").find((line) => line.includes(`leftovers.py' ${mode} `)) ?? ""
+    assert.ok(command.includes("--worktree '<worktree>' --primary '<primary>'"), `${mode} names the main checkout`)
+  }
+  assert.doesNotMatch(text, /only if it changed/, "a partial removal can follow any error")
   const procedure = await read("references/procedure.md")
   assert.doesNotMatch(procedure, /\brm\b/)
 })

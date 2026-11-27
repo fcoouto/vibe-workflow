@@ -24,9 +24,11 @@ Every step that says "sort" means this command, with the worktree's absolute top
 python3 -I -B '<skill folder>/scripts/leftovers.py' sort --worktree '<worktree>'
 ```
 
-`<skill folder>` is this skill's "Base directory for this skill:" path. Shell-quote every
-argument of every command in this file: wrap it in single quotes and write a `'` inside it
-as `'\''`.
+`<skill folder>` is this skill's "Base directory for this skill:" path. `<worktree>` is the
+path `git rev-parse --show-toplevel` prints in the worktree: absolute, with no symbolic
+link in it. The script refuses a worktree path that is, or lies below, a symbolic link.
+Shell-quote every argument of every command in this file: wrap it in single quotes and
+write a `'` inside it as `'\''`.
 
 The `sort`, `expand`, `manifest` and `identity` modes of this script only read, and they
 never rewrite git's index. `sort` runs `git status --porcelain=v1 -z --ignored` in the
@@ -85,53 +87,72 @@ python3 -I -B '<skill folder>/scripts/leftovers.py' manifest --worktree '<worktr
 
 - **Exit 0**: for each `--path`, one row per entry at and below it, with its stored name,
   its `type` (`file`, `folder`, `link` or `other`), for a file the `sha256` of its content,
-  and git's `status` for it (`??`, `!!`, or another status when git tracks or stages it).
-  Then one digest row for that path, such as
-  `{"digest": …, "path": …, "entries": 3, "statuses": ["??"], "tracked": 0}`. The digest
-  covers all of its rows, so it changes when a name, a type, any content or any git status
-  below the path changes. `tracked` counts the files in it that git tracks or stages. The
-  digest row has `"unsafe": true` when any row in it is unsafe.
+  and `status`, every status git gives that name: `["??"]`, `["!!"]`, or more, such as
+  `["??", "D "]` for a staged deletion next to the same untracked file. A name git lists
+  that is not on disk gets a row of type `missing`. Then one digest row for that path,
+  such as
+  `{"digest": …, "path": …, "entries": 3, "statuses": ["??"], "tracked": 0, "staged": 0}`.
+  The digest covers all of its rows, so it changes when a name, a type, any content or any
+  git status below the path changes. `tracked` counts the names git's index holds in it.
+  `staged` counts the statuses in it other than `??` and `!!`. The digest row has
+  `"unsafe": true` when any row in it is unsafe.
 - **Any other exit**: a read failed and no row was printed. The paths count as changed.
 
 The script reads through folders it opens from the worktree's top folder, never through a
 symbolic link: a link is recorded by its target and never followed, and a path below a
-linked folder is refused.
+linked folder is refused. A folder on another device than the top folder is a mount and
+is refused too. A bind mount of the same device is not detected.
 
 ### Removing
 
 Leftover files are removed only by these two commands, never by a shell command of your
-own. Both work only in a linked worktree, and both remove through folders opened from the
-worktree's top folder, never through a symbolic link.
+own. `<primary>` is the primary checkout's path. Before it removes anything, each command
+makes the identity check of "Sweeping older merged worktrees" step 2 on the worktree:
+the repository registers exactly that path, its backlink points at it, and its common git
+dir is the repository's. Both remove through folders opened from the worktree's top
+folder, never through a symbolic link and never onto another device.
 
 The discard command removes approved **Discard** paths. Give each path, then the digest
 recorded for it:
 
 ```sh
-python3 -I -B '<skill folder>/scripts/leftovers.py' discard --worktree '<worktree>' --path '<path>' --digest '<digest>' --path '<path>' --digest '<digest>'
+python3 -I -B '<skill folder>/scripts/leftovers.py' discard --worktree '<worktree>' --primary '<primary>' --path '<path>' --digest '<digest>' --path '<path>' --digest '<digest>'
 ```
 
 It takes the paths in order. For each one it builds the manifest again and checks it
 immediately before it removes that path. It refuses when the digest differs from the one
-you gave, when anything in the path is tracked or staged, when anything in it is unsafe,
+you gave, when the path holds anything tracked or staged, when anything in it is unsafe,
 or when a file in it is neither untracked nor ignored.
 
 The caches command removes every rebuildable row:
 
 ```sh
-python3 -I -B '<skill folder>/scripts/leftovers.py' caches --worktree '<worktree>'
+python3 -I -B '<skill folder>/scripts/leftovers.py' caches --worktree '<worktree>' --primary '<primary>'
 ```
 
-It sorts the worktree itself, and checks each rebuildable row again immediately before it
-removes that row: it must still be one ignored entry with nothing tracked in it.
+It sorts the worktree itself. It reads each rebuildable row, then asks git again
+immediately before it removes that row. The row must still be one ignored entry, with
+nothing tracked or staged in it, nothing unsafe in it, and every file in it ignored.
 
 Read the result of either command the same way:
 
-- **Exit 0**: one `{"discarded": "<path>"}` row for each path it removed.
-- **Exit 2**: a row for each path it already removed, then `refused: <reason>`. It stopped
-  there. A refused folder can be partly removed, but only if it changed while it was being
-  removed. Report the rows and the reason. Remove nothing more, by this command or any
-  other means: cleanup of this worktree is blocked.
+- **Exit 0**: one `removed: <path>` line for each path it removed.
+- **Exit 2**: a `removed: <path>` line for each path it fully removed, then one refusal,
+  and it stops there:
+  - `refused: <path>: <reason>; nothing in it was removed`: the check before the removal
+    failed.
+  - `refused: <path>: <reason>; it may be partly removed`: the removal itself failed.
+    This follows any error, such as a folder that cannot be changed, and not only a
+    change made by someone else.
+  - `refused: <reason>` with no path: nothing was removed at all.
+
+  Report the lines and the refusal. Remove nothing more, by this command or any other
+  means: cleanup of this worktree is blocked.
 - **Anything else**: treat it as refused, the same way.
+
+Accepted residual risk: a path replaced between its last check and its removal, or a
+folder moved out while it is being removed, is not detected, because a worktree has one
+user and no adversary.
 
 ## Before `[READY]`
 
@@ -147,8 +168,8 @@ merges. It only reads.
   manifest fails, that path gets **Keep the worktree** only.
 
 Offer these choices. The user may always answer **Keep the worktree** instead. Offer
-**Archive** or **Discard** only for a path whose digest row has `"tracked": 0` and no
-`"unsafe": true`.
+**Archive** or **Discard** only for a path whose digest row has `"tracked": 0`,
+`"staged": 0` and no `"unsafe": true`.
 
 | Kind of path | Choices |
 |---|---|
@@ -218,9 +239,9 @@ Build and test outputs (`dist/`, `build/`, `coverage/`, `.test-artifacts/`):
 ### After the answers
 
 1. For each **Archive** or **Discard** answer, record the choice, the exact path and its
-   whole digest row (digest, statuses and tracked count), from the manifest the user saw.
-   Change nothing for them yet. If the pull request closes unmerged, they are never
-   touched.
+   whole digest row (digest, statuses, tracked and staged counts), from the manifest the
+   user saw. Change nothing for them yet. If the pull request closes unmerged, they are
+   never touched.
 2. Act on each **Commit to this PR** answer: stage exactly the approved path, commit, push.
 3. Sort again. The question is settled when every real-work row left is covered by a
    recorded **Archive**, **Discard** or **Keep the worktree** answer (check 4 says what
@@ -256,9 +277,9 @@ nothing if any does:
      inside such a path.
 
    Then list them again: run the manifest for every recorded path and compare each digest
-   row with the recorded one. A different digest, status or tracked count, a missing path
-   or a failed read stops that group, which is the paths that share one answer: none of
-   them is touched, and the group is reported. This check fails when the sort fails, when a group stops, or when any row
+   row with the recorded one. Any difference in the row, a missing path or a failed read
+   stops that group, which is the paths that share one answer: none of them is touched,
+   and the group is reported. This check fails when the sort fails, when a group stops, or when any row
    is not covered: real work with no answer in this session, or a **Keep the worktree**
    answer. Report the paths and leave the worktree; never delete real work silently. This
    check only reads: the covered files are acted on in step 3 of the order, after checks
@@ -455,11 +476,13 @@ Then, for each named worktree, in this order:
    Then:
    - Exit 0: continue. Skip the worktree if it has a `.gitmodules` file.
    - Exactly `refused: the worktree's Git pointer is broken` (the note may say
-     `needs repair`, and `git worktree list` may show `prunable`): run
+     `needs repair`, and `git worktree list` may show `prunable`). The script says this
+     only when the path's `.git` file names a git folder that does not exist. Run
      `git -C <primary> worktree repair <worktree>`, which rewrites git's own metadata
      only. Then run the identity command again: a `git status` that works is not enough.
      Unless it now exits 0, skip the worktree and report it.
-   - Any other refusal or exit: skip the worktree and report it. Never repair it.
+   - Any other refusal or exit, such as a git error, warning or timeout: skip the worktree
+     and report it. Never repair it.
 3. **Confirm the merge.** `HEAD` is the `head` the identity command printed.
    - With a branch: run
      `gh pr list --head <branch> --state merged --json number,headRefOid,baseRefName`. It

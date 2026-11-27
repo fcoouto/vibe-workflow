@@ -1,6 +1,8 @@
 """Exercise the leftover listing in throwaway repositories, never a real checkout."""
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "skills/vibe-pull-requests/scripts/leftovers.py"
@@ -57,9 +60,27 @@ class LeftoversTest(unittest.TestCase):
             command += ["--path", path]
         return subprocess.run([*command, *extra], cwd=self.root, capture_output=True, text=True, timeout=60)
 
-    def discard(self, *pairs, worktree=None):
+    def discard(self, *pairs, worktree=None, primary=None):
         extra = [item for path, digest in pairs for item in ("--path", path, "--digest", digest)]
-        return self.run_script("discard", worktree=worktree, extra=extra)
+        return self.run_script("discard", worktree=worktree, extra=[*extra, "--primary", str(primary or self.main)])
+
+    def caches(self, worktree=None, primary=None):
+        return self.run_script("caches", worktree=worktree, extra=["--primary", str(primary or self.main)])
+
+    def inside(self, *argv, **patches):
+        """Run the script in this process, so one of its functions can be replaced; the current folder is restored."""
+        module = load()
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.ExitStack() as stack:
+            for name, make in patches.items():
+                stack.enter_context(mock.patch.object(module, name, make(getattr(module, name))))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            code = module.main(list(argv))
+        os.chdir(here)
+        return code, out.getvalue(), err.getvalue()
 
     def identity(self, worktree, branch=None, primary=None):
         extra = ["--primary", str(primary or self.main), *(("--branch", branch) if branch else ("--detached",))]
@@ -69,7 +90,7 @@ class LeftoversTest(unittest.TestCase):
         """A removing mode that refused: what it already removed is listed, then one reason."""
         self.assertEqual(run.returncode, 2, run.stderr)
         self.assertRegex(run.stderr, r"\Arefused: [^\n]+\n\Z")
-        self.assertEqual([json.loads(line) for line in run.stdout.splitlines()], [{"discarded": path} for path in discarded])
+        self.assertEqual(run.stdout.splitlines(), [f"removed: {path}" for path in discarded])
 
     def outside(self):
         """A folder next to the worktree that no mode may read through a link or change."""
@@ -90,7 +111,7 @@ class LeftoversTest(unittest.TestCase):
 
     def digest(self, path):
         *entries, last = self.rows("manifest", path)
-        self.assertLessEqual({"digest", "path", "entries", "statuses", "tracked"}, set(last))
+        self.assertLessEqual({"digest", "path", "entries", "statuses", "tracked", "staged"}, set(last))
         self.assertEqual(last["entries"], len(entries))
         return last["digest"]
 
@@ -287,8 +308,9 @@ class LeftoversTest(unittest.TestCase):
         self.assertEqual((entry["type"], entry["target"], last["entries"]), ("link", str(outside), 1))
         alias = self.root / "alias"
         alias.symlink_to(self.linked)
-        for mode in ("sort", "expand", "caches"):
+        for mode in ("sort", "expand"):
             self.refused(self.run_script(mode, worktree=alias))
+        self.refused(self.caches(worktree=alias))
         self.refused(self.run_script("manifest", "link", worktree=alias))
         self.assertEqual((outside / "secret.md").read_text(), "secret\n")
 
@@ -298,12 +320,12 @@ class LeftoversTest(unittest.TestCase):
         (self.linked / "notes/empty").mkdir()
         rows = self.rows("manifest", "notes")
         self.assertEqual({row["path"]: row.get("status") for row in rows[:-1]},
-                         {"notes": None, "notes/.env": "!!", "notes/a.md": "??", "notes/empty": None})
-        self.assertEqual((rows[-1]["statuses"], rows[-1]["tracked"]), (["!!", "??"], 0))
+                         {"notes": None, "notes/.env": ["!!"], "notes/a.md": ["??"], "notes/empty": None})
+        self.assertEqual((rows[-1]["statuses"], rows[-1]["tracked"], rows[-1]["staged"]), (["!!", "??"], 0, 0))
         git(self.linked, "add", "notes/a.md")
         staged = self.rows("manifest", "notes")
-        self.assertEqual([row["status"] for row in staged if row.get("path") == "notes/a.md" and "type" in row], ["A "])
-        self.assertEqual((staged[-1]["statuses"], staged[-1]["tracked"]), (["!!", "A "], 1))
+        self.assertEqual([row["status"] for row in staged if row.get("path") == "notes/a.md" and "type" in row], [["A "]])
+        self.assertEqual((staged[-1]["statuses"], staged[-1]["tracked"], staged[-1]["staged"]), (["!!", "A "], 1, 1))
         self.assertNotEqual(staged[-1]["digest"], rows[-1]["digest"], "same bytes, another status")
 
     def test_manifest_marks_a_folder_that_holds_a_repository_or_a_name_that_cannot_be_typed(self):
@@ -329,7 +351,7 @@ class LeftoversTest(unittest.TestCase):
         self.write("keep.md")
         run = self.discard(("notes.md", self.digest("notes.md")), ("out/", self.digest("out")))
         self.assertEqual((run.returncode, run.stderr), (0, ""))
-        self.assertEqual([json.loads(line) for line in run.stdout.splitlines()], [{"discarded": "notes.md"}, {"discarded": "out"}])
+        self.assertEqual(run.stdout.splitlines(), ["removed: notes.md", "removed: out"])
         self.assertEqual([row["path"] for row in self.rows("sort")], ["keep.md"])
         self.assertFalse((self.linked / "out").exists())
         self.assertEqual((self.linked / "src/app.py").read_text(), "print(1)\n")
@@ -371,12 +393,15 @@ class LeftoversTest(unittest.TestCase):
         (self.main / "notes.md").write_text("x\n")
         (self.main / "node_modules").mkdir()
         digest = self.digest("notes.md")
-        self.refused(self.run_script("discard"))
-        self.refused(self.run_script("discard", "notes.md"))
-        self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest, "--digest", digest]))
-        self.refused(self.run_script("caches", "node_modules"))
+        primary = ["--primary", str(self.main)]
+        self.refused(self.run_script("discard", extra=primary))
+        self.refused(self.run_script("discard", "notes.md", extra=primary))
+        self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest, "--digest", digest, *primary]))
+        self.refused(self.run_script("discard", extra=["--path", "notes.md", "--digest", digest]))
+        self.refused(self.run_script("caches"))
+        self.refused(self.run_script("caches", "node_modules", extra=primary))
         self.stopped(self.discard(("notes.md", digest), worktree=self.main))
-        self.refused(self.run_script("caches", worktree=self.main))
+        self.refused(self.caches(worktree=self.main))
         self.assertTrue((self.linked / "notes.md").exists() and (self.main / "notes.md").exists())
         self.assertTrue((self.main / "node_modules").is_dir())
 
@@ -386,23 +411,170 @@ class LeftoversTest(unittest.TestCase):
                      "mynode_modules/index.js", "build/node_modules/x.js", ".env", "notes.md"):
             self.write(name)
         (self.linked / "node_modules/linked-out").symlink_to(outside)
-        run = self.run_script("caches")
+        run = self.caches()
         self.assertEqual((run.returncode, run.stderr), (0, ""))
-        self.assertEqual(sorted(json.loads(line)["discarded"] for line in run.stdout.splitlines()),
-                         [".DS_Store", "node_modules/", "src/__pycache__/", "src/check.pyc"])
+        self.assertEqual(sorted(run.stdout.splitlines()),
+                         ["removed: .DS_Store", "removed: node_modules/", "removed: src/__pycache__/", "removed: src/check.pyc"])
         self.assertEqual(sorted(row["path"] for row in self.rows("sort")), [".env", "build/", "mynode_modules/", "notes.md"])
         self.assertTrue((self.linked / "build/node_modules/x.js").exists())
         self.assertEqual((outside / "secret.md").read_text(), "secret\n")
-        again = self.run_script("caches")
+        again = self.caches()
         self.assertEqual((again.returncode, again.stdout, again.stderr), (0, "", ""))
 
     def test_caches_leaves_an_ignored_folder_that_holds_a_tracked_file(self):
         self.write("node_modules/pkg/kept.js")
         self.write("node_modules/pkg/other.js")
         git(self.linked, "add", "-f", "node_modules/pkg/kept.js")
-        run = self.run_script("caches")
+        run = self.caches()
         self.assertEqual((run.returncode, run.stdout), (0, ""), run.stderr)
         self.assertTrue((self.linked / "node_modules/pkg/other.js").exists())
+
+    def test_caches_checks_git_again_after_it_read_the_folder(self):
+        self.write("node_modules/pkg/index.js")
+
+        def stage_after(scan):
+            def scanned(*args, **kwargs):
+                node = scan(*args, **kwargs)
+                if node.row["path"] == "node_modules":
+                    git(self.linked, "add", "-f", "node_modules/pkg/index.js")
+                return node
+            return scanned
+
+        code, out, err = self.inside("caches", "--worktree", str(self.linked), "--primary", str(self.main), _scan=stage_after)
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertRegex(err, r"\Arefused: node_modules/: [^\n]+; nothing in it was removed\n\Z")
+        self.assertTrue((self.linked / "node_modules/pkg/index.js").exists())
+
+    def test_a_staged_deletion_next_to_the_same_untracked_file_stays_in_the_manifest_and_blocks_removal(self):
+        self.write("note.md", "kept\n")
+        self.write("src/old.pyc", "compiled\n")
+        git(self.linked, "add", "-f", "note.md", "src/old.pyc")
+        git(self.linked, "commit", "-qm", "tracked")
+        git(self.linked, "rm", "-q", "--cached", "note.md", "src/old.pyc")
+        self.assertEqual(sorted((row["status"], row["path"]) for row in self.rows("sort")),
+                         [("!!", "src/old.pyc"), ("??", "note.md"), ("D ", "note.md"), ("D ", "src/old.pyc")])
+        entry, last = self.rows("manifest", "note.md")
+        self.assertEqual((entry["status"], last["statuses"], last["tracked"], last["staged"]), (["??", "D "], ["??", "D "], 0, 1))
+        self.stopped(self.discard(("note.md", last["digest"])))
+        self.stopped(self.caches())
+        self.assertEqual(((self.linked / "note.md").read_text(), (self.linked / "src/old.pyc").read_text()), ("kept\n", "compiled\n"))
+
+    def test_a_tracked_file_deleted_from_the_folder_still_counts_in_its_manifest(self):
+        self.write("docs/gone.md")
+        self.write("docs/kept.md")
+        git(self.linked, "add", "docs/gone.md")
+        git(self.linked, "commit", "-qm", "tracked")
+        (self.linked / "docs/gone.md").unlink()
+        rows = self.rows("manifest", "docs")
+        self.assertEqual([(row["path"], row["type"], row["status"]) for row in rows[:-1] if row["type"] in ("missing", "file")],
+                         [("docs/kept.md", "file", ["??"]), ("docs/gone.md", "missing", [" D"])])
+        self.assertEqual((rows[-1]["tracked"], rows[-1]["staged"]), (1, 1))
+        self.stopped(self.discard(("docs", rows[-1]["digest"])))
+        self.assertTrue((self.linked / "docs/kept.md").exists())
+
+    def test_caches_refuses_a_cache_that_holds_a_repository_or_a_name_that_cannot_be_typed(self):
+        self.write("node_modules/pkg/.git/config")
+        self.write("node_modules/pkg/index.js")
+        self.write("src/__pycache__/line\nbreak.pyc")
+        run = self.caches()
+        self.stopped(run)
+        self.assertRegex(run.stderr, r"\Arefused: node_modules/: [^\n]+; nothing in it was removed\n\Z")
+        self.assertTrue((self.linked / "node_modules/pkg/.git/config").exists())
+        shutil.rmtree(self.linked / "node_modules")
+        self.stopped(self.caches())
+        self.assertTrue((self.linked / "src/__pycache__/line\nbreak.pyc").exists())
+
+    def test_every_mode_refuses_a_worktree_named_through_a_linked_folder_or_a_relative_path(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest = self.digest("notes.md")
+        through = self.root / "through"
+        through.symlink_to(self.root)
+        for worktree in (f"{through}/linked", "linked", f"{self.root}/./linked", f"{self.root}/main/../linked"):
+            with self.subTest(worktree=worktree):
+                self.refused(self.run_script("sort", worktree=worktree))
+                self.refused(self.run_script("expand", worktree=worktree))
+                self.refused(self.run_script("manifest", "notes.md", worktree=worktree))
+                self.stopped(self.discard(("notes.md", digest), worktree=worktree))
+                self.refused(self.caches(worktree=worktree))
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+
+    def test_discard_and_caches_remove_only_in_a_worktree_the_repository_registers_at_that_path(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest = self.digest("notes.md")
+        other = self.root / "other"
+        other.mkdir()
+        git(other, "init", "-q", "-b", "main")
+        git(other, "commit", "-q", "--allow-empty", "-m", "base")
+        self.stopped(self.discard(("notes.md", digest), primary=other))
+        self.refused(self.caches(primary=other))
+        backlink = self.main / ".git/worktrees/linked/gitdir"
+        backlink.write_text(f"{self.second()}/.git\n")
+        self.stopped(self.discard(("notes.md", digest)))
+        self.refused(self.caches())
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+
+    def test_a_folder_on_another_device_is_refused_before_anything_is_read_or_removed(self):
+        self.write("out/a.js")
+        self.write("out/mounted/b.js")
+        self.write("node_modules/mounted/c.js")
+        digest = self.digest("out")
+        mounted = {os.stat(self.linked / "out/mounted").st_ino, os.stat(self.linked / "node_modules/mounted").st_ino}
+
+        def another(device):
+            return lambda info: -1 if info.st_ino in mounted else device(info)
+
+        worktree, primary = ["--worktree", str(self.linked)], ["--primary", str(self.main)]
+        for argv in (["manifest", *worktree, "--path", "out"], ["discard", *worktree, "--path", "out", "--digest", digest, *primary],
+                     ["caches", *worktree, *primary]):
+            with self.subTest(mode=argv[0]):
+                code, out, err = self.inside(*argv, _device=another)
+                self.assertEqual((code, out), (2, ""), err)
+                self.assertIn("another device", err)
+        self.assertTrue((self.linked / "out/a.js").exists() and (self.linked / "node_modules/mounted/c.js").exists())
+
+    def test_an_error_during_removal_names_the_path_that_may_be_partly_removed_and_stops(self):
+        if os.geteuid() == 0:
+            self.skipTest("root removes from every folder")
+        for name in ("first.md", "out/a.js", "out/locked/b.js", "out/z.js", "last.md"):
+            self.write(name)
+        locked = self.linked / "out/locked"
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        run = self.discard(*((path, self.digest(path)) for path in ("first.md", "out", "last.md")))
+        self.assertEqual(run.returncode, 2)
+        self.assertEqual(run.stdout.splitlines(), ["removed: first.md"])
+        self.assertRegex(run.stderr, r"\Arefused: out: [^\n]+; it may be partly removed\n\Z")
+        self.assertFalse((self.linked / "out/a.js").exists(), "removed before the error")
+        self.assertTrue((self.linked / "out/locked/b.js").exists() and (self.linked / "out/z.js").exists())
+        self.assertTrue((self.linked / "last.md").exists(), "nothing after the failed path is touched")
+
+    def test_a_refusal_before_removal_says_nothing_in_the_path_was_removed(self):
+        self.write("a.md")
+        run = self.discard(("a.md", "0" * 64))
+        self.stopped(run)
+        self.assertRegex(run.stderr, r"\Arefused: a.md: [^\n]+; nothing in it was removed\n\Z")
+
+    def test_identity_calls_a_pointer_broken_only_when_its_git_folder_is_missing(self):
+        head = self.main / ".git/worktrees/linked/HEAD"
+        head.write_text("garbage\n")
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertNotIn("pointer is broken", run.stderr)
+
+        def timing_out(run_git):
+            def run(command, **kwargs):
+                if "--show-toplevel" in command:
+                    raise subprocess.TimeoutExpired(command, 120)
+                return run_git(command, **kwargs)
+            return lambda _: mock.Mock(run=run, TimeoutExpired=subprocess.TimeoutExpired)
+
+        head.write_text("ref: refs/heads/feat/x\n")
+        argv = ["identity", "--worktree", str(self.linked), "--primary", str(self.main), "--branch", "feat/x"]
+        self.assertEqual(self.inside(*argv)[0], 0)
+        code, out, err = self.inside(*argv, subprocess=timing_out(subprocess.run))
+        self.assertEqual((code, out, err), (2, "", "refused: Git could not run\n"))
 
     def second(self, name="second"):
         path = self.root / name
