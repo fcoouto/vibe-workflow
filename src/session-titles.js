@@ -47,8 +47,10 @@ const REQUESTS = {
 }
 const MAX_PENDING = 16
 const MAX_SHELLS = 64
+const SHELL_EXIT_GRACE_MS = 200
+const JOB = "experimental.job.updated"
 const STEP = "session.step.ended"
-const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP]
+const TYPES = [...TURNS, "session.moved", ...Object.keys(REQUESTS), "shell.exited", STEP, JOB]
 const MAX_GENERATIONS = 256
 const MAX_PARENTS = 1024
 // OpenCode evaluates plugin modules separately per location in the same server realm.
@@ -57,11 +59,16 @@ const PREFERENCES = Symbol.for("vibe-workflow.session-titles.preferences.v1")
 export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = defaultRun, deadline = 3000, started = serverStart() }) {
   const sessions = new Map(), chains = new Map(), checked = new Set(), saved = new Map(), controller = new AbortController()
   const generations = new Map(), parents = new Map(), reals = new Map(), pending = new Map(), shells = new Map(), exited = new Set()
+  const shellGraces = new Map(), shellRoots = new Map()
   const progress = new WeakMap(), planVersions = new WeakMap(), sentTitles = new WeakMap()
   const where = ctx.location?.directory ?? null, storage = where ? ctx.storage : undefined
   const project = typeof ctx.location?.project?.id === "string" ? ctx.location.project.id : null
   let preference = { revision: 0, copies: 0 }, leave = () => {}
-  const close = () => { controller.abort(); leave(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear() }
+  const close = () => {
+    controller.abort()
+    for (const id of shellGraces.keys()) cancelShellGrace(id)
+    leave(); sessions.clear(); checked.clear(); saved.clear(); pending.clear(); shells.clear()
+  }
   const unavailable = { registered: false, close, preferenceSaved: () => {} }
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.event?.subscribe !== "function") return unavailable
   const here = where ? await realpath(where).catch(() => where) : null
@@ -83,6 +90,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     return next
   }
   function forget(sessionID) {
+    cancelShellGrace(sessionID)
     sessions.delete(sessionID)
     checked.delete(sessionID)
     saved.delete(sessionID)
@@ -123,6 +131,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     sessions.set(sessionID, entry)
     if (sessions.size > MAX_SESSIONS) {
       const oldest = sessions.keys().next().value
+      cancelShellGrace(oldest)
       sessions.delete(oldest)
       checked.delete(oldest)
       saved.delete(oldest)
@@ -217,6 +226,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   async function retire(sessionID, entry, admitted) {
+    cancelShellGrace(sessionID)
     entry.task = null
     await save(sessionID, entry, admitted)
     if (sessions.get(sessionID) === entry) {
@@ -282,6 +292,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     if (!current(sessionID, admitted)) return
     let entry = sessions.get(sessionID)
     if (!held || (found.kind === "spec" && held.spec !== file)) {
+      cancelShellGrace(sessionID)
       const title = known.title ?? ""
       const reused = held || finite(known.time?.idle) || (title.startsWith(MARK) && PREFIX.test(title))
       const task = { top, spec: found.kind === "spec" ? file : null, plan: found.kind === "plan" ? file : null,
@@ -384,21 +395,22 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       enqueue(sessionID, (admitted) => relabel(sessionID, true, admitted, { still: () => pending.get(sessionID)?.size > 0 }))
     } else if (open.delete(id) && !open.size) {
       pending.delete(sessionID)
-      enqueue(sessionID, (admitted) => relabel(sessionID, false, admitted, { running: true, still: () => !pending.get(sessionID)?.size }))
+      enqueue(sessionID, (admitted) => relabel(sessionID, false, admitted, {
+        running: !hasShell(sessionID) && !shellGraces.has(sessionID), still: () => !pending.get(sessionID)?.size,
+      }))
     }
   }
 
   // Sets or clears WAITING on the meter as it stands, with no git or gh read. Never while the task is fresh: before its
   // first meter (OpenCode titles a new session during its first turn) or when it was bound in the current turn.
-  // `running`: only while the session runs. `still()`: re-checked right before the write, so a request answered (or a
-  // new one asked) while this job waited on its reads leaves no flash.
-  async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, still = () => true } = {}) {
+  // `running` and `idle` use the same session read as the title. `still()` rechecks state before the write.
+  async function relabel(sessionID, waiting, admitted, { running: whileRunning = false, idle = false, still = () => true } = {}) {
     if (!await on()) return
     const entry = sessions.get(sessionID), task = entry?.task
     if (!task || entry.silenced || (task.fresh && !sentTitles.has(task))) return
     const info = await read(sessionID)
     if (await owns(info) !== true || !current(sessionID, admitted) || sessions.get(sessionID) !== entry ||
-        (whileRunning && !running(info.time)) || !still()) return
+        (whileRunning && !running(info.time)) || (idle && running(info.time)) || !still()) return
     const title = info.title ?? ""
     reconcileTitle(entry, title)
     if (task.cells === 5) { await retire(sessionID, entry, admitted); return }
@@ -412,26 +424,84 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     await save(sessionID, entry, admitted)
   }
 
-  // Background shells: the agent is resumed when one exits, so a session with one running is not waiting on the user.
+  // Background work belongs to the root's current task, even when the shell runs in a different checkout.
   // An id that already exited is never tracked (a fast command can exit before the tool hook runs).
-  const hasShell = (sessionID) => [...shells.values()].includes(sessionID)
-  function track(shellID, sessionID) {
-    if (exited.has(shellID)) return
-    shells.set(shellID, sessionID)
-    if (shells.size > MAX_SHELLS) shells.delete(shells.keys().next().value)
+  function hasShell(root) {
+    const entry = sessions.get(root)
+    for (const shell of shells.values()) if (shell.root === root && (!shell.entry || shell.entry === entry)) return true
+    return false
   }
+
+  function track(shellID, root) {
+    if (exited.has(shellID) || controller.signal.aborted) return false
+    const entry = sessions.get(root), previous = shells.get(shellID)
+    // A local tool result may arrive before the broadcast resolves its owning root.
+    if (previous && (previous.entry || !entry)) return false
+    const first = !hasShell(root)
+    cancelShellGrace(root)
+    shells.set(shellID, { root, entry })
+    if (shells.size > MAX_SHELLS) shells.delete(shells.keys().next().value)
+    return first
+  }
+
+  function cancelShellGrace(root) {
+    clearTimeout(shellGraces.get(root))
+    shellGraces.delete(root)
+  }
+
+  async function shellRoot(sessionID) {
+    if (sessions.has(sessionID)) return sessionID
+    if (!sessions.size || parents.get(sessionID) === null) return null
+    if (shellRoots.has(sessionID)) return shellRoots.get(sessionID)
+    if (shellRoots.size >= MAX_SHELLS) return null
+    const lookup = rootOf(sessionID).finally(() => shellRoots.delete(sessionID))
+    shellRoots.set(sessionID, lookup)
+    return lookup
+  }
+
+  async function shellJob(info) {
+    if (info?.kind !== "shell" || typeof info.shellID !== "string") return
+    const { sessionID, shellID, status } = info
+    if (status === "completed" || status === "error" || status === "cancelled") return shellExited(shellID)
+    if (status !== "running" || typeof sessionID !== "string" || !sessions.size || exited.has(shellID) ||
+        shells.get(shellID)?.entry || !await on()) return
+    const source = admit(sessionID)
+    const root = await shellRoot(sessionID)
+    const entry = sessions.get(root)
+    if (!entry?.task || entry.silenced || !current(sessionID, source) || !track(shellID, root)) return
+    await enqueue(root, (admitted) => relabel(root, false, admitted, {
+      still: () => sessions.get(root) === entry && hasShell(root) && !pending.get(root)?.size,
+    }), admit(root, source.revision))
+  }
+
+  async function shellTurnStarted(sessionID) {
+    if (shellGraces.has(sessionID)) return cancelShellGrace(sessionID)
+    if (!shellGraces.size || sessions.has(sessionID)) return
+    const before = new Map(shellGraces)
+    const root = await shellRoot(sessionID)
+    if (before.has(root) && before.get(root) === shellGraces.get(root)) cancelShellGrace(root)
+  }
+
   function shellExited(shellID) {
     if (typeof shellID !== "string") return
     exited.add(shellID)
     if (exited.size > MAX_SHELLS) exited.delete(exited.values().next().value)
-    const sessionID = shells.get(shellID)
-    if (!shells.delete(shellID) || hasShell(sessionID) || !sessions.get(sessionID)?.task) return
-    // OpenCode normally resumes the agent within milliseconds; the user chose an immediate WAITING over waiting for a
-    // turn that may never come, accepting a possible sub-second flash.
-    enqueue(sessionID, async (admitted) => {
-      const now = await activity(sessionID, { withSelf: true })
-      if (!now.children && !now.self) await relabel(sessionID, true, admitted, { still: () => !hasShell(sessionID) })
-    })
+    const shell = shells.get(shellID)
+    if (!shells.delete(shellID)) return
+    const { root } = shell, entry = sessions.get(root)
+    if (!entry?.task || entry.silenced || (shell.entry && shell.entry !== entry) || hasShell(root)) return
+    const admission = admit(root)
+    const sameGrace = () => shellGraces.get(root) === timer
+    const still = () => sameGrace() && sessions.get(root) === entry && !hasShell(root) && !pending.get(root)?.size
+    // Give OpenCode time to resume a turn with the shell result before showing an idle WAITING.
+    const timer = setTimeout(() => {
+      void enqueue(root, async (admitted) => {
+        if (!still() || !await on()) return
+        const now = await activity(root)
+        if (!now.children && still()) await relabel(root, true, admitted, { idle: true, still })
+      }, admission).then(() => { if (sameGrace()) cancelShellGrace(root) })
+    }, SHELL_EXIT_GRACE_MS)
+    shellGraces.set(root, timer)
   }
 
   const validLocal = (facts) => facts.exists && !facts.errors.some(({ step }) => step === "status" || step === "diff")
@@ -616,7 +686,9 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     }
     const kept = strip(title)
     const topic = !kept || DEFAULT_TITLE.test(kept) || reset ? task.slug : kept
-    const next = compose(topic, cells, ended && cells < 5 && !busy.children && !hasShell(sessionID))
+    const waiting = pending.get(sessionID)?.size > 0 ||
+      (ended && !busy.children && !hasShell(sessionID) && !shellGraces.has(sessionID))
+    const next = compose(topic, cells, cells < 5 && waiting)
     if (next !== title) await updateTitle(sessionID, entry, next, cells)
     if (!current(sessionID, admitted) || sessions.get(sessionID) !== entry || entry.task !== task) return
     sentTitles.delete(task)
@@ -648,6 +720,13 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
         }
       } catch {}
     })
+    // Older hosts may lack job broadcasts. Their idle snapshot already lists the root's descendant shells.
+    try {
+      await ctx.session.hook?.("experimental.idle", ({ sessionID, background }) => {
+        if (!sessions.get(sessionID)?.task || !Array.isArray(background)) return
+        for (const job of background) if (job?.kind === "shell" && typeof job.shellID === "string") track(job.shellID, sessionID)
+      })
+    } catch {}
     // Settings are saved at the checkout root, which several location copies may share.
     let preferenceRoot
     try { if (where) preferenceRoot = (await settings.inspect()).root } catch {}
@@ -665,12 +744,14 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
       try {
         for await (const event of stream) {
           if (REQUESTS[event?.type]) { request(...REQUESTS[event.type](event.data)); continue }
+          if (event?.type === JOB) { shellJob(event.data?.info).catch(() => {}); continue }
           if (event?.type === "shell.exited") { shellExited(event.data?.id); continue }
           const sessionID = event?.data?.sessionID
           if (typeof sessionID !== "string") continue
           if (event.type === STEP) stepProgress(event, sessionID)
           else if (event.type === "session.moved") forget(sessionID)
           else if (TURNS.includes(event.type)) {
+            if (event.type === TURNS[0]) shellTurnStarted(sessionID).catch(() => {})
             // A blocking request cannot outlive its session's own turn boundary; this also drops a missed reply.
             pending.delete(sessionID)
             resetProgress(sessionID)
@@ -682,6 +763,9 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
     })()
   } catch { close(); return unavailable }
   return { registered: true, close, preferenceSaved(enabled) {
-    if (typeof enabled === "boolean" && !controller.signal.aborted) preference.revision++
+    if (typeof enabled === "boolean" && !controller.signal.aborted) {
+      preference.revision++
+      if (!enabled) for (const id of shellGraces.keys()) cancelShellGrace(id)
+    }
   } }
 }

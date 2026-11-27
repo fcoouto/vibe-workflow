@@ -40,7 +40,8 @@ test("DEFAULT_TITLE matches generated titles only", () => {
 const SPEC = "docs/superpowers/specs/2026-11-20-fix-auth-design.md"
 const OTHER = "docs/superpowers/specs/2026-11-21-add-cache-design.md"
 const PLAN = "docs/superpowers/plans/2026-11-20-fix-auth.md"
-const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((done) => setTimeout(done, 2)) }
+const realSetTimeout = setTimeout
+const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((done) => realSetTimeout(done, 2)) }
 const gitStatus = (facts, args) => {
   const sep = args.includes("-z") ? "\0" : "\n"
   return [`# branch.head ${facts.branch ?? "(detached)"}`, ...(facts.upstream ? [`# branch.upstream origin/${facts.branch}`] : []), ""].join(sep)
@@ -74,7 +75,7 @@ function memoryStorage({ failing = false } = {}) {
 }
 
 async function host(t, { state = "on", cleanup = false, events = true, directory, project, gitState = "on",
-  storage = memoryStorage(), root, located = true, deadline, started = Date.now() - 60 * 60 * 1000 } = {}) {
+  storage = memoryStorage(), root, located = true, deadline, idleHook = true, started = Date.now() - 60 * 60 * 1000 } = {}) {
   if (!root) {
     root = realpathSync(mkdtempSync(join(tmpdir(), "session-titles-")))
     const made = root
@@ -85,7 +86,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   const facts = { branch: "feat/x", upstream: true, changed: [], prs: {}, fail: false, gate: null,
     active: [], finished: [], stale: [], silent: [], busyOnly: [], busyAgo: {}, longBusy: [], busyAt: {}, many: 0, parents: {}, listFail: false, listArray: false, listRaw: undefined, listHang: false }
   const preference = { state }
-  let stream, subscribed
+  let stream, subscribed, idle
   const parentOf = (id) => facts.parents[id] ?? (id.startsWith("child") ? "ses_1" : undefined)
   const timeOf = (id) => {
     if (facts.times?.[id]) return facts.times[id]
@@ -105,6 +106,10 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
     ...(located && { location: { directory } }), storage,
     tool: { hook: async (name, handler) => calls.hook.push([name, handler]) },
     session: {
+      hook: async (name, handler) => {
+        if (!idleHook || name !== "experimental.idle") throw Error("unsupported hook")
+        idle = handler
+      },
       get: async ({ sessionID }) => {
         calls.get.push(sessionID)
         if (facts.failGet) throw Error("get")
@@ -168,6 +173,7 @@ async function host(t, { state = "on", cleanup = false, events = true, directory
   }
   const emit = async (type, sessionID = "ses_1") => { stream.push({ type, data: { sessionID } }); await settle() }
   return { started, root, ctx, calls, facts, titles, preference, write, shell, emit, storage, registered: titlesFor, subscribed: () => subscribed,
+    idle: (background, sessionID = "ses_1") => idle?.({ sessionID, background }),
     push: (event) => stream.push(event), end: (sessionID) => emit("session.execution.succeeded", sessionID),
     start: (sessionID) => emit("session.execution.started", sessionID) }
 }
@@ -278,7 +284,7 @@ test("a spec write binds without renaming; turn boundaries write the meter and l
   assert.equal(h.registered.registered, true)
   assert.deepEqual(h.subscribed().types, ["session.execution.started", "session.execution.succeeded",
     "session.execution.failed", "session.execution.interrupted", "session.moved", "permission.asked", "form.created",
-    "permission.replied", "form.replied", "form.cancelled", "shell.exited", "session.step.ended"])
+    "permission.replied", "form.replied", "form.cancelled", "shell.exited", "session.step.ended", "experimental.job.updated"])
   await h.write(SPEC)
   assert.deepEqual(h.calls.update, [])
   await h.end()
@@ -1455,7 +1461,17 @@ test("requests of unbound or child sessions do nothing", async (t) => {
 const background = (h, id, command = "sleep 45") => h.shell(command, "ses_1", { result: { content: [], metadata: { shellID: id, status: "running" } } })
 const exited = (h, id) => { h.push({ type: "shell.exited", data: { id, exit: 0, status: "exited" } }); return settle() }
 
-test("a running background shell keeps WAITING off at a turn end, and its exit with nothing running sets it", async (t) => {
+const job = (sessionID, shellID, status = "running", kind = "shell") => ({
+  type: "experimental.job.updated", data: { info: { kind, id: shellID, sessionID, shellID, status } },
+})
+
+function shellClock(t) {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  return async (ms = 200) => { t.mock.timers.tick(ms); await settle() }
+}
+
+test("a running background shell keeps WAITING off until 200 ms after its final idle exit", async (t) => {
+  const tick = shellClock(t)
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -1464,10 +1480,15 @@ test("a running background shell keeps WAITING off at a turn end, and its exit w
   await h.end()
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
   await exited(h, "sh_1")
+  await h.end()
+  await tick(199)
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await tick(1)
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
 })
 
 test("a background shell's exit while the session runs again writes nothing", async (t) => {
+  const tick = shellClock(t)
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -1478,10 +1499,12 @@ test("a background shell's exit while the session runs again writes nothing", as
   h.facts.active = ["ses_1"]
   const writes = h.calls.update.length
   await exited(h, "sh_1")
+  await tick()
   assert.equal(h.calls.update.length, writes)
 })
 
 test("with two background shells only the last exit labels", async (t) => {
+  const tick = shellClock(t)
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -1492,7 +1515,98 @@ test("with two background shells only the last exit labels", async (t) => {
   await exited(h, "sh_1")
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
   await exited(h, "sh_2")
+  await tick()
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
+})
+
+test("cross-worktree background jobs clear WAITING only for their bound ancestor", async (t) => {
+  const tick = shellClock(t)
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "wt", { parentID: "ses_1" })
+  w.session("child_2", "wt", { parentID: "child_1" })
+  w.session("other", "wt")
+  await w.write(SPEC)
+  await w.end()
+  await w.push(job("other", "sh_other"))
+  await w.push(job("child_2", "sh_image", "running", "image"))
+  assert.equal(w.title(), waiting)
+  const gh = w.copies.main.calls.gh
+  await w.push(job("child_2", "sh_1"))
+  assert.equal(w.title(), quiet)
+  await w.push(job("child_2", "sh_2"))
+  await w.push(job("child_2", "sh_1", "completed"))
+  await tick()
+  assert.equal(w.title(), quiet)
+  await w.push(job("child_2", "sh_2", "cancelled"))
+  await tick(199)
+  assert.equal(w.title(), quiet)
+  await tick(1)
+  assert.equal(w.title(), waiting)
+  assert.deepEqual(w.copies.main.calls.update, [["ses_1", waiting], ["ses_1", quiet], ["ses_1", waiting]])
+  assert.equal(w.copies.main.calls.gh, gh)
+  assert.deepEqual(w.copies.wt.calls.update, [])
+})
+
+test("a resumed descendant or replacement shell cancels the final-exit grace", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  await exited(h, "sh_1")
+  await h.start("child_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  h.push(job("child_1", "sh_2"))
+  await settle()
+  await exited(h, "sh_2")
+  await tick(100)
+  h.push(job("child_1", "sh_3"))
+  await settle()
+  await tick()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await exited(h, "sh_3")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("a real permission prompt shows WAITING immediately during shell activity and grace", async (t) => {
+  const tick = shellClock(t)
+  const h = await running(t)
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  await ask(h, "permission.asked", "per_shell")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await exited(h, "sh_1")
+  await ask(h, "permission.replied", "per_shell")
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await ask(h, "permission.asked", "per_grace")
+  assert.equal(h.titles.get("ses_1"), waiting)
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("an idle snapshot supplies descendant shells on hosts without job updates", async (t) => {
+  const tick = shellClock(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await h.start()
+  await h.idle([{ kind: "shell", sessionID: "child_1", shellID: "sh_1" }])
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await exited(h, "sh_1")
+  await tick()
+  assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("an unsupported idle hook does not disable Title Sync", async (t) => {
+  const h = await host(t, { idleHook: false })
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), waiting)
 })
 
 test("a shell that exits before its hook runs is never tracked", async (t) => {
@@ -1507,6 +1621,7 @@ test("a shell that exits before its hook runs is never tracked", async (t) => {
 })
 
 test("a 65th background shell drops the oldest", async (t) => {
+  const tick = shellClock(t)
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -1515,6 +1630,7 @@ test("a 65th background shell drops the oldest", async (t) => {
   await h.end()
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, false))
   for (let i = 1; i <= 64; i++) await exited(h, `sh_${i}`)
+  await tick()
   assert.equal(h.titles.get("ses_1"), compose("Fix login flow", 1, true))
 })
 
@@ -1534,6 +1650,7 @@ test("a finished shell result is never tracked, and an unbound session's shell e
 })
 
 test("a shell started while an earlier shell's exit check runs keeps WAITING off", async (t) => {
+  const tick = shellClock(t)
   const h = await host(t)
   await h.write(SPEC)
   await h.end()
@@ -1544,6 +1661,7 @@ test("a shell started while an earlier shell's exit check runs keeps WAITING off
   h.facts.listGate = new Promise((done) => { release = done })
   h.push({ type: "shell.exited", data: { id: "sh_1", status: "exited" } })
   await settle()
+  await tick()
   await background(h, "sh_2")
   release()
   await settle()
