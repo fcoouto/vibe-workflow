@@ -171,7 +171,8 @@ provider sees the code. (Builder check; my call.) Brief:
 - say whether the issue was introduced by this change or already existed;
 - never run commands with real credentials, contact live services or print a
   secret's value; when a line looks like a secret, quote only its file, line
-  and type, never the line itself, in tool output as well as the report;
+  and type, never the line itself, in search output as well as the report
+  (reading a file is not quoting it);
 - if `differential-review` is installed, use it within these limits, read its
   `adversarial.md` instead of delegating to its plugin agent, and point its report
   file at the private reports folder (see Report storage), never elsewhere in the
@@ -276,8 +277,9 @@ publishes for each (`npx skills add https://github.com/trailofbits/skills --skil
 
 **Partner scope across clients** (user, 27 November). vibe-workflow starts with
 OpenCode and will add Codex, Claude, Cursor and others. Partners always install at
-user scope. Skills keep one shared copy in `~/.agents/skills/`, linked into each
-client's skills folder, so a later client only adds a link. Plugins and MCP
+user scope. Skills keep one shared copy in `~/.agents/skills/`, read directly by
+clients that support that folder (OpenCode does) and linked into the others, so a
+later client only adds a link. Plugins and MCP
 servers are per client, because each client has its own format and config: offer
 each partner for every installed client it officially supports, mark the rest
 `not-supported`, and never write config for a client that is not installed. This

@@ -19,6 +19,15 @@ Choose the highest tier reached by any part, based on effect, not file type.
   `SKILL.md`, system prompts); deployment or config examples; CI fixtures and
   workflow files; anything executed or loaded at runtime.
 
+## Secrets
+
+When you read the diff yourself, reading a changed file is necessary and is not
+quoting. Never repeat a secret's value in a reply, report, pull request, commit,
+log or any command you write. Quote it as file, line and type only. Search for
+secrets only with commands that list file names, such as `rg -l` or
+`git grep -l`; never use a search tool or option that prints matching lines for a
+secret pattern.
+
 ## Short list
 
 Use for tier 1 and as the base of tiers 2 and 3:

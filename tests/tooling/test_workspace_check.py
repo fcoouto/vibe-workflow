@@ -133,6 +133,33 @@ class LocalTest(unittest.TestCase):
         spec = {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}
         self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "4.10.0"))
 
+    def test_skill_in_the_shared_folder_is_present(self):
+        present = self.check.integration_present
+        spec = {"kind": "skill", "name": "differential-review", "version_from": "frontmatter"}
+        self.assertEqual(present(spec, {}, self.home), (False, None))
+        shared = self.home / ".agents/skills/differential-review"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: differential-review\nversion: 1.2.0\n---\n")
+        self.assertEqual(present(spec, {}, self.home), (True, "1.2.0"))
+        self.assertTrue(present({"kind": "skill", "name": "differential-review"}, {}, self.home)[0])
+
+    def test_skill_version_prefers_the_opencode_folder_over_the_shared_one(self):
+        for folder, version in ((self.home / ".agents/skills/impeccable", "1.0.0"),
+                                (self.config_dir / "skills/impeccable", "4.10.0")):
+            folder.mkdir(parents=True)
+            (folder / "SKILL.md").write_text(f"---\nname: impeccable\nversion: {version}\n---\n")
+        spec = {"kind": "skill", "name": "impeccable", "version_from": "frontmatter"}
+        self.assertEqual(self.check.integration_present(spec, {}, self.home), (True, "4.10.0"))
+
+    def test_dangling_opencode_link_falls_back_to_the_shared_folder(self):
+        skills = self.config_dir / "skills"
+        skills.mkdir()
+        os.symlink(self.home / "gone", skills / "sharp-edges")
+        spec = {"kind": "skill", "name": "sharp-edges"}
+        self.assertFalse(self.check.integration_present(spec, {}, self.home)[0])
+        (self.home / ".agents/skills/sharp-edges").mkdir(parents=True)
+        self.assertTrue(self.check.integration_present(spec, {}, self.home)[0])
+
 
 class UpstreamTest(unittest.TestCase):
     def setUp(self):
@@ -399,6 +426,19 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
                 (self.config_dir / "skills" / name).mkdir(parents=True)
                 self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
+
+    def test_shared_folder_alone_makes_a_trail_of_bits_partner_ready(self):
+        shipped = json.loads((SCRIPT.parent.parent / "partners.json").read_text())
+        partner = next(p for p in shipped["partners"] if p["id"] == "tob-differential-review")
+        env = self.check.Env(home=self.home, run=lambda argv: self.fail("unexpected command"),
+                             fetch=lambda url: self.fail("unexpected network"))
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "missing")
+        shared = self.home / ".agents/skills/differential-review"
+        shared.mkdir(parents=True)
+        (shared / "SKILL.md").write_text("---\nname: differential-review\n---\n")
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
+        (self.config_dir / "skills/differential-review").mkdir(parents=True)
+        self.assertEqual(self.check.judge(partner, {}, env)["state"], "ready")
 
 
 if __name__ == "__main__":

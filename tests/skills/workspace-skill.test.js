@@ -38,4 +38,7 @@ test("procedure keeps the approval, Python-first and backup rules", async () => 
     "npx skills add", "-g", "-a opencode", "DISABLE_TELEMETRY=1"]) {
     assert.ok(procedure.includes(text), text)
   }
+  const flat = procedure.replace(/\s+/g, " ")
+  assert.ok(flat.includes("which OpenCode reads directly"))
+  assert.ok(!flat.includes("linked for OpenCode"))
 })

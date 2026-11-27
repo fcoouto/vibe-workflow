@@ -2,9 +2,10 @@
 
 Fill this brief for a tier-3 reviewer or a full-review sweep. Dispatch with
 `agent: "explore"`. Select the model via `smart_router_select` with `reviewing`
-set to the author's model; without Smart Router use the top tier. Use only
-providers already in use by the user. Include the review scope, diff range and
-tier-3 triggers, or the full-review area and bound.
+set to the author's model; without Smart Router, use the top tier on this session's own provider.
+Never pick a pay-as-you-go route (for example the opencode provider) unless the user approved it.
+Include the review scope, diff range and tier-3 triggers, or the full-review area
+and bound. Wait for the reviewer's result; do not poll with shell commands.
 
 The reviewer is read-only by instruction: shell access remains available. No
 installs, builds, scanner runs or partner scripts unless the user approved that exact run;
@@ -17,9 +18,11 @@ candidate, look for counterevidence such as upstream validation, ownership
 checks and tests. Label it confirmed, likely or hardening; state whether it was
 introduced or made worse by the change, or is pre-existing.
 
-Never print secret values. Quote a secret as file, line and type only, in tool output
-as well as the report. Use search options that print file names, not matching
-lines; inspect safely without exposing values.
+Reading a changed file is necessary and is not quoting. Never repeat a secret's
+value in a reply, report, pull request, commit, log or any command you write.
+Quote it as file, line and type only. Search for secrets only with commands that
+list file names, such as `rg -l` or `git grep -l`; never use a search tool or
+option that prints matching lines for a secret pattern.
 
 ## Partner skills
 

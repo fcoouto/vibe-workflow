@@ -25,10 +25,24 @@ test("ship check carries the tiers, rules and PR section", async () => {
 })
 test("reviewer brief carries the read-only, routing and redaction rules", async () => {
   hasAll(await read("references/reviewer-brief.md"), ['agent: "explore"', "smart_router_select", "reviewing", "top tier",
-    "counterevidence", "confirmed", "likely", "hardening", "pre-existing", "file, line and type", "tool output",
+    "counterevidence", "confirmed", "likely", "hardening", "pre-existing", "file, line and type",
     "real credentials", "live services", "differential-review", "adversarial.md", "fp-check", "exploit code",
     "available skills", "approved that exact run", "installed is not approval", "cannot load skills",
     "Base directory for this skill:", "{baseDir}", "read tool"])
+})
+test("secrets stay out of replies and searches, and reading a changed file is allowed", async () => {
+  const brief = (await read("references/reviewer-brief.md")).replace(/\s+/g, " ")
+  const ship = (await read("references/ship-check.md")).replace(/\s+/g, " ")
+  hasAll(brief, ["rg -l", "git grep -l", "matching lines", "file, line and type"])
+  hasAll(ship, ["rg -l", "reading a changed file is necessary", "file, line and type"])
+  for (const [name, text] of [["reviewer-brief.md", brief], ["ship-check.md", ship]]) {
+    assert.ok(!text.includes("in tool output as well as the report"), name)
+  }
+})
+test("reviewer model falls back to the session's own provider and the coordinator waits", async () => {
+  const brief = (await read("references/reviewer-brief.md")).replace(/\s+/g, " ")
+  hasAll(brief, ["pay-as-you-go", "this session's own provider", "do not poll"])
+  assert.ok(!brief.includes("Use only providers already in use by the user"))
 })
 test("reviewer returns findings without writing partner reports", async () => {
   hasAll((await read("references/reviewer-brief.md")).replace(/\s+/g, " "), [

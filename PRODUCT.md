@@ -80,11 +80,12 @@ overlapping behavior.
   `.vibe-workflow/security-reports/` in the main checkout, a folder whose own
   `.gitignore` keeps everything in it untracked. Trail of Bits skills are used when
   installed and are offered by `vibe-prepare-my-workspace`, never bundled. A review
-  fixes nothing and makes no claim that code is secure. Advisory. Its notes, its
-  command listing and one ship check were observed on OpenCode 2.3.2 (27 November
-  2026); that check kept a secret's value out of its reply but not out of tool
-  results, and the partner install leaves no link in OpenCode's skills folder, so
-  Prepare Workspace reports the skills missing. See `docs/development.md`,
+  fixes nothing and makes no claim that code is secure. Advisory. Observed on
+  OpenCode 2.3.2 (27 November 2026): the `requesting-code-review` and
+  `finishing-a-development-branch` notes, the pull request note with a stub `gh`
+  only, the command listing and one ship check. Not observed: the
+  `subagent-driven-development` note, a real pull request and a full review. What
+  those runs found and what changed after them is in `docs/development.md`,
   "Security review: what is known".
 
 The shipped router configuration examples are disabled and empty. This is
@@ -120,8 +121,8 @@ different from the approved future onboarding default below.
 - Multi-client Prepare Workspace (client detection and per-client installs), a
   separate project; today it covers OpenCode only. The partner-scope rule it must
   keep: partners always install at user scope. Skills keep one shared copy in
-  `~/.agents/skills/`, linked into each client's skills folder, so a later client
-  only adds a link. Plugins and MCP servers are per client: offer each partner for
+  `~/.agents/skills/`, read directly by clients that support that folder (OpenCode
+  does) and linked into the others, so a later client only adds a link. Plugins and MCP servers are per client: offer each partner for
   every installed client it officially supports, mark the rest `not-supported`,
   and never write config for a client that is not installed.
 
