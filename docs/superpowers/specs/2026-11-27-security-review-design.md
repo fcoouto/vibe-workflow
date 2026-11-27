@@ -176,6 +176,10 @@ provider sees the code. (Builder check; my call.) Brief:
   `adversarial.md` instead of delegating to its plugin agent, and point its report
   file at the private reports folder (see Report storage), never elsewhere in the
   repository. Do not use `fp-check`: its deep path writes and runs exploit code.
+  An `explore` reviewer cannot load skills (observed: `Permission denied: skill`),
+  so the coordinator loads the partner skill once to learn its folder, and the
+  brief gives the reviewer that folder's absolute path: read `SKILL.md` there with
+  the read tool, and treat `{baseDir}` in it as that folder.
 
 **Result.** A `Security` section in the PR body: head commit, tier and reason,
 what was checked, findings with severity and status, and limits. The skill tells
