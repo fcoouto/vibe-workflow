@@ -1,7 +1,7 @@
 # Security review: proportional ship checks and an on-demand project review
 
 Date: 27 November 2026. Status: approved by the user and implemented. Council review
-of the build rulings: `docs/vibe-council/sessions/495ec31d5f35_security-review-rulings/result.md`.
+of the build rulings: `docs/vibe-workflow/council-sessions/2026-11-27_security-review-rulings/result.md`.
 
 ## Intent
 
