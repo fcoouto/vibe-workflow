@@ -9,7 +9,7 @@ Choose the highest tier reached by any part, based on effect, not file type.
 | --- | --- | --- |
 | Tier 0 None | docs, comments, styling, tests only, pure renames with no behavior change | Nothing; explain the lack of surface in one PR line. |
 | Tier 1 Light | ordinary logic, new internal functions, refactors that move code across a boundary | Check the short list yourself. |
-| Tier 2 Focused | new endpoints, commands, user input handling, file or network access, config defaults, logging of user data | Add a security section to the existing reviewer's brief; no extra agent. |
+| Tier 2 Focused | new endpoints, commands, user input handling, file or network access, config defaults, logging of user data | Add a security section to the existing reviewer's brief, with the secret rules below; no extra agent. |
 | Tier 3 Deep | authentication, authorization or tenancy; secrets or credentials; crypto; parsing untrusted data or deserialization; shell, SQL or template construction; file paths and uploads; outbound requests to user-chosen URLs; dependency or lockfile changes; CI workflows, release or install scripts; AI agents fed external input; removing a validation or check | Dispatch one reviewer using [reviewer-brief.md](reviewer-brief.md). |
 
 - A refactor of security-relevant code is tier 3 until shown otherwise.
@@ -35,6 +35,13 @@ working alone.
 - As soon as a likely secret is found, the coordinator tells the user immediately
   in chat, by file, line and type, that it must be treated as exposed and rotated
   now. Do not wait for the end of the check.
+- A committed likely secret is rated high until it is rotated, whatever the
+  repository's own documents say about it.
+- At tier 2, the security section added to the code reviewer's brief carries the
+  same secret rules: the raw-read limit, searching by file name only, quoting a
+  secret as file, line and type only, and stopping at once to return only the
+  alert. The coordinator then tells the user and resumes that reviewer, as
+  [reviewer-brief.md](reviewer-brief.md) describes.
 
 ## Short list
 

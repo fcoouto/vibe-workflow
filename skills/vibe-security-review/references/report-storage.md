@@ -50,8 +50,9 @@ What the script does, so a refusal can be explained:
    directory, or when `git ls-files`, run against the main checkout's own index,
    lists anything in the folder.
 4. Refuses when the main checkout or `.vibe-workflow` belongs to another user or
-   is writable by its group or by everyone: whoever can write a folder can swap
-   what is inside it. The script never changes their permissions.
+   is writable by everyone: whoever can write a folder can swap what is inside
+   it. A group-writable folder passes. The script never changes their
+   permissions.
 5. Creates missing folders with permissions `0700`. It refuses a reports folder
    that belongs to another user and sets an existing one to `0700`.
 6. Keeps the folder's `.gitignore` at exactly `*` and a newline. A differing

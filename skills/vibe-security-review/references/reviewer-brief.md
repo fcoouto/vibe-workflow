@@ -46,7 +46,14 @@ secret pattern.
 
 A reviewer that finds a likely secret stops at once and returns only the alert:
 file, line and type. The coordinator tells the user immediately to rotate it,
-then resumes the same reviewer by its session to finish the review.
+then resumes the same reviewer by its session to finish the review. If resuming
+fails, dispatch a fresh reviewer for the remaining scope and give it the alert
+already raised, so it does not report it again. If that also fails, record the
+review as incomplete and never present it as clean. An incomplete required
+tier-3 review keeps the pull request [BLOCKED].
+
+A committed likely secret is rated high until it is rotated, whatever the
+repository's own documents say about it.
 
 ## Partner skills
 
@@ -69,6 +76,10 @@ line. The coordinator verifies it again: after resolving links, that path must
 lie inside one of the two roots. If it does not, discard what was loaded and
 continue the built-in review. Put the path in the brief. The reviewer reads
 `<folder>/SKILL.md` with the read tool and treats `{baseDir}` as that folder.
+
+When a partner skill is skipped (not installed, an untrusted location, or a
+repository skill of the same name), name it under the review's limits, in the
+report and in the pull request's `Security` section.
 
 If `differential-review` appears in the coordinator's available skills and passes
 those checks, use it within these limits for tier 3. Read its `adversarial.md`

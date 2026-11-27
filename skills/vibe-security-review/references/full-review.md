@@ -43,11 +43,18 @@ alone on a small project.
 - A sweep reviewer that finds a likely secret stops at once and returns only the
   alert: file, line and type. The coordinator tells the user immediately to
   rotate it, then resumes the same reviewer by its session to finish its area.
+  If resuming fails, dispatch a fresh reviewer for the remaining scope and give
+  it the alert already raised, so it does not report it again. If that also
+  fails, record the review as incomplete and never present it as clean: say in
+  the report which area was not finished.
 
 ## Optional partners
 
 Never install a tool during a review. Check where each partner skill comes from
-before loading it, as [reviewer-brief.md](reviewer-brief.md) describes.
+before loading it, as [reviewer-brief.md](reviewer-brief.md) describes. When a
+partner skill is skipped (not installed, an untrusted location, or a repository
+skill of the same name), name it under the review's limits, in the report and
+in the pull request's `Security` section if there is one.
 
 Reviewers use partner guidance that only reads local files:
 `agentic-actions-auditor` for local workflows invoking AI agents, `sharp-edges`

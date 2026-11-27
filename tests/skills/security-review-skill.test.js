@@ -63,6 +63,34 @@ test("raw reads are a stated limit, every reader searches by name only, and a li
   }
   assert.ok(!brief.includes("first in your result"), "ordering in a final result is not an immediate alert")
 })
+test("a stopped reviewer that cannot be resumed is replaced, and an unfinished review is never called clean", async () => {
+  for (const name of ["reviewer-brief", "full-review"]) {
+    const text = await flat(`references/${name}.md`)
+    hasAll(text, ["If resuming fails, dispatch a fresh reviewer for the remaining scope",
+      "the alert already raised, so it does not report it again",
+      "If that also fails, record the review as incomplete and never present it as clean"])
+    assert.ok(text.indexOf("resumes the same reviewer") < text.indexOf("If resuming fails"), name)
+  }
+  hasAll(await flat("references/reviewer-brief.md"), ["An incomplete required tier-3 review keeps the pull request [BLOCKED]"])
+})
+test("a committed likely secret is rated high until it is rotated", async () => {
+  const sentence = "A committed likely secret is rated high until it is rotated, whatever the repository's own documents say about it."
+  for (const name of ["ship-check", "reviewer-brief"]) hasAll(await flat(`references/${name}.md`), [sentence])
+})
+test("the tier-2 security section given to the code reviewer carries the secret rules", async () => {
+  const ship = await flat("references/ship-check.md")
+  hasAll(ship, ["At tier 2, the security section added to the code reviewer's brief carries the same secret rules",
+    "the raw-read limit", "searching by file name only", "quoting a secret as file, line and type only",
+    "stopping at once to return only the alert"])
+  assert.match(ship, /\| Tier 2 Focused \|[^|]+\|[^|]*secret rules[^|]*\|/, "the tier table points to the rules")
+})
+test("a skipped partner skill is named under the review's limits", async () => {
+  for (const name of ["reviewer-brief", "full-review"]) {
+    hasAll(await flat(`references/${name}.md`), ["When a partner skill is skipped", "not installed", "an untrusted location",
+      "a repository skill of the same name", "name it under the review's limits",
+      "in the report and in the pull request's `Security` section"])
+  }
+})
 test("the reviewer runs only on a provider and billing path the user already uses, router on or off", async () => {
   const brief = await flat("references/reviewer-brief.md")
   hasAll(brief, ["pay-as-you-go", "this session's own provider", "do not poll",
@@ -178,7 +206,8 @@ test("the report text reaches the script through a file, never through shell sou
     "mktemp -d", "`0600`", "every argument shell-quoted", "--from '<temporary file>'",
     "deletes the temporary file", "leaves the temporary file in place", "then delete the temporary file",
     "appears once in the session's tool history",
-    "writable by its group or by everyone", "never changes their permissions", "still the folder and the file it opened",
+    "belongs to another user or is writable by everyone", "A group-writable folder passes",
+    "never changes their permissions", "still the folder and the file it opened",
     "a different file found under that name is left untouched"])
   assert.ok(!raw.includes("<<"), "no heredoc in the recipe")
   assert.ok(!/standard input|stdin/i.test(raw), "no standard-input transport")
