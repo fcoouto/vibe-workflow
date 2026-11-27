@@ -322,7 +322,8 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
   Under a group-writable `.vibe-workflow` an existing reports folder is never
   repaired: unless it is already `0700` with a `.gitignore` of exactly `*`, it is
   refused and left untouched, since a group member could have renamed another of
-  the user's folders into that place.
+  the user's folders into that place. A folder the script has just created is
+  set up only if it is still empty when opened.
   It reads Git's path output as
   bytes, replaces a differing `.gitignore` atomically, creates each report
   exclusively without following links, and confirms `git check-ignore -q <report

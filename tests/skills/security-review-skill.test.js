@@ -208,7 +208,7 @@ test("the report text reaches the script through a file, never through shell sou
     "appears once in the session's tool history",
     "belongs to another user or is writable by everyone", "A group-writable folder passes",
     "Under a group-writable `.vibe-workflow`, an existing reports folder is used only as it is",
-    "refused and left untouched",
+    "refused and left untouched", "A folder the script has just created must still be empty when it is opened",
     "never changes their permissions", "still the folder and the file it opened",
     "a different file found under that name is left untouched"])
   assert.ok(!raw.includes("<<"), "no heredoc in the recipe")

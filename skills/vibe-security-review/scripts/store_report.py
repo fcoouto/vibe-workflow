@@ -167,7 +167,8 @@ def store(cwd, mode, topic, source, now=None):
         raise Refused("mode must be full or ship")
     if not TOPIC.fullmatch(topic):
         raise Refused("topic must be lowercase letters, digits and hyphens, at most 61 characters")
-    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "geteuid") or os.open not in os.supports_dir_fd:
+    if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "geteuid") or os.open not in os.supports_dir_fd
+            or os.listdir not in os.supports_fd):
         raise Refused("this system cannot create the report safely")
     body = _read_source(source)
     if not body:
@@ -195,6 +196,11 @@ def store(cwd, mode, topic, source, now=None):
         found = os.fstat(folder)
         if found.st_uid != os.geteuid():
             raise Refused("the reports folder is owned by another user")
+        # `made` says a folder was created at that name, not that the open returned it. A folder this run
+        # created is empty; one with anything in it took its place in between and is not this run's to set up.
+        if made and os.listdir(folder):
+            raise Refused("the folder opened as the new reports folder is not empty, so it is not the one "
+                          "this run created; it was left untouched")
         if shared:
             # A group member can rename another of this user's folders into this place. Owning the folder is
             # then no proof that it is the reports folder, so nothing in it is changed to make it fit: it must

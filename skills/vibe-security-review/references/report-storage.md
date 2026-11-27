@@ -58,6 +58,9 @@ What the script does, so a refusal can be explained:
    group-writable `.vibe-workflow`, an existing reports folder is used only as it
    is: one that is not already `0700` with the right `.gitignore` is refused and
    left untouched, because a group member could have moved another folder there.
+   A folder the script has just created must still be empty when it is opened;
+   if it is not, another folder took its place, and the script refuses and writes
+   nothing.
 6. Keeps the folder's `.gitignore` at exactly `*` and a newline. A differing
    regular file is replaced whole, not edited in place; a symlink or anything
    else there is refused.

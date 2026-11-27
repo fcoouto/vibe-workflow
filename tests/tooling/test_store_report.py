@@ -295,6 +295,41 @@ class StoreReportTest(unittest.TestCase):
         second = self.saved(self.cli(self.linked, topic="again"))
         self.assertEqual(second.parent, self.reports)
 
+    def test_a_folder_swapped_in_between_creating_and_opening_is_not_initialized(self):
+        module = load()
+        real = os.mkdir
+        cases = ((0o775, {"notes.txt": b"unrelated\n"}),
+                 (0o775, {".gitignore": b"*\n", "notes.txt": b"unrelated\n"}),
+                 (0o755, {"notes.txt": b"unrelated\n"}))
+        for number, (parent, files) in enumerate(cases):
+            with self.subTest(parent=oct(parent), files=sorted(files)):
+                base = self.folders(self.main / ".vibe-workflow")
+                os.chmod(base, parent)
+                self.addCleanup(os.chmod, base, 0o755)
+                # Another of the user's folders: private, owned by the user, and not empty.
+                planted = self.root / f"planted-{number}"
+                planted.mkdir()
+                os.chmod(planted, 0o700)
+                for name, content in files.items():
+                    (planted / name).write_bytes(content)
+
+                def mkdir(name, *args, **kwargs):
+                    real(name, *args, **kwargs)
+                    if name == "security-reports":
+                        # The moment between the script's mkdir and its open: its new folder is replaced.
+                        os.rmdir(self.reports)
+                        os.rename(planted, self.reports)
+                with mock.patch.object(module.os, "mkdir", mkdir):
+                    with self.assertRaisesRegex(module.Refused, "not empty.*left untouched"):
+                        self.store(module, self.linked, body=b"private finding\n")
+                self.assertEqual({p.name: p.read_bytes() for p in self.reports.iterdir()}, files,
+                                 "no .gitignore and no report are added, and its files are unchanged")
+                self.assertEqual(self.reports.stat().st_mode & 0o777, 0o700)
+                for path in self.reports.iterdir():
+                    path.unlink()
+                self.reports.rmdir()
+        self.assertEqual(len(list(self.scratch.iterdir())), len(cases), "each refused report's temporary file is kept")
+
     def test_under_a_private_parent_an_existing_folder_is_still_repaired(self):
         self.folders(self.reports)
         (self.reports / ".gitignore").write_bytes(b"*.log\n")
