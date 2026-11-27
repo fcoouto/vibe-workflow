@@ -210,11 +210,13 @@ An existing `worktree_cleanup: true` authorizes the new behavior; nothing is ask
 
 ### 7. Archive folder (user's choice, 2026-11-27)
 
-Archive moves paths to `<primary checkout>/.vibe-workflow/archives/<branch>/`, keeping each
-path's place relative to the worktree root. No leading dot, matching PR #408's
-`.vibe-workflow/security-reports/`. A branch with slashes nests (`design/x` becomes
-`design/x/`). If that folder already exists, a `-<YYYYMMDD-HHMMSS>` suffix is added, then
-`-2`, `-3`; nothing is overwritten. The folder is the second exception to "never touch the
+Archive moves paths to `<primary checkout>/.vibe-workflow/archives/<YYYY-MM-DD>_<branch>/`,
+keeping each path's place relative to the worktree root (user's choice, 2026-11-27, the
+same `<date>_<title>` pattern as `docs/vibe-workflow/council-sessions/`). `<YYYY-MM-DD>` is
+the local date when the archive runs; every `/` in the branch becomes `-`, so the folders
+stay flat (`fix/title-sync` becomes `2026-11-27_fix-title-sync/`). No leading dot, matching
+PR #408's `.vibe-workflow/security-reports/`. If that folder already exists, `-2`, then
+`-3` (up to `-99`) is added; nothing is overwritten. The folder is the second exception to "never touch the
 primary checkout", next to `.vibe-workflow/settings.json` (PR #408's reports folder is a
 third), and like that file it does not make the primary checkout unclean for the
 fast-forward rule. Writing it changes no tracked file, HEAD or index.

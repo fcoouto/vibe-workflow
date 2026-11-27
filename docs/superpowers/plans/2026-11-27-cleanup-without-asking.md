@@ -17,7 +17,7 @@
 - One 500 ms deadline per note, started before the first read, shared by every read and the session list, and cancelling: on expiry every running git child is killed through an `AbortSignal` and no new one starts. On timeout or any failure the note is omitted and existing text is unchanged.
 - Rebuildable list (exact): `node_modules/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.DS_Store`. An entry qualifies only when its status is `!!` and the last path component equals a listed name exactly (`*.pyc`: ends in `.pyc`).
 - Nothing is deleted, moved or archived before the merge is confirmed.
-- Archive folder: `<primary checkout>/.vibe-workflow/archives/<branch>/`, self-ignoring via `.vibe-workflow/archives/.gitignore` containing exactly `*`. Written only by the archive script, never by hand.
+- Archive folder: `<primary checkout>/.vibe-workflow/archives/<YYYY-MM-DD>_<branch, "/" as "-">/`, self-ignoring via `.vibe-workflow/archives/.gitignore` containing exactly `*`. Written only by the archive script, never by hand.
 - Depends on PR #408 (`skills/vibe-security-review/scripts/store_report.py`): before Task 1, rebase this branch onto `main` after #408 merges, then run the full suite once and note what already fails.
 - Skill scripts stay Python 3.11 standard library, run as `python3 -I -B '<skill folder>/scripts/<name>.py'`.
 - Never `--force`, `-D`, or `worktree_remove` with `force`. Archive never overwrites and never follows a symbolic link.
@@ -194,13 +194,13 @@ git commit -m "feat: name merged worktrees when a worktree is created"
   - Both scripts reach it by inserting the package root, `os.path.realpath(__file__)` three levels up, at `sys.path[0]` before `from runtime.private_folder import ...`. The root is checked to contain `runtime/private_folder.py`; otherwise `refused: the plugin's files are incomplete`.
 - Produces the CLI: `python3 -I -B '<skill folder>/scripts/archive.py' --worktree '<path>' --branch '<branch>' --path '<relative path>' [--path ...]`
   - Exit 0: prints one absolute destination per archived path. Exit 2: prints `archived: <dest>` for each path already moved, then `refused: <reason>`; nothing further moves.
-  - Destination: `<main>/.vibe-workflow/archives/<branch>[-<YYYYMMDD-HHMMSS>[-N]]/<relative path>`; the run's folder is created with `mkdir` that fails if it exists, then retried with the next suffix (up to `-99`).
+  - Destination: `<main>/.vibe-workflow/archives/<YYYY-MM-DD>_<branch, "/" as "-">[-N]/<relative path>`; the run's folder is created with `mkdir` that fails if it exists, then retried with the next suffix (up to `-99`).
   - Refuses: `--worktree` not a linked worktree of the repository whose main checkout `main_checkout` finds (compare `git rev-parse --path-format=absolute --git-common-dir`); a branch name that `git check-ref-format --branch` rejects; an absolute path, a `..` component, or any parent component that is a link (each opened with `O_NOFOLLOW` from the worktree's descriptor); a path that `git -C <worktree> ls-files` lists; a destination that `git -C <main> check-ignore -q` does not ignore; an existing destination entry; a rename that fails with `EXDEV` (never falls back to copying).
   - Moves with `os.rename(name, name, src_dir_fd=..., dst_dir_fd=...)` only, so links inside a moved folder move as links.
 
 - [ ] **Step 1: Write the failing tests** in `tests/tooling/test_archive.py`, in the fixture style of `tests/tooling/test_store_report.py` (temporary main checkout plus a linked worktree, global git config ignored, umask-independent):
 - `test_moves_ignored_and_untracked_paths_keeping_layout` — `.env` (ignored) and `reports/a.md` (untracked) land at `archives/feat/x/.env` and `archives/feat/x/reports/a.md`; sources are gone; exit 0 prints both destinations; `git -C <main> status --porcelain` is empty.
-- `test_second_run_gets_a_suffix_and_never_overwrites` — a second archive of the same branch goes to `feat/x-<YYYYMMDD-HHMMSS>/`; the first run's files are unchanged.
+- `test_second_run_gets_a_suffix_and_never_overwrites` — a second archive of the same branch goes to `<YYYY-MM-DD>_feat-x-2/`; the first run's files are unchanged.
 - `test_refuses_tracked_absolute_dotdot_and_linked_parent` — each case exits 2 with `refused:` and moves nothing.
 - `test_refuses_a_linked_archives_folder_or_gitignore` — `archives` as a link, and `archives/.gitignore` as a link: refused, link targets untouched.
 - `test_rewrites_a_differing_gitignore` — `archives/.gitignore` holding `*.log` becomes exactly `*\n` before any move.
