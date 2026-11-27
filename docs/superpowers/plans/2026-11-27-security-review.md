@@ -299,17 +299,55 @@ git commit -m "feat: add the Security section to pull request guidance"
 **Files:**
 - Modify: `docs/development.md` (new section `## Security review: what is known`, after the last section)
 
-Steps 1-3 and 5 were done before implementation, on 27 November 2026 (commit "docs: record Trail of Bits portability, static reading"). Only Step 4's decision remains.
+All steps were done before implementation, on 27 November 2026 (commits "docs: record Trail of Bits portability, static reading" and "docs: record live qualification of Trail of Bits skills and report storage"). Nothing is left for the implementer.
 
 - [x] **Step 1: Pin the revision.** `149d7b21f4067765b82e67029730b42d228ef4b4`.
 - [x] **Step 2: Read, do not install.** The five skills' `SKILL.md`, references and plugin parts at that SHA, plus OpenCode 2.3.2's skill loader.
 - [x] **Step 3: Write the section** `## Security review: what is known` in `docs/development.md`. Verdicts: `differential-review`, `agentic-actions-auditor`, `sharp-edges` and `supply-chain-risk-auditor` likely portable; `fp-check` not used.
-- [ ] **Step 4: Stop.** Do not edit `skills/vibe-prepare-my-workspace/partners.json`. Its procedure marks a tool without official OpenCode support as `not-supported`, and listing needs a live load check that requires installing. Report the verdicts to the user and ask whether to authorize a live check or leave the skills unlisted (detection through the available skills list still works).
+- [x] **Step 4: Decision.** The user chose (27 November) to list the four portable skills in Prepare Workspace, installed alongside the other partners, never bundled in this package. That is Task 6; Task 7's final checks cover it.
 - [x] **Step 5: Commit** (done)
 
-Task 7 runs only if the user authorizes it at Step 4, and then before Task 6 so the final checks cover it; otherwise the skills stay unlisted and Task 6 follows.
+### Task 6: List the Trail of Bits skills in Prepare Workspace
 
-### Task 6: Product docs, README and live injection check
+The user decided (27 November) that the four portable skills are offered with the other partners, never bundled in this package. Their official OpenCode install path is the skills CLI that skills.sh publishes for each skill (`npx skills add https://github.com/trailofbits/skills --skill <name>`); its documented OpenCode global folder is `~/.config/opencode/skills/`, the folder `check.py` reads (`vercel-labs/skills`, `docs/agents.md`).
+
+**Files:**
+- Modify: `skills/vibe-prepare-my-workspace/partners.json`
+- Modify: `skills/vibe-prepare-my-workspace/references/procedure.md` (step 5)
+- Modify: `docs/development.md` (the Security review section)
+- Test: `tests/tooling/test_workspace_check.py`, `tests/skills/workspace-skill.test.js`
+
+**Interfaces:**
+- Produces: partner ids `tob-differential-review`, `tob-sharp-edges`, `tob-agentic-actions-auditor`, `tob-supply-chain-risk-auditor`. Each entry: `clients.opencode = {"kind": "skill", "name": "<skill name>"}`, `upstream = {"type": "presence"}` (as `graphify-skill`), `docs = "https://skills.sh/trailofbits/skills/<skill name>"`, and a one-line `why`:
+  - `differential-review`: `Deep security review of high-risk changes, used by the vibe-security-review ship check.`
+  - `sharp-edges`: `Finds misuse-prone APIs and dangerous configuration in a full security review.`
+  - `agentic-actions-auditor`: `Audits GitHub Actions workflows that run AI agents.`
+  - `supply-chain-risk-auditor`: `Dependency and supply-chain risk report; needs uv and network access, and runs only with approval.`
+  Place them after `context7`, before `rtk`.
+
+- [ ] **Step 1: Write the failing tests**
+  - `tests/tooling/test_workspace_check.py`: the exact id list at line 370 gains the four ids in that position; a new test asserts each entry's `clients`, `upstream`, `docs` and `why` exactly as above, and that `check.py` reports a row `ready` when `<home>/.config/opencode/skills/<name>/` exists and `missing` when it does not (fixture home, as `test_mcp_file_and_skill_presence` does).
+  - `tests/skills/workspace-skill.test.js`: the procedure phrase list gains `"npx skills add"`, `"-g"`, `"-a opencode"`, `"DISABLE_TELEMETRY=1"`.
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `python3 -B -m unittest tests.tooling.test_workspace_check -v && node --test tests/skills/workspace-skill.test.js`
+Expected: FAIL on the new ids and phrases.
+
+- [ ] **Step 3: Implement.** Add the four entries. In `procedure.md` step 5, add: a skill partner whose `docs` page is on skills.sh installs with the command that page shows, plus `-g -a opencode` (user scope, OpenCode only) and `DISABLE_TELEMETRY=1` (the CLI otherwise reports skill names and files); `-y` only after the user approved that exact list. Nothing else in the procedure changes.
+- [ ] **Step 4: Run both suites**
+
+Run: `python3 -B -m unittest discover -s tests -t . && node --test "tests/**/*.test.js"`
+Expected: all pass.
+- [ ] **Step 5: Commit**
+
+```bash
+git add skills/vibe-prepare-my-workspace tests/tooling/test_workspace_check.py tests/skills/workspace-skill.test.js
+git commit -m "feat: offer Trail of Bits security skills as workspace partners"
+```
+
+Task 7 Step 6 probe 5 observes the real install path.
+
+### Task 7: Product docs, README and live injection check
 
 **Files:**
 - Modify: `PRODUCT.md` (move "code and security review" out of Planned evaluations; add a Security review bullet under Available now: skill, command, ship-check notes, report folder, advisory and not yet observed live)
@@ -318,7 +356,7 @@ Task 7 runs only if the user authorizes it at Step 4, and then before Task 6 so 
 - Modify: `tests/tooling/opencode-verified.json` (only if the injection check writes it)
 
 - [ ] **Step 1: Update `PRODUCT.md` and `docs/development.md`** as listed.
-- [ ] **Step 2: Load the `impeccable` skill and add the README section**: what the ship check does, how to ask for a full review (`/vibe-security-review` or "Use `vibe-security-review` to review this project."), where reports go and that they are never committed. Keep it under 15 lines.
+- [ ] **Step 2: Load the `impeccable` skill and add the README section**: what the ship check does, how to ask for a full review (`/vibe-security-review` or "Use `vibe-security-review` to review this project."), where reports go and that they are never committed, and that `vibe-prepare-my-workspace` offers the four Trail of Bits skills. Keep it under 15 lines.
 - [ ] **Step 3: Run every check**
 
 ```sh
@@ -340,28 +378,10 @@ git commit -m "docs: describe the security review"
 
 - [ ] **Step 5: Run the injection check** (pre-authorized): `python3 -B scripts/live_check.py --injection`. Expected: every model and the shell probe pass. If it writes `tests/tooling/opencode-verified.json`, commit that file (`git commit -m "test: record injection check"`). If it fails, stop and tell the user; do not retry another way.
 
-- [ ] **Step 6: Observe what only a live run can show.** Confirm with the user first that the 27 November request to qualify the plan's unsure points covers these runs. Each is one `python3 -B scripts/live_check.py --prompt "..." --settings '<settings JSON>'` in a throwaway clone (onboarded, Smart Router saved; git workflow on, then off). Probe 1 must run without `--isolated`, because the isolated config has no superpowers skills; probes 2 and 3 may add `--isolated`:
+- [ ] **Step 6: Observe what only a live run can show.** The user authorized these runs on 27 November. Each of probes 1-3 is one `python3 -B scripts/live_check.py --prompt "..." --settings '<settings JSON>'` in a throwaway clone (onboarded, Smart Router saved; git workflow on, then off). Probe 1 must run without `--isolated`, because the isolated config has no superpowers skills; probes 2 and 3 may add `--isolated`:
   1. Load `requesting-code-review`, then `finishing-a-development-branch`: the security note is in each tool result, and the reply plans the ship check.
   2. Run `gh pr create --draft --title "[BLOCKED] probe"` with `--origin` pointing at a throwaway local bare repository: `SHIP_PR` is in the result with the git workflow off and on.
   3. Commit a synthetic secret (`AKIA` followed by 16 `X`) in a tier-3 change and ask for the ship check: no tool output, reply or report contains the value; the finding names only file, line and type.
   4. `/vibe-security-review` is listed by the background service's `GET /api/command` after the plugin is exported (read-only).
+  5. The Task 6 install command, run with `HOME` and `XDG_CONFIG_HOME` set to a throwaway folder, puts each skill under `<HOME>/.config/opencode/skills/<name>/`, and `python3 -I -B skills/vibe-prepare-my-workspace/scripts/check.py` with that `HOME` reports the four rows ready. If the CLI writes elsewhere, record where and fix the partner entries.
   Record each result, pass or fail, in `docs/development.md` under `## Security review: what is known`, and commit (`docs: record security review live checks`). A failure goes back to its task; do not retry the same way.
-
-### Task 7 (only with the user's authorization from Task 5): live portability check and partner listing
-
-**Files:**
-- Modify: `skills/vibe-prepare-my-workspace/partners.json`
-- Modify: `skills/vibe-prepare-my-workspace/references/procedure.md` (only if the user approves listing skills whose official docs do not cover OpenCode)
-- Modify: `docs/development.md` (the Task 5 section)
-- Test: `tests/tooling/test_workspace_check.py`
-
-- [ ] **Step 1: Confirm the exact authorization**: which skills, installed where (user scope `~/.config/opencode/skills/<name>/`, which `check.py` reads), from the Task 5 SHA. No answer is not consent.
-- [ ] **Step 2: Install and observe.** Copy each approved skill folder at the pinned SHA. In a new session, confirm each appears in the available skills list and loads through the skill tool. Record pass or fail per skill, with the OpenCode version and date, in `docs/development.md`. (An isolated config already passed this for all four on 27 November; this step confirms it in the user's real config.)
-- [ ] **Step 3: Write the failing test** in `tests/tooling/test_workspace_check.py`: each passing skill has a partner entry with `clients.opencode = {"kind": "skill", "name": "<name>"}`, `upstream = {"type": "presence"}` (as `graphify-skill`), a `docs` URL under `https://github.com/trailofbits/skills/`, and a `why` line; a skill that failed Step 2 has no entry.
-- [ ] **Step 4: Run it to verify it fails**, then add the entries, then run `python3 -B -m unittest discover -s tests -t .`. Expected: all pass.
-- [ ] **Step 5: Commit**
-
-```bash
-git add skills/vibe-prepare-my-workspace docs/development.md tests/tooling/test_workspace_check.py
-git commit -m "feat: list portable Trail of Bits skills as workspace partners"
-```

@@ -266,8 +266,13 @@ kept out of the PR body (a public repository) or a partner tool writes a report.
 Add Trail of Bits skills to `vibe-prepare-my-workspace/partners.json` as
 optional skill partners, so the user can see and approve them. Proposed set:
 `differential-review`, `agentic-actions-auditor`, `sharp-edges`,
-`supply-chain-risk-auditor` (`fp-check` dropped after the static check). Each needs a portability check on OpenCode before
-it is listed (see "Left to the builder").
+`supply-chain-risk-auditor` (`fp-check` dropped after the static check).
+Decided by the user (27 November) after all four passed a live load check on
+OpenCode 2.3.2: list them, install them alongside the other partners, never
+bundle them in this package. They install through the skills CLI that skills.sh
+publishes for each (`npx skills add https://github.com/trailofbits/skills --skill
+<name> -g -a opencode`), whose OpenCode global folder is
+`~/.config/opencode/skills/`, the folder the workspace check reads.
 
 ## Trail of Bits evaluation
 
