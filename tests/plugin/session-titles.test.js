@@ -1470,6 +1470,17 @@ function shellClock(t) {
   return async (ms = 200) => { t.mock.timers.tick(ms); await settle() }
 }
 
+function delaySessionRead(h, id) {
+  const get = h.ctx.session.get
+  let release
+  const gate = new Promise((done) => { release = done })
+  h.ctx.session.get = async (input) => {
+    if (input.sessionID === id) await gate
+    return get(input)
+  }
+  return release
+}
+
 test("a running background shell keeps WAITING off until 200 ms after its final idle exit", async (t) => {
   const tick = shellClock(t)
   const h = await host(t)
@@ -1563,9 +1574,13 @@ test("a resumed descendant or replacement shell cancels the final-exit grace", a
   await settle()
   await exited(h, "sh_2")
   await tick(100)
-  h.push(job("child_1", "sh_3"))
+  const release = delaySessionRead(h, "child_slow")
+  h.push(job("child_slow", "sh_3"))
   await settle()
-  await tick()
+  await tick(100)
+  assert.equal(h.titles.get("ses_1"), quiet)
+  release()
+  await settle()
   assert.equal(h.titles.get("ses_1"), quiet)
   await exited(h, "sh_3")
   await tick()
@@ -1574,18 +1589,86 @@ test("a resumed descendant or replacement shell cancels the final-exit grace", a
 
 test("a real permission prompt shows WAITING immediately during shell activity and grace", async (t) => {
   const tick = shellClock(t)
-  const h = await running(t)
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  await ask(h, "permission.asked", "per_shell")
   h.push(job("child_1", "sh_1"))
   await settle()
-  await ask(h, "permission.asked", "per_shell")
   assert.equal(h.titles.get("ses_1"), waiting)
-  await exited(h, "sh_1")
   await ask(h, "permission.replied", "per_shell")
   assert.equal(h.titles.get("ses_1"), quiet)
+  let release
+  h.facts.listGate = new Promise((done) => { release = done })
+  await exited(h, "sh_1")
+  await tick()
   await ask(h, "permission.asked", "per_grace")
   assert.equal(h.titles.get("ses_1"), waiting)
-  await tick()
+  release()
+  await settle()
   assert.equal(h.titles.get("ses_1"), waiting)
+})
+
+test("a delayed background start cannot relabel a replacement task", async (t) => {
+  const h = await host(t)
+  await h.write(SPEC)
+  await h.end()
+  const release = delaySessionRead(h, "child_slow")
+  h.push(job("child_slow", "sh_old"))
+  await settle()
+  await h.write(OTHER)
+  await h.end()
+  release()
+  await settle()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · add cache")
+})
+
+test("another copy's preference revision invalidates the old shell grace", async (t) => {
+  const tick = shellClock(t)
+  const w = await world(t)
+  w.session("ses_1", "main")
+  w.session("child_1", "wt", { parentID: "ses_1" })
+  await w.write(SPEC)
+  await w.end()
+  await w.push(job("child_1", "sh_1"))
+  await w.push(job("child_1", "sh_1", "completed"))
+  w.preference.state = "off"
+  w.copies.wt.registered.preferenceSaved(false)
+  await tick(100)
+  assert.equal(w.title(), quiet)
+  w.preference.state = "on"
+  w.copies.wt.registered.preferenceSaved(true)
+  await w.end()
+  assert.equal(w.title(), waiting)
+})
+
+test("a background start with known ancestry can precede the first task bind", async (t) => {
+  const h = await host(t, { idleHook: false })
+  await h.start()
+  await h.start("child_1")
+  const reads = h.calls.get.length
+  h.push(job("child_1", "sh_1"))
+  await settle()
+  assert.equal(h.calls.get.length, reads)
+  await h.write(SPEC)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), quiet)
+  await h.write(OTHER)
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), "￻▰▱▱▱▱ WAITING · add cache")
+})
+
+test("unbound background jobs cannot evict a bound task's running shell", async (t) => {
+  const h = await host(t)
+  h.facts.parents.child_other = "other"
+  await h.write(SPEC)
+  await h.end()
+  h.push(job("child_1", "sh_owned"))
+  await settle()
+  for (let i = 0; i < 64; i++) h.push(job("child_other", `sh_other_${i}`))
+  await settle()
+  await h.end()
+  assert.equal(h.titles.get("ses_1"), quiet)
 })
 
 test("an idle snapshot supplies descendant shells on hosts without job updates", async (t) => {
