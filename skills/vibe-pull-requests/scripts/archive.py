@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Move leftover paths out of a linked worktree into its main checkout's private archive, or refuse; nothing is overwritten."""
+"""Move leftover paths out of a linked worktree into its main checkout's private archive, or refuse; nothing is overwritten.
+The worktree must be the one the merge was confirmed for: registered at that path, on --branch and at --head.
+A detached worktree is refused, because the cleanup rules archive only from a worktree that is on its branch."""
 import argparse
 import errno
 import os
+import re
 import stat
 import sys
 import time
@@ -15,13 +18,18 @@ sys.path.insert(0, ROOT)
 from runtime.private_folder import BASE, Refused, git, main_checkout, open_private_folder
 
 ARCHIVES = "archives"
+COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# What a paused rebase, merge, cherry-pick, revert or bisect, or a stash it set aside, leaves in a worktree's own Git folder.
+PAUSED = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE",
+          "MERGE_AUTOSTASH")
 CAPABLE = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "geteuid") and os.listdir in os.supports_fd
            and {os.open, os.mkdir, os.lstat, os.rename} <= os.supports_dir_fd)
 
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
-        raise Refused("invalid arguments; give --worktree <dir>, --branch <name> and one or more --path <relative path>")
+        raise Refused("invalid arguments; give --worktree <dir>, --branch <name>, --head <commit> (the full hash) and "
+                      "one or more --path <relative path>")
 
 
 def _text(result):
@@ -35,9 +43,35 @@ def _same(first, second):
         return False
 
 
-def _worktree(worktree):
+def _confirmed(real, main, own_dir, branch, head):
+    """Refuse unless this is the worktree the merge was confirmed for: its repository registers it at this path and
+    its backlink points here, no Git operation is paused in it, it is on that branch, and its HEAD is that commit."""
+    listed = git(main, "worktree", "list", "--porcelain", "-z")
+    paths = [os.fsdecode(field[len(b"worktree "):]) for field in listed.stdout.split(b"\0") if field.startswith(b"worktree ")]
+    try:
+        with open(os.path.join(own_dir, "gitdir"), "rb") as file:
+            backlink = os.fsdecode(file.read(1 << 16).removesuffix(b"\n"))
+    except OSError:
+        backlink = None
+    if listed.returncode or paths[1:].count(real) != 1 or backlink != os.path.join(real, ".git"):
+        raise Refused("the repository does not register --worktree at that path with a backlink to it")
+    for name in PAUSED:
+        if os.path.lexists(os.path.join(own_dir, name)):
+            raise Refused(f"a Git operation is paused in the worktree ({name})")
+    live = git(real, "symbolic-ref", "--short", "-q", "HEAD")
+    if live.returncode == 1:
+        raise Refused("the worktree is detached; archive needs the branch the merge was confirmed for")
+    if live.returncode or _text(live) != branch:
+        raise Refused("the worktree is not on that branch")
+    commit = git(real, "rev-parse", "--verify", "HEAD^{commit}")
+    if commit.returncode or _text(commit) != head:
+        raise Refused("the worktree's HEAD is not the commit that was confirmed")
+
+
+def _worktree(worktree, branch, head):
     """The main checkout is the first record of the worktree's own repository. The worktree must be a linked
-    worktree, named by its top folder, and not a link; the main checkout itself is refused."""
+    worktree, named by its top folder, and not a link; the main checkout itself is refused. It must also be the
+    worktree the merge was confirmed for."""
     try:
         if stat.S_ISLNK(os.lstat(worktree).st_mode):
             raise Refused("--worktree is a symbolic link")
@@ -53,6 +87,8 @@ def _worktree(worktree):
     top, own_dir, own_common = map(_text, results)
     if not (_same(top, real) and not _same(own_dir, own_common)):
         raise Refused("--worktree is not a linked worktree")
+    _branch(main, branch)
+    _confirmed(real, main, own_dir, branch, head)
     return real, main
 
 
@@ -183,12 +219,14 @@ def _move(path, source, run, run_name, main, made, opened):
     return destination
 
 
-def archive(worktree, branch, paths, moved):
-    """Append each moved destination to `moved` as it goes, so a refusal still reports what already moved."""
+def archive(worktree, branch, head, paths, moved):
+    """Append each moved destination to `moved` as it goes, so a refusal still reports what already moved.
+    Every check of the worktree comes before the first folder is made."""
     if not CAPABLE:
         raise Refused("this system cannot archive safely")
-    real, main = _worktree(worktree)
-    _branch(main, branch)
+    if not COMMIT.fullmatch(head):
+        raise Refused("--head must be the full commit hash the merge was confirmed for")
+    real, main = _worktree(worktree, branch, head)
     entry = os.lstat(os.path.join(real, ".git"))
     git_entry = entry.st_dev, entry.st_ino
     day = time.strftime("%Y-%m-%d")
@@ -222,12 +260,13 @@ def main(argv=None):
     parser = _Parser(description=__doc__)
     parser.add_argument("--worktree", required=True)
     parser.add_argument("--branch", required=True)
+    parser.add_argument("--head", required=True)
     parser.add_argument("--path", dest="paths", action="append", required=True)
     moved = []
     try:
         try:
             args = parser.parse_args(argv)
-            archive(args.worktree, args.branch, args.paths, moved)
+            archive(args.worktree, args.branch, args.head, args.paths, moved)
         except OSError as error:
             raise Refused(f"the archive could not be written ({type(error).__name__})") from error
     except Refused as refusal:

@@ -83,10 +83,14 @@ class ArchiveTest(unittest.TestCase):
         os.chmod(base, 0o755)
         return base
 
-    def archive(self, *paths, branch="feat/x", worktree=None, cwd=None):
-        """Run the script from a folder that is no repository, unless the caller names another one."""
+    def head(self, worktree=None):
+        return git(worktree or self.linked, "rev-parse", "HEAD").strip()
+
+    def archive(self, *paths, branch="feat/x", worktree=None, cwd=None, head=None):
+        """Run the script from a folder that is no repository, unless the caller names another one. The commit is the
+        worktree's own unless the caller names another one."""
         command = [sys.executable, "-I", "-B", "-c", FROZEN, str(SCRIPT), "--worktree", str(worktree or self.linked),
-                   "--branch", branch]
+                   "--branch", branch, "--head", head or self.head(worktree)]
         for path in paths:
             command += ["--path", path]
         return subprocess.run(command, cwd=cwd or self.root, capture_output=True, text=True, timeout=30)
@@ -102,7 +106,7 @@ class ArchiveTest(unittest.TestCase):
                                                       side_effect=OSError(errno.EXDEV, "Cross-device link")))
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", *args])
+            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--head", self.head(), *args])
         return code, out.getvalue(), err.getvalue()
 
     def refused(self, run):
@@ -146,11 +150,13 @@ class ArchiveTest(unittest.TestCase):
 
     def test_a_slash_branch_gets_one_flat_folder(self):
         (self.linked / ".env").write_text("x\n")
+        git(self.linked, "switch", "-q", "-c", "fix/title-sync")
         run = self.archive(".env", branch="fix/title-sync")
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(Path(run.stdout.strip()), self.archives / f"{DAY}_fix-title-sync" / ".env")
         self.assertEqual(self.names(), [".gitignore", f"{DAY}_fix-title-sync"])
         (self.linked / ".env").write_text("y\n")
+        git(self.linked, "switch", "-q", "-c", "feat/a/b")
         self.assertEqual(self.archive(".env", branch="feat/a/b").returncode, 0)
         self.assertEqual(self.names(), [".gitignore", f"{DAY}_feat-a-b", f"{DAY}_fix-title-sync"])
 
@@ -330,7 +336,7 @@ class ArchiveTest(unittest.TestCase):
     def test_archived_lines_arrive_before_the_refusal_when_streams_merge(self):
         (self.linked / ".env").write_text("x\n")
         command = [sys.executable, "-I", "-B", "-c", FROZEN, str(SCRIPT), "--worktree", str(self.linked),
-                   "--branch", "feat/x", "--path", ".env", "--path", "README.md"]
+                   "--branch", "feat/x", "--head", self.head(), "--path", ".env", "--path", "README.md"]
         run = subprocess.run(command, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, timeout=30)
         self.assertEqual(run.returncode, 2)
@@ -350,7 +356,7 @@ class ArchiveTest(unittest.TestCase):
             return real_move(*args, **kwargs)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
                 mock.patch.object(module, "_move", side_effect=record):
-            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x",
+            code = module.main(["--worktree", str(self.linked), "--branch", "feat/x", "--head", self.head(),
                                 "--path", "d1/f.txt", "--path", "d2/f.txt", "--path", "d3/f.txt"])
         self.assertEqual(code, 0)
         self.assertEqual(len(set(counts)), 1, counts)
@@ -407,6 +413,89 @@ class ArchiveTest(unittest.TestCase):
                 self.refused(self.archive(".env", branch=branch))
                 self.assertEqual((self.linked / ".env").read_text(), "x\n")
         self.assertFalse((self.main / ".vibe-workflow").exists())
+
+    def kept(self, run, reason):
+        """A refusal before anything was made: the leftover file stays and the main checkout has no settings folder."""
+        self.refused(run)
+        self.assertEqual(run.stderr, f"refused: {reason}\n")
+        self.assertEqual((self.linked / ".env").read_text(), "x\n")
+        self.assertFalse((self.main / ".vibe-workflow").exists())
+
+    def test_refuses_a_worktree_that_is_not_on_the_named_branch(self):
+        (self.linked / ".env").write_text("x\n")
+        git(self.main, "branch", "other")
+        self.kept(self.archive(".env", branch="other"), "the worktree is not on that branch")
+        self.kept(self.archive(".env", branch="main"), "the worktree is not on that branch")
+        git(self.linked, "switch", "-q", "--detach")
+        self.kept(self.archive(".env"), "the worktree is detached; archive needs the branch the merge was confirmed for")
+
+    def test_refuses_a_head_that_is_not_the_worktrees_full_commit(self):
+        (self.linked / ".env").write_text("x\n")
+        head = self.head()
+        for given in ("HEAD", head[:12], head.upper(), head + "0", "feat/x"):
+            with self.subTest(head=given):
+                self.kept(self.archive(".env", head=given), "--head must be the full commit hash the merge was confirmed for")
+        git(self.linked, "commit", "-q", "--allow-empty", "-m", "after the merge")
+        self.kept(self.archive(".env", head=head), "the worktree's HEAD is not the commit that was confirmed")
+        command = [sys.executable, "-I", "-B", str(SCRIPT), "--worktree", str(self.linked), "--branch", "feat/x", "--path", ".env"]
+        run = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.refused(run)
+        self.assertIn("--head <commit>", run.stderr)
+        self.assertEqual(self.archive(".env").returncode, 0)
+
+    def test_refuses_a_worktree_the_repository_does_not_register_at_that_path(self):
+        (self.linked / ".env").write_text("x\n")
+        second = self.root / "second"
+        git(self.main, "worktree", "add", "-q", "--detach", str(second))
+        backlink = self.main / ".git/worktrees/linked/gitdir"
+        recorded = backlink.read_text()
+        backlink.write_text(f"{second}/.git\n")
+        self.kept(self.archive(".env"), "the repository does not register --worktree at that path with a backlink to it")
+        backlink.write_text(recorded)
+        moved = self.root / "moved"
+        self.linked.rename(moved)
+        run = self.archive(".env", worktree=moved, head=self.head(moved))
+        self.refused(run)
+        self.assertEqual(run.stderr, "refused: the repository does not register --worktree at that path with a backlink to it\n")
+        self.assertEqual((moved / ".env").read_text(), "x\n")
+        self.assertFalse((self.main / ".vibe-workflow").exists())
+
+    def test_refuses_a_worktree_with_a_paused_git_operation(self):
+        (self.linked / ".env").write_text("x\n")
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
+                     "AUTO_MERGE", "MERGE_AUTOSTASH"):
+            with self.subTest(state=name):
+                state = own / name
+                state.mkdir() if name.startswith("rebase") else state.write_text("0" * 40 + "\n")
+                self.kept(self.archive(".env"), f"a Git operation is paused in the worktree ({name})")
+                state.rmdir() if name.startswith("rebase") else state.unlink()
+        self.assertEqual(self.archive(".env").returncode, 0)
+
+    def test_a_settings_or_archives_folder_under_another_letter_case_is_refused_and_left_untouched(self):
+        if not case_insensitive(self.root):
+            self.skipTest("the temporary volume is case-sensitive")
+        (self.linked / ".env").write_text("x\n")
+        for base, name in ((".Vibe-Workflow", "archives"), (".vibe-workflow", "Archives")):
+            with self.subTest(base=base, name=name):
+                folder = self.main / base / name
+                folder.mkdir(parents=True)
+                os.chmod(self.main / base, 0o755)
+                os.chmod(folder, 0o755)
+                (folder / "kept.md").write_text("tracked\n")
+                (folder / ".gitignore").write_text("!kept.md\n")
+                git(self.main, "add", "-f", f"{base}/{name}")
+                git(self.main, "commit", "-qm", "a tracked folder under another letter case")
+                self.assertEqual(git(self.main, "ls-files", "--", ".vibe-workflow/archives"), "", "Git sees no tracked file")
+                self.refused(self.archive(".env"))
+                self.assertEqual((self.linked / ".env").read_text(), "x\n")
+                self.assertEqual((folder / ".gitignore").read_text(), "!kept.md\n")
+                self.assertEqual(sorted(path.name for path in folder.iterdir()), [".gitignore", "kept.md"])
+                self.assertEqual(folder.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(git(self.main, "status", "--porcelain"), "")
+                git(self.main, "rm", "-rqf", f"{base}/{name}")
+                git(self.main, "commit", "-qm", "undo")
+                shutil.rmtree(self.main / base, ignore_errors=True)
 
 
 if __name__ == "__main__":
