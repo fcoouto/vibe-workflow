@@ -3,6 +3,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,6 +31,14 @@ def fake_package(folder):
     (package / "skills" / "vibe-project-layout" / "SKILL.md").write_text(
         "---\nname: vibe-project-layout\ndescription: Use when creating files.\n---\n\n# Project layout\n")
     return package
+
+
+class ScriptTest(unittest.TestCase):
+    def test_runs_as_a_program_although_scripts_holds_select_py(self):
+        run = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "layout_eval.py"), "--help"],
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("--summary", run.stdout)
 
 
 class RunModelTimeoutTest(unittest.TestCase):

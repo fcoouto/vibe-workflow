@@ -5,18 +5,24 @@ Each trial builds a fixture repo with this checkout's package as a project-local
 `opencode run --standalone` with an empty config directory (so no installed plugin loads) on a pinned model, scores
 the result from git, and removes the fixture. Results are appended to a JSONL file; `--summary` prints the counts.
 """
-import argparse
-import concurrent.futures
-import importlib.util
-import json
 import os
-import re
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
-from pathlib import Path
+
+# Run as a program, Python puts scripts/ first on the path, where scripts/select.py shadows the standard
+# `select` module that subprocess needs. Drop exactly that entry before importing anything else.
+if sys.path and sys.path[0] and os.path.realpath(sys.path[0]) == os.path.dirname(os.path.realpath(__file__)):
+    del sys.path[0]
+
+import argparse  # noqa: E402
+import concurrent.futures  # noqa: E402
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("live_check", ROOT / "scripts" / "live_check.py")
