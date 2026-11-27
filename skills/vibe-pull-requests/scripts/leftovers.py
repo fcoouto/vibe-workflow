@@ -17,6 +17,9 @@ EXPAND = (*STATUS, "--untracked-files=all")
 EACH = (*STATUS, "--ignored", "--untracked-files=all")
 ABSOLUTE = ("rev-parse", "--path-format=absolute")
 BROKEN = "the worktree's Git pointer is broken"
+# What a paused rebase, merge, cherry-pick, revert or bisect, or a stash it set aside, leaves in a worktree's own Git folder.
+PAUSED = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE",
+          "MERGE_AUTOSTASH")
 USAGE = ("invalid arguments; give sort, expand, manifest, discard, caches or identity, then --worktree <dir> and "
          "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name> or "
          "--detached, --head <commit> (the full hash)")
@@ -257,6 +260,15 @@ def _nested(folder, shown, device):
                 os.close(descriptor)
 
 
+def _overlooked():
+    """Refuse a worktree with a tracked file that Git was told to overlook, by assume-unchanged or skip-worktree.
+    An edit to such a file gets no status row, so the worktree would look clean and removing it would lose the edit."""
+    for entry in _out("ls-files", "-v", "-z").split(b"\0"):
+        if entry[:1].islower() or entry[:1] == b"S":
+            raise Refused(f"{os.fsdecode(entry[2:])!r} is marked assume-unchanged or skip-worktree, so Git may hide a "
+                          "change to it")
+
+
 def _statuses(shown):
     """Everything Git says at and below a path: every status of each name, and the names its index holds.
     One name can have two statuses, such as a staged deletion next to the same untracked file."""
@@ -451,6 +463,9 @@ def identity(worktree, primary, branch, head=None):
         if (not _same(named, git_dir) or not _same(os.path.dirname(git_dir), os.path.join(common, b"worktrees"))
                 or backlink != pointer):
             raise Refused("the repository's backlink does not point at this path")
+        for name in PAUSED:
+            if os.path.lexists(os.path.join(git_dir, os.fsencode(name))):
+                raise Refused(f"a Git operation is paused in the worktree ({name})")
         code, name = _git("symbolic-ref", "--short", "-q", "HEAD", codes=(0, 1))
         if (os.fsdecode(name.removesuffix(b"\n")) if code == 0 else None) != branch:
             raise Refused("the worktree is not on that branch")
@@ -487,6 +502,8 @@ def run(args, done):
     try:
         if mode == "identity":
             return [json.dumps(row)]
+        if mode != "manifest":
+            _overlooked()  # Before any listing is trusted and before anything is removed.
         if mode in ("sort", "expand"):
             listing = (*EXPAND, "--", *(b"/".join(path) for path in paths)) if mode == "expand" else SORT
             rows = _entries(_out(*listing), only="??" if mode == "expand" else None)

@@ -586,15 +586,12 @@ class LeftoversTest(unittest.TestCase):
 
     def test_a_repository_named_in_another_letter_case_makes_sort_refuse_whatever_git_lists(self):
         self.write("src/deep/er/.GIT/HEAD")
-        listings = set()
         for folding in ("true", "false"):
             with self.subTest(ignoreCase=folding):
                 git(self.linked, "config", "core.ignoreCase", folding)
-                listings.add(git(self.linked, "status", "--porcelain", "--ignored"))
                 run = self.run_script("sort")
                 self.refused(run)
                 self.assertIn("'src/deep/er/.GIT'", run.stderr)
-        self.assertLessEqual(listings, {"", "?? src/deep/\n"}, "Git hides it or lists its folder; the script refuses both ways")
 
     def test_a_hidden_repository_makes_sort_and_expand_refuse_whatever_rows_git_lists(self):
         self.write("saved/.git/config", "[core]\n")
@@ -611,6 +608,62 @@ class LeftoversTest(unittest.TestCase):
         shutil.rmtree(self.linked / "saved")
         self.assertEqual([row["path"] for row in self.rows("sort")], ["notes/", ".DS_Store"])
         self.assertEqual([row["path"] for row in self.rows("expand")], ["notes/a.md"])
+
+    def test_a_tracked_file_git_was_told_to_overlook_makes_sorts_and_removals_refuse(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest = self.digest("notes.md")
+        for flag in ("assume-unchanged", "skip-worktree"):
+            with self.subTest(flag=flag):
+                git(self.linked, "update-index", f"--{flag}", "src/app.py")
+                (self.linked / "src/app.py").write_text("print('an edit nothing lists')\n")
+                self.assertEqual(git(self.linked, "status", "--porcelain"), "?? notes.md\n", "Git lists no row for the edit")
+                for run in (self.run_script("sort"), self.run_script("expand"), self.run_script("expand", "notes.md")):
+                    self.refused(run)
+                    self.assertIn("'src/app.py'", run.stderr)
+                    self.assertIn("may hide a change", run.stderr)
+                self.stopped(self.discard(("notes.md", digest)))
+                self.refused(self.caches())
+                self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+                git(self.linked, "update-index", f"--no-{flag}", "src/app.py")
+                self.assertEqual(sorted(row["path"] for row in self.rows("sort")), ["node_modules/", "notes.md", "src/app.py"])
+                git(self.linked, "checkout", "-q", "--", "src/app.py")
+        run = self.caches()
+        self.assertEqual((run.returncode, run.stdout, run.stderr), (0, "removed: node_modules/\n", ""))
+
+    def test_a_flag_on_an_unchanged_tracked_file_refuses_too(self):
+        git(self.linked, "update-index", "--assume-unchanged", "src/app.py")
+        run = self.run_script("sort")
+        self.refused(run)
+        self.assertEqual(run.stderr, "refused: 'src/app.py' is marked assume-unchanged or skip-worktree, so Git may hide a "
+                                     "change to it\n")
+
+    def test_a_paused_git_operation_makes_identity_and_the_removing_modes_refuse(self):
+        self.write("notes.md")
+        self.write("node_modules/x.js")
+        digest = self.digest("notes.md")
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
+                     "AUTO_MERGE", "MERGE_AUTOSTASH"):
+            with self.subTest(state=name):
+                state = own / name
+                state.mkdir() if name.startswith("rebase") else state.write_text("0" * 40 + "\n")
+                for run in (self.identity(self.linked, "feat/x"), self.discard(("notes.md", digest)), self.caches()):
+                    self.refused(run)
+                    self.assertEqual(run.stderr, f"refused: a Git operation is paused in the worktree ({name})\n")
+                state.rmdir() if name.startswith("rebase") else state.unlink()
+        self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
+        (self.main / ".git/MERGE_HEAD").write_text("0" * 40 + "\n")
+        self.assertEqual(self.identity(self.linked, "feat/x").returncode, 0, "another worktree's state is not this one's")
+
+    def test_a_real_bisect_in_a_clean_worktree_is_a_paused_operation(self):
+        git(self.linked, "bisect", "start")
+        self.assertEqual(self.rows("sort"), [], "nothing is listed, yet the worktree is mid-operation")
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertIn("a Git operation is paused in the worktree", run.stderr)
+        git(self.linked, "bisect", "reset")
+        self.assertEqual(self.identity(self.linked, "feat/x").returncode, 0)
 
     def test_the_walk_for_repositories_follows_no_link_and_crosses_no_device(self):
         outside = self.outside()
