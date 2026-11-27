@@ -174,6 +174,21 @@ Note shape, appended to the existing note: "vibe-workflow: merged worktrees stil
 <name> (<branch>), …. Sweep them per the worktree cleanup steps in vibe-pull-requests."
 At most 10 names, then "and N more".
 
+### 6. Settings promise (user's decision, 2026-11-27)
+
+An existing `worktree_cleanup: true` authorizes the new behavior; nothing is asked again.
+
+- Onboarding's question 3 context (`skills/vibe-onboard-project/references/procedure.md`,
+  today "It never removes unmerged work, uncommitted work or ignored files; it stops and
+  tells you.") becomes: "It also removes older merged worktrees and tool caches such as
+  `node_modules`. It never removes unmerged work, and asks before the merge about any other
+  files left in the folder." Exact wording goes through the same shape test; the builder may
+  tighten it.
+- The first sweep note a plugin process sends adds one sentence telling the agent to state
+  the new behavior in its report: "Cleanup now also removes older merged worktrees and tool
+  caches; other files are asked about before the merge." Tracked in memory only, so it may
+  repeat after a restart.
+
 ## Constraints
 
 - Plugin: read-only git, no `gh`, no network, no new dependencies; Node ES modules.
@@ -221,8 +236,8 @@ At most 10 names, then "and N more".
 Astra (builder check plus flaws, 2026-11-27) raised three questions and five flaws. The
 allowlist, the readiness order, the archive scope, the missing detach, the `--independent`
 test and the residual busy-check window were settled above as the writer's calls; squash
-merges stay a non-goal. The upgrade question was the user's to answer (see Settings
-promise).
+merges stay a non-goal. The upgrade question was the user's to answer: existing
+`true` applies the new behavior (section 6).
 
 ## Left to the builder
 
