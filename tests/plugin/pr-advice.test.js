@@ -300,6 +300,17 @@ test("the sweep list follows the ready and merge notes only when cleanup is on",
   assert.equal(note.split(LINE).length - 1, 1)
 })
 
+test("merge help forms never sweep and keep the existing merge note", async () => {
+  for (const command of ["gh pr merge 3 --help", "gh pr merge -h"]) {
+    const sweep = fakeSweep()
+    const note = await advisor(cleanOn, { sweep }).advise(command)
+    assert.equal(sweep.calls.length, 0, command)
+    assert.equal(note, await advisor(cleanOn).advise(command), command)
+    assert.match(note, /update the primary checkout/, command)
+  }
+  assert.deepEqual(classify("gh pr merge 3 --help"), [{ kind: "pr_merge", auto: false, preview: true }])
+})
+
 test("the sweep excludes the command's directory", async () => {
   const sweep = fakeSweep()
   await advisor(cleanOn, { sweep }).advise("gh pr merge 3", "ses_a", { directory: "/wt/x/src" })
