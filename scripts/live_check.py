@@ -164,8 +164,20 @@ def _events(output):
             continue
 
 
-def _owned_by(project, session, env):
-    """Whether OpenCode lists `session` for exactly this directory; anything unproven is False."""
+def _resolved(path):
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):  # a NUL or an unresolvable name proves nothing
+        return None
+
+
+def _owned_by(project, session, env, expected):
+    """Whether OpenCode lists `session` for exactly the clone resolved before the run; anything unproven is False.
+
+    The clone may have been replaced by a link while the agent ran, so `expected` is the path resolved beforehand.
+    """
+    if expected is None or os.path.islink(project) or _resolved(project) != expected:
+        return False
     try:
         listed = json.loads(_run(["opencode", "session", "list", "--standalone", "--format", "json"], cwd=project,
                                  timeout=60, data="", env={**env, "PWD": str(project)}) or "[]")
@@ -178,12 +190,13 @@ def _owned_by(project, session, env):
         if isinstance(item, dict) and item.get("id") == session:
             location = item.get("location") if isinstance(item.get("location"), dict) else {}
             directory = item.get("directory") or location.get("directory")
-            return isinstance(directory, str) and os.path.realpath(directory) == os.path.realpath(project)
+            return isinstance(directory, str) and _resolved(directory) == expected
     return False
 
 
 def run_model(project, model, env, prompt=INJECTION_PROMPT, timeout=300):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
+    expected = _resolved(project)
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
     # caller's input out of the prompt.
     out = _run(["opencode", "run", "--standalone", "--archived", *(["-m", model] if model else []),
@@ -218,7 +231,7 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT, timeout=300):
                           "command": given.get("command") if isinstance(given.get("command"), str) else None,
                           "output": "\n".join(text for text in texts_out if isinstance(text, str))}
     session, deleted = (sessions[0] if sessions else None), False
-    if session and _owned_by(project, session, env):
+    if session and _owned_by(project, session, env, expected):
         # --archived only hides the session; delete it so the check leaves nothing in the user's storage. A session
         # not listed for this clone is never deleted: its ID came from the model's event stream.
         try:

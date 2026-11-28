@@ -267,6 +267,34 @@ class InjectionTest(unittest.TestCase):
             self.assertFalse([argv for argv, _ in calls if argv[:3] == ["opencode", "session", "delete"]], listing)
             self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False), listing)
 
+    def test_a_wrapped_listing_owns_the_session(self):
+        answer, _ = self.run_with({"data": [{"id": "ses_x", "location": {"directory": "/clone"}}]})
+        self.assertTrue(answer["deleted"])
+
+    def test_a_malformed_listed_directory_deletes_nothing_and_keeps_the_id(self):
+        answer, calls = self.run_with([{"id": "ses_x", "directory": "/clo\x00ne"}])
+        self.assertFalse([argv for argv, _ in calls if argv[:3] == ["opencode", "session", "delete"]])
+        self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False))
+
+    def test_a_clone_replaced_by_a_link_during_the_run_deletes_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            clone, other = Path(folder) / "clone", Path(folder) / "real-project"
+            clone.mkdir(); other.mkdir()
+            calls = []
+
+            def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+                calls.append(argv)
+                if argv[1] == "run":  # the agent swaps its own folder for a link to another project
+                    clone.rmdir(); clone.symlink_to(other)
+                    return json.dumps({"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
+                if argv[:3] == ["opencode", "session", "list"]:
+                    return json.dumps([{"id": "ses_x", "directory": str(other)}])
+                return ""
+            with mock.patch.object(live_check, "_run", side_effect=fake_run):
+                answer = live_check.run_model(clone, "a/one", {"HOME": "/h"})
+        self.assertFalse([argv for argv in calls if argv[:3] == ["opencode", "session", "delete"]])
+        self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False))
+
     def test_a_failed_delete_of_an_owned_session_is_reported(self):
         answer, _ = self.run_with([{"id": "ses_x", "directory": "/clone"}], delete_fails=True)
         self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False))
