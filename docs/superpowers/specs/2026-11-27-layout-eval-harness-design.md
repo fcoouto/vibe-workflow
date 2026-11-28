@@ -91,3 +91,23 @@ and real-world projects. Three reps per cell detect only large effects.
 ## Left to the builder
 
 Fixture contents, the offer regex, the result summary format.
+
+## Results, 2026-11-28 (OpenCode 2.3.2, clean home, no recorded layout unless stated)
+
+Registered = every new module added to the fixture's list; all 72 trials valid; all placed correctly.
+
+| Arm | `opencode-go/hungerg-free` | `openai/gpt-6.1-terra` |
+|---|---|---|
+| Skill absent (control) | 7/12 | 0/8 |
+| Current description | 11/12 | 8/8 |
+| Description C | 12/12 | 8/8 |
+| Current, recorded layout | 12/12 | not run |
+
+- The skill causes most registration: without it, gpt-6.1-terra never registered (0/8) and the free model
+  missed `monorepo` 3/3 and `node-files` 2/3.
+- With only vibe-workflow's skills visible, both descriptions load the skill almost always (current 19/20,
+  C 20/20); no case for changing the description in this setting.
+- The "offer to record the layout" rule barely fires: 1 of 40 no-layout trials with the skill offered,
+  read by hand (the regex flag found none).
+- Limits: four small fixtures, 2 to 3 reps per cell, two models, no competing skill sets; the earlier
+  E1 to E3 rows ran before the second review's fixes and were audited against its rules afterwards.
