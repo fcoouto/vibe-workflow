@@ -164,6 +164,24 @@ def _events(output):
             continue
 
 
+def _owned_by(project, session, env):
+    """Whether OpenCode lists `session` for exactly this directory; anything unproven is False."""
+    try:
+        listed = json.loads(_run(["opencode", "session", "list", "--standalone", "--format", "json"], cwd=project,
+                                 timeout=60, data="", env={**env, "PWD": str(project)}) or "[]")
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return False
+    listed = listed.get("data", listed) if isinstance(listed, dict) else listed
+    if not isinstance(listed, list):
+        return False
+    for item in listed:
+        if isinstance(item, dict) and item.get("id") == session:
+            location = item.get("location") if isinstance(item.get("location"), dict) else {}
+            directory = item.get("directory") or location.get("directory")
+            return isinstance(directory, str) and os.path.realpath(directory) == os.path.realpath(project)
+    return False
+
+
 def run_model(project, model, env, prompt=INJECTION_PROMPT, timeout=300):
     """One first-call prompt on one model in an isolated private server; text parts form the reply."""
     # OpenCode takes its directory from PWD, which cwd alone leaves pointing at the caller; empty stdin keeps the
@@ -200,8 +218,9 @@ def run_model(project, model, env, prompt=INJECTION_PROMPT, timeout=300):
                           "command": given.get("command") if isinstance(given.get("command"), str) else None,
                           "output": "\n".join(text for text in texts_out if isinstance(text, str))}
     session, deleted = (sessions[0] if sessions else None), False
-    if session:
-        # --archived only hides the session; delete it so the check leaves nothing in the user's storage.
+    if session and _owned_by(project, session, env):
+        # --archived only hides the session; delete it so the check leaves nothing in the user's storage. A session
+        # not listed for this clone is never deleted: its ID came from the model's event stream.
         try:
             _run(["opencode", "session", "delete", session, "--standalone"], cwd=project, timeout=60, data="",
                  env={**env, "PWD": str(project)})
@@ -344,17 +363,19 @@ def check_injection(record_path=RECORD, runner=run_model, version_text=None, tod
         if not results:
             for provider, (model, replaced, overflow) in chosen.items():
                 answer = _answer(runner, project, model, env)
-                passed = injection_passes(answer["reply"], answer["tool_calls"], notes)
+                errored = bool(answer.get("errors"))
+                passed = not errored and injection_passes(answer["reply"], answer["tool_calls"], notes)
                 results.append({"path": provider, "model": model, "replaced": replaced, "paid_overflow": overflow,
                                 "pass": passed,
-                                "outcome": "delivered" if passed else "not_delivered",
+                                "outcome": "run_error" if errored else "delivered" if passed else "not_delivered",
                                 "excerpt": "" if passed else answer["reply"][:200],
                                 "session_left": None if answer.get("deleted", True) else answer.get("session")})
             model = chosen[SHELL_PROBE_PATH][0]
             answer = _answer(runner, project, model, shell_probe_env(work, project), prompt=SHELL_PROMPT)
-            passed = shell_probe_passes(answer)
+            errored = bool(answer.get("errors"))
+            passed = not errored and shell_probe_passes(answer)
             results.append({"path": SHELL_PROBE_PATH, "model": model, "probe": "shell-note", "pass": passed,
-                            "outcome": "delivered" if passed else "not_delivered",
+                            "outcome": "run_error" if errored else "delivered" if passed else "not_delivered",
                             "excerpt": "" if passed else answer["reply"][:200],
                             "session_left": None if answer.get("deleted", True) else answer.get("session")})
     finally:

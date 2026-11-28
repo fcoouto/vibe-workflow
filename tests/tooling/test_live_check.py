@@ -104,6 +104,8 @@ class IsolatedPromptTest(unittest.TestCase):
 
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             calls.append((argv, cwd, data, env))
+            if argv[:3] == ["opencode", "session", "list"]:
+                return json.dumps([{"id": "ses_a", "directory": "/clone"}])
             return self.events() if argv[:3] == ["opencode", "run", "--standalone"] else ""
         overrides = {"OPENCODE_CONFIG": "/x.json", "OPENCODE_SESSION_ID": "ses_parent", "GIT_DIR": "/g"}
         with mock.patch.dict(os.environ, overrides), mock.patch.object(live_check, "prepare", return_value=Path("/clone")), \
@@ -233,19 +235,40 @@ class InjectionTest(unittest.TestCase):
             answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
         self.assertEqual(answer["reply"], "NEVER set this\nabcdef")
 
-    def test_run_model_deletes_its_session(self):
+    def run_with(self, listing, delete_fails=False):
         calls = []
 
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             calls.append((argv, env))
             if argv[1] == "run":
                 return json.dumps({"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "hi"}})
-            raise subprocess.CalledProcessError(1, argv)
+            if argv[:3] == ["opencode", "session", "list"]:
+                if isinstance(listing, Exception):
+                    raise listing
+                return json.dumps(listing)
+            if delete_fails:
+                raise subprocess.CalledProcessError(1, argv)
+            return ""
         with mock.patch.object(live_check, "_run", side_effect=fake_run):
             answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
-        delete, env = calls[1]
-        self.assertEqual(delete[:4], ["opencode", "session", "delete", "ses_x"])
-        self.assertEqual(env["PWD"], "/clone")
+        return answer, calls
+
+    def test_run_model_deletes_its_session_once_the_clone_owns_it(self):
+        answer, calls = self.run_with([{"id": "ses_x", "directory": "/clone"}])
+        deletes = [(argv, env) for argv, env in calls if argv[:3] == ["opencode", "session", "delete"]]
+        self.assertEqual([argv[:4] for argv, _ in deletes], [["opencode", "session", "delete", "ses_x"]])
+        self.assertEqual(deletes[0][1]["PWD"], "/clone")
+        self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", True))
+
+    def test_run_model_keeps_a_session_it_cannot_prove_belongs_to_the_clone(self):
+        for listing in ([{"id": "ses_x", "directory": "/Users/someone/real-project"}], [{"id": "ses_other", "directory": "/clone"}],
+                        [{"id": "ses_x"}], {"weird": 1}, subprocess.CalledProcessError(1, "list")):
+            answer, calls = self.run_with(listing)
+            self.assertFalse([argv for argv, _ in calls if argv[:3] == ["opencode", "session", "delete"]], listing)
+            self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False), listing)
+
+    def test_a_failed_delete_of_an_owned_session_is_reported(self):
+        answer, _ = self.run_with([{"id": "ses_x", "directory": "/clone"}], delete_fails=True)
         self.assertEqual((answer["session"], answer["deleted"]), ("ses_x", False))
 
     def test_run_model_reads_opencode_events_as_they_arrive(self):
@@ -436,6 +459,22 @@ class PathTest(unittest.TestCase):
             self.assertEqual(self.path.read_bytes(), before)
             blocked = [item for item in summary["results"] if item.get("outcome") == "could_not_select"]
             self.assertEqual([item["path"] for item in blocked], ["openai"])
+
+    def test_an_error_event_fails_a_probe_even_when_its_reply_passes(self):
+        before = self.path.read_bytes()
+        error = {"type": "error", "error": {"name": "ProviderError"}}
+        for broken in ("notes", "shell"):
+            def runner(project, model, env, prompt=live_check.INJECTION_PROMPT, broken=broken):
+                answer = self.runner(project, model, env, prompt)
+                hit = (prompt == live_check.SHELL_PROMPT) if broken == "shell" else (
+                    prompt != live_check.SHELL_PROMPT and model == "opencode-go/claude-haiku-5-5")
+                return {**answer, "errors": [error]} if hit else answer
+            summary = self.check(runner=runner)
+            self.assertFalse(summary["recorded"], broken)
+            self.assertEqual(self.path.read_bytes(), before)
+            failed = [item for item in summary["results"] if not item["pass"]]
+            self.assertEqual(len(failed), 1, broken)
+            self.assertEqual(failed[0]["outcome"], "run_error", broken)
 
     def test_a_failing_note_or_shell_probe_blocks_the_record(self):
         before = self.path.read_bytes()
