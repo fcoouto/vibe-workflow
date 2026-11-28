@@ -204,9 +204,16 @@ test("without GitHub, a branch counts as pushed only when its remote branch exis
   const text = await read("references/worktree-cleanup.md")
   const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees")).replace(/\s+/g, " ")
   const steps = ["`git -C <primary> for-each-ref --format='%(upstream)' refs/heads/<branch>`",
+    "`refs/remotes/<remote>/<branch>`", "the branch's own name",
     "`git -C <primary> rev-parse --verify <upstream>`", "`git -C <primary> merge-base --is-ancestor <head> <upstream>`",
     "Only then may the ancestor test confirm the merge"].map((phrase) => sweep.indexOf(phrase))
-  assert.ok(steps.every((index, i) => index >= 0 && (i === 0 || steps[i - 1] < index)), `upstream, exists, holds the tip: ${steps}`)
+  assert.ok(steps.every((index, i) => index >= 0 && (i === 0 || steps[i - 1] < index)), `own name, exists, holds the tip: ${steps}`)
+  assert.ok(sweep.includes("pruned"), "a pruned remote branch cannot be confirmed without GitHub")
+  const github = sweep.slice(sweep.indexOf("- With a branch: run"), sweep.indexOf("- Detached, or without GitHub"))
+  for (const phrase of ["`gh pr list --head <branch> --state merged --json number,headRefOid,baseRefName`",
+    "equal its `headRefOid`", "An empty list means not merged", "whose remote branch is gone"]) {
+    assert.ok(github.includes(phrase), phrase)
+  }
 })
 
 test("a failed sort before [READY] can be answered with Keep the worktree", async () => {

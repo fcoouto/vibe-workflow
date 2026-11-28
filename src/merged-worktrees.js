@@ -34,14 +34,15 @@ export function parseWorktrees(porcelain) {
 }
 
 // Input is the REFS answer: one `<ref> <its upstream> <its symbolic target> <its distance to the upstream>` line per
-// merged ref. A branch with no commits of its own is merged too, so a branch counts only when it has a remote branch
-// other than the default one, that remote branch exists here, and it holds the branch's tip: the distance is empty or
-// only `[behind N]`, never `[gone]` or `[ahead N]`. Returns null when the default branch's own line is missing.
+// merged ref. A branch with no commits of its own is merged too, so a branch counts only when it was pushed: it has a
+// remote branch other than the default one, and that remote branch either holds the branch's tip (the distance is empty
+// or only `[behind N]`, never `[ahead N]`) or is `[gone]`, as after a merged head branch is deleted and pruned.
+// Returns null when the default branch's own line is missing.
 function pushedBranches(listing) {
   const lines = listing.split("\n").filter(Boolean).map((line) => line.split(" "))
   const target = lines.find(([ref]) => ref === MERGED)?.[2]
   if (!target) return null
-  const held = (track) => track === "" || /^\[behind \d+\]$/.test(track)
+  const held = (track) => track === "" || track === "[gone]" || /^\[behind \d+\]$/.test(track)
   return new Set(lines
     .filter(([ref, upstream, , ...track]) => ref.startsWith("refs/heads/") && upstream?.startsWith("refs/remotes/") &&
       upstream !== target && held(track.join(" ")))

@@ -91,8 +91,8 @@ test("a branch that was never pushed, or that tracks the default branch, is not 
   assert.equal(await sweep({ run: gitRun(unknown) }).note({}), null, "no default branch target: nothing is named")
 })
 
-test("a branch is named only when its upstream exists and holds the branch's tip", async () => {
-  const names = ["topic", "behind", "fresh", "gone", "ahead", "diverged", "odd"]
+test("a branch is named when its upstream holds its tip or is gone, never when it is ahead or has no upstream", async () => {
+  const names = ["topic", "behind", "fresh", "gone", "ahead", "diverged", "odd", "never"]
   const porcelain = ["worktree /repo", "HEAD a1", "branch refs/heads/main", "",
     ...names.flatMap((name) => [`worktree /wt/${name}`, "HEAD b2", `branch refs/heads/${name}`, ""])].join("\0")
   const merged = ["refs/heads/main refs/remotes/origin/main  ",
@@ -102,9 +102,11 @@ test("a branch is named only when its upstream exists and holds the branch's tip
     "refs/heads/gone refs/remotes/origin/gone  [gone]",
     "refs/heads/ahead refs/remotes/origin/ahead  [ahead 1]",
     "refs/heads/diverged refs/remotes/origin/diverged  [ahead 1, behind 3]",
-    "refs/heads/odd refs/remotes/origin/odd  [something new]", DEFAULT, ""].join("\n")
+    "refs/heads/odd refs/remotes/origin/odd  [something new]",
+    "refs/heads/never   ", DEFAULT, ""].join("\n")
   const answers = { ...ANSWERS, [LIST]: { code: 0, stdout: porcelain }, [MERGED]: { code: 0, stdout: merged } }
-  assert.deepEqual(paths(await sweep({ run: gitRun(answers) }).note({})), ["/wt/topic", "/wt/behind"])
+  assert.deepEqual(paths(await sweep({ run: gitRun(answers) }).note({})), ["/wt/topic", "/wt/behind", "/wt/gone"],
+    "a gone upstream means the branch was pushed once")
 })
 
 test("no more than eight folders are resolved at once, and none after the deadline", async () => {

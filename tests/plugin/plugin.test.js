@@ -2178,7 +2178,7 @@ test("a worktree whose branch was just created, or never pushed, is not named as
     "a detached worktree keeps the ancestor test")
 })
 
-test("a branch whose upstream is gone, or does not hold its tip, is not named as merged", async (t) => {
+test("a merged branch whose remote branch was pruned is named; one ahead of its upstream is not", async (t) => {
   const { root, primary, a, b } = await mergedWorktrees(t)
   // `fresh` starts at the default branch and only tracks the merged topic `a`.
   sweepGit(primary, "worktree", "add", "-q", "-b", "fresh", join(root, "fresh"))
@@ -2198,7 +2198,7 @@ test("a branch whose upstream is gone, or does not hold its tip, is not named as
   const fire = await sweepHook(t, { root, directory: primary })
   const event = await fire({ tool: "bash", status: "completed", sessionID: "ses_1",
     input: { command: "gh pr merge 3", workdir: primary }, result: "done" })
-  assert.deepEqual(sweptEntries(event.result).map(({ path }) => path), [a, b])
+  assert.deepEqual(sweptEntries(event.result).map(({ path }) => path), [a, b, join(root, "gone")])
 })
 
 test("a session folder named through a symbolic link still excludes its worktree", async (t) => {

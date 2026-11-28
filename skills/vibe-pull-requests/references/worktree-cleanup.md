@@ -548,15 +548,16 @@ Then, for each named worktree, in this order:
      `gh pr list --head <branch> --state merged --json number,headRefOid,baseRefName`. It
      must return a pull request whose `baseRefName` is the default branch, and `HEAD` must
      equal its `headRefOid` or pass the ancestor test below. An empty list means not merged.
+     This is also the gate for a branch whose remote branch is gone.
    - Detached, or without GitHub: `HEAD` must pass the ancestor test.
    - With a branch and without GitHub, the ancestor test alone is not enough, because a
      branch with no commits of its own passes it. Skip a branch that was never pushed, in
      these three checks:
      - `git -C <primary> for-each-ref --format='%(upstream)' refs/heads/<branch>` must print
-       a name that starts with `refs/remotes/` and is not
-       `refs/remotes/origin/<default branch>`. That name is `<upstream>`.
+       `refs/remotes/<remote>/<branch>`: a remote branch that carries the branch's own name,
+       and so never `refs/remotes/origin/<default branch>`. That name is `<upstream>`.
      - `git -C <primary> rev-parse --verify <upstream>` must succeed: the remote branch
-       exists here.
+       exists here. A pruned remote branch cannot be confirmed without GitHub.
      - `git -C <primary> merge-base --is-ancestor <head> <upstream>` must exit 0: the remote
        branch holds the branch's tip.
 
