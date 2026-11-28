@@ -380,6 +380,20 @@ class SecurityTest(unittest.TestCase):
         self.assertEqual(len(out.read_text().splitlines()), 2)
 
 
+class AppendRowLinkTest(unittest.TestCase):
+    def test_a_results_path_that_is_a_link_is_refused_and_its_target_untouched(self):
+        folder = Path(tempfile.mkdtemp(prefix="layout-eval-link-")).resolve()
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(folder)])
+        target = folder / "target.txt"
+        target.write_text("keep\n")
+        target.chmod(0o644)
+        link = folder / "rows.jsonl"
+        link.symlink_to(target)
+        with self.assertRaises(OSError):
+            layout_eval.append_row(link, {"a": 1})
+        self.assertEqual((target.read_text(), oct(target.stat().st_mode & 0o777)), ("keep\n", "0o644"))
+
+
 class IsolationTest(unittest.TestCase):
     def test_the_clean_env_hides_home_skills_but_keeps_logins(self):
         with tempfile.TemporaryDirectory() as folder:

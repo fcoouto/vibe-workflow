@@ -325,7 +325,7 @@ def summarize(rows):
 
 def append_row(path, row):
     """Results hold replies and tool inputs, which may echo private data: the file is owner-only."""
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)  # never write through a link
     try:
         os.fchmod(descriptor, 0o600)
         os.write(descriptor, (json.dumps(row) + "\n").encode())
