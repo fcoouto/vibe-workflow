@@ -472,6 +472,21 @@ class ArchiveTest(unittest.TestCase):
                 state.rmdir() if name in folders else state.unlink()
         self.assertEqual(self.archive(".env").returncode, 0)
 
+    def test_refuses_unresolved_conflicts_and_an_unfinished_notes_merge(self):
+        (self.linked / "README.md").write_text("two\n")
+        git(self.linked, "stash", "-q")
+        (self.linked / "README.md").write_text("three\n")
+        git(self.linked, "commit", "-qam", "three")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        popped = subprocess.run(["git", "-C", str(self.linked), "stash", "pop", "-q"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(popped.returncode, 0, "the fixture needs a conflict")
+        (self.linked / ".env").write_text("x\n")
+        self.kept(self.archive(".env"), "the worktree has unresolved conflicts")
+        git(self.linked, "checkout", "-q", "HEAD", "--", "README.md")
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        (own / "NOTES_MERGE_WORKTREE").mkdir()
+        self.kept(self.archive(".env"), "a Git operation is paused in the worktree (NOTES_MERGE_WORKTREE)")
+
     def test_archives_after_a_finished_rebase(self):
         """Git leaves AUTO_MERGE in the worktree's own Git folder after a clean, finished rebase."""
         (self.linked / "a.md").write_text("a\n")

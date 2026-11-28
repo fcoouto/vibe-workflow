@@ -691,6 +691,30 @@ class LeftoversTest(unittest.TestCase):
         self.refused(run)
         self.assertIn("a Git operation is paused in the worktree (rebase-merge)", run.stderr)
 
+    def test_unresolved_conflicts_with_no_operation_marker_are_refused(self):
+        """A conflicted `stash pop` leaves an unmerged index and AUTO_MERGE, but no MERGE_HEAD or rebase folder."""
+        self.write("node_modules/x.js")
+        (self.linked / "src/app.py").write_text("print(2)\n")
+        git(self.linked, "stash", "-q")
+        (self.linked / "src/app.py").write_text("print(3)\n")
+        git(self.linked, "commit", "-qam", "three")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env |= {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        popped = subprocess.run(["git", "-C", str(self.linked), "stash", "pop", "-q"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(popped.returncode, 0, "the fixture needs a conflict")
+        self.assertTrue(git(self.linked, "ls-files", "--unmerged"))
+        for run in (self.identity(self.linked, "feat/x"), self.caches()):
+            self.refused(run)
+            self.assertEqual(run.stderr, "refused: the worktree has unresolved conflicts\n")
+        self.assertTrue((self.linked / "node_modules/x.js").exists())
+
+    def test_an_unfinished_notes_merge_is_a_paused_operation(self):
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        (own / "NOTES_MERGE_WORKTREE").mkdir()
+        run = self.identity(self.linked, "feat/x")
+        self.refused(run)
+        self.assertEqual(run.stderr, "refused: a Git operation is paused in the worktree (NOTES_MERGE_WORKTREE)\n")
+
     def test_a_real_bisect_in_a_clean_worktree_is_a_paused_operation(self):
         git(self.linked, "bisect", "start")
         self.assertEqual(self.rows("sort"), [], "nothing is listed, yet the worktree is mid-operation")

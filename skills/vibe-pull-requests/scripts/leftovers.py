@@ -20,8 +20,10 @@ BROKEN = "the worktree's Git pointer is broken"
 # What a paused rebase, merge, cherry-pick, revert or bisect, or a stash it set aside, leaves in a worktree's own Git folder.
 # `sequencer` holds the commits a multi-commit cherry-pick or revert has still to apply. `AUTO_MERGE` is not listed: Git
 # leaves it after a clean, finished rebase, and a paused merge or rebase is already marked by MERGE_HEAD or its folder.
+# Conflicts no marker names (a conflicted `stash pop`, `merge --squash` or `cherry-pick --no-commit`) are caught by the
+# unmerged-index check instead. `NOTES_MERGE_WORKTREE` holds an unfinished `git notes merge`.
 PAUSED = ("rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
-          "MERGE_AUTOSTASH")
+          "MERGE_AUTOSTASH", "NOTES_MERGE_WORKTREE")
 USAGE = ("invalid arguments; give sort, expand, manifest, discard, caches or identity, then --worktree <dir> and "
          "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name> or "
          "--detached, --head <commit> (the full hash)")
@@ -468,6 +470,8 @@ def identity(worktree, primary, branch, head=None):
         for name in PAUSED:
             if os.path.lexists(os.path.join(git_dir, os.fsencode(name))):
                 raise Refused(f"a Git operation is paused in the worktree ({name})")
+        if _out("ls-files", "--unmerged", "-z"):
+            raise Refused("the worktree has unresolved conflicts")
         code, name = _git("symbolic-ref", "--short", "-q", "HEAD", codes=(0, 1))
         if (os.fsdecode(name.removesuffix(b"\n")) if code == 0 else None) != branch:
             raise Refused("the worktree is not on that branch")
