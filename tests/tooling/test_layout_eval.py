@@ -65,6 +65,18 @@ class RunModelTimeoutTest(unittest.TestCase):
         self.assertEqual(seen["timeout"], 900)
 
 
+class RunModelErrorsTest(unittest.TestCase):
+    def test_run_model_surfaces_error_events(self):
+        lines = [{"type": "text", "sessionID": "ses_x", "part": {"id": "p1", "type": "text", "text": "partial"}},
+                 {"type": "error", "sessionID": "ses_x", "error": {"name": "ProviderError", "data": {"message": "429"}}}]
+
+        def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
+            return "\n".join(json.dumps(line) for line in lines) if argv[1] == "run" else ""
+        with mock.patch.object(live_check, "_run", side_effect=fake_run):
+            answer = live_check.run_model(Path("/clone"), "a/one", {"HOME": "/h"})
+        self.assertEqual(len(answer["errors"]), 1)
+
+
 class Base(unittest.TestCase):
     def build(self, name, description="current", layout=False, marker="m-1"):
         folder = tempfile.mkdtemp(prefix="layout-eval-test-")
@@ -142,8 +154,13 @@ class EntriesTest(unittest.TestCase):
                          {"stock", "duration"})
         barrel = {"file": "index.js", "kind": "reexports", "base": ""}
         text = ('export { a } from "./slugify.js"\nexport * from \'./money\'\nimport { d } from "./duration.js"\n'
-                '// export { x } from "./commented.js"\n')
+                '// export { x } from "./commented.js"\n/*\nexport { y } from "./blocked.js"\n*/\n')
         self.assertEqual(layout_eval.entries(barrel, text), {"slugify", "money"})
+
+    def test_malformed_list_entries_are_ignored_not_fatal(self):
+        files = {"file": "package.json", "kind": "files", "base": ""}
+        self.assertEqual(layout_eval.entries(files, json.dumps({"files": ["src/a.js", {"x": 1}, 3]})), {"src/a.js"})
+        self.assertEqual(layout_eval.entries(files, json.dumps(["not", "an", "object"])), set())
 
     def test_expected_entry_is_relative_to_the_list_base(self):
         self.assertEqual(layout_eval.expected_entry({"kind": "files", "base": "packages/api"}, "packages/api/src/d.js"), "src/d.js")
@@ -208,6 +225,19 @@ class ScoreTest(Base):
         self.assertEqual((result["where"], result["registered"], result["split"]), ("linked-worktree", False, True))
 
 
+class MoreScoreTest(Base):
+    def test_new_code_in_two_checkouts_is_split_even_without_list_edits_elsewhere(self):
+        project, base = self.build("node-files")
+        tree = project.parent / "elsewhere"
+        git(project, "worktree", "add", "-q", "-b", "task", str(tree))
+        (tree / "src" / "units.js").write_text("x\n")
+        (project / "src" / "duration.js").write_text("y\n")
+        package = json.loads((project / "package.json").read_text())
+        package["files"].append("src/duration.js")
+        (project / "package.json").write_text(json.dumps(package))
+        self.assertTrue(layout_eval.result(project, base, layout_eval.FIXTURES["node-files"])["split"])
+
+
 class FactsTest(unittest.TestCase):
     def test_a_skill_load_counts_only_when_its_output_carries_the_marker(self):
         project = Path("/tmp/fx/project")
@@ -223,16 +253,25 @@ class FactsTest(unittest.TestCase):
                  {"tool": "read", "input": {"path": "/elsewhere/skills/vibe-project-layout/SKILL.md"}}]
         self.assertEqual(layout_eval.facts(tools, "", project, "m")["outside_skill_reads"], ["/elsewhere/skills/vibe-project-layout/SKILL.md"])
 
+    def test_any_shell_command_naming_the_skill_fails_closed(self):
+        tools = [{"tool": "shell", "input": {"command": "cd ~/.agents/skills && cat vibe-project-layout/SKILL.md"}}]
+        self.assertEqual(len(layout_eval.facts(tools, "", Path("/p"), "m")["outside_skill_reads"]), 1)
+
+    def test_a_read_naming_the_skill_outside_the_fixture_fails_closed(self):
+        tools = [{"tool": "read", "input": {"path": "/x/vibe-project-layout/SKILL.md"}}]
+        self.assertEqual(len(layout_eval.facts(tools, "", Path("/p"), "m")["outside_skill_reads"]), 1)
+
     def test_the_offer_flag(self):
         self.assertTrue(layout_eval.facts([], "Want me to record this layout in AGENTS.md?", Path("/p"), "m")["offered_to_record"])
         self.assertFalse(layout_eval.facts([], "Done. Two files created.", Path("/p"), "m")["offered_to_record"])
 
     def test_validity_reasons(self):
         good = {"error": None, "code_files": ["src/a.js"], "outside_skill_reads": [], "unverified_skill_load": False,
-                "split": False, "sessions_unknown": False}
+                "split": False, "sessions_unknown": False, "run_errors": [], "reply": "Done."}
         self.assertEqual(layout_eval.invalid_reason(good), None)
         cases = {"error": {"error": "timeout"}, "no_code_file": {"code_files": []}, "outside_skill_read": {"outside_skill_reads": ["/x"]},
-                 "unverified_skill_load": {"unverified_skill_load": True}, "split_result": {"split": True}}
+                 "unverified_skill_load": {"unverified_skill_load": True}, "split_result": {"split": True},
+                 "run_error_event": {"run_errors": [{"type": "error"}]}, "no_final_reply": {"reply": "  "}}
         for reason, broken in cases.items():
             self.assertEqual(layout_eval.invalid_reason({**good, **broken}), reason)
 
@@ -250,12 +289,28 @@ class CleanupTest(unittest.TestCase):
         def fake_run(argv, cwd=None, timeout=120, data=None, env=None):
             calls.append(argv)
             if argv[:3] == ["opencode", "session", "list"]:
-                return json.dumps([{"id": "ses_a"}, {"id": "ses_b"}])
+                return json.dumps([{"id": "ses_a", "directory": "/p"}, {"id": "ses_b", "location": {"directory": "/p"}},
+                                   {"id": "ses_other", "directory": "/Users/someone/real-project"}, {"id": "ses_nodir"}])
             return ""
         with mock.patch.object(layout_eval.live_check, "_run", side_effect=fake_run):
             deleted, unknown = layout_eval.sweep_sessions(Path("/p"), {"PWD": "/p"})
-        self.assertEqual((deleted, unknown), (["ses_a", "ses_b"], False))
+        self.assertEqual((deleted, unknown), (["ses_a", "ses_b"], True))
         self.assertEqual([c[:4] for c in calls[1:]], [["opencode", "session", "delete", "ses_a"], ["opencode", "session", "delete", "ses_b"]])
+
+    def test_an_unexpected_listing_shape_is_unknown_and_deletes_nothing(self):
+        with mock.patch.object(layout_eval.live_check, "_run", return_value=json.dumps({"weird": 1})) as run:
+            self.assertEqual(layout_eval.sweep_sessions(Path("/p"), {}), ([], True))
+        self.assertEqual(run.call_count, 1)
+
+    def test_every_fixture_gets_its_own_root_commit(self):
+        folder = tempfile.mkdtemp(prefix="layout-eval-test-")
+        self.addCleanup(subprocess.run, ["rm", "-rf", folder])
+        package = fake_package(folder)
+        roots = set()
+        for marker in ("one", "two"):
+            project = layout_eval.build_fixture(Path(folder) / marker, "node-files", package, "current", False, marker)
+            roots.add(subprocess.run(["git", "-C", str(project), "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout)
+        self.assertEqual(len(roots), 2)
 
     def test_a_failed_listing_reports_unknown(self):
         with mock.patch.object(layout_eval.live_check, "_run", side_effect=subprocess.CalledProcessError(1, "x")):

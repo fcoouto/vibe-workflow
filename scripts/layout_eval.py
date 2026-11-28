@@ -154,7 +154,8 @@ def build_fixture(project, name, package, description, layout, marker):
         (project / "AGENTS.md").write_text("# Agent instructions\n\n## Project layout\n\n" + fixture["layout"])
     _git(project, "init", "-q", "-b", "main", check=True)
     _git(project, "add", "-A", check=True)
-    _git(project, "commit", "-qm", "initial", check=True)
+    # A unique message gives each fixture its own root commit, so OpenCode sees each as a separate project.
+    _git(project, "commit", "-qm", f"initial {marker}", check=True)
     with open(project / ".git" / "info" / "exclude", "a") as exclude:
         exclude.write("\n.opencode/\n")
     plugin = project / ".opencode" / "plugins" / "live-check"
@@ -174,15 +175,21 @@ def build_fixture(project, name, package, description, layout, marker):
     return project
 
 
+def _strings(value):
+    return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
+
+
 def entries(spec, text):
     if spec["kind"] == "files":
-        value = json.loads(text).get("files")
-        return set(value) if isinstance(value, list) else set()
+        data = json.loads(text)
+        return _strings(data.get("files")) if isinstance(data, dict) else set()
     if spec["kind"] == "py-modules":
-        value = tomllib.loads(text).get("tool", {}).get("setuptools", {}).get("py-modules")
-        return set(value) if isinstance(value, list) else set()
+        tool = tomllib.loads(text).get("tool", {})
+        return _strings(tool.get("setuptools", {}).get("py-modules")) if isinstance(tool, dict) else set()
     if spec["kind"] == "reexports":
-        return set(REEXPORT.findall(text))
+        code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        code = re.sub(r"(?m)^\s*//.*$", "", code)
+        return set(REEXPORT.findall(code))
     raise ValueError(spec["kind"])
 
 
@@ -217,7 +224,7 @@ def _location(path, base, fixture):
         after = (Path(path) / spec["file"]).read_text() if (Path(path) / spec["file"]).is_file() else ""
         try:
             lists[spec["file"]] = (entries(spec, before), entries(spec, after), before != after)
-        except (ValueError, tomllib.TOMLDecodeError):
+        except (ValueError, TypeError, AttributeError, tomllib.TOMLDecodeError):
             lists[spec["file"]] = (entries(spec, before), set(), True)  # an unparsable list registers nothing
     registered = bool(code) and all(
         expected_entry(spec, f) in lists[spec["file"]][1] and expected_entry(spec, f) not in lists[spec["file"]][0]
@@ -237,7 +244,7 @@ def result(project, base, fixture):
     with_code = [loc for loc in locations if loc["code_files"]]
     picked = max(with_code, key=lambda loc: len(loc["code_files"])) if with_code else locations[0]
     chosen = {**picked, "code_locations": len(with_code),
-              "split": any(loc["lists_changed"] for loc in locations if loc is not picked)}
+              "split": any(loc["lists_changed"] or loc["code_files"] for loc in locations if loc is not picked)}
     return chosen
 
 
@@ -250,11 +257,11 @@ def facts(tools, reply, project, marker):
             loaded = True
             unverified = unverified or f"eval-marker {marker}" not in (call.get("output") or "")
         path = given.get("filePath") or given.get("path") or ""
-        if f"skills/{SKILL}" in path and not os.path.normpath(os.path.join(root, path)).startswith(root + os.sep):
+        if SKILL in path and not os.path.normpath(os.path.join(root, path)).startswith(root + os.sep):
             outside.append(path)
         command = given.get("command") or ""
-        if f"skills/{SKILL}" in command:
-            outside.append(command[:200])  # a shell read of the skill cannot be placed safely: fail closed
+        if SKILL in command:
+            outside.append(command[:200])  # a shell command naming the skill cannot be placed safely: fail closed
     return {"skill_loaded": loaded, "unverified_skill_load": unverified, "outside_skill_reads": outside,
             "offered_to_record": bool(OFFER.search(reply or ""))}
 
@@ -270,6 +277,10 @@ def invalid_reason(row):
         return "unverified_skill_load"
     if row.get("split"):
         return "split_result"
+    if row.get("run_errors"):
+        return "run_error_event"
+    if not (row.get("reply") or "").strip():
+        return "no_final_reply"
     return None
 
 
@@ -303,10 +314,18 @@ def sweep_sessions(project, env):
     except (subprocess.SubprocessError, OSError, ValueError):
         return [], True
     listed = listed.get("data", listed) if isinstance(listed, dict) else listed
-    deleted, unknown = [], False
-    for item in listed if isinstance(listed, list) else []:
+    if not isinstance(listed, list):
+        return [], True
+    deleted, unknown, here = [], False, os.path.realpath(project)
+    for item in listed:
         session = item.get("id") if isinstance(item, dict) else None
         if not (isinstance(session, str) and session.startswith("ses")):
+            unknown = True
+            continue
+        location = item.get("location") if isinstance(item.get("location"), dict) else {}
+        directory = item.get("directory") or location.get("directory")
+        if not (isinstance(directory, str) and os.path.realpath(directory) == here):
+            unknown = True  # never delete a session that is not provably this fixture's
             continue
         try:
             live_check._run(["opencode", "session", "delete", session, "--standalone"], cwd=project, timeout=60, data="", env=env)
@@ -342,13 +361,13 @@ def trial(package, work_root, spec):
             answer = live_check.run_model(project, spec["model"], env, prompt=FIXTURES[spec["fixture"]]["prompt"], timeout=1200)
         except (subprocess.SubprocessError, OSError) as error:
             row["error"] = repr(error)[:300]
-            answer = {"reply": "", "tools": []}
+            answer = {"reply": "", "tools": [], "errors": []}
         row.update(result(project, base, FIXTURES[spec["fixture"]]))
         row.update(facts(answer["tools"], answer["reply"], project, marker))
         row["tools_brief"] = [[call.get("tool"), str((call.get("input") or {}).get("name") or (call.get("input") or {}).get("id")
                                or (call.get("input") or {}).get("filePath") or (call.get("input") or {}).get("path")
                                or (call.get("input") or {}).get("command") or "")[:120]] for call in answer["tools"]]
-        row.update(tool_calls=len(answer["tools"]), reply_tail=(answer["reply"] or "")[-800:])
+        row.update(tool_calls=len(answer["tools"]), reply=answer["reply"] or "", run_errors=answer.get("errors", []))
     except Exception as error:  # report a broken trial; never hide it
         row["error"] = repr(error)[:300]
     finally:
