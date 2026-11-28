@@ -1,6 +1,7 @@
 """Pure parts of the dev-only layout eval harness; never runs OpenCode."""
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -293,13 +294,13 @@ class CleanupTest(unittest.TestCase):
                                    {"id": "ses_other", "directory": "/Users/someone/real-project"}, {"id": "ses_nodir"}])
             return ""
         with mock.patch.object(layout_eval.live_check, "_run", side_effect=fake_run):
-            deleted, unknown = layout_eval.sweep_sessions(Path("/p"), {"PWD": "/p"})
+            deleted, unknown = layout_eval.sweep_sessions(Path("/p"), {"PWD": "/p"}, "/p")
         self.assertEqual((deleted, unknown), (["ses_a", "ses_b"], True))
         self.assertEqual([c[:4] for c in calls[1:]], [["opencode", "session", "delete", "ses_a"], ["opencode", "session", "delete", "ses_b"]])
 
     def test_an_unexpected_listing_shape_is_unknown_and_deletes_nothing(self):
         with mock.patch.object(layout_eval.live_check, "_run", return_value=json.dumps({"weird": 1})) as run:
-            self.assertEqual(layout_eval.sweep_sessions(Path("/p"), {}), ([], True))
+            self.assertEqual(layout_eval.sweep_sessions(Path("/p"), {}, "/p"), ([], True))
         self.assertEqual(run.call_count, 1)
 
     def test_every_fixture_gets_its_own_root_commit(self):
@@ -314,7 +315,69 @@ class CleanupTest(unittest.TestCase):
 
     def test_a_failed_listing_reports_unknown(self):
         with mock.patch.object(layout_eval.live_check, "_run", side_effect=subprocess.CalledProcessError(1, "x")):
-            self.assertEqual(layout_eval.sweep_sessions(Path("/p"), {}), ([], True))
+            self.assertEqual(layout_eval.sweep_sessions(Path("/p"), {}, "/p"), ([], True))
+
+
+class SecurityTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp(prefix="layout-eval-sec-")).resolve()
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.folder)])
+
+    def test_fixture_git_ignores_inherited_git_variables(self):
+        other = self.folder / "other"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        before = subprocess.run(["git", "-C", str(other), "status", "--porcelain"], capture_output=True, text=True).stdout
+        with mock.patch.dict("os.environ", {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other)}):
+            project = layout_eval.build_fixture(self.folder / "project", "node-files", fake_package(self.folder), "current", False, "m")
+        self.assertTrue((project / ".git").is_dir())
+        self.assertEqual(subprocess.run(["git", "-C", str(other), "rev-list", "--all"], capture_output=True, text=True).stdout, "")
+        self.assertEqual(subprocess.run(["git", "-C", str(other), "status", "--porcelain"], capture_output=True, text=True).stdout, before)
+
+    def test_the_sweep_refuses_a_fixture_path_that_became_a_symlink(self):
+        real = self.folder / "real"; real.mkdir()
+        link = self.folder / "project"; link.symlink_to(real)
+        with mock.patch.object(layout_eval.live_check, "_run") as run:
+            self.assertEqual(layout_eval.sweep_sessions(link, {}, str(self.folder / "project")), ([], True))
+        run.assert_not_called()
+
+    def test_the_sweep_matches_the_directory_recorded_before_the_run(self):
+        project = self.folder / "project"; project.mkdir()
+        listing = json.dumps([{"id": "ses_a", "directory": str(project)}])
+        with mock.patch.object(layout_eval.live_check, "_run", side_effect=[listing, ""]):
+            self.assertEqual(layout_eval.sweep_sessions(project, {}, os.path.realpath(project)), (["ses_a"], False))
+
+    def test_a_worktree_outside_the_trial_is_not_read_and_invalidates(self):
+        project, base = Base.build(self, "node-files")
+        outside = self.folder / "outside-wt"
+        git(project, "worktree", "add", "-q", "-b", "task", str(outside))
+        (outside / "src" / "duration.js").write_text("x\n")
+        got = layout_eval.result(project, base, layout_eval.FIXTURES["node-files"], root=project.parent)
+        self.assertTrue(got["outside_worktree"])
+        self.assertEqual(layout_eval.invalid_reason({**got, "reply": "x", "outside_skill_reads": [], "run_errors": []}),
+                         "outside_worktree")
+
+    def test_a_symlinked_list_file_is_not_read(self):
+        project, base = Base.build(self, "node-files")
+        (project / "src" / "duration.js").write_text("x\n")
+        target = self.folder / "elsewhere.json"
+        target.write_text(json.dumps({"files": ["src/index.js", "src/orders.js", "src/billing.js", "src/duration.js"]}))
+        (project / "package.json").unlink(); (project / "package.json").symlink_to(target)
+        self.assertFalse(layout_eval.result(project, base, layout_eval.FIXTURES["node-files"])["registered"])
+
+    def test_a_read_through_a_symlink_inside_the_fixture_counts_as_outside(self):
+        outside = self.folder / "copy" / "skills" / "vibe-project-layout"; outside.mkdir(parents=True)
+        (outside / "SKILL.md").write_text("x")
+        project = self.folder / "project"; project.mkdir()
+        (project / "vibe-project-layout").symlink_to(outside)
+        tools = [{"tool": "read", "input": {"path": "vibe-project-layout/SKILL.md"}}]
+        self.assertEqual(len(layout_eval.facts(tools, "", project, "m")["outside_skill_reads"]), 1)
+
+    def test_rows_are_appended_to_an_owner_only_file(self):
+        out = self.folder / "rows.jsonl"
+        layout_eval.append_row(out, {"a": 1})
+        layout_eval.append_row(out, {"b": 2})
+        self.assertEqual(oct(out.stat().st_mode & 0o777), "0o600")
+        self.assertEqual(len(out.read_text().splitlines()), 2)
 
 
 class IsolationTest(unittest.TestCase):

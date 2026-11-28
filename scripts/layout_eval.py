@@ -19,6 +19,7 @@ import importlib.util  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import shutil  # noqa: E402
+import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
@@ -130,7 +131,9 @@ REEXPORT = re.compile(r"""^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']\./([\w.-]+
 
 
 def _git(path, *args, check=False):
-    return subprocess.run([*GIT, "-C", str(path), *args], capture_output=True, text=True, check=check).stdout
+    # Inherited GIT_DIR, GIT_WORK_TREE and the like would point Git at another repository.
+    env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+    return subprocess.run([*GIT, "-C", str(path), *args], capture_output=True, text=True, check=check, env=env).stdout
 
 
 def patch_description(text, variant):
@@ -221,7 +224,12 @@ def _location(path, base, fixture):
     lists = {}
     for spec in fixture["lists"]:
         before = _git(path, "show", f"{base}:{spec['file']}")
-        after = (Path(path) / spec["file"]).read_text() if (Path(path) / spec["file"]).is_file() else ""
+        listed = Path(path) / spec["file"]
+        try:
+            regular = stat.S_ISREG(os.lstat(listed).st_mode)  # never follow a link or open a special file
+        except OSError:
+            regular = False
+        after = listed.read_text() if regular else ""
         try:
             lists[spec["file"]] = (entries(spec, before), entries(spec, after), before != after)
         except (ValueError, TypeError, AttributeError, tomllib.TOMLDecodeError):
@@ -234,30 +242,37 @@ def _location(path, base, fixture):
             "lists_changed": any(changed for _, _, changed in lists.values())}
 
 
-def result(project, base, fixture):
-    """The delivered result is the checkout holding the new code; list edits made in any other checkout mark it split."""
-    here, locations = os.path.realpath(project), []
+def result(project, base, fixture, root=None):
+    """The delivered result is the checkout holding the new code; list edits made in any other checkout mark it split.
+
+    Only checkouts inside `root` (the trial folder) are read; one anywhere else is never opened and makes the trial invalid.
+    """
+    here, locations, outside = os.path.realpath(project), [], False
+    root = root or Path(project).parent
     for path in _worktrees(project):
+        if not inside(path, root):
+            outside = True
+            continue
         scored = _location(path, base, fixture)
         scored["where"] = "fixture" if path == here else "linked-worktree"
         locations.append(scored)
     with_code = [loc for loc in locations if loc["code_files"]]
     picked = max(with_code, key=lambda loc: len(loc["code_files"])) if with_code else locations[0]
-    chosen = {**picked, "code_locations": len(with_code),
+    chosen = {**picked, "code_locations": len(with_code), "outside_worktree": outside,
               "split": any(loc["lists_changed"] or loc["code_files"] for loc in locations if loc is not picked)}
     return chosen
 
 
 def facts(tools, reply, project, marker):
     loaded, unverified, outside = False, False, []
-    root = os.path.normpath(str(project))
+    root = os.path.realpath(project)
     for call in tools:
         given = call.get("input") or {}
         if call.get("tool") == "skill" and SKILL in (given.get("name"), given.get("id")):
             loaded = True
             unverified = unverified or f"eval-marker {marker}" not in (call.get("output") or "")
         path = given.get("filePath") or given.get("path") or ""
-        if SKILL in path and not os.path.normpath(os.path.join(root, path)).startswith(root + os.sep):
+        if SKILL in path and not os.path.realpath(os.path.join(root, path)).startswith(root + os.sep):
             outside.append(path)
         command = given.get("command") or ""
         if SKILL in command:
@@ -269,6 +284,8 @@ def facts(tools, reply, project, marker):
 def invalid_reason(row):
     if row.get("error"):
         return "error"
+    if row.get("outside_worktree"):
+        return "outside_worktree"
     if not row.get("code_files"):
         return "no_code_file"
     if row.get("outside_skill_reads"):
@@ -306,8 +323,24 @@ def summarize(rows):
     return cells
 
 
-def sweep_sessions(project, env):
-    """Delete every session stored for this fixture directory; report unknown when the list cannot be read."""
+def append_row(path, row):
+    """Results hold replies and tool inputs, which may echo private data: the file is owner-only."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, (json.dumps(row) + "\n").encode())
+    finally:
+        os.close(descriptor)
+
+
+def sweep_sessions(project, env, expected):
+    """Delete the sessions stored for this fixture directory; report unknown when that cannot be proven.
+
+    `expected` is the fixture's resolved path recorded before the agent ran: if the path has since become a link or
+    resolves elsewhere, nothing is listed or deleted.
+    """
+    if os.path.islink(project) or os.path.realpath(project) != expected:
+        return [], True
     try:
         listed = json.loads(live_check._run(["opencode", "session", "list", "--standalone", "--format", "json"],
                                             cwd=project, timeout=60, data="", env=env) or "[]")
@@ -316,7 +349,7 @@ def sweep_sessions(project, env):
     listed = listed.get("data", listed) if isinstance(listed, dict) else listed
     if not isinstance(listed, list):
         return [], True
-    deleted, unknown, here = [], False, os.path.realpath(project)
+    deleted, unknown, here = [], False, expected
     for item in listed:
         session = item.get("id") if isinstance(item, dict) else None
         if not (isinstance(session, str) and session.startswith("ses")):
@@ -356,13 +389,14 @@ def trial(package, work_root, spec):
     try:
         build_fixture(project, spec["fixture"], package, spec["description"], spec["layout"], marker)
         base = _git(project, "rev-parse", "HEAD").strip()
+        expected = os.path.realpath(project)
         env = clean_env(work, project)
         try:
             answer = live_check.run_model(project, spec["model"], env, prompt=FIXTURES[spec["fixture"]]["prompt"], timeout=1200)
         except (subprocess.SubprocessError, OSError) as error:
             row["error"] = repr(error)[:300]
             answer = {"reply": "", "tools": [], "errors": []}
-        row.update(result(project, base, FIXTURES[spec["fixture"]]))
+        row.update(result(project, base, FIXTURES[spec["fixture"]], root=work))
         row.update(facts(answer["tools"], answer["reply"], project, marker))
         row["tools_brief"] = [[call.get("tool"), str((call.get("input") or {}).get("name") or (call.get("input") or {}).get("id")
                                or (call.get("input") or {}).get("filePath") or (call.get("input") or {}).get("path")
@@ -372,7 +406,7 @@ def trial(package, work_root, spec):
         row["error"] = repr(error)[:300]
     finally:
         if env is not None:
-            row["sessions_deleted"], row["sessions_unknown"] = sweep_sessions(project, env)
+            row["sessions_deleted"], row["sessions_unknown"] = sweep_sessions(project, env, expected)
         row["left_behind"] = []
         if (project / ".git").exists():
             for path in _worktrees(project):
@@ -423,8 +457,7 @@ def main():
         specs = plan(args.experiment, args.model, args.description, args.layout, args.reps)
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
             for row in pool.map(lambda spec: trial(package, work_root, spec), specs):
-                with args.out.open("a") as out:
-                    out.write(json.dumps(row) + "\n")
+                append_row(args.out, row)
                 print(json.dumps({k: row[k] for k in ("experiment", "model", "fixture", "description", "layout", "rep",
                                                        "valid", "invalid_reason", "registered", "skill_loaded", "left_behind") if k in row}), flush=True)
     finally:
