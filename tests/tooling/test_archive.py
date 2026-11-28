@@ -463,13 +463,13 @@ class ArchiveTest(unittest.TestCase):
     def test_refuses_a_worktree_with_a_paused_git_operation(self):
         (self.linked / ".env").write_text("x\n")
         own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
-        for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
-                     "AUTO_MERGE", "MERGE_AUTOSTASH"):
+        folders = ("rebase-merge", "rebase-apply", "sequencer")
+        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE", "MERGE_AUTOSTASH"):
             with self.subTest(state=name):
                 state = own / name
-                state.mkdir() if name.startswith("rebase") else state.write_text("0" * 40 + "\n")
+                state.mkdir() if name in folders else state.write_text("0" * 40 + "\n")
                 self.kept(self.archive(".env"), f"a Git operation is paused in the worktree ({name})")
-                state.rmdir() if name.startswith("rebase") else state.unlink()
+                state.rmdir() if name in folders else state.unlink()
         self.assertEqual(self.archive(".env").returncode, 0)
 
     def test_a_settings_or_archives_folder_under_another_letter_case_is_refused_and_left_untouched(self):

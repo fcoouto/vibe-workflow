@@ -643,15 +643,15 @@ class LeftoversTest(unittest.TestCase):
         self.write("node_modules/x.js")
         digest = self.digest("notes.md")
         own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
-        for name in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
-                     "AUTO_MERGE", "MERGE_AUTOSTASH"):
+        folders = ("rebase-merge", "rebase-apply", "sequencer")
+        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE", "MERGE_AUTOSTASH"):
             with self.subTest(state=name):
                 state = own / name
-                state.mkdir() if name.startswith("rebase") else state.write_text("0" * 40 + "\n")
+                state.mkdir() if name in folders else state.write_text("0" * 40 + "\n")
                 for run in (self.identity(self.linked, "feat/x"), self.discard(("notes.md", digest)), self.caches()):
                     self.refused(run)
                     self.assertEqual(run.stderr, f"refused: a Git operation is paused in the worktree ({name})\n")
-                state.rmdir() if name.startswith("rebase") else state.unlink()
+                state.rmdir() if name in folders else state.unlink()
         self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
         (self.main / ".git/MERGE_HEAD").write_text("0" * 40 + "\n")
         self.assertEqual(self.identity(self.linked, "feat/x").returncode, 0, "another worktree's state is not this one's")
