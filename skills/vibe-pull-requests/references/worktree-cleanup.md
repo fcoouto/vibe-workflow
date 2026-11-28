@@ -277,12 +277,14 @@ Build and test outputs (`dist/`, `build/`, `coverage/`, `.test-artifacts/`):
    paths and nothing else, so take these steps in order:
    - Stage each approved path by its literal name: `git add -- ':(literal)<path>'`. Never
      stage with `.`, `-A` or a pattern.
-   - `git diff --cached --name-only -z` must now list exactly the approved paths (for a
-     folder, the files inside it). If anything else is staged, stop and ask: it was staged
-     before you started, and the commit would publish it.
+   - `git diff --cached --no-renames --name-only -z` must now list exactly the approved
+     paths (for a folder, the files inside it). If anything else is staged, stop and ask:
+     it was staged before you started, and the commit would publish it. Keep
+     `--no-renames` in both checks: without it, git can show an unrelated staged deletion
+     as a rename into an approved path, and list only that path.
    - Commit.
-   - `git show --name-only -z --format= HEAD` must list exactly the approved paths again.
-     If it lists anything else, do not push: stop and report.
+   - `git show --no-renames --name-only -z --format= HEAD` must list exactly the approved
+     paths again. If it lists anything else, do not push: stop and report.
    - Push.
 3. Sort again. The question is settled when every real-work row left is covered by a
    recorded **Archive**, **Discard** or **Keep the worktree** answer (check 4 says what
@@ -548,10 +550,17 @@ Then, for each named worktree, in this order:
      equal its `headRefOid` or pass the ancestor test below. An empty list means not merged.
    - Detached, or without GitHub: `HEAD` must pass the ancestor test.
    - With a branch and without GitHub, the ancestor test alone is not enough, because a
-     branch with no commits of its own passes it. Skip a branch that was never pushed:
-     `git -C <primary> for-each-ref --format='%(upstream)' refs/heads/<branch>` must print
-     a name that starts with `refs/remotes/` and is not
-     `refs/remotes/origin/<default branch>`.
+     branch with no commits of its own passes it. Skip a branch that was never pushed, in
+     these three checks:
+     - `git -C <primary> for-each-ref --format='%(upstream)' refs/heads/<branch>` must print
+       a name that starts with `refs/remotes/` and is not
+       `refs/remotes/origin/<default branch>`. That name is `<upstream>`.
+     - `git -C <primary> rev-parse --verify <upstream>` must succeed: the remote branch
+       exists here.
+     - `git -C <primary> merge-base --is-ancestor <head> <upstream>` must exit 0: the remote
+       branch holds the branch's tip.
+
+     Only then may the ancestor test confirm the merge.
    - The ancestor test is
      `git -C <worktree> merge-base --is-ancestor HEAD origin/<default branch>`.
 

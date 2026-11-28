@@ -193,10 +193,20 @@ test("the sweep note is read as JSON, and being named makes a worktree a candida
 test("an approved commit publishes exactly the approved paths", async () => {
   const text = await read("references/worktree-cleanup.md")
   const answers = text.slice(text.indexOf("### After the answers"), text.indexOf("## Confirm the merge")).replace(/\s+/g, " ")
-  const steps = ["`git add -- ':(literal)<path>'`", "`git diff --cached --name-only -z`", "Commit.",
-    "`git show --name-only -z --format= HEAD`", "Push."].map((phrase) => answers.indexOf(phrase))
+  const steps = ["`git add -- ':(literal)<path>'`", "`git diff --cached --no-renames --name-only -z`", "Commit.",
+    "`git show --no-renames --name-only -z --format= HEAD`", "Push."].map((phrase) => answers.indexOf(phrase))
   assert.ok(steps.every((index, i) => index >= 0 && (i === 0 || steps[i - 1] < index)), `stage, check, commit, check, push: ${steps}`)
   for (const phrase of ["exactly the approved paths", "stop and ask", "do not push"]) assert.ok(answers.includes(phrase), phrase)
+  for (const command of answers.match(/`git (diff|show) [^`]*`/g)) assert.ok(command.includes("--no-renames"), command)
+})
+
+test("without GitHub, a branch counts as pushed only when its remote branch exists and holds its tip", async () => {
+  const text = await read("references/worktree-cleanup.md")
+  const sweep = text.slice(text.indexOf("## Sweeping older merged worktrees")).replace(/\s+/g, " ")
+  const steps = ["`git -C <primary> for-each-ref --format='%(upstream)' refs/heads/<branch>`",
+    "`git -C <primary> rev-parse --verify <upstream>`", "`git -C <primary> merge-base --is-ancestor <head> <upstream>`",
+    "Only then may the ancestor test confirm the merge"].map((phrase) => sweep.indexOf(phrase))
+  assert.ok(steps.every((index, i) => index >= 0 && (i === 0 || steps[i - 1] < index)), `upstream, exists, holds the tip: ${steps}`)
 })
 
 test("a failed sort before [READY] can be answered with Keep the worktree", async () => {

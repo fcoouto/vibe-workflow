@@ -212,11 +212,12 @@ test("the documented switch and branch delete run no hook when hooks are pointed
   const { root, common, worktree } = await repository(t)
   const marker = join(root, "hook-ran")
   await mkdir(join(common, "hooks"), { recursive: true })
+  // The marker's path reaches the hooks through the environment, never as text inside the script.
   for (const name of ["post-checkout", "reference-transaction"]) {
-    await writeFile(join(common, "hooks", name), `#!/bin/sh\necho ${name} >> '${marker}'\n`, { mode: 0o755 })
+    await writeFile(join(common, "hooks", name), `#!/bin/sh\necho ${name} >> "$HOOK_MARKER"\n`, { mode: 0o755 })
   }
   // No `core.hooksPath` from the fixture here: only what the command itself passes.
-  const raw = (cwd, ...args) => spawnSync("git", args, { cwd, env, encoding: "utf8" })
+  const raw = (cwd, ...args) => spawnSync("git", args, { cwd, env: { ...env, HOOK_MARKER: marker }, encoding: "utf8" })
   const quiet = await worktree("quiet", { push: true })
   const loud = await worktree("loud", { push: true })
   await assert.rejects(readFile(marker), "the fixture itself ran no hook")
@@ -230,6 +231,24 @@ test("the documented switch and branch delete run no hook when hooks are pointed
   const ran = await readFile(marker, "utf8")
   assert.match(ran, /post-checkout/, "without the setting, the switch runs the hook")
   assert.match(ran, /reference-transaction/, "without the setting, the branch delete runs the hook")
+})
+
+test("rename detection hides an unrelated staged deletion behind an approved path, and --no-renames shows both", async (t) => {
+  const { worktree } = await repository(t)
+  const path = await worktree("renamed", { push: true })
+  const content = "the same content\nin both files\n"
+  await writeFile(join(path, "unrelated.md"), content)
+  must(path, "add", "unrelated.md")
+  must(path, "commit", "-q", "-m", "an unrelated tracked file")
+  // Someone staged the deletion earlier; the approved path is a new file that happens to hold the same content.
+  must(path, "rm", "-q", "--cached", "unrelated.md")
+  await writeFile(join(path, "approved.md"), content)
+  must(path, "add", "--", ":(literal)approved.md")
+  assert.deepEqual(entries(path, "diff", "--cached", "--name-only", "-z"), ["approved.md"], "one rename, named by its destination")
+  assert.deepEqual(entries(path, "diff", "--cached", "--no-renames", "--name-only", "-z"), ["approved.md", "unrelated.md"])
+  must(path, "commit", "-q", "-m", "commit to this PR")
+  assert.deepEqual(entries(path, "show", "--name-only", "-z", "--format=", "HEAD"), ["approved.md"])
+  assert.deepEqual(entries(path, "show", "--no-renames", "--name-only", "-z", "--format=", "HEAD"), ["approved.md", "unrelated.md"])
 })
 
 const commonDir = ["rev-parse", "--path-format=absolute", "--git-common-dir"]

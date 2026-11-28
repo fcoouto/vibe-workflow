@@ -164,8 +164,10 @@ Known limits:
 - `git worktree list --porcelain -z` needs git 2.36+; older git keeps the note silent.
 - When the host's session list gives no folders, only the session's own worktree is protected.
   When only some running sessions give a folder, the note is suppressed.
-- A branch is named only when it has a remote branch other than the default one, so a merged
-  branch that was never pushed is never swept.
+- A branch is named only when it has a remote branch other than the default one, that remote
+  branch still exists locally and it holds the branch's tip. A merged branch that was never
+  pushed, or whose remote branch was pruned, is never swept. A branch created at another merged
+  topic's tip, tracking that topic, is still named; the merge confirmation then decides.
 - The sweep never runs `git worktree repair`: a worktree with a broken pointer is skipped and
   reported with the command for the user.
 - Worktrees made with `git worktree add --relative-paths` fail the identity check (their
