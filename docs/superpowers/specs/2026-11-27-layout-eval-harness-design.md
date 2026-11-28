@@ -1,0 +1,113 @@
+# Layout skill eval harness (short design)
+
+Status: approach approved by the user 2026-11-27 ("go as you recommended"); this doc records it.
+
+## Intent
+
+`vibe-project-layout` ships to other users, whose projects look nothing like this repo. Every
+earlier live run used this repo itself, and the earlier A/B batches ran through `opencode api`,
+whose shared service loads the user's installed plugins: the installed copy tracks `main`, so both
+arms most likely read the new wording. Decisions about the skill need evidence from varied
+projects, with the skill under test being the only copy loaded and the model pinned.
+
+## Goals
+
+- A dev-only harness that runs one coding prompt per trial in a small generated fixture project and
+  scores the result from the project's real files.
+- Only the fixture's plugin copy loads: each trial is a private `opencode run --standalone` with an
+  empty config directory (`live_check.isolated_env`). The harness records every skill file the
+  agent read and marks a trial invalid if it read a copy outside the fixture.
+- The model is pinned per trial (`-m`).
+- Results answer: does description C load the skill more often, and register new files more
+  often, than the current description, in projects without a recorded layout? Does a recorded
+  layout change registration? Does the agent offer to record a layout?
+
+## Non-goals
+
+- Not shipped: not in `scripts/manifest.py` or `package.json` `files`.
+- No change to the shipped skill in this PR. The description variant is patched into the fixture's
+  plugin copy only. A description change, if the data supports it, is its own PR.
+- No paid routes: only `opencode-go/hungerg-free` (free) and the two included-subscription models
+  already recorded for live checks (`claude-agent/haiku`, `openai/gpt-6.1-terra`).
+
+## Approaches
+
+1. **Generated fixtures plus isolated standalone runs (chosen).** Fixtures are defined in the script,
+   so no fixture tree joins the repo; isolation reuses `live_check`'s tested environment.
+2. **Fixture folders committed under `tests/`.** Easier to read, but adds many files and invites the
+   layout questions the harness is meant to measure.
+3. **Keep using `opencode api`.** Rejected: it loads the installed plugins, which is what broke the
+   earlier comparison.
+
+## Design
+
+Fixtures (each a git repo with an initial commit, plus `.opencode/plugins/live-check` holding this
+checkout's package, id renamed, `.opencode/` excluded from git):
+
+| Fixture | Shape | A new module must appear in |
+|---|---|---|
+| `node-files` | `src/` modules, `test/`, `package.json` `files` lists each module | `package.json` |
+| `python-modules` | `src/` modules, `tests/`, `pyproject.toml` `py-modules` lists each module | `pyproject.toml` |
+| `monorepo` | `packages/api` and `packages/web`, each `package.json` `files` lists its modules | `packages/api/package.json` |
+| `flat-barrel` | flat root modules with tests beside them; `index.js` re-exports every module | `index.js` |
+
+The prompt asks for a duration-parser helper and a test (the monorepo prompt names the `api`
+package), and says to create the files and stop, with no tests, installs or network.
+
+Conditions: description `current` or `C` (Fable's symptom-keyed wording); recorded layout absent
+(no `AGENTS.md`) or present (`AGENTS.md` with a `## Project layout` section naming the list).
+
+Scoring per trial, from git against the initial commit, in the fixture and in any linked worktree
+the agent created: the new code file (not a test); whether every required list gained its file
+name; whether the skill loaded; whether the reply offers to record a layout. A trial is valid only
+if the run finished, a code file exists and no skill copy outside the fixture was read.
+
+Runs: E1 no layout, both descriptions, 4 fixtures x 3 reps on the free model (24). E2 recorded
+layout, current description, 4 x 3 on the free model (12). E3 no layout, both descriptions, 4 x 1 on
+each subscription model (16). Three trials run at once.
+
+`live_check.run_model` gains a `timeout` parameter (default unchanged) so slow models finish.
+
+## Validity and safety rules (from the harness review)
+
+- Provenance: each fixture's skill copy carries a per-trial marker; a skill load whose output lacks it
+  makes the trial invalid. A shell command that touches the skill path also fails the trial closed.
+- Registration compares parsed list entries before and after (`files` array, `py-modules`, `export ... from`
+  lines), for every new non-test module, not text mentions.
+- The result is the checkout holding the new code; a list edit in another checkout marks it `split`
+  (invalid). Invalid trials are counted by reason, per fixture and overall.
+- Sessions stored for the fixture directory are listed and deleted after each trial, even on timeout.
+  Worktrees are removed only inside the trial folder; any other is reported, never deleted.
+- Only `opencode-go/hungerg-free` and `openai/gpt-6.1-terra` are accepted. `claude-agent/haiku` is left out:
+  it fails without the real `~/.claude`, so it cannot run in the clean home.
+- Not sandboxed: the agent's shell can reach real paths, as in every live check; the prompt says not
+  to install or use the network. The offer flag is a regex; offers are classified by reading the replies.
+
+## Not verified
+
+Other users' plugin sets (the isolated config loads only vibe-workflow), other OpenCode versions,
+and real-world projects. Three reps per cell detect only large effects.
+
+## Left to the builder
+
+Fixture contents, the offer regex, the result summary format.
+
+## Results, 2026-11-28 (OpenCode 2.3.2, clean home, no recorded layout unless stated)
+
+Registered = every new module added to the fixture's list; all 72 trials valid; all placed correctly.
+
+| Arm | `opencode-go/hungerg-free` | `openai/gpt-6.1-terra` |
+|---|---|---|
+| Skill absent (control) | 7/12 | 0/8 |
+| Current description | 11/12 | 8/8 |
+| Description C | 12/12 | 8/8 |
+| Current, recorded layout | 12/12 | not run |
+
+- The skill causes most registration: without it, gpt-6.1-terra never registered (0/8) and the free model
+  missed `monorepo` 3/3 and `node-files` 2/3.
+- With only vibe-workflow's skills visible, both descriptions load the skill almost always (current 19/20,
+  C 20/20); no case for changing the description in this setting.
+- The "offer to record the layout" rule barely fires: 1 of 40 no-layout trials with the skill offered,
+  read by hand (the regex flag found none).
+- Limits: four small fixtures, 2 to 3 reps per cell, two models, no competing skill sets; the earlier
+  E1 to E3 rows ran before the second review's fixes and were audited against its rules afterwards.
