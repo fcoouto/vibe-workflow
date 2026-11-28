@@ -43,6 +43,12 @@ The Security section must cover the current head, and no blocking finding from t
 vibe-security-review ship check may remain open. Add the section even when the
 project's own template wins.
 
+When worktree cleanup is on, the leftover files question is settled before `[READY]`:
+sort the worktree's leftover files as [worktree cleanup](worktree-cleanup.md) says under
+"Before `[READY]`". The pull request stays a `[BLOCKED]` draft until only rebuildable
+files are left or the user has answered. This check only reads; nothing is deleted, moved
+or archived before the merge is confirmed.
+
 ## Merging
 
 - If agents may not merge, stop at `[READY]` and tell the user the pull request
@@ -78,6 +84,11 @@ and then `git merge --ff-only origin/main` there. A change to
 is dirty, diverged, detached or uncertain, or the fast-forward is refused, report
 that and change nothing.
 
-The other exception is writing a report into the ignored
+Another exception is writing a report into the ignored
 `.vibe-workflow/security-reports/` folder, as the vibe-security-review skill's
 report storage describes. This does not make the checkout unclean.
+
+The third exception is the ignored `.vibe-workflow/archives/` folder. After a confirmed
+merge, leftover files the user chose to archive move there. It is written only by the
+archive script that [worktree cleanup](worktree-cleanup.md) names, never by hand. This
+does not make the checkout unclean either.

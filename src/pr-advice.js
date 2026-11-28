@@ -160,11 +160,11 @@ export function classify(command) {
     if (first === "cd" || first === "pushd") moved = true
     else if (first === "gh" && second === "pr") {
       const rest = words.slice(3)
-      const preview = (third === "create" || third === "ready") && isPreview(rest) && { preview: true }
+      const preview = (third === "create" || third === "ready" || third === "merge") && isPreview(rest) && { preview: true }
       if (third === "create") actions.push({ kind: "pr_create", draft: flag(rest, "--draft", "-d"), title: titleOf(rest), ...preview })
       else if (third === "ready") actions.push({ kind: "pr_ready", undo: flag(rest, "--undo"), ...preview })
       else if (third === "edit") { const title = titleOf(rest); if (title !== null) actions.push({ kind: "pr_retitle", title }) }
-      else if (third === "merge") actions.push({ kind: "pr_merge", auto: flag(rest, "--auto") })
+      else if (third === "merge") actions.push({ kind: "pr_merge", auto: flag(rest, "--auto"), ...preview })
     } else if (first === "git") {
       let index = 1, dir = null
       while (words[index]?.bare && words[index].text.startsWith("-")) {
@@ -195,6 +195,8 @@ const NOTES = {
     "unless they asked you to merge this one.",
   agentMerges: "vibe-workflow: before merging, confirm the checks and review evidence cover the current head; " +
     "merge only a [READY] pull request whose evidence is current.",
+  leftovers: "vibe-workflow: Before marking it [READY], check the worktree's leftover files per the worktree cleanup steps " +
+    "in vibe-pull-requests; delete nothing before the merge.",
 }
 
 function mergeNote(auto, agentMerge, primaryPath, cleanup) {
@@ -214,7 +216,7 @@ function remember(map, key, value) {
   if (map.size > MAX_SESSIONS) map.delete(map.keys().next().value)
 }
 
-export function createAdvisor({ settings, primary, checkout, onboarded = async () => false }) {
+export function createAdvisor({ settings, primary, checkout, onboarded = async () => false, sweep = null }) {
   const armed = new Map()
   const branches = new Map()
   return {
@@ -239,6 +241,7 @@ export function createAdvisor({ settings, primary, checkout, onboarded = async (
             notes.push(SUMMARY)
             if (!action.draft) notes.push(NOTES.notDraft)
             if (action.title !== null && !action.title.startsWith("[BLOCKED]")) notes.push(NOTES.notBlocked)
+            if (cleanup) notes.push(NOTES.leftovers)
             arm(true)
           } else if (action.kind === "pr_ready" && action.undo) arm(false)
           else if (action.kind === "pr_ready" || (action.kind === "pr_retitle" && action.title.startsWith("[READY]"))) {
@@ -261,6 +264,13 @@ export function createAdvisor({ settings, primary, checkout, onboarded = async (
                 ". Never touch the primary checkout; tell the user, and do task work in a worktree.")
             }
           }
+        }
+        const qualifying = actions.some((action) => (action.kind === "pr_ready" && !action.undo && !action.preview) ||
+          (action.kind === "pr_retitle" && action.title.startsWith("[READY]")) || (action.kind === "pr_merge" && !action.auto && !action.preview))
+        if (qualifying && cleanup) {
+          let line = null
+          try { line = await sweep?.note({ exclude: [event.directory] }) } catch {}
+          if (line) notes.push(line)
         }
         if (ship) notes.push(SHIP_PR)
         return notes.length ? notes.join("\n") : null

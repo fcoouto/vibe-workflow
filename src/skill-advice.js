@@ -39,7 +39,7 @@ const SHIP_NOTES = {
     "check covers the current head and its Security section is in the body; run it if not. " + OVERRIDE,
 }
 
-export function createSkillAdvisor({ settings, onboarded = async () => false }) {
+export function createSkillAdvisor({ settings, onboarded = async () => false, sweep = null }) {
   return {
     async skillNote(skill) {
       if (typeof skill !== "string") return null
@@ -52,6 +52,9 @@ export function createSkillAdvisor({ settings, onboarded = async () => false }) 
         } else if (entry) {
           const state = await settings()
           if (state?.state === "on") note = entry.note(state)
+          if (key === "using-git-worktrees" && state?.state === "on" && state.worktree_cleanup === true && sweep) {
+            try { const line = await sweep.note({ exclude: [] }); if (line) note += "\n" + line } catch {}
+          }
         }
       } catch {}
       try {

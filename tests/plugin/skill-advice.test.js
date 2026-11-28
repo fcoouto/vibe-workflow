@@ -118,3 +118,35 @@ test("skillNote sends the stakes-sized design review in any onboarded project", 
   const failing = advisor(on, { onboarded: async () => { throw new Error("boom") } })
   assert.equal(await failing.skillNote("brainstorming"), null)
 })
+
+const SWEEP_LINE = 'vibe-workflow: merged worktrees still on disk (JSON): [{"path":"/work/feature-a","branch":"feature-a","repair":false}]. ' +
+  "Sweep them per the worktree cleanup steps in vibe-pull-requests."
+function sweepFake(result) {
+  const sweep = { calls: [], note: async (options) => { sweep.calls.push(options); if (result instanceof Error) throw result; return result } }
+  return sweep
+}
+const CLEANUP = { state: "on", agent_merge: false, worktree_cleanup: true }
+
+test("the worktree note adds the sweep list when cleanup is on", async () => {
+  const sweep = sweepFake(SWEEP_LINE)
+  assert.equal(await advisor(CLEANUP, { sweep }).skillNote("using-git-worktrees"), WORKTREE + "\n" + SWEEP_LINE)
+  assert.deepEqual(sweep.calls, [{ exclude: [] }])
+  for (const worktree_cleanup of [false, null]) {
+    const off = sweepFake(SWEEP_LINE)
+    assert.equal(await advisor({ ...CLEANUP, worktree_cleanup }, { sweep: off }).skillNote("using-git-worktrees"), WORKTREE)
+    assert.deepEqual(off.calls, [])
+  }
+  const disabled = sweepFake(SWEEP_LINE)
+  assert.equal(await advisor({ ...CLEANUP, state: "off" }, { sweep: disabled }).skillNote("using-git-worktrees"), null)
+  assert.deepEqual(disabled.calls, [])
+  for (const result of [null, new Error("boom")]) {
+    assert.equal(await advisor(CLEANUP, { sweep: sweepFake(result) }).skillNote("using-git-worktrees"), WORKTREE)
+  }
+})
+
+test("other skills never read the sweep", async () => {
+  const sweep = sweepFake(SWEEP_LINE)
+  const { skillNote } = advisor(CLEANUP, { sweep })
+  for (const skill of ["finishing-a-development-branch", "writing-plans", "brainstorming"]) await skillNote(skill)
+  assert.deepEqual(sweep.calls, [])
+})

@@ -143,6 +143,47 @@ note gained "name it"; observed again the same day, the handoff then named the m
 ("Execution method: Native (pre-approved, so no choice needed)") and still asked for the
 review. Not observed: a real plan and execution after the review.
 
+## Post-merge sweep: what is known
+
+The sweep note lists older merged worktrees named by the plugin. It is read-only.
+
+Measured (2026-11-27, this repository, git workflow on with cleanup on): 18.6 ms
+sequential on 7 worktrees and 18 branches. Reads run only at three moments: after a
+successful `gh pr ready` (not `--undo`) or retitle to `[READY]`, after a successful
+`gh pr merge` without `--auto`, and when `using-git-worktrees` loads. One cancelling
+500 ms deadline covers each note, including the session list; on expiry every git child
+is killed and the note is omitted.
+
+Not observed live:
+
+- The sweep line in a real session.
+- Whether `ctx.session.list` without `parentID` returns `location.directory`.
+
+Known limits:
+
+- `git worktree list --porcelain -z` needs git 2.36+; older git keeps the note silent.
+- When the host's session list gives no folders, only the session's own worktree is protected.
+  When only some running sessions give a folder, the note is suppressed.
+- A branch is named only when it has a remote branch other than the default one, and that
+  remote branch either holds the branch's tip or was pruned. A merged branch that was never
+  pushed is never swept. Being named is not enough: with GitHub the merged pull request for
+  that branch decides, and without GitHub the remote branch must exist, hold the tip and carry
+  the branch's own name, so a pruned branch is then left alone.
+- The sweep never runs `git worktree repair`: a worktree with a broken pointer is skipped and
+  reported with the command for the user.
+- Worktrees made with `git worktree add --relative-paths` fail the identity check (their
+  backlink is relative), so their cleanup always blocks.
+- A tracked file marked assume-unchanged or skip-worktree blocks cleanup, so every sparse
+  checkout does.
+- Cleanup's switch and branch delete run with hooks disabled. Clean and smudge filter drivers
+  that the user configured in their own repository still run when git reads the worktree
+  (accepted residual, single-user model).
+- Concurrent replacement between a check and its removal or move is an accepted residual (no locking).
+- Same-device bind mounts are not detected.
+- Listed tool caches are deleted without asking, even if hand-edited (user decision).
+- Any nested `.git` in a worktree blocks its cleanup.
+- Statically classified compound commands (e.g. `false && gh pr merge 3 || true`) still trigger the read.
+
 ## Session titles: what is known
 
 The opt-in `session_titles` setting is described in

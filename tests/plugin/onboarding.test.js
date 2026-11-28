@@ -341,7 +341,9 @@ test("every onboarding question has the same control-shaped form", async (t) => 
   assert.match(questions[1], /Turn off git guidance — No PR reminders, and no cleanup\./)
   for (const [index, phrase] of [[1, "Reminders are not available in this OpenCode, so this is guidance only."],
     [1, "current for the latest commit"], [1, "[BLOCKED]"],
-    [2, "never removes unmerged work, uncommitted work or ignored files"],
+    [2, "and older merged worktrees, and deletes tool caches such as `node_modules` without asking."],
+    [2, "Before the pull request is marked ready, it asks about any other files in the task's folder."],
+    [2, "Older worktrees with such files are skipped and reported, never asked about."],
     [4, "This OpenCode does not send session events, so titles will not update yet."],
     [3, "not only agents'"], [2, "Keep cleaning up (Current, Recommended)"], [4, "Keep showing it (Current, Recommended)"]]) {
     assert.ok(questions[index].includes(phrase), phrase)
@@ -423,7 +425,7 @@ test("the procedure pins the cleanup questions, the GitHub conditions, the apply
     "`viewerPermission` is `ADMIN`", "gh repo edit", "--delete-branch-on-merge", "the same `gh repo view` call",
     "GitHub auto-delete: already on.", "GitHub auto-delete: not changed (admin access is needed).",
     "GitHub auto-delete: not available (gh is missing or not logged in).",
-    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: not available (could not be read).", "ignored files", "GitHub auto-delete: turned on.",
+    "GitHub auto-delete: not available (this remote is not on GitHub).", "GitHub auto-delete: not available (could not be read).", "It never removes unmerged work", "GitHub auto-delete: turned on.",
     "GitHub: turn on auto-delete of merged branches", "previous_worktree_cleanup", '"worktree_cleanup"',
     "A yes to question 4 counts as a change", "the Saving line comes before anything is applied",
     "a cancel at any question or a denied native file-edit permission means no GitHub change",
@@ -522,7 +524,7 @@ test("only apply with enabled true lets the setup check fetch scores", async (t)
   t.after(() => rm(root, { recursive: true }))
   await mkdir(join(root, "scripts"))
   await writeFile(join(root, "package.json"), '{"type":"module"}')
-  for (const name of ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
+  for (const name of ["index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/merged-worktrees.js", "src/council.js", "src/claude-limit-events.js", "skills/vibe-onboard-project/SKILL.md",
     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-pull-requests/SKILL.md", "skills/vibe-council/SKILL.md", "skills/vibe-project-layout/SKILL.md", "skills/vibe-security-review/SKILL.md"]) {
     await mkdir(join(root, name, ".."), { recursive: true })
     await copyFile(new URL(`../../${name}`, import.meta.url), join(root, name))

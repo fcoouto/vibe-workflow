@@ -60,9 +60,16 @@ overlapping behavior.
   OpenCode 2.2.6 (19 November 2026); other versions are unverified.
 - Post-merge cleanup: opt-in under `git_workflow` (`worktree_cleanup`). After a
   verified merge, agents remove the task's worktree and its local branch with the
-  client's own tool, never forcing and never touching the primary checkout. Remote
-  branch deletion is GitHub's own setting; onboarding reads it and offers to turn it
-  on when it is off and the user is an admin. Advisory, and not yet observed live.
+  client's own tool, never forcing and never touching the primary checkout. Before
+  `[READY]`, each other file left in the task's folder gets one choice: Commit to this
+  PR, Archive, Discard or Keep the worktree, by kind of file. Older merged worktrees
+  named by the plugin are swept without questions: rebuildable tool caches are deleted,
+  and worktrees with other files are skipped and reported. Archives go to
+  `.vibe-workflow/archives/<YYYY-MM-DD>_<branch with "/" as "-">/`. Leftover-file
+  deletion and archive moves go through the bundled `leftovers.py` and `archive.py`
+  scripts. Remote branch deletion is GitHub's own setting; onboarding reads it and
+  offers to turn it on when it is off and the user is an admin. Advisory, and not yet
+  observed live.
 - Project layout: the `vibe-project-layout` skill tells agents where a new file goes
   (framework paths, then the project's recorded layout, then the nearest comparable
   file, then example layouts) and, on request, restructures with a user-approved move

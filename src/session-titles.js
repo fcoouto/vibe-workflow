@@ -10,6 +10,11 @@ export const DEFAULT_TITLE = /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}
 
 export const strip = (title) => title.replace(PREFIX, "")
 
+const finite = (value) => typeof value === "number" && Number.isFinite(value)
+
+// Busy since `started` (this server process) and not idle since.
+export const isRunning = (time, started) => finite(time?.busy) && time.busy >= started && !(finite(time.idle) && time.idle >= time.busy)
+
 // When this server process started; every run it starts is busy from a later time.
 export const serverStart = () => Date.now() - process.uptime() * 1000
 
@@ -147,8 +152,7 @@ export async function registerSessionTitles(ctx, { settings, gitWorkflow, run = 
   }
 
   const text = (value) => value === null || typeof value === "string"
-  const finite = (value) => typeof value === "number" && Number.isFinite(value)
-  const running = (time) => finite(time?.busy) && time.busy >= started && !(finite(time.idle) && time.idle >= time.busy)
+  const running = (time) => isRunning(time, started)
   const instance = randomUUID().slice(0, 8)
   const STEPS = ["status", "diff", "plan", "pr"]
   const PR_STATES = ["OPEN", "MERGED", "CLOSED"]

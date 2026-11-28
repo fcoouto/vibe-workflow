@@ -100,7 +100,7 @@ class PackageTest(unittest.TestCase):
         run = self.build(output)
         self.assertEqual(run.returncode, 0, run.stderr.decode())
         files = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
-        expected = {"index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/session-facts.js", "src/session-titles.js", "src/council.js",
+        expected = {"index.js", "src/project.js", "src/onboarding.js", "src/pr-advice.js", "src/advice.js", "src/skill-advice.js", "src/merged-worktrees.js", "src/session-facts.js", "src/session-titles.js", "src/council.js",
                     "src/claude-limit-events.js", "package.json", "README.md", "LICENSE", "assets/logo.png",
                     "skills/vibe-onboard-project/SKILL.md", "skills/vibe-onboard-project/references/procedure.md",
                     "skills/vibe-prepare-my-workspace/SKILL.md", "skills/vibe-prepare-my-workspace/references/procedure.md",
@@ -113,6 +113,8 @@ class PackageTest(unittest.TestCase):
                     "skills/vibe-pull-requests/SKILL.md", "skills/vibe-pull-requests/references/procedure.md",
                     "skills/vibe-pull-requests/references/pull-request-template.md",
                     "skills/vibe-pull-requests/references/worktree-cleanup.md",
+                    "skills/vibe-pull-requests/scripts/archive.py",
+                    "skills/vibe-pull-requests/scripts/leftovers.py",
                     "skills/vibe-security-review/SKILL.md", "skills/vibe-security-review/references/ship-check.md",
                     "skills/vibe-security-review/references/full-review.md", "skills/vibe-security-review/references/reviewer-brief.md",
                     "skills/vibe-security-review/references/report-storage.md",
@@ -121,7 +123,7 @@ class PackageTest(unittest.TestCase):
         expected |= {"runtime/" + name + ".py" for name in [
             "__init__", "routing", "routing_paths", "routing_observations",
             "subscription_billing", "selector", "storage", "processes", "continuity",
-            "native_catalog", "claude_usage", "claude_quota", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council", "feedback", "usage_balance"]}
+            "native_catalog", "claude_usage", "claude_quota", "opencode_account", "scores", "codex_reset", "chatgpt_limit", "council", "feedback", "usage_balance", "private_folder"]}
         self.assertEqual(files, expected)
         self.assertEqual(json.loads((output / "package.json").read_text())["name"], "vibe-workflow")
         self.assertEqual((output / "assets/logo.png").read_bytes(), (ROOT / "assets/logo.png").read_bytes())
