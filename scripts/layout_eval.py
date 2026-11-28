@@ -34,8 +34,10 @@ _spec.loader.exec_module(live_check)
 GIT = ["git", "-c", "user.name=layout-eval", "-c", "user.email=layout-eval@example.invalid", "-c", "core.hooksPath=/dev/null"]
 SKILL = "vibe-project-layout"
 ALLOWED_MODELS = ("opencode-go/hungerg-free", "openai/gpt-6.1-terra")  # free, and an included subscription
+REGISTRATION = '    await registerSkill(ctx, "vibe-project-layout")\n'
 DESCRIPTIONS = {
     "current": None,
+    "absent": None,  # control arm: the skill is removed from the fixture's plugin copy
     "C": ("Use when adding, moving or renaming a file or folder, before picking its path, when a new file may need "
           "listing in a package manifest, file list or export list, when unsure where code, tests, scripts or docs "
           "go, or when asked to organize or restructure a project."),
@@ -159,6 +161,12 @@ def build_fixture(project, name, package, description, layout, marker):
     shutil.copytree(package, plugin)
     index = plugin / "index.js"
     index.write_text(live_check.rename_plugin_id(index.read_text()))
+    if description == "absent":
+        if index.read_text().count(REGISTRATION) != 1:
+            raise ValueError("expected exactly one registration line for the skill")
+        index.write_text(index.read_text().replace(REGISTRATION, ""))
+        shutil.rmtree(plugin / "skills" / SKILL)
+        return project
     skill = plugin / "skills" / SKILL / "SKILL.md"
     text = patch_description(skill.read_text(), description) if DESCRIPTIONS[description] else skill.read_text()
     # The marker proves which copy the skill tool returned; both arms carry it, after the body.

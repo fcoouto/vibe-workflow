@@ -27,7 +27,9 @@ SHIPPED_SKILL = (ROOT / "skills" / "vibe-project-layout" / "SKILL.md").read_text
 def fake_package(folder):
     package = Path(folder) / "package"
     (package / "skills" / "vibe-project-layout").mkdir(parents=True)
-    (package / "index.js").write_text("export default {\n  " + live_check.PLUGIN_ID + "\n}\n")
+    (package / "index.js").write_text("export default {\n  " + live_check.PLUGIN_ID + "\n}\n"
+                                      '    await registerSkill(ctx, "vibe-pull-requests")\n'
+                                      '    await registerSkill(ctx, "vibe-project-layout")\n')
     (package / "skills" / "vibe-project-layout" / "SKILL.md").write_text(SHIPPED_SKILL)
     return package
 
@@ -99,6 +101,26 @@ class FixtureTest(Base):
         self.assertEqual(changed, [2])
         self.assertEqual(after[2], "description: " + layout_eval.DESCRIPTIONS["C"])
         self.assertNotIn(": ", layout_eval.DESCRIPTIONS["C"], "a colon-space breaks the unquoted YAML value")
+
+    def test_the_absent_arm_removes_the_skill_and_only_its_registration(self):
+        project, _ = self.build("node-files", description="absent")
+        plugin = project / ".opencode" / "plugins" / "live-check"
+        index = (plugin / "index.js").read_text()
+        self.assertFalse((plugin / "skills" / "vibe-project-layout").exists())
+        self.assertNotIn('registerSkill(ctx, "vibe-project-layout")', index)
+        self.assertIn('registerSkill(ctx, "vibe-pull-requests")', index)
+        self.assertIn(live_check.LIVE_ID, index)
+
+    def test_the_absent_arm_refuses_a_plugin_whose_registration_line_changed(self):
+        folder = tempfile.mkdtemp(prefix="layout-eval-test-")
+        self.addCleanup(subprocess.run, ["rm", "-rf", folder])
+        package = fake_package(folder)
+        (package / "index.js").write_text("export default {\n  " + live_check.PLUGIN_ID + "\n}\n")
+        with self.assertRaises(ValueError):
+            layout_eval.build_fixture(Path(folder) / "project", "node-files", package, "absent", False, "m")
+
+    def test_the_shipped_entry_still_registers_the_skill_on_one_line(self):
+        self.assertEqual((ROOT / "index.js").read_text().count(layout_eval.REGISTRATION), 1)
 
     def test_a_description_line_outside_the_frontmatter_is_refused(self):
         with self.assertRaises(ValueError):
