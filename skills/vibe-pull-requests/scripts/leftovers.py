@@ -18,9 +18,10 @@ EACH = (*STATUS, "--ignored", "--untracked-files=all")
 ABSOLUTE = ("rev-parse", "--path-format=absolute")
 BROKEN = "the worktree's Git pointer is broken"
 # What a paused rebase, merge, cherry-pick, revert or bisect, or a stash it set aside, leaves in a worktree's own Git folder.
-# `sequencer` holds the commits a multi-commit cherry-pick or revert has still to apply.
+# `sequencer` holds the commits a multi-commit cherry-pick or revert has still to apply. `AUTO_MERGE` is not listed: Git
+# leaves it after a clean, finished rebase, and a paused merge or rebase is already marked by MERGE_HEAD or its folder.
 PAUSED = ("rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
-          "AUTO_MERGE", "MERGE_AUTOSTASH")
+          "MERGE_AUTOSTASH")
 USAGE = ("invalid arguments; give sort, expand, manifest, discard, caches or identity, then --worktree <dir> and "
          "what that mode takes: --path <relative path>, --digest <digest>, --primary <dir>, --branch <name> or "
          "--detached, --head <commit> (the full hash)")

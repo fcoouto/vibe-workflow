@@ -644,7 +644,7 @@ class LeftoversTest(unittest.TestCase):
         digest = self.digest("notes.md")
         own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
         folders = ("rebase-merge", "rebase-apply", "sequencer")
-        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE", "MERGE_AUTOSTASH"):
+        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "MERGE_AUTOSTASH"):
             with self.subTest(state=name):
                 state = own / name
                 state.mkdir() if name in folders else state.write_text("0" * 40 + "\n")
@@ -655,6 +655,41 @@ class LeftoversTest(unittest.TestCase):
         self.assertTrue((self.linked / "notes.md").exists() and (self.linked / "node_modules/x.js").exists())
         (self.main / ".git/MERGE_HEAD").write_text("0" * 40 + "\n")
         self.assertEqual(self.identity(self.linked, "feat/x").returncode, 0, "another worktree's state is not this one's")
+
+    def test_a_finished_rebase_is_not_a_paused_operation(self):
+        """Git leaves AUTO_MERGE in the worktree's own Git folder after a clean, finished rebase."""
+        self.write("node_modules/x.js")
+        (self.linked / "a.md").write_text("a\n")
+        git(self.linked, "add", "a.md")
+        git(self.linked, "commit", "-qm", "a")
+        (self.main / "b.md").write_text("b\n")
+        git(self.main, "add", "b.md")
+        git(self.main, "commit", "-qm", "b")
+        git(self.linked, "rebase", "-q", "main")
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        if not (own / "AUTO_MERGE").exists():  # older Git does not write it; leave the same state by hand
+            (own / "AUTO_MERGE").write_text(git(self.linked, "rev-parse", "HEAD^{tree}"))
+        self.assertEqual(self.identity(self.linked, "feat/x").returncode, 0)
+        run = self.caches()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout, "removed: node_modules/\n")
+        self.assertFalse((self.linked / "node_modules").exists())
+
+    def test_a_rebase_stopped_on_a_conflict_is_still_a_paused_operation(self):
+        (self.linked / "src/app.py").write_text("print(2)\n")
+        git(self.linked, "commit", "-qam", "two")
+        (self.main / "src/app.py").write_text("print(3)\n")
+        git(self.main, "commit", "-qam", "three")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env |= {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        stopped = subprocess.run(["git", "-C", str(self.linked), "-c", "user.name=Fixture", "-c",
+                                  "user.email=fixture@example.invalid", "rebase", "-q", "main"],
+                                 env=env, capture_output=True, text=True)
+        self.assertNotEqual(stopped.returncode, 0, "the fixture needs a conflict")
+        self.refused(self.identity(self.linked, "feat/x"))  # the stopped rebase has detached HEAD
+        run = self.identity(self.linked)
+        self.refused(run)
+        self.assertIn("a Git operation is paused in the worktree (rebase-merge)", run.stderr)
 
     def test_a_real_bisect_in_a_clean_worktree_is_a_paused_operation(self):
         git(self.linked, "bisect", "start")

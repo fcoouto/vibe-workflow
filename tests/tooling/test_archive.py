@@ -464,13 +464,30 @@ class ArchiveTest(unittest.TestCase):
         (self.linked / ".env").write_text("x\n")
         own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
         folders = ("rebase-merge", "rebase-apply", "sequencer")
-        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "AUTO_MERGE", "MERGE_AUTOSTASH"):
+        for name in (*folders, "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "MERGE_AUTOSTASH"):
             with self.subTest(state=name):
                 state = own / name
                 state.mkdir() if name in folders else state.write_text("0" * 40 + "\n")
                 self.kept(self.archive(".env"), f"a Git operation is paused in the worktree ({name})")
                 state.rmdir() if name in folders else state.unlink()
         self.assertEqual(self.archive(".env").returncode, 0)
+
+    def test_archives_after_a_finished_rebase(self):
+        """Git leaves AUTO_MERGE in the worktree's own Git folder after a clean, finished rebase."""
+        (self.linked / "a.md").write_text("a\n")
+        git(self.linked, "add", "a.md")
+        git(self.linked, "commit", "-qm", "a")
+        (self.main / "b.md").write_text("b\n")
+        git(self.main, "add", "b.md")
+        git(self.main, "commit", "-qm", "b")
+        git(self.linked, "rebase", "-q", "main")
+        own = Path(git(self.linked, "rev-parse", "--path-format=absolute", "--git-dir").strip())
+        if not (own / "AUTO_MERGE").exists():  # older Git does not write it; leave the same state by hand
+            (own / "AUTO_MERGE").write_text(git(self.linked, "rev-parse", "HEAD^{tree}"))
+        (self.linked / ".env").write_text("x\n")
+        run = self.archive(".env")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.archived(), [f"{RUN}/.env"])
 
     def test_a_settings_or_archives_folder_under_another_letter_case_is_refused_and_left_untouched(self):
         if not case_insensitive(self.root):

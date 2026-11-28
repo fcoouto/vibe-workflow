@@ -20,9 +20,10 @@ from runtime.private_folder import BASE, Refused, git, main_checkout, open_priva
 ARCHIVES = "archives"
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # What a paused rebase, merge, cherry-pick, revert or bisect, or a stash it set aside, leaves in a worktree's own Git folder.
-# `sequencer` holds the commits a multi-commit cherry-pick or revert has still to apply.
+# `sequencer` holds the commits a multi-commit cherry-pick or revert has still to apply. `AUTO_MERGE` is not listed: Git
+# leaves it after a clean, finished rebase, and a paused merge or rebase is already marked by MERGE_HEAD or its folder.
 PAUSED = ("rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
-          "AUTO_MERGE", "MERGE_AUTOSTASH")
+          "MERGE_AUTOSTASH")
 CAPABLE = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "geteuid") and os.listdir in os.supports_fd
            and {os.open, os.mkdir, os.lstat, os.rename} <= os.supports_dir_fd)
 
