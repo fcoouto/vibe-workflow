@@ -2,6 +2,7 @@
 import os
 import stat
 import subprocess
+import unicodedata
 
 BASE = ".vibe-workflow"
 IGNORE = b"*\n"
@@ -81,6 +82,21 @@ def _listed(name, parent, shown):
         raise Refused(f"{shown} is not stored under exactly that name, so it was left untouched")
 
 
+def _folded(name):
+    """A name as a case-insensitive volume compares it: decomposed, then without letter case."""
+    return unicodedata.normalize("NFD", os.fsdecode(name)).casefold()
+
+
+def _tracks(main, path):
+    """Whether the index holds a path at or below `path` under any spelling a case-insensitive volume would
+    take for it. Asked by the exact name, Git does not list a file it tracks under another letter case, yet
+    after a rename on disk that file is the one in the folder. An index that cannot be read counts as tracking."""
+    listed = git(main, "ls-files", "-z")
+    folder = _folded(path)
+    return bool(listed.returncode) or any(name == folder or name.startswith(folder + "/")
+                                          for name in map(_folded, listed.stdout.split(b"\0")))
+
+
 def _shared(label):
     return f"the {label} already exists under a group-writable {BASE}, so it is not repaired"
 
@@ -123,8 +139,7 @@ def open_private_folder(main, name, label):
             raise Refused(f"{item} is a symlink")
         if kind is not None and not stat.S_ISDIR(kind):
             raise Refused(f"{item} is not a directory")
-    tracked = git(main, "ls-files", "--", path)
-    if tracked.returncode or tracked.stdout:
+    if _tracks(main, path):
         raise Refused(f"the main checkout tracks files in the {label}, or its index could not be read")
     opened = []
     try:

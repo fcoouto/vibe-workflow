@@ -482,20 +482,50 @@ class ArchiveTest(unittest.TestCase):
                 folder.mkdir(parents=True)
                 os.chmod(self.main / base, 0o755)
                 os.chmod(folder, 0o755)
-                (folder / "kept.md").write_text("tracked\n")
+                (folder / "kept.md").write_text("kept\n")
                 (folder / ".gitignore").write_text("!kept.md\n")
-                git(self.main, "add", "-f", f"{base}/{name}")
-                git(self.main, "commit", "-qm", "a tracked folder under another letter case")
-                self.assertEqual(git(self.main, "ls-files", "--", ".vibe-workflow/archives"), "", "Git sees no tracked file")
-                self.refused(self.archive(".env"))
+                run = self.archive(".env")
+                self.refused(run)
+                self.assertIn("is not stored under exactly that name, so it was left untouched", run.stderr)
                 self.assertEqual((self.linked / ".env").read_text(), "x\n")
                 self.assertEqual((folder / ".gitignore").read_text(), "!kept.md\n")
                 self.assertEqual(sorted(path.name for path in folder.iterdir()), [".gitignore", "kept.md"])
                 self.assertEqual(folder.stat().st_mode & 0o777, 0o755)
-                self.assertEqual(git(self.main, "status", "--porcelain"), "")
-                git(self.main, "rm", "-rqf", f"{base}/{name}")
+                shutil.rmtree(self.main / base)
+
+    def test_a_folder_the_index_tracks_under_another_letter_case_is_refused_after_a_rename_on_disk(self):
+        (self.linked / ".env").write_text("x\n")
+        exact = self.main / ARCHIVES
+        for base, name in ((".Vibe-Workflow", "archives"), (".vibe-workflow", "Archives"), (".VIBE-WORKFLOW", "ARCHIVES")):
+            with self.subTest(base=base, name=name):
+                folder = self.main / base / name
+                folder.mkdir(parents=True)
+                (folder / "kept.md").write_text("tracked\n")
+                (folder / ".gitignore").write_text("!kept.md\n")
+                git(self.main, "add", "-f", f"{base}/{name}")
+                git(self.main, "commit", "-qm", "a tracked folder under another letter case")
+                # The folder gets its exact name on disk only; the index keeps the other spelling.
+                folder.rename(self.main / base / "moving")
+                (self.main / base).rename(self.main / "moving")
+                (self.main / "moving").rename(self.main / ".vibe-workflow")
+                (self.main / ".vibe-workflow/moving").rename(exact)
+                os.chmod(self.main / ".vibe-workflow", 0o755)
+                os.chmod(exact, 0o755)
+                self.assertIn(".vibe-workflow", os.listdir(self.main))
+                self.assertIn("archives", os.listdir(self.main / ".vibe-workflow"))
+                self.assertEqual(git(self.main, "ls-files", "--", ARCHIVES), "", "asked by the exact name, Git lists nothing")
+                run = self.archive(".env")
+                self.refused(run)
+                self.assertEqual(run.stderr, "refused: the main checkout tracks files in the archives folder, or its index "
+                                             "could not be read\n")
+                self.assertEqual((self.linked / ".env").read_text(), "x\n")
+                self.assertEqual((exact / ".gitignore").read_text(), "!kept.md\n")
+                self.assertEqual(sorted(path.name for path in exact.iterdir()), [".gitignore", "kept.md"])
+                self.assertEqual(exact.stat().st_mode & 0o777, 0o755)
+                git(self.main, "rm", "-rq", "--cached", f"{base}/{name}")
                 git(self.main, "commit", "-qm", "undo")
-                shutil.rmtree(self.main / base, ignore_errors=True)
+                shutil.rmtree(self.main / ".vibe-workflow")
+        self.assertEqual(self.archive(".env").returncode, 0, "with nothing tracked there, the exact folder is used")
 
 
 if __name__ == "__main__":
