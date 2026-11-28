@@ -14,12 +14,12 @@ const PORCELAIN = [
   "worktree /wt/moved", "HEAD f6", "branch refs/heads/feat/moved", "prunable gitdir file points to non-existent location", "",
 ].join("\0")
 const LIST = "worktree list --porcelain -z"
-const MERGED = "for-each-ref --merged refs/remotes/origin/HEAD --format=%(refname) %(upstream) %(symref) " +
+const MERGED = "for-each-ref --merged refs/remotes/origin/HEAD --format=%(refname) %(upstream) %(symref) %(upstream:track) " +
   "refs/heads refs/remotes/origin/HEAD"
-const DEFAULT = "refs/remotes/origin/HEAD  refs/remotes/origin/main"
+const DEFAULT = "refs/remotes/origin/HEAD  refs/remotes/origin/main "
 // Git's answer for merged branches that each have their own remote branch; `main` tracks the default branch.
-const refs = (...names) => ["refs/heads/main refs/remotes/origin/main ",
-  ...names.map((name) => `refs/heads/${name} refs/remotes/origin/${name} `), DEFAULT, ""].join("\n")
+const refs = (...names) => ["refs/heads/main refs/remotes/origin/main  ",
+  ...names.map((name) => `refs/heads/${name} refs/remotes/origin/${name}  `), DEFAULT, ""].join("\n")
 const ANSWERS = {
   [LIST]: { code: 0, stdout: PORCELAIN },
   [MERGED]: { code: 0, stdout: refs("feat/one", "feat/locked", "feat/moved") },
@@ -82,13 +82,56 @@ test("a branch that was never pushed, or that tracks the default branch, is not 
     "worktree /wt/tracking", "HEAD a1", "branch refs/heads/tracking", "",
     "worktree /wt/local", "HEAD a1", "branch refs/heads/local", "",
     "worktree /wt/pushed", "HEAD b2", "branch refs/heads/pushed", ""].join("\0")
-  const merged = ["refs/heads/main refs/remotes/origin/main ", "refs/heads/fresh  ",
-    "refs/heads/tracking refs/remotes/origin/main ", "refs/heads/local refs/heads/main ",
-    "refs/heads/pushed refs/remotes/origin/pushed ", DEFAULT, ""].join("\n")
+  const merged = ["refs/heads/main refs/remotes/origin/main  ", "refs/heads/fresh   ",
+    "refs/heads/tracking refs/remotes/origin/main  ", "refs/heads/local refs/heads/main  ",
+    "refs/heads/pushed refs/remotes/origin/pushed  ", DEFAULT, ""].join("\n")
   const answers = { ...ANSWERS, [LIST]: { code: 0, stdout: porcelain }, [MERGED]: { code: 0, stdout: merged } }
   assert.deepEqual(paths(await sweep({ run: gitRun(answers) }).note({})), ["/wt/pushed"])
   const unknown = { ...answers, [MERGED]: { code: 0, stdout: merged.replace(DEFAULT + "\n", "") } }
   assert.equal(await sweep({ run: gitRun(unknown) }).note({}), null, "no default branch target: nothing is named")
+})
+
+test("a branch is named only when its upstream exists and holds the branch's tip", async () => {
+  const names = ["topic", "behind", "fresh", "gone", "ahead", "diverged", "odd"]
+  const porcelain = ["worktree /repo", "HEAD a1", "branch refs/heads/main", "",
+    ...names.flatMap((name) => [`worktree /wt/${name}`, "HEAD b2", `branch refs/heads/${name}`, ""])].join("\0")
+  const merged = ["refs/heads/main refs/remotes/origin/main  ",
+    "refs/heads/topic refs/remotes/origin/topic  ",
+    "refs/heads/behind refs/remotes/origin/behind  [behind 2]",
+    "refs/heads/fresh refs/remotes/origin/topic  [ahead 7]",
+    "refs/heads/gone refs/remotes/origin/gone  [gone]",
+    "refs/heads/ahead refs/remotes/origin/ahead  [ahead 1]",
+    "refs/heads/diverged refs/remotes/origin/diverged  [ahead 1, behind 3]",
+    "refs/heads/odd refs/remotes/origin/odd  [something new]", DEFAULT, ""].join("\n")
+  const answers = { ...ANSWERS, [LIST]: { code: 0, stdout: porcelain }, [MERGED]: { code: 0, stdout: merged } }
+  assert.deepEqual(paths(await sweep({ run: gitRun(answers) }).note({})), ["/wt/topic", "/wt/behind"])
+})
+
+test("no more than eight folders are resolved at once, and none after the deadline", async () => {
+  const lines = ["worktree /repo", "HEAD a", "branch refs/heads/main", ""]
+  const merged = []
+  for (let i = 1; i <= 20; i++) {
+    lines.push(`worktree /wt/n${i}`, `HEAD h${i}`, `branch refs/heads/n${i}`, "")
+    merged.push(`n${i}`)
+  }
+  const run = gitRun({ ...ANSWERS, [LIST]: { code: 0, stdout: lines.join("\0") }, [MERGED]: { code: 0, stdout: refs(...merged) } })
+  let running = 0, most = 0, calls = 0
+  const real = (wait) => async (path) => {
+    calls++
+    most = Math.max(most, ++running)
+    await new Promise((resolve) => setTimeout(resolve, wait))
+    running--
+    return path
+  }
+  const exclude = Array.from({ length: 10 }, (_, i) => `/elsewhere/${i}`)
+  const note = await sweep({ run, real: real(2) }).note({ exclude })
+  assert.equal(named(note).length, 10)
+  assert.equal(calls, 30, "every excluded folder and every candidate is resolved")
+  assert.equal(most, 8)
+  calls = 0
+  assert.equal(await sweep({ run, real: real(40), deadline: 15 }).note({ exclude }), null)
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.equal(calls, 8, "nothing more is resolved once the deadline has passed")
 })
 
 test("the explanation is sent once per process object", async () => {

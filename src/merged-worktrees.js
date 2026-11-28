@@ -5,7 +5,7 @@ import { isRunning } from "./session-titles.js"
 
 const exec = promisify(execFile)
 const MERGED = "refs/remotes/origin/HEAD"
-const REFS = ["for-each-ref", "--merged", MERGED, "--format=%(refname) %(upstream) %(symref)", "refs/heads", MERGED]
+const REFS = ["for-each-ref", "--merged", MERGED, "--format=%(refname) %(upstream) %(symref) %(upstream:track)", "refs/heads", MERGED]
 const LISTED = 10
 const PROBES = 8
 const PAGE = 50
@@ -33,15 +33,18 @@ export function parseWorktrees(porcelain) {
   return entries
 }
 
-// Input is the REFS answer: one `<ref> <its upstream> <its symbolic target>` line per merged ref. A branch with no
-// commits of its own is merged too, so a branch counts only when it has a remote branch other than the default one.
-// Returns null when the default branch's own line is missing.
+// Input is the REFS answer: one `<ref> <its upstream> <its symbolic target> <its distance to the upstream>` line per
+// merged ref. A branch with no commits of its own is merged too, so a branch counts only when it has a remote branch
+// other than the default one, that remote branch exists here, and it holds the branch's tip: the distance is empty or
+// only `[behind N]`, never `[gone]` or `[ahead N]`. Returns null when the default branch's own line is missing.
 function pushedBranches(listing) {
   const lines = listing.split("\n").filter(Boolean).map((line) => line.split(" "))
   const target = lines.find(([ref]) => ref === MERGED)?.[2]
   if (!target) return null
+  const held = (track) => track === "" || /^\[behind \d+\]$/.test(track)
   return new Set(lines
-    .filter(([ref, upstream]) => ref.startsWith("refs/heads/") && upstream?.startsWith("refs/remotes/") && upstream !== target)
+    .filter(([ref, upstream, , ...track]) => ref.startsWith("refs/heads/") && upstream?.startsWith("refs/remotes/") &&
+      upstream !== target && held(track.join(" ")))
     .map(([ref]) => ref.slice("refs/heads/".length)))
 }
 
@@ -98,10 +101,11 @@ export function createSweep({ primary, run = defaultRun, busy = async () => null
     const ancestors = new Set(heads.filter((_, i) => ancestry[i].code === 0))
     const found = candidates.filter((entry) => entry.branch === null ? ancestors.has(entry) : names.has(entry.branch))
     const given = [...exclude.filter((dir) => typeof dir === "string"), ...(sessions?.dirs ?? [])]
-    const [dirs, tops] = await Promise.all([Promise.all(given.map(forms)), Promise.all(found.map((entry) => forms(entry.path)))])
+    const resolved = await pooled([...given, ...found.map((entry) => entry.path)], PROBES, signal, forms)
     if (signal.aborted) return null
+    const dirs = resolved.slice(0, given.length).flat(), tops = resolved.slice(given.length)
     const inside = (dir, top) => dir === top || dir.startsWith(top + "/")
-    return found.filter((_, i) => !dirs.flat().some((dir) => tops[i].some((top) => inside(dir, top))))
+    return found.filter((_, i) => !dirs.some((dir) => tops[i].some((top) => inside(dir, top))))
   }
 
   return {
